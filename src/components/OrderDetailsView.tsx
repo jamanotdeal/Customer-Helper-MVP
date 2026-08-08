@@ -47,7 +47,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   // Assigned Helper details
   const helperInfo = order.helperId ? fallbackStore.users.get(order.helperId) : null;
   const helperName = order.helperName || helperInfo?.displayName || 'Assigned Helper';
-  const helperPhone = order.helperPhone || helperInfo?.alternativePhone || null;
+  // Phone priority: order.helperPhone → user profile alternativePhone → helper application whatsapp
+  const helperAppEntry = order.helperId
+    ? Array.from(fallbackStore.helperApplications.values()).find((a) => a.userId === order.helperId && a.status === 'APPROVED')
+    : null;
+  const helperPhone = order.helperPhone || helperInfo?.alternativePhone || helperAppEntry?.whatsapp || null;
 
   const getWhatsAppUrl = (phone: string) => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');

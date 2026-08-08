@@ -593,9 +593,15 @@ class FallbackStore {
 
     const user = this.users.get(app.userId);
     if (user) {
-      user.isHelper = true;
-      this.users.set(app.userId, user);
-      await this.saveUser(user);
+      // Sync helper's WhatsApp number from their application to their profile
+      // so it's available as helperPhone when they accept orders.
+      const updatedUser = {
+        ...user,
+        isHelper: true,
+        alternativePhone: app.whatsapp || user.alternativePhone,
+      };
+      this.users.set(app.userId, updatedUser);
+      await this.saveUser(updatedUser);
     }
     this.notify();
 

@@ -7,6 +7,7 @@ import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { PaginationControl } from './admin/PaginationControl';
 import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -17,6 +18,8 @@ export const CustomerHome: React.FC = () => {
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     const syncOrders = () => {
@@ -45,6 +48,11 @@ export const CustomerHome: React.FC = () => {
     if (selectedFilter === 'CANCELLED') return o.status === 'CANCELED';
     return true;
   });
+
+  // Pagination
+  const totalOrderItems = filteredOrders.length;
+  const totalOrderPages = Math.ceil(totalOrderItems / pageSize) || 1;
+  const paginatedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   if (selectedOrderId) {
     return (
@@ -146,7 +154,7 @@ export const CustomerHome: React.FC = () => {
             {(['ALL', 'ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED'] as const).map((filter) => (
               <button
                 key={filter}
-                onClick={() => setSelectedFilter(filter)}
+                onClick={() => { setSelectedFilter(filter); setCurrentPage(1); }}
                 className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all ${
                   selectedFilter === filter
                     ? 'bg-emerald-600 text-white shadow-md'
@@ -173,13 +181,28 @@ export const CustomerHome: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredOrders.map((order) => (
+              {paginatedOrders.map((order) => (
                 <OrderCard
                   key={order.id}
                   order={order}
                   onClick={() => setSelectedOrderId(order.id)}
                 />
               ))}
+
+              {/* Pagination */}
+              {totalOrderItems > 0 && (
+                <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                  <PaginationControl
+                    currentPage={currentPage}
+                    totalPages={totalOrderPages}
+                    totalItems={totalOrderItems}
+                    pageSize={pageSize}
+                    pageSizeOptions={[5, 10, 20, 50]}
+                    onPageChange={(p) => setCurrentPage(p)}
+                    onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

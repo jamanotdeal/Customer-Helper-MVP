@@ -53,11 +53,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                 <span className="font-extrabold text-xl tracking-tight text-gray-900 font-sans">
                   Jamanot
                 </span>
-                {user && activeMode !== 'customer' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 uppercase tracking-wider">
-                    {activeMode}
-                  </span>
-                )}
               </div>
               <p className="text-xs font-medium text-emerald-700 font-sans">
                 Ask. Relax. Done.

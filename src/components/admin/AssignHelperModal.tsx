@@ -39,7 +39,8 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
     return {
       userId: app.userId,
       name: app.legalName || app.userName,
-      phone: matchedUser?.alternativePhone || 'N/A',
+      // Prefer the WhatsApp from the application form, fallback to profile's alternativePhone
+      phone: app.whatsapp || matchedUser?.alternativePhone || 'N/A',
       email: app.email,
       nid: app.nid,
       hasCycle: app.hasCycle,

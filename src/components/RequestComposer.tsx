@@ -261,7 +261,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       id: `ord-${Date.now().toString().slice(-5)}`,
       customerId: user.uid,
       customerName: user.displayName || 'Customer',
-      customerPhone: user.email || '01800000000',
+      customerPhone: altPhone,
       alternativePhone: altPhone,
       title: titleText,
       items: allItemsList,

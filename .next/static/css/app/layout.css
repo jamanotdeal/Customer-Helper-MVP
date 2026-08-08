@@ -1687,6 +1687,10 @@ video {
   --tw-bg-opacity: 1;
   background-color: rgb(167 243 208 / var(--tw-bg-opacity, 1));
 }
+.bg-\[\#25D366\]{
+  --tw-bg-opacity: 1;
+  background-color: rgb(37 211 102 / var(--tw-bg-opacity, 1));
+}
 .bg-gradient-to-br{
   background-image: linear-gradient(to bottom right, var(--tw-gradient-stops));
 }
@@ -2749,6 +2753,10 @@ body {
 }
 .hover\:bg-white\/20:hover{
   background-color: rgb(255 255 255 / 0.2);
+}
+.hover\:bg-\[\#1ebe5d\]:hover{
+  --tw-bg-opacity: 1;
+  background-color: rgb(30 190 93 / var(--tw-bg-opacity, 1));
 }
 .hover\:text-emerald-600:hover{
   --tw-text-opacity: 1;
