@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, X } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
@@ -157,6 +158,25 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                 </svg>
                 <span>Continue with Google</span>
               </button>
+
+              <p className="text-[11px] text-gray-500 text-center pt-2 leading-relaxed">
+                By continuing, you agree to Jamanot&apos;s{' '}
+                <Link
+                  href="/terms"
+                  onClick={() => setShowLoginModal(false)}
+                  className="text-emerald-600 font-bold underline hover:text-emerald-700"
+                >
+                  Terms of Service
+                </Link>{' '}
+                and{' '}
+                <Link
+                  href="/privacy"
+                  onClick={() => setShowLoginModal(false)}
+                  className="text-emerald-600 font-bold underline hover:text-emerald-700"
+                >
+                  Privacy Policy
+                </Link>.
+              </p>
             </div>
           </div>
         </div>

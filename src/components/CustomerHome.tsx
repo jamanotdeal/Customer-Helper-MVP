@@ -9,6 +9,7 @@ import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X } from 'lucide-react';
 import Image from 'next/image';
+import Link from 'next/link';
 
 export const CustomerHome: React.FC = () => {
   const { user, loginWithGoogle } = useAuth();
@@ -236,9 +237,42 @@ export const CustomerHome: React.FC = () => {
               <span>Continue with Google</span>
               <ArrowRight className="w-4 h-4" />
             </button>
+
+            <p className="text-[11px] text-gray-500 text-center pt-1 leading-relaxed">
+              By continuing, you agree to Jamanot&apos;s{' '}
+              <Link
+                href="/terms"
+                onClick={() => setShowAuthRequiredModal(false)}
+                className="text-emerald-600 font-bold underline hover:text-emerald-700"
+              >
+                Terms of Service
+              </Link>{' '}
+              and{' '}
+              <Link
+                href="/privacy"
+                onClick={() => setShowAuthRequiredModal(false)}
+                className="text-emerald-600 font-bold underline hover:text-emerald-700"
+              >
+                Privacy Policy
+              </Link>.
+            </p>
           </div>
         </div>
       )}
+
+      {/* Customer Bottom Footer Links */}
+      <footer className="pt-6 border-t border-gray-100 text-center text-xs text-gray-400 space-y-2">
+        <div className="flex items-center justify-center space-x-4 font-semibold text-gray-500">
+          <Link href="/terms" className="hover:text-emerald-600 transition-colors">
+            Terms of Service
+          </Link>
+          <span>•</span>
+          <Link href="/privacy" className="hover:text-emerald-600 transition-colors">
+            Privacy Policy
+          </Link>
+        </div>
+        <p className="text-[11px] text-gray-400">© {new Date().getFullYear()} Jamanot. Ask. Relax. Done.</p>
+      </footer>
     </div>
   );
 };
