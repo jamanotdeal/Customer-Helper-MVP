@@ -14,7 +14,7 @@ export const HelperDashboard: React.FC = () => {
   const { user } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<'AVAILABLE' | 'ACTIVE' | 'COMPLETED'>('AVAILABLE');
-  const [rejectedOrderIds, setRejectedOrderIds] = useState<Set<string>>(new Set());
+  const [rejectedOrderIds] = useState<Set<string>>(new Set());
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
@@ -95,19 +95,6 @@ export const HelperDashboard: React.FC = () => {
     setSelectedOrderId(orderId);
   };
 
-  const handleRejectOrder = async (orderId: string) => {
-    if (!user) return;
-    const confirmed = await showConfirm(
-      'রিকুয়েস্ট প্রত্যাখ্যান',
-      'আপনি কি এই রিকুয়েস্টটি প্রত্যাখ্যান করতে চান? প্রত্যাখ্যান করলে এটি আপনার তালিকা থেকে সরে যাবে।',
-      'হ্যাঁ, Reject করুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-
-    // Store rejected order IDs in session so the helper doesn't see it again
-    setRejectedOrderIds((prev) => new Set(prev).add(orderId));
-  };
 
   if (selectedOrderId) {
     const targetOrder = fallbackStore.orders.get(selectedOrderId);
@@ -196,7 +183,6 @@ export const HelperDashboard: React.FC = () => {
                 key={ord.id}
                 order={ord}
                 onAccept={handleAcceptOrder}
-                onReject={handleRejectOrder}
                 activeOrdersCount={activeOrders.length}
                 activeOrderLimit={activeOrderLimit}
               />

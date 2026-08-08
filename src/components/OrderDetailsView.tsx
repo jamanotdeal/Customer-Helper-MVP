@@ -75,56 +75,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     return 'UPCOMING';
   };
 
-  const handleApproveFeeAdjustment = async () => {
-    if (!order.feeAdjustment) return;
-    const confirmed = await showConfirm(
-      'ফি অ্যাডজাস্টমেন্ট অনুমোদন',
-      `আপনি কি হেলপারের ডেলিভারি ফি ৫${order.feeAdjustment.amount} টাকা অনুমোদন করতে চান? মূল ফি ছিল ৫${order.originalDeliveryFee} টাকা।`,
-      'হ্যাঁ, Approve করুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-    fallbackStore.updateOrder(order.id, (o) => ({
-      ...o,
-      deliveryFee: o.feeAdjustment!.amount,
-      feeAdjustment: { ...o.feeAdjustment!, status: 'APPROVED' },
-      statusHistory: [
-        ...o.statusHistory,
-        {
-          id: `sh-${Date.now()}`,
-          status: o.status,
-          timestamp: new Date().toISOString(),
-          actor: 'Customer',
-          note: `Approved fee adjustment to ৳${o.feeAdjustment!.amount}`,
-        },
-      ],
-    }));
-  };
-
-  const handleRejectFeeAdjustment = async () => {
-    if (!order.feeAdjustment) return;
-    const confirmed = await showConfirm(
-      'ফি অ্যাডজাস্টমেন্ট প্রত্যাখ্যান',
-      `আপনি কি ডেলিভারি ফি ড্রিকুয়েস্ট প্রত্যাখ্যান করতে চান? মূল ফি ৫${order.originalDeliveryFee} বরাবর থাকবে।`,
-      'হ্যাঁ, Reject করুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-    fallbackStore.updateOrder(order.id, (o) => ({
-      ...o,
-      feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
-      statusHistory: [
-        ...o.statusHistory,
-        {
-          id: `sh-${Date.now()}`,
-          status: o.status,
-          timestamp: new Date().toISOString(),
-          actor: 'Customer',
-          note: 'Rejected fee adjustment',
-        },
-      ],
-    }));
-  };
 
   const handleCancelOrder = async () => {
     const confirmed = await showConfirm(
@@ -178,7 +128,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               {badge.label}
             </span>
           </div>
-          <h2 className="text-xl font-black mb-1">{order.title}</h2>
+          <h2 className="text-xl font-black mb-1">{`Order-#${order.id}`}</h2>
           <p className="text-xs text-emerald-100">
             Created At: {formatPlacedDateTime(order.createdAt)}
           </p>
@@ -290,47 +240,20 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         </div>
 
-        {/* Fee Adjustment Alert (If requested by Helper) */}
-        {order.feeAdjustment && (
-          <div
-            className={`p-4 rounded-3xl border ${
-              order.feeAdjustment.status === 'PENDING'
-                ? 'border-amber-300 bg-amber-50 text-amber-900'
-                : order.feeAdjustment.status === 'APPROVED'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-red-200 bg-red-50 text-red-900'
-            }`}
-          >
+        {/* Fee Adjustment Notice (auto-applied, no approval needed) */}
+        {order.feeAdjustment && order.feeAdjustment.status === 'APPROVED' && (
+          <div className="p-4 rounded-3xl border border-emerald-200 bg-emerald-50 text-emerald-900">
             <div className="flex items-center space-x-2 font-bold text-sm mb-1">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              <span>Helper Fee Adjustment Request</span>
+              <AlertTriangle className="w-5 h-5 text-emerald-600" />
+              <span>Delivery Fee Updated by Helper</span>
             </div>
-            <p className="text-xs mb-2">
-              Normal Fee: ৳{order.originalDeliveryFee} → Requested Fee: <strong>৳{order.feeAdjustment.amount}</strong>
+            <p className="text-xs mb-1">
+              Original Fee: ৳{order.originalDeliveryFee} → Updated Fee: <strong>৳{order.feeAdjustment.amount}</strong>
             </p>
-            <p className="text-xs italic bg-white/60 p-2.5 rounded-xl border border-amber-200/50 mb-3">
-              "{order.feeAdjustment.reason}"
-            </p>
-
-            {order.feeAdjustment.status === 'PENDING' ? (
-              <div className="flex space-x-2">
-                <button
-                  onClick={handleApproveFeeAdjustment}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-md"
-                >
-                  Approve (৳{order.feeAdjustment.amount})
-                </button>
-                <button
-                  onClick={handleRejectFeeAdjustment}
-                  className="flex-1 py-2.5 rounded-xl bg-gray-200 text-gray-800 font-bold text-xs"
-                >
-                  Reject
-                </button>
-              </div>
-            ) : (
-              <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-white inline-block">
-                Status: {order.feeAdjustment.status}
-              </span>
+            {order.feeAdjustment.reason && (
+              <p className="text-xs italic bg-white/60 p-2.5 rounded-xl border border-emerald-200/50">
+                &quot;{order.feeAdjustment.reason}&quot;
+              </p>
             )}
           </div>
         )}
@@ -378,6 +301,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 : 'Not available yet (Calculated after product cost)'}
             </span>
           </div>
+          {order.feeAdjustment?.status === 'APPROVED' && order.feeAdjustment.reason && (
+            <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 flex items-start space-x-1.5">
+              <span className="font-extrabold shrink-0">Note:</span>
+              <span className="font-medium italic">{order.feeAdjustment.reason}</span>
+            </div>
+          )}
           <div className="flex justify-between py-2 border-t border-gray-100 text-sm font-extrabold text-gray-900">
             <span>Total Payable:</span>
             <span className="text-emerald-700">

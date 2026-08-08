@@ -60,29 +60,68 @@ export default function Home() {
     user && (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel')
   );
 
-  // While Firebase auth / redirect result is still resolving, show a loading screen.
-  // This prevents flashing the unauthenticated (login) view when Google redirects back.
+  // While Firebase auth / redirect result is still resolving, show a skeleton layout.
+  // Mirrors the real app structure so there's no jarring full-page loading screen.
   if (loading) {
     return (
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '100dvh',
-        background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
-        gap: '16px',
-      }}>
-        <div style={{
-          width: '48px',
-          height: '48px',
-          border: '3px solid rgba(99,102,241,0.2)',
-          borderTopColor: '#6366f1',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        <span style={{ color: '#94a3b8', fontSize: '14px', letterSpacing: '0.05em' }}>Signing you in…</span>
+      <div className="mobile-container relative flex flex-col min-h-screen bg-gray-50">
+        {/* Header Skeleton */}
+        <div className="sticky top-0 z-40 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+          <div className="w-28 h-6 rounded-xl bg-gray-200 animate-pulse" />
+          <div className="flex items-center space-x-2">
+            <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
+            <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
+          </div>
+        </div>
+
+        {/* Main Content Skeleton */}
+        <main className="flex-1 w-full p-4 pb-20 space-y-4">
+          {/* Form Card Skeleton */}
+          <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
+            {/* Heading lines */}
+            <div className="space-y-2 text-center">
+              <div className="w-40 h-5 rounded-xl bg-gray-200 animate-pulse mx-auto" />
+              <div className="w-56 h-3.5 rounded-lg bg-gray-100 animate-pulse mx-auto" />
+              <div className="w-44 h-3 rounded-lg bg-gray-100 animate-pulse mx-auto" />
+            </div>
+            {/* CTA button skeleton */}
+            <div className="w-full h-12 rounded-2xl bg-emerald-100 animate-pulse" />
+          </div>
+
+          {/* Info cards skeleton */}
+          <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-5 space-y-3">
+            <div className="w-36 h-4 rounded-lg bg-emerald-200 animate-pulse" />
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl">
+                <div className="w-7 h-7 rounded-full bg-emerald-100 animate-pulse shrink-0" />
+                <div className="flex-1 h-4 rounded-lg bg-gray-100 animate-pulse" />
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-3xl p-5 space-y-3">
+            <div className="w-24 h-4 rounded-lg bg-gray-200 animate-pulse" />
+            <div className="grid grid-cols-2 gap-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="p-3.5 rounded-2xl bg-gray-50 space-y-2">
+                  <div className="w-5 h-5 rounded-lg bg-gray-200 animate-pulse" />
+                  <div className="w-16 h-3 rounded bg-gray-200 animate-pulse" />
+                  <div className="w-24 h-2.5 rounded bg-gray-100 animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </main>
+
+        {/* Bottom Nav Skeleton */}
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-100 px-6 py-2 flex items-center justify-around z-50">
+          {[1, 2].map((i) => (
+            <div key={i} className="flex flex-col items-center space-y-1">
+              <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
+              <div className="w-10 h-2.5 rounded bg-gray-100 animate-pulse" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

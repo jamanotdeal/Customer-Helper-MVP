@@ -126,7 +126,7 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
                           {ord.status}
                         </span>
                       </div>
-                      <p className="font-extrabold text-gray-800">{ord.title}</p>
+                      <p className="font-extrabold text-gray-800">{ord.title || ord.items?.[0]?.name || 'Order'}</p>
                       <p className="text-[11px] text-gray-500">
                         {new Date(ord.createdAt).toLocaleString()} • Delivery Fee: ৳{ord.deliveryFee}
                       </p>

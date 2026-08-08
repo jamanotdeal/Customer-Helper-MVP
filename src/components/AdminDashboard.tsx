@@ -190,7 +190,7 @@ export const AdminDashboard: React.FC = () => {
       list = list.filter(
         (o) =>
           o.id.toLowerCase().includes(q) ||
-          o.title.toLowerCase().includes(q) ||
+          (o.title || '').toLowerCase().includes(q) ||
           o.customerName.toLowerCase().includes(q) ||
           (o.customerPhone && o.customerPhone.includes(q)) ||
           (o.helperName && o.helperName.toLowerCase().includes(q)) ||
@@ -812,7 +812,7 @@ export const AdminDashboard: React.FC = () => {
                               <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
                             </td>
                             <td className="py-4 px-5">
-                              <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title}</div>
+                              <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
                               <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
                             </td>
                             <td className="py-4 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
@@ -898,7 +898,7 @@ export const AdminDashboard: React.FC = () => {
                         <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
                       </td>
                       <td className="py-4 px-5">
-                        <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title}</div>
+                        <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
                         <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
                       </td>
                       <td className="py-4 px-5">

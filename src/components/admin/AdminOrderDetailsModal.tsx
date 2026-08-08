@@ -409,7 +409,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <FileText className="w-4 h-4 text-purple-700" />
                 <span>Order Content & Instructions</span>
               </h4>
-              <p className="font-black text-sm text-gray-900">{order.title}</p>
+              <p className="font-black text-sm text-gray-900">{`Order-#${order.id}`}</p>
               
               <div className="space-y-1.5">
                 <span className="text-gray-500 font-bold block text-[11px]">Requested Items List:</span>
@@ -527,38 +527,31 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             )}
 
             {order.feeAdjustment && (
-              <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-950 space-y-2">
+              <div className={`p-4 rounded-2xl border space-y-2 text-xs ${
+                order.feeAdjustment.status === 'APPROVED'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                  : 'border-amber-200 bg-amber-50 text-amber-950'
+              }`}>
                 <div className="flex items-center justify-between font-extrabold">
-                  <span className="flex items-center space-x-1.5 text-amber-800">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    <span>Helper Delivery Fee Adjustment Request</span>
+                  <span className="flex items-center space-x-1.5">
+                    <AlertTriangle className={`w-4 h-4 ${order.feeAdjustment.status === 'APPROVED' ? 'text-emerald-600' : 'text-amber-600'}`} />
+                    <span>Helper Delivery Fee Adjustment</span>
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px]">
-                    Status: {order.feeAdjustment.status}
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                    order.feeAdjustment.status === 'APPROVED'
+                      ? 'bg-emerald-200 text-emerald-900'
+                      : 'bg-amber-200 text-amber-900'
+                  }`}>
+                    {order.feeAdjustment.status}
                   </span>
                 </div>
-                <p className="text-xs">
-                  Original Fee: ৳{order.originalDeliveryFee} → Requested Fee: <strong>৳{order.feeAdjustment.amount}</strong>
+                <p>
+                  Original Fee: ৳{order.originalDeliveryFee} → Updated Fee: <strong>৳{order.feeAdjustment.amount}</strong>
                 </p>
-                <p className="italic bg-white/70 p-2 rounded-xl border border-amber-100">
-                  Reason: "{order.feeAdjustment.reason}"
-                </p>
-
-                {order.feeAdjustment.status === 'PENDING' && (
-                  <div className="flex space-x-2 pt-1">
-                    <button
-                      onClick={handleApproveFeeAdjustment}
-                      className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-sm transition-all"
-                    >
-                      Approve Fee (৳{order.feeAdjustment.amount})
-                    </button>
-                    <button
-                      onClick={handleRejectFeeAdjustment}
-                      className="flex-1 py-2 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold transition-all"
-                    >
-                      Reject Fee Adjustment
-                    </button>
-                  </div>
+                {order.feeAdjustment.reason && (
+                  <p className="italic bg-white/70 p-2 rounded-xl border border-current/10">
+                    Note: &quot;{order.feeAdjustment.reason}&quot;
+                  </p>
                 )}
               </div>
             )}

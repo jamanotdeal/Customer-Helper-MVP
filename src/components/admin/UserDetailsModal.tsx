@@ -446,7 +446,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                                 Customer Request ({ord.status})
                               </span>
                             </div>
-                            <p className="font-extrabold text-gray-900 mt-1">{ord.title}</p>
+                            <p className="font-extrabold text-gray-900 mt-1">{ord.title || ord.items?.[0]?.name || 'Order'}</p>
                             <p className="text-[11px] text-gray-600">Assigned Helper: {ord.helperName || 'Unassigned'}</p>
                           </div>
                           <div className="flex items-center space-x-1.5 text-purple-900 font-extrabold">
@@ -469,7 +469,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                                 Helper Delivery ({ord.status})
                               </span>
                             </div>
-                            <p className="font-extrabold text-gray-900 mt-1">{ord.title}</p>
+                            <p className="font-extrabold text-gray-900 mt-1">{ord.title || ord.items?.[0]?.name || 'Order'}</p>
                             <p className="text-[11px] text-gray-600">Customer: {ord.customerName} ({ord.customerPhone})</p>
                           </div>
                           <div className="flex items-center space-x-1.5 text-purple-900 font-extrabold">
@@ -519,7 +519,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                               {ord.status}
                             </span>
                           </div>
-                          <p className="font-extrabold text-gray-800">{ord.title}</p>
+                          <p className="font-extrabold text-gray-800">{ord.title || ord.items?.[0]?.name || 'Order'}</p>
                           <p className="text-[11px] text-gray-500">
                             {new Date(ord.createdAt).toLocaleString()} • Delivery Fee: ৳{ord.deliveryFee}
                           </p>
@@ -571,7 +571,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                               {ord.status}
                             </span>
                           </div>
-                          <p className="font-extrabold text-gray-800">{ord.title}</p>
+                          <p className="font-extrabold text-gray-800">{ord.title || ord.items?.[0]?.name || 'Order'}</p>
                           <p className="text-[11px] text-gray-500">
                             Customer: {ord.customerName} • Delivery Fee: ৳{ord.deliveryFee}
                           </p>

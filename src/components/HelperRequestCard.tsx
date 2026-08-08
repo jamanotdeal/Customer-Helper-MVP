@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
-import { MapPin, Navigation, ArrowRight, AlertCircle, Clock, XCircle } from 'lucide-react';
+import { MapPin, Navigation, Clock } from 'lucide-react';
 import { formatCreatedAt, getElapsedTime } from '@/lib/timeUtils';
 
 interface HelperRequestCardProps {
   order: Order;
   onAccept: (orderId: string) => void;
-  onReject: (orderId: string) => void;
   activeOrdersCount: number;
   activeOrderLimit: number;
 }
@@ -14,7 +13,6 @@ interface HelperRequestCardProps {
 export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   order,
   onAccept,
-  onReject,
   activeOrdersCount,
   activeOrderLimit,
 }) => {
@@ -33,7 +31,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
       {/* Title & Fee Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h4 className="font-bold text-gray-900 text-sm leading-snug">{order.title}</h4>
+          <h4 className="font-bold text-gray-900 text-sm leading-snug">{`Order-#${order.id}`}</h4>
           <div className="flex items-center space-x-2 mt-1">
             <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md inline-flex items-center space-x-1">
               <Clock className="w-3 h-3 text-emerald-600 animate-spin-slow" />
@@ -73,19 +71,11 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
       </div>
 
       {/* Action Buttons */}
-      <div className="flex items-center space-x-2 pt-1">
-        <button
-          onClick={() => onReject(order.id)}
-          className="py-3 px-3 rounded-2xl bg-red-50 text-red-700 hover:bg-red-100 font-bold text-xs border border-red-200 transition-all shrink-0 flex items-center space-x-1"
-        >
-          <XCircle className="w-3.5 h-3.5" />
-          <span>Reject</span>
-        </button>
-
+      <div className="pt-1">
         <button
           onClick={() => onAccept(order.id)}
           disabled={isCapReached}
-          className={`flex-1 py-3 rounded-2xl font-extrabold text-xs shadow-md transition-all ${
+          className={`w-full py-3 rounded-2xl font-extrabold text-xs shadow-md transition-all ${
             isCapReached
               ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
               : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98'

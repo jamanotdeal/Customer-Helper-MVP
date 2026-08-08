@@ -40,11 +40,7 @@ const isUserSuperAdminEmail = (email?: string | null): boolean => {
   return SUPER_ADMIN_EMAILS.includes(normalized);
 };
 
-/** Returns true if we're on a mobile browser where popups are commonly blocked */
-const isMobileBrowser = (): boolean => {
-  if (typeof navigator === 'undefined') return false;
-  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
-};
+
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -228,21 +224,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      if (isMobileBrowser()) {
-        // Mobile: use full-page redirect (popup is blocked by most mobile browsers).
-        // getRedirectResult() in useEffect will handle the result when the user returns.
-        await signInWithRedirect(auth, googleProvider);
-        // NOTE: browser navigates away — nothing after this runs on mobile.
-      } else {
-        // Desktop: use popup (fast, no page navigation needed).
-        const res = await signInWithPopup(auth, googleProvider);
-        if (res.user) {
-          const savedMode = getSavedActiveMode();
-          const profile = buildProfile(res.user, savedMode);
-          applyProfile(profile, savedMode);
-        }
-        setLoading(false);
+      // Use popup on all devices (desktop & mobile). Mobile browsers support popups
+      // triggered by a direct user gesture. The redirect flow was unreliable on mobile
+      // (getRedirectResult failing silently due to cookie/storage restrictions).
+      const res = await signInWithPopup(auth, googleProvider);
+      if (res.user) {
+        const savedMode = getSavedActiveMode();
+        const profile = buildProfile(res.user, savedMode);
+        applyProfile(profile, savedMode);
       }
+      setLoading(false);
     } catch (err: any) {
       console.warn('[Auth] Google login error:', err?.code, err?.message);
       if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/popup-closed-by-user') {

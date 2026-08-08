@@ -19,15 +19,12 @@ import {
   Trash2,
   MapPin,
   Phone,
-  Sparkles,
   Navigation,
   FileText,
   HelpCircle,
-  ShoppingBag,
   ArrowRight,
   Store,
   ListPlus,
-  Tag,
 } from 'lucide-react';
 
 interface RequestComposerProps {
@@ -47,12 +44,12 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   );
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
 
-  const [firstItemName, setFirstItemName] = useState('');
+
   // Guaranteed minimum 1 item in item details list
   const [items, setItems] = useState<OrderItem[]>([
     { id: 'item-1', name: '', qty: '1' },
   ]);
-  const [missingPref, setMissingPref] = useState<MissingItemPref>('SKIP');
+  const [missingPref, setMissingPref] = useState<MissingItemPref | ''>('');
   const [altPhone, setAltPhone] = useState('');
   const [pickupAddress, setPickupAddress] = useState('');
 
@@ -98,12 +95,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       setAltPhone(getSavedAltPhone());
     }
 
-    if (user?.missingItemPreference) {
-      setMissingPref(user.missingItemPreference);
-    } else {
-      setMissingPref(getSavedMissingItemPref());
-    }
-
     if (user?.defaultDeliveryLocation?.address) {
       setDeliveryAddress(user.defaultDeliveryLocation.address);
       setDeliveryLat(user.defaultDeliveryLocation.lat);
@@ -130,17 +121,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     setIsExpanded(true);
   };
 
-  // Sync typing with expansion check
-  const handleFirstItemChange = (val: string) => {
-    if (!user) {
-      loginWithGoogle();
-      return;
-    }
-    setFirstItemName(val);
-    if (!isExpanded && val.trim().length > 0) {
-      setIsExpanded(true);
-    }
-  };
+
 
   const handleAddItem = () => {
     if (!user) {
@@ -205,18 +186,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       return;
     }
 
-    // Determine primary item text
-    const primaryText = firstItemName.trim();
-
-    if (!primaryText) {
-      await showAlert('প্রয়োজনীয় তথ্য খালি', 'অনুগ্রহ করে আপনার রিকোয়েস্টের শিরোনাম/মূল বিষয় বক্সে লিখুন।', 'warning');
-      return;
-    }
+    // Determine primary item text from first item
+    const primaryText = items[0]?.name.trim() || '';
 
     // Validate Item rows (Name & Qty are mandatory for each item row)
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
-      const itemName = item.name.trim() || (idx === 0 ? primaryText : '');
+      const itemName = item.name.trim();
       if (!itemName) {
         await showAlert('আইটেমের নাম প্রয়োজন', `অনুগ্রহ করে Item #${idx + 1}-এর নাম লিখুন।`, 'warning');
         return;
@@ -234,8 +210,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     if (!altPhone.trim()) {
       await showAlert(
-        'হোয়াটসঅ্যাপ নম্বর প্রয়োজন',
+        'হোয়াটসঅ্যাপ নম্বর প্রয়োজন',
         'অনুগ্রহ করে যোগাযোগের জন্য সচল হোয়াটসঅ্যাপ নম্বর লিখুন।',
+        'warning'
+      );
+      return;
+    }
+
+    if (!missingPref) {
+      await showAlert(
+        'Missing Item Preference Required',
+        'Please select what we should do if any item is missing or there is a problem.',
         'warning'
       );
       return;
@@ -252,7 +237,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     const allItemsList: OrderItem[] = items.map((it, idx) => ({
       ...it,
-      name: it.name.trim() || (idx === 0 ? primaryText : `Item #${idx + 1}`),
+      name: it.name.trim() || `Item #${idx + 1}`,
       qty: it.qty.trim() || '1',
     }));
 
@@ -270,7 +255,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     updateCustomerPreferences(altPhone, finalDelivLoc, missingPref);
 
     const deliveryFee = 0;
-    const titleText = primaryText;
+    const titleText = primaryText || items.map(i => i.name.trim()).filter(Boolean).join(', ') || 'Order';
 
     const newOrder: Order = {
       id: `ord-${Date.now().toString().slice(-5)}`,
@@ -303,7 +288,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     await fallbackStore.addOrder(newOrder);
 
     // Reset form
-    setFirstItemName('');
     setItems([{ id: `item-${Date.now()}`, name: '', qty: '1' }]);
     setAdditionalNote('');
     setIsExpanded(false);
@@ -314,74 +298,61 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Main Item Input (Title) */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5 px-0.5">
-            <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5">
-              <Tag className="w-4 h-4 text-emerald-600" />
-              <span>What do you need? *</span>
-            </label>
-          </div>
+      {/* Centered heading — cycling placeholder as animated tagline */}
+      <button
+        type="button"
+        onClick={handleInputInteract}
+        className="w-full text-center mb-4 group outline-none"
+      >
+        <h2 className="font-extrabold text-lg text-gray-900 mb-1">What do you need?</h2>
+        <p
+          key={placeholderIndex}
+          className="text-sm font-semibold text-emerald-600 animate-in fade-in duration-500 min-h-[1.25rem]"
+        >
+          {currentPlaceholder}
+        </p>
+        <p className="text-[11px] text-gray-400 mt-1">Tell us whatever you need — we&apos;ll handle the rest.</p>
+      </button>
 
-          <div className="relative">
-            <input
-              type="text"
-              value={firstItemName}
-              onChange={(e) => handleFirstItemChange(e.target.value)}
-              onFocus={handleInputInteract}
-              onClick={handleInputInteract}
-              placeholder={currentPlaceholder}
-              className="w-full py-3.5 px-4 rounded-2xl bg-gray-50/80 border border-gray-200 focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-gray-900 placeholder-gray-400 font-medium text-sm transition-all outline-none"
-              required
-            />
-            {(!isExpanded || !user) && (
-              <button
-                type="button"
-                onClick={handleInputInteract}
-                className="absolute right-2.5 top-2.5 bg-emerald-600 text-white p-2 rounded-xl hover:bg-emerald-700 transition-all shadow-xs"
-              >
-                <Sparkles className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        </div>
+      <form onSubmit={handleSubmit} className="space-y-3">
 
         {/* Expanded Form Fields (Only visible when user is authenticated and form expanded) */}
         {isExpanded && user && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200 pt-2 border-t border-gray-100">
-            {/* 2. Items / Order Details List */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5">
-                <ListPlus className="w-4 h-4 text-emerald-600" />
-                <span>Items *</span>
-              </label>
+          <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
 
+            {/* ── BLOCK 1: Order Details ── */}
+            <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-3 space-y-2">
+              <p className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider pb-0.5">Order Details</p>
+
+              {/* Items List */}
               {items.map((item, idx) => (
-                <div key={item.id} className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    value={item.name}
-                    onChange={(e) => handleUpdateItem(item.id, 'name', e.target.value)}
-                    placeholder={`Item #${idx + 1} *`}
-                    className="flex-1 p-2.5 rounded-xl border border-gray-200 text-xs focus:border-emerald-500 outline-none text-gray-900"
-                    required
-                  />
+                <div key={item.id} className="flex items-center space-x-1.5">
+                  <div className="relative flex-1">
+                    <ListPlus className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={item.name}
+                      onChange={(e) => handleUpdateItem(item.id, 'name', e.target.value)}
+                      placeholder={`Item #${idx + 1}`}
+                      className="w-full pl-8 pr-2 py-2.5 rounded-xl border border-gray-200 text-xs focus:border-emerald-500 outline-none text-gray-900 bg-white"
+                      required
+                    />
+                  </div>
                   <input
                     type="text"
                     value={item.qty}
                     onChange={(e) => handleUpdateItem(item.id, 'qty', e.target.value)}
-                    placeholder="Qty *"
-                    className="w-20 p-2.5 rounded-xl border border-gray-200 text-xs text-center focus:border-emerald-500 outline-none text-gray-900"
+                    placeholder="Qty"
+                    className="w-14 py-2.5 px-2 rounded-xl border border-gray-200 text-xs text-center focus:border-emerald-500 outline-none text-gray-900 bg-white"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => handleRemoveItem(item.id)}
-                    title={items.length > 1 ? "Remove Item" : "Clear Item"}
-                    className="p-2.5 rounded-xl bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
+                    title={items.length > 1 ? "Remove" : "Clear"}
+                    className="p-2.5 rounded-xl bg-red-50 text-red-400 hover:bg-red-100 transition-colors"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
@@ -389,149 +360,121 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
               <button
                 type="button"
                 onClick={handleAddItem}
-                className="w-full py-2.5 px-3 rounded-xl bg-gray-50 border border-dashed border-emerald-300 text-emerald-800 hover:bg-emerald-50 font-bold text-xs flex items-center justify-center space-x-1.5 transition-all mt-1"
+                className="w-full py-1.5 px-3 rounded-xl bg-white border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-bold text-xs flex items-center justify-center space-x-1 transition-all"
               >
-                <Plus className="w-4 h-4 text-emerald-600" />
-                <span>+ Add item</span>
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add another item</span>
               </button>
-            </div>
 
-            {/* 3. If anything is missing (Missing Item Preference) */}
-            <div className="pt-1">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5 mb-1.5">
-                <HelpCircle className="w-4 h-4 text-emerald-600" />
-                <span>If anything is missing: *</span>
-              </label>
-              <div className="grid grid-cols-3 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setMissingPref('SKIP')}
-                  className={`p-2.5 rounded-xl border text-center text-xs font-semibold transition-all ${
-                    missingPref === 'SKIP'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-900 shadow-xs font-bold'
-                      : 'border-gray-200 text-gray-600 bg-white hover:bg-gray-50'
-                  }`}
+              {/* Missing Pref Dropdown */}
+              <div className="relative">
+                <HelpCircle className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none z-10" />
+                <select
+                  value={missingPref}
+                  onChange={(e) => setMissingPref(e.target.value as any)}
+                  required
+                  className={`w-full pl-8 pr-3 py-2.5 rounded-xl border border-gray-200 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none text-xs font-medium transition-all cursor-pointer appearance-none ${missingPref === '' ? 'text-gray-400' : 'text-gray-700'}`}
                 >
-                  Skip missing items
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMissingPref('SIMILAR')}
-                  className={`p-2.5 rounded-xl border text-center text-xs font-semibold transition-all ${
-                    missingPref === 'SIMILAR'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-900 shadow-xs font-bold'
-                      : 'border-gray-200 text-gray-600 bg-white hover:bg-gray-50'
-                  }`}
-                >
-                  Buy similar alternative
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMissingPref('CALL')}
-                  className={`p-2.5 rounded-xl border text-center text-xs font-semibold transition-all ${
-                    missingPref === 'CALL'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-900 shadow-xs font-bold'
-                      : 'border-gray-200 text-gray-600 bg-white hover:bg-gray-50'
-                  }`}
-                >
-                  Call me for instruction
-                </button>
+                  <option value="">If any item is missing or any problem then what should we do?</option>
+                  <option value="SKIP">If any item is missing or any problem then: Skip the item</option>
+                  <option value="SIMILAR">If any item is missing or any problem then: Buy a similar alternative</option>
+                  <option value="CALL">If any item is missing or any problem then: Call me for instructions</option>
+                </select>
               </div>
             </div>
 
-            {/* 4. From where? (optional) */}
-            <div className="pt-1">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5 mb-1">
-                <Store className="w-4 h-4 text-emerald-600" />
-                <span>From where? (optional)</span>
-              </label>
-              <input
-                type="text"
-                value={pickupAddress}
-                onChange={(e) => setPickupAddress(e.target.value)}
-                placeholder="Shop or market location"
-                className="w-full p-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 outline-none text-xs text-gray-900"
-              />
-            </div>
+            {/* ── BLOCK 2: Delivery & Contact ── */}
+            <div className="bg-gray-50/80 border border-gray-200 rounded-2xl p-3 space-y-2">
+              <p className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider pb-0.5">Delivery & Contact</p>
 
-            {/* 5. Delivery Address */}
-            <div className="space-y-2 pt-1">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5">
-                <MapPin className="w-4 h-4 text-emerald-600" />
-                <span>Delivery Address *</span>
-              </label>
-
+              {/* Pickup Address */}
               <div className="relative">
+                <Store className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={pickupAddress}
+                  onChange={(e) => setPickupAddress(e.target.value)}
+                  placeholder="From where should buy or get it? (Optional)"
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-xs text-gray-900"
+                />
+              </div>
+
+              {/* Delivery Address */}
+              <div className="relative">
+                <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
                 <input
                   type="text"
                   value={deliveryAddress}
                   onChange={(e) => setDeliveryAddress(e.target.value)}
-                  placeholder="Enter full delivery address..."
-                  className="w-full py-3 pl-3 pr-10 rounded-2xl border border-gray-200 focus:border-emerald-500 outline-none text-xs text-gray-900 font-medium"
+                  placeholder="Delivery address *"
+                  className="w-full pl-8 pr-9 py-2.5 rounded-xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-xs text-gray-900"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => handleDetectLocation(false)}
                   disabled={isLocating}
-                  title="Detect Location"
-                  className="absolute right-2 top-2 p-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                  title="Detect my location"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
                 >
                   <Navigation className={`w-3.5 h-3.5 ${isLocating ? 'animate-spin' : ''}`} />
                 </button>
               </div>
-            </div>
 
-            {/* 6. Whatsapp Number (For Contact) */}
-            <div className="pt-1">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5 mb-1">
-                <Phone className="w-4 h-4 text-emerald-600" />
-                <span>Whatsapp Number (For Contact) *</span>
-              </label>
-              <input
-                type="tel"
-                value={altPhone}
-                onChange={(e) => setAltPhone(e.target.value)}
-                placeholder="01XXXXXXXXX"
-                className="w-full p-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 outline-none text-xs text-gray-900"
-                required
-              />
-            </div>
+              {/* WhatsApp Number */}
+              <div className="relative">
+                <Phone className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  type="tel"
+                  value={altPhone}
+                  onChange={(e) => setAltPhone(e.target.value)}
+                  placeholder="WhatsApp number *"
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-xs text-gray-900"
+                  required
+                />
+              </div>
 
-            {/* 7. Additional Notes */}
-            <div className="pt-1">
-              <label className="text-xs font-bold text-gray-900 flex items-center space-x-1.5 mb-1">
-                <FileText className="w-4 h-4 text-emerald-600" />
-                <span>Additional Notes (optional)</span>
-              </label>
-              <textarea
-                value={additionalNote}
-                onChange={(e) => setAdditionalNote(e.target.value)}
-                placeholder="Specific instructions, flat number, door code, brand preference..."
-                className="w-full p-2.5 rounded-2xl border border-gray-200 text-xs focus:border-emerald-500 outline-none h-16 resize-none text-gray-900"
-              />
+              {/* Additional Notes */}
+              <div className="relative">
+                <FileText className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <textarea
+                  value={additionalNote}
+                  onChange={(e) => setAdditionalNote(e.target.value)}
+                  placeholder="Additional notes — flat no., brand preference... (optional)"
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-gray-200 bg-white text-xs focus:border-emerald-500 outline-none h-14 resize-none text-gray-900"
+                />
+              </div>
             </div>
           </div>
         )}
 
-        {/* Submit Button */}
-        <button
-          type={user ? 'submit' : 'button'}
-          onClick={!user ? handleInputInteract : undefined}
-          disabled={submitting}
-          className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
-        >
-          {submitting ? (
-            <span>Submitting...</span>
-          ) : (
-            <>
-              <span>{user ? 'Submit Order' : 'Login to Submit Order'}</span>
-              <ArrowRight className="w-4 h-4" />
-            </>
-          )}
-        </button>
+        {/* CTA or Submit Button */}
+        {!isExpanded ? (
+          <button
+            type="button"
+            onClick={handleInputInteract}
+            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
+          >
+            <span>Tell Us Your Needs</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            type={user ? 'submit' : 'button'}
+            onClick={!user ? handleInputInteract : undefined}
+            disabled={submitting}
+            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
+          >
+            {submitting ? (
+              <span>Submitting...</span>
+            ) : (
+              <>
+                <span>{user ? 'Submit Order' : 'Login to Submit'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+        )}
       </form>
     </div>
   );

@@ -57,22 +57,6 @@ export const CustomerHome: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-24">
-      {/* Logged-Out Top Auth Prompt Banner */}
-      {!user && (
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-3xl p-4 text-white shadow-floating flex items-center justify-between">
-          <div>
-            <h3 className="font-extrabold text-sm mb-0.5">Welcome to Jamanot!</h3>
-            <p className="text-xs text-emerald-100">Sign in to request nearby helpers instantly.</p>
-          </div>
-          <button
-            onClick={() => loginWithGoogle()}
-            className="py-2.5 px-4 rounded-2xl bg-white text-emerald-900 font-extrabold text-xs shadow-md hover:bg-emerald-50 active:scale-95 transition-all shrink-0"
-          >
-            Google Sign In
-          </button>
-        </div>
-      )}
-
       {/* Primary Request Composer */}
       <RequestComposer
         onOrderCreated={(newOrder) => {

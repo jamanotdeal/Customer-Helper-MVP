@@ -17,11 +17,11 @@ export const saveAltPhone = (phone: string) => {
   if (phone) localStorage.setItem(KEYS.ALT_PHONE, phone);
 };
 
-export const getSavedMissingItemPref = (): MissingItemPref => {
-  if (typeof window === 'undefined') return 'SKIP';
+export const getSavedMissingItemPref = (): MissingItemPref | null => {
+  if (typeof window === 'undefined') return null;
   const val = localStorage.getItem(KEYS.MISSING_ITEM_PREF);
-  if (val === 'SIMILAR' || val === 'CALL') return val;
-  return 'SKIP';
+  if (val === 'SKIP' || val === 'SIMILAR' || val === 'CALL') return val;
+  return null;
 };
 
 export const saveMissingItemPref = (pref: MissingItemPref) => {

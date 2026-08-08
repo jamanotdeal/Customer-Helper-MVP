@@ -168,7 +168,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
           ? {
               amount: val,
               reason: feeReason.trim(),
-              status: 'PENDING',
+              status: 'APPROVED',
               requestedAt: new Date().toISOString(),
             }
           : o.feeAdjustment,
@@ -222,7 +222,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
               {badge.label} (৳{order.deliveryFee})
             </span>
           </div>
-          <h3 className="text-lg font-black text-white">{order.title}</h3>
+          <h3 className="text-lg font-black text-white">{`Order-#${order.id}`}</h3>
           
           {/* Prominent Eye-Catching Counterup Timer Card */}
           <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950 via-gray-900 to-teal-950 border border-emerald-500/40 flex items-center justify-between shadow-inner">
@@ -617,12 +617,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer (Optional)</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer <span className="text-red-500">*</span></label>
                 <textarea
                   value={feeReason}
                   onChange={(e) => setFeeReason(e.target.value)}
                   placeholder="যেমন: মালামাল ভারী অথবা পিকআপ স্পট অতিরিক্ত দূরে..."
                   className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-amber-500"
+                  required
                 />
               </div>
 

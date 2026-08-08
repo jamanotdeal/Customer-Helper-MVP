@@ -113,7 +113,7 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
             </div>
             <div>
               <h3 className="font-extrabold text-base">Assign Helper to Order</h3>
-              <p className="text-xs text-purple-200">Order #{order.id} • {order.title}</p>
+              <p className="text-xs text-purple-200">Order #{order.id} • {order.title || order.items?.[0]?.name || 'Order'}</p>
             </div>
           </div>
           <button

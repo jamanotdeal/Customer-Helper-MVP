@@ -57,7 +57,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onClick, showDurati
     >
       <div className="flex items-start justify-between mb-2">
         <h3 className="font-bold text-gray-900 text-sm leading-snug line-clamp-1 pr-2">
-          {order.title}
+          {`Order-#${order.id}`}
         </h3>
         <span
           className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${badge.color} shrink-0`}
