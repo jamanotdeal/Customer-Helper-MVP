@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateDeliveryFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatCreatedAt, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -18,7 +18,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
   const [feeReason, setFeeReason] = useState('');
   const [showFeeModal, setShowFeeModal] = useState(false);
-  const { showConfirm } = useModal();
+  const { showConfirm, showAlert } = useModal();
+
+  // Validation: helper must enter product cost (which auto-sets delivery fee) before advancing
+  const hasCostAndFee = order.productCost !== undefined;
 
   const badge = getStatusBadgeInfo(order.status);
 
@@ -79,6 +82,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
   const [uncheckedError, setUncheckedError] = useState('');
 
   const handleUpdateStatusWithCheck = (newStatus: OrderStatus, note?: string) => {
+    // Guard: product cost must be entered before advancing past ACCEPTED
+    if (order.productCost === undefined) {
+      showAlert(
+        'Product Cost Required',
+        'You must enter the total product cost first. This auto-calculates the delivery fee. You cannot proceed without completing this step.',
+        'warning'
+      );
+      return;
+    }
+
     const allChecked = order.items.every((i) => i.purchased);
     if (!allChecked && !note) {
       setPendingNextStatus(newStatus);
@@ -93,6 +106,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
 
   const handleConfirmUncheckedSubmission = (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard: product cost must still be set even after bypassing unchecked items
+    if (order.productCost === undefined) {
+      showAlert(
+        'Product Cost Required',
+        'You must enter the total product cost first before proceeding.',
+        'warning'
+      );
+      setShowUncheckedModal(false);
+      return;
+    }
     if (!uncheckedNote.trim()) {
       setUncheckedError('অগ্রসর হতে হলে একটি নোট/কারণ লিখুন।');
       return;
@@ -395,24 +418,63 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
         {/* Status Progression Action Buttons */}
         {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
           <div className="space-y-3">
+            {/* Fee/Cost Validation Warning Banner */}
+            {!hasCostAndFee && order.status === 'ACCEPTED' && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 space-y-2.5 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 rounded-2xl bg-orange-100 text-orange-700 flex-shrink-0">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-orange-900">Product Cost Required</h4>
+                    <p className="text-[11px] text-orange-700 font-semibold mt-0.5">
+                      Enter the total product cost above to auto-calculate & confirm the delivery fee before proceeding.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start space-x-2 text-[11px] text-orange-800 font-medium bg-orange-100/60 p-3 rounded-2xl border border-orange-200">
+                  <span className="font-black text-orange-600 text-base leading-none">1.</span>
+                  <span>Enter <strong>Product Cost</strong> in the section above — this auto-calculates the delivery fee.</span>
+                </div>
+                <div className="flex items-start space-x-2 text-[11px] text-orange-800 font-medium bg-orange-100/60 p-3 rounded-2xl border border-orange-200">
+                  <span className="font-black text-orange-600 text-base leading-none">2.</span>
+                  <span>Optionally adjust the <strong>Delivery Fee</strong> if needed (requires admin approval).</span>
+                </div>
+                <p className="text-[10px] text-orange-600 font-bold text-center pt-1">
+                  You cannot mark this order as Purchased/Executed without completing this step.
+                </p>
+              </div>
+            )}
+
             {/* ACCEPTED → PURCHASED_EXECUTED */}
             {order.status === 'ACCEPTED' && (
-              <div className="p-4 rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 space-y-3 shadow-sm animate-in fade-in duration-200">
-                <div className="flex items-center space-x-2 text-indigo-800">
-                  <PackageCheck className="w-5 h-5 text-indigo-600" />
-                  <span className="font-extrabold text-sm">Next Step: Mark as Purchased / Executed</span>
+              hasCostAndFee ? (
+                <div className="p-4 rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 space-y-3 shadow-sm animate-in fade-in duration-200">
+                  <div className="flex items-center space-x-2 text-indigo-800">
+                    <PackageCheck className="w-5 h-5 text-indigo-600" />
+                    <span className="font-extrabold text-sm">Next Step: Mark as Purchased / Executed</span>
+                  </div>
+                  <p className="text-xs text-indigo-700/80 font-medium">
+                    Once you've purchased/executed all required items from the shop, tap below to proceed.
+                  </p>
+                  <button
+                    onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
+                    className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
+                  >
+                    <PackageCheck className="w-5 h-5" />
+                    <span>Mark as Purchased / Executed</span>
+                  </button>
                 </div>
-                <p className="text-xs text-indigo-700/80 font-medium">
-                  Once you've purchased/executed all required items from the shop, tap below to proceed.
-                </p>
+              ) : (
                 <button
-                  onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
-                  className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
+                  disabled
+                  onClick={() => showAlert('Product Cost Required', 'Please enter the product cost first to auto-calculate the delivery fee. You cannot proceed without completing this step.', 'warning')}
+                  className="w-full py-3.5 rounded-2xl bg-gray-200 text-gray-400 font-extrabold text-sm cursor-not-allowed flex items-center justify-center space-x-2 border-2 border-dashed border-gray-300"
                 >
                   <PackageCheck className="w-5 h-5" />
                   <span>Mark as Purchased / Executed</span>
                 </button>
-              </div>
+              )
             )}
 
             {/* PURCHASED_EXECUTED → ON_THE_WAY */}

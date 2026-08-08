@@ -12,7 +12,7 @@ import { NotificationDrawer } from '@/components/NotificationDrawer';
 import { requestBrowserNotificationPermission } from '@/lib/firebase';
 
 export default function Home() {
-  const { user, activeMode } = useAuth();
+  const { user, loading, activeMode } = useAuth();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
 
@@ -59,6 +59,33 @@ export default function Home() {
   const isAdminView = Boolean(
     user && (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel')
   );
+
+  // While Firebase auth / redirect result is still resolving, show a loading screen.
+  // This prevents flashing the unauthenticated (login) view when Google redirects back.
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100dvh',
+        background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
+        gap: '16px',
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          border: '3px solid rgba(99,102,241,0.2)',
+          borderTopColor: '#6366f1',
+          borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <span style={{ color: '#94a3b8', fontSize: '14px', letterSpacing: '0.05em' }}>Signing you in…</span>
+      </div>
+    );
+  }
 
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
