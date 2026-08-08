@@ -12,12 +12,16 @@ import { Bike, CheckCircle2, Clock, AlertTriangle, Layers } from 'lucide-react';
 
 export const HelperDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { showAlert } = useModal();
+  const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<'AVAILABLE' | 'ACTIVE' | 'COMPLETED'>('AVAILABLE');
+  const [rejectedOrderIds, setRejectedOrderIds] = useState<Set<string>>(new Set());
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
+    fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
+  );
 
   useEffect(() => {
     const syncOrders = () => {
@@ -38,6 +42,7 @@ export const HelperDashboard: React.FC = () => {
         setAvailableOrders(avail);
         setActiveOrders(act);
         setCompletedOrders(comp);
+        setActiveOrderLimit(fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5);
       }
     };
 
@@ -50,14 +55,22 @@ export const HelperDashboard: React.FC = () => {
 
   const handleAcceptOrder = async (orderId: string) => {
     if (!user) return;
-    if (activeOrders.length >= 5) {
+    if (activeOrders.length >= activeOrderLimit) {
       await showAlert(
         'অর্ডার সীমা পূর্ণ',
-        'আপনি সর্বোচ্চ ৫টি অ্যাক্টিভ অর্ডার সম্পন্ন করার পর নতুন অর্ডার নিতে পারবেন।',
+        `আপনি সর্বোচ্চ ${activeOrderLimit}টি অ্যাক্টিভ অর্ডার সম্পন্ন করার পর নতুন অর্ডার নিতে পারবেন।`,
         'warning'
       );
       return;
     }
+
+    const confirmed = await showConfirm(
+      'রিকুয়েস্ট গ্রহণ করুন',
+      'আপনি কি এই রিকুয়েস্টটি গ্রহণ করতে চান? গ্রহণ করার পর আপনি অর্ডারটি ডেলিভারি করতে বাধ্য থাকবেন।',
+      'হ্যাঁ, Accept করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
 
     fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
@@ -82,43 +95,18 @@ export const HelperDashboard: React.FC = () => {
     setSelectedOrderId(orderId);
   };
 
-  const handleFeeAdjustment = async (orderId: string, amount: number, reason: string) => {
+  const handleRejectOrder = async (orderId: string) => {
     if (!user) return;
-    if (activeOrders.length >= 5) {
-      await showAlert(
-        'অর্ডার সীমা পূর্ণ',
-        'আপনি সর্বোচ্চ ৫টি অ্যাক্টিভ অর্ডার সম্পন্ন করার পর নতুন অর্ডার নিতে পারবেন।',
-        'warning'
-      );
-      return;
-    }
+    const confirmed = await showConfirm(
+      'রিকুয়েস্ট প্রত্যাখ্যান',
+      'আপনি কি এই রিকুয়েস্টটি প্রত্যাখ্যান করতে চান? প্রত্যাখ্যান করলে এটি আপনার তালিকা থেকে সরে যাবে।',
+      'হ্যাঁ, Reject করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
 
-    fallbackStore.updateOrder(orderId, (o) => ({
-      ...o,
-      status: 'ACCEPTED',
-      helperId: user.uid,
-      helperName: user.displayName,
-      helperPhone: user.alternativePhone,
-      acceptedAt: new Date().toISOString(),
-      feeAdjustment: {
-        amount,
-        reason,
-        status: 'PENDING',
-        requestedAt: new Date().toISOString(),
-      },
-      statusHistory: [
-        ...o.statusHistory,
-        {
-          id: `sh-${Date.now()}`,
-          status: 'ACCEPTED',
-          timestamp: new Date().toISOString(),
-          actor: `Helper (${user.displayName})`,
-          note: `Requested fee adjustment to ৳${amount}`,
-        },
-      ],
-    }));
-
-    setSelectedOrderId(orderId);
+    // Store rejected order IDs in session so the helper doesn't see it again
+    setRejectedOrderIds((prev) => new Set(prev).add(orderId));
   };
 
   if (selectedOrderId) {
@@ -145,12 +133,12 @@ export const HelperDashboard: React.FC = () => {
             <span className="font-extrabold text-base">Helper Workspace</span>
           </div>
           <span className="text-xs font-bold px-3 py-1 rounded-full bg-white/20">
-            Active: {activeOrders.length}/5
+            Active: {activeOrders.length}/{activeOrderLimit}
           </span>
         </div>
         <p className="text-xs text-emerald-100 font-medium">
-          {activeOrders.length >= 5
-            ? '⚠️ Maximum 5 active orders reached. Finish existing orders to accept more.'
+          {activeOrders.length >= activeOrderLimit
+            ? `Maximum ${activeOrderLimit} active orders reached. Finish existing orders to accept more.`
             : 'Accept nearby customer requests and start earning.'}
         </p>
       </div>
@@ -201,13 +189,16 @@ export const HelperDashboard: React.FC = () => {
               <p className="text-xs text-gray-500">নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।</p>
             </div>
           ) : (
-            availableOrders.map((ord) => (
+            availableOrders
+              .filter((ord) => !rejectedOrderIds.has(ord.id))
+              .map((ord) => (
               <HelperRequestCard
                 key={ord.id}
                 order={ord}
                 onAccept={handleAcceptOrder}
-                onRequestFeeAdjustment={handleFeeAdjustment}
+                onReject={handleRejectOrder}
                 activeOrdersCount={activeOrders.length}
+                activeOrderLimit={activeOrderLimit}
               />
             ))
           )}

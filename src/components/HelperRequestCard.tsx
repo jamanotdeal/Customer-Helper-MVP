@@ -1,26 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
-import { MapPin, Navigation, ArrowRight, DollarSign, AlertCircle, Clock } from 'lucide-react';
+import { MapPin, Navigation, ArrowRight, AlertCircle, Clock, XCircle } from 'lucide-react';
 import { formatCreatedAt, getElapsedTime } from '@/lib/timeUtils';
 
 interface HelperRequestCardProps {
   order: Order;
   onAccept: (orderId: string) => void;
-  onRequestFeeAdjustment: (orderId: string, amount: number, reason: string) => void;
+  onReject: (orderId: string) => void;
   activeOrdersCount: number;
+  activeOrderLimit: number;
 }
 
 export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   order,
   onAccept,
-  onRequestFeeAdjustment,
+  onReject,
   activeOrdersCount,
+  activeOrderLimit,
 }) => {
-  const [showFeeModal, setShowFeeModal] = useState(false);
-  const [adjustedFee, setAdjustedFee] = useState(order.deliveryFee + 10);
-  const [reason, setReason] = useState('Heavy items and pickup location distance.');
-
-  const isCapReached = activeOrdersCount >= 5;
+  const isCapReached = activeOrdersCount >= activeOrderLimit;
   const [elapsed, setElapsed] = useState(() => getElapsedTime(order.createdAt));
 
   useEffect(() => {
@@ -29,12 +27,6 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, [order.createdAt]);
-
-  const handleAdjustSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onRequestFeeAdjustment(order.id, adjustedFee, reason);
-    setShowFeeModal(false);
-  };
 
   return (
     <div className="bg-white rounded-3xl border border-gray-100 shadow-soft p-4 space-y-3">
@@ -60,10 +52,12 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
 
       {/* Pickup & Delivery details */}
       <div className="bg-gray-50 rounded-2xl p-3 border border-gray-100 text-xs space-y-1.5">
-        <div className="flex items-center space-x-2 text-gray-600">
-          <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span className="font-semibold text-gray-800">Pickup:</span>
-          <span className="truncate">{order.pickupLocation?.address || 'Local Helper Market'}</span>
+        <div className="flex items-start space-x-2 text-gray-600">
+          <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+          <span className="font-semibold text-gray-800 shrink-0">Pickup:</span>
+          <span className={`truncate ${order.pickupLocation?.address ? 'text-gray-800 font-medium' : 'text-gray-400 italic'}`}>
+            {order.pickupLocation?.address || 'N/A'}
+          </span>
         </div>
         <div className="flex items-center space-x-2 text-gray-800">
           <Navigation className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -81,10 +75,11 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
       {/* Action Buttons */}
       <div className="flex items-center space-x-2 pt-1">
         <button
-          onClick={() => setShowFeeModal(true)}
-          className="py-3 px-3 rounded-2xl bg-amber-50 text-amber-800 hover:bg-amber-100 font-bold text-xs border border-amber-200 transition-all shrink-0"
+          onClick={() => onReject(order.id)}
+          className="py-3 px-3 rounded-2xl bg-red-50 text-red-700 hover:bg-red-100 font-bold text-xs border border-red-200 transition-all shrink-0 flex items-center space-x-1"
         >
-          Adjust Fee
+          <XCircle className="w-3.5 h-3.5" />
+          <span>Reject</span>
         </button>
 
         <button
@@ -96,61 +91,9 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
               : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98'
           }`}
         >
-          {isCapReached ? 'Limit Reached (5 Max)' : 'Accept Request'}
+          {isCapReached ? `Limit Reached (${activeOrderLimit} Max)` : 'Accept Request'}
         </button>
       </div>
-
-      {/* Fee Adjustment Modal */}
-      {showFeeModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-gray-900">Request Fee Adjustment</h3>
-            <p className="text-xs text-gray-600">
-              Normal Delivery Fee is ৳{order.deliveryFee}. Please state your requested fee and reason for the customer.
-            </p>
-
-            <form onSubmit={handleAdjustSubmit} className="space-y-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Requested Delivery Fee (৳)</label>
-                <input
-                  type="number"
-                  value={adjustedFee}
-                  onChange={(e) => setAdjustedFee(Number(e.target.value))}
-                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Reason for Customer</label>
-                <textarea
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="যেমন: পিকআপ লোকেশন অনেক দূরে এবং মালামাল বেশি ভারী..."
-                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
-              <div className="flex space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowFeeModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 rounded-2xl bg-emerald-600 text-white font-bold text-xs shadow-md"
-                >
-                  Submit & Accept
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

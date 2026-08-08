@@ -163,6 +163,7 @@ export interface PricingSettings {
   rules: ValueFeeRule[];
   helperCommissionPercent: number; // e.g. 80
   minWithdrawalAmount: number;     // e.g. 100
+  helperActiveOrderLimit?: number; // Max concurrent active orders a helper can hold (default 5)
   inputPlaceholders?: string[];    // Admin configured placeholder texts
 }
 

@@ -85,7 +85,7 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
     fallbackStore.addNotification({
       id: `notif-${Date.now()}-helper-assign`,
       userId: helper.userId,
-      title: '📦 অ্যাডমিন অর্ডার অ্যাসাইন করেছেন!',
+      title: 'অ্যাডমিন অর্ডার অ্যাসাইন করেছেন!',
       body: `অর্ডার #${order.id} (${order.title}) আপনাকে অ্যাসাইন করা হয়েছে।`,
       orderId: order.id,
       read: false,

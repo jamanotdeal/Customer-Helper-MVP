@@ -57,7 +57,9 @@ self.addEventListener('push', (event) => {
     icon: '/Jamanot-Logo.png',
     badge: '/Jamanot-Logo.png',
     data: { url: data.url || '/' },
-    vibrate: [100, 50, 100],
+    vibrate: [200, 100, 200, 100, 200],
+    renotify: true,
+    tag: data.tag || 'jamanot-notification',
     actions: [
       { action: 'open', title: 'Open Jamanot' }
     ]
@@ -68,6 +70,28 @@ self.addEventListener('push', (event) => {
   );
 });
 
+// Client postMessage event for background system notifications
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    const { title, body, tag, url, icon } = event.data;
+    const options = {
+      body: body || '',
+      icon: icon || '/Jamanot-Logo.png',
+      badge: '/Jamanot-Logo.png',
+      tag: tag || `notif-${Date.now()}`,
+      renotify: true,
+      vibrate: [200, 100, 200, 100, 200],
+      data: { url: url || '/' },
+      actions: [
+        { action: 'open', title: 'Open Jamanot' }
+      ]
+    };
+    event.waitUntil(
+      self.registration.showNotification(title || 'Jamanot', options)
+    );
+  }
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const targetUrl = event.notification.data?.url || '/';
@@ -75,7 +99,7 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (let client of windowClients) {
-        if (client.url === targetUrl && 'focus' in client) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
           return client.focus();
         }
       }
@@ -85,3 +109,4 @@ self.addEventListener('notificationclick', (event) => {
     })
   );
 });
+

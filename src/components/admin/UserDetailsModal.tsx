@@ -221,7 +221,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                   </span>
                   {user.isHelper && (
                     <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 font-extrabold text-[10px] uppercase">
-                      Helper ✓
+                      Helper
                     </span>
                   )}
                 </div>
@@ -408,7 +408,11 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                         <p><strong>Legal Name:</strong> {helperApp.legalName}</p>
                         <p><strong>NID Number:</strong> {helperApp.nid}</p>
                         <p><strong>Application Status:</strong> <span className="font-extrabold text-emerald-700">{helperApp.status}</span></p>
-                        <p><strong>Assets:</strong> {helperApp.hasSmartphone ? '📱 Smartphone ' : ''}{helperApp.hasCycle ? '🚲 Cycle ' : ''}{helperApp.hasBike ? '🛵 Bike' : ''}</p>
+                        <p><strong>Assets:</strong>{' '}
+                          {helperApp.hasSmartphone && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 text-[10px] font-bold mr-1">Smartphone</span>}
+                          {helperApp.hasCycle && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-50 text-green-800 text-[10px] font-bold mr-1">Cycle</span>}
+                          {helperApp.hasBike && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[10px] font-bold">Bike</span>}
+                        </p>
                       </div>
                     ) : (
                       <p className="text-gray-500 italic py-2">কোনো হেলপার রেজিস্ট্রেশন আবেদন জমা দেওয়া হয়নি।</p>

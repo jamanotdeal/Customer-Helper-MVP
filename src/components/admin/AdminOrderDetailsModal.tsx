@@ -19,6 +19,10 @@ import {
   FileText,
   UserCheck,
   ShieldAlert,
+  Edit2,
+  PackageCheck,
+  Truck,
+  Ban,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 
@@ -33,6 +37,13 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 }) => {
   const { showAlert, showConfirm } = useModal();
   const [showAssignModal, setShowAssignModal] = useState(false);
+
+  // Admin edit modals
+  const [showAdminFeeModal, setShowAdminFeeModal] = useState(false);
+  const [adminFeeInput, setAdminFeeInput] = useState('');
+  const [adminFeeReason, setAdminFeeReason] = useState('');
+  const [showAdminCostModal, setShowAdminCostModal] = useState(false);
+  const [adminCostInput, setAdminCostInput] = useState('');
 
   const order = fallbackStore.orders.get(orderId);
   if (!order) {
@@ -197,6 +208,88 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     showAlert('আপডেট সম্পন্ন', `অর্ডারের স্ট্যাটাস '${targetStatus}' এ সেট করা হয়েছে।`, 'success');
   };
 
+  const handleAdminDirectCancel = async () => {
+    const confirmed = await showConfirm(
+      'অর্ডার বাতিল',
+      'আপনি কি এই অর্ডারটি সরাসরি বাতিল করতে চান? এটি এখনই কার্যকর হবে।',
+      'হ্যাঁ, বাতিল করুন',
+      'না'
+    );
+    if (!confirmed) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      status: 'CANCELED',
+      cancelledAt: new Date().toISOString(),
+      cancellationRequest: o.cancellationRequest
+        ? { ...o.cancellationRequest, status: 'APPROVED' }
+        : { requestedBy: 'helper', reason: 'Cancelled by Admin', status: 'APPROVED', createdAt: new Date().toISOString() },
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: 'CANCELED' as OrderStatus,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: 'Order cancelled directly by Admin',
+        },
+      ],
+    }));
+    showAlert('অর্ডার বাতিল', 'অর্ডারটি সফলভাবে বাতিল করা হয়েছে।', 'info');
+  };
+
+  const handleAdminSaveFee = (e: React.FormEvent) => {
+    e.preventDefault();
+    const val = parseFloat(adminFeeInput);
+    if (isNaN(val) || val < 0) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      deliveryFee: val,
+      feeAdjustment: {
+        amount: val,
+        reason: adminFeeReason.trim() || 'Admin manual fee override',
+        status: 'APPROVED',
+        requestedAt: new Date().toISOString(),
+      },
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: `Delivery fee updated to ৳${val} by Admin${adminFeeReason.trim() ? `: ${adminFeeReason.trim()}` : ''}`,
+        },
+      ],
+    }));
+    setShowAdminFeeModal(false);
+    setAdminFeeInput('');
+    setAdminFeeReason('');
+    showAlert('ফি আপডেট', `ডেলিভারি ফি ৳${val} এ আপডেট করা হয়েছে।`, 'success');
+  };
+
+  const handleAdminSaveCost = (e: React.FormEvent) => {
+    e.preventDefault();
+    const val = parseFloat(adminCostInput);
+    if (isNaN(val) || val < 0) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      productCost: val,
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: `Product cost/budget updated to ৳${val} by Admin`,
+        },
+      ],
+    }));
+    setShowAdminCostModal(false);
+    setAdminCostInput('');
+    showAlert('বাজেট আপডেট', `পণ্যের খরচ/বাজেট ৳${val} এ আপডেট করা হয়েছে।`, 'success');
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -300,7 +393,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </div>
                 ) : (
                   <div className="py-2 text-center text-amber-700 bg-amber-50 rounded-xl border border-amber-200">
-                    <p className="font-extrabold text-xs">⚠️ No Helper Assigned Yet</p>
+                    <div className="font-extrabold text-xs flex items-center justify-center space-x-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>No Helper Assigned Yet</span>
+                    </div>
                     <p className="text-[11px]">Click "Assign Helper" above to assign an active helper anytime.</p>
                   </div>
                 )}
@@ -493,34 +589,103 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             </div>
 
             {/* 6. Admin Force Action Buttons */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
               <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block">
-                Admin Quick Override Actions:
+                Admin Override & Edit Actions:
               </span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setShowAssignModal(true)}
-                  className="py-2 px-3 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                >
-                  Assign / Reassign Helper
-                </button>
-                {order.status !== 'DELIVERED' && (
+
+              {/* Status Progression Buttons */}
+              {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+                <div>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Force Status Change:</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setShowAssignModal(true)}
+                      className="py-2 px-3 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Assign / Reassign Helper</span>
+                    </button>
+                    {order.status !== 'ACCEPTED' && (
+                      <button
+                        onClick={() => handleForceStatusChange('ACCEPTED')}
+                        className="py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                      >
+                        → ACCEPTED
+                      </button>
+                    )}
+                    {order.status !== 'PURCHASED_EXECUTED' && (
+                      <button
+                        onClick={() => handleForceStatusChange('PURCHASED_EXECUTED')}
+                        className="py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      >
+                        <PackageCheck className="w-3.5 h-3.5" />
+                        <span>→ PURCHASED</span>
+                      </button>
+                    )}
+                    {order.status !== 'ON_THE_WAY' && (
+                      <button
+                        onClick={() => handleForceStatusChange('ON_THE_WAY')}
+                        className="py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      >
+                        <Truck className="w-3.5 h-3.5" />
+                        <span>→ ON THE WAY</span>
+                      </button>
+                    )}
+                    {order.status !== 'ARRIVED' && (
+                      <button
+                        onClick={() => handleForceStatusChange('ARRIVED')}
+                        className="py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>→ ARRIVED</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleForceStatusChange('DELIVERED')}
+                      className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>→ DELIVERED</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Edit Fee & Budget */}
+              <div>
+                <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Edit Fee & Budget:</p>
+                <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={() => handleForceStatusChange('DELIVERED')}
-                    className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                    onClick={() => { setAdminFeeInput(String(order.deliveryFee)); setAdminFeeReason(''); setShowAdminFeeModal(true); }}
+                    className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
                   >
-                    Force Mark Delivered
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Update Delivery Fee (৳{order.deliveryFee})</span>
                   </button>
-                )}
-                {order.status !== 'CANCELED' && (
                   <button
-                    onClick={() => handleForceStatusChange('CANCELED')}
-                    className="py-2 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                    onClick={() => { setAdminCostInput(order.productCost !== undefined ? String(order.productCost) : ''); setShowAdminCostModal(true); }}
+                    className="py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
                   >
-                    Force Cancel Order
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>Update Product Cost{order.productCost !== undefined ? ` (৳${order.productCost})` : ''}</span>
                   </button>
-                )}
+                </div>
               </div>
+
+              {/* Direct Cancel (always visible unless already done) */}
+              {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+                <div>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Danger Zone:</p>
+                  <button
+                    onClick={handleAdminDirectCancel}
+                    className="py-2 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>Cancel This Order Immediately</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -543,6 +708,89 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           onClose={() => setShowAssignModal(false)}
           onAssigned={() => setShowAssignModal(false)}
         />
+      )}
+
+      {/* Admin: Edit Delivery Fee Modal */}
+      {showAdminFeeModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <Edit2 className="w-5 h-5 text-amber-600" />
+                <span>Admin: Update Delivery Fee</span>
+              </h3>
+              <button onClick={() => setShowAdminFeeModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">Current fee: <strong>৳{order.deliveryFee}</strong>. This update will be applied immediately and marked as Admin approved.</p>
+            <form onSubmit={handleAdminSaveFee} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">New Delivery Fee (৳)</label>
+                <input
+                  type="number"
+                  step="1"
+                  value={adminFeeInput}
+                  onChange={(e) => setAdminFeeInput(e.target.value)}
+                  placeholder="e.g. 80"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-amber-500"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note (Optional)</label>
+                <textarea
+                  value={adminFeeReason}
+                  onChange={(e) => setAdminFeeReason(e.target.value)}
+                  placeholder="e.g. Adjusted due to long distance..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-16 outline-none focus:border-amber-500"
+                />
+              </div>
+              <div className="flex space-x-2 pt-1">
+                <button type="button" onClick={() => setShowAdminFeeModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="submit" className="flex-1 py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md">Save Fee</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Edit Product Cost / Budget Modal */}
+      {showAdminCostModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <DollarSign className="w-5 h-5 text-purple-600" />
+                <span>Admin: Update Product Cost</span>
+              </h3>
+              <button onClick={() => setShowAdminCostModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">Current product cost: <strong>{order.productCost !== undefined ? `৳${order.productCost}` : 'Not set'}</strong>.</p>
+            <form onSubmit={handleAdminSaveCost} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Product Cost / Budget (৳)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={adminCostInput}
+                  onChange={(e) => setAdminCostInput(e.target.value)}
+                  placeholder="e.g. 450"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="flex space-x-2 pt-1">
+                <button type="button" onClick={() => setShowAdminCostModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md">Save Cost</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </>
   );

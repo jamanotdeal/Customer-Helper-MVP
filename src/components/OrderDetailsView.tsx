@@ -75,8 +75,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     return 'UPCOMING';
   };
 
-  const handleApproveFeeAdjustment = () => {
+  const handleApproveFeeAdjustment = async () => {
     if (!order.feeAdjustment) return;
+    const confirmed = await showConfirm(
+      'ফি অ্যাডজাস্টমেন্ট অনুমোদন',
+      `আপনি কি হেলপারের ডেলিভারি ফি ৫${order.feeAdjustment.amount} টাকা অনুমোদন করতে চান? মূল ফি ছিল ৫${order.originalDeliveryFee} টাকা।`,
+      'হ্যাঁ, Approve করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       deliveryFee: o.feeAdjustment!.amount,
@@ -94,8 +101,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     }));
   };
 
-  const handleRejectFeeAdjustment = () => {
+  const handleRejectFeeAdjustment = async () => {
     if (!order.feeAdjustment) return;
+    const confirmed = await showConfirm(
+      'ফি অ্যাডজাস্টমেন্ট প্রত্যাখ্যান',
+      `আপনি কি ডেলিভারি ফি ড্রিকুয়েস্ট প্রত্যাখ্যান করতে চান? মূল ফি ৫${order.originalDeliveryFee} বরাবর থাকবে।`,
+      'হ্যাঁ, Reject করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
@@ -228,7 +242,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         ) : (
           <div className="bg-amber-50/90 rounded-3xl border border-amber-200/80 p-4 text-center space-y-1 shadow-soft">
-            <p className="font-extrabold text-xs text-amber-900">⏳ Waiting for Helper Assignment</p>
+            <p className="font-extrabold text-xs text-amber-900 flex items-center justify-center space-x-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Waiting for Helper Assignment</span>
+            </p>
             <p className="text-[11px] text-amber-700 font-medium">
               A nearby helper will accept your order soon. Once assigned, their name and WhatsApp contact details will appear here.
             </p>

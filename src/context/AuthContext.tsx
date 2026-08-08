@@ -89,14 +89,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (isAdmin) {
           setActiveModeState('admin');
           saveActiveMode('admin');
+        } else {
+          const targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
+          setActiveModeState(targetMode);
+          saveActiveMode(targetMode);
         }
       } else {
         setUser(null);
       }
       setLoading(false);
     });
-
-    setLoading(false);
 
     return () => {
       unsubscribeStore();
@@ -206,8 +208,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setActiveMode(profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : 'customer');
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Google Popup Auth login cancelled or failed.', err);
+      if (err?.code === 'auth/unauthorized-domain') {
+        alert(
+          `Domain Not Authorized!\n\nYour domain (${typeof window !== 'undefined' ? window.location.hostname : 'your custom domain'}) is not added to your Firebase Authorized Domains.\n\nPlease add it in Firebase Console -> Authentication -> Settings -> Authorized domains.`
+        );
+      } else if (err?.code && err.code !== 'auth/popup-closed-by-user') {
+        alert(`Login failed: ${err.message || err.code}`);
+      }
     } finally {
       setLoading(false);
     }

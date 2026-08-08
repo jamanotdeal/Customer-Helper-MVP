@@ -5,6 +5,7 @@ import { calculateDeliveryFee } from '@/lib/pricing';
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatCreatedAt, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { useModal } from './CustomModal';
 
 interface HelperActiveOrderViewProps {
   order: Order;
@@ -17,8 +18,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
   const [feeReason, setFeeReason] = useState('');
   const [showFeeModal, setShowFeeModal] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
+  const { showConfirm } = useModal();
 
   const badge = getStatusBadgeInfo(order.status);
 
@@ -155,20 +155,24 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
     setShowFeeModal(false);
   };
 
-  const handleRequestCancellation = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!cancelReason.trim()) return;
+  const handleRequestCancellation = async () => {
+    const confirmed = await showConfirm(
+      'অর্ডার বাতিলের অনুরোধ',
+      'আপনি কি এই অর্ডারটি বাতিলের অনুরোধ পাঠাতে চান? প্রশাসন এবং গ্রাহক রিভিউ করবেন। হেলপার সরাসরি অর্ডার বাতিল করতে পারে না।',
+      'হ্যাঁ, অনুরোধ পাঠান',
+      'ফিরে যান'
+    );
+    if (!confirmed) return;
 
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       cancellationRequest: {
         requestedBy: 'helper',
-        reason: cancelReason.trim(),
+        reason: 'Cancellation requested by helper',
         status: 'PENDING',
         createdAt: new Date().toISOString(),
       },
     }));
-    setShowCancelModal(false);
   };
 
   return (
@@ -388,6 +392,91 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
           </div>
         </div>
 
+        {/* Status Progression Action Buttons */}
+        {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+          <div className="space-y-3">
+            {/* ACCEPTED → PURCHASED_EXECUTED */}
+            {order.status === 'ACCEPTED' && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 space-y-3 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2 text-indigo-800">
+                  <PackageCheck className="w-5 h-5 text-indigo-600" />
+                  <span className="font-extrabold text-sm">Next Step: Mark as Purchased / Executed</span>
+                </div>
+                <p className="text-xs text-indigo-700/80 font-medium">
+                  Once you've purchased/executed all required items from the shop, tap below to proceed.
+                </p>
+                <button
+                  onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
+                  className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
+                >
+                  <PackageCheck className="w-5 h-5" />
+                  <span>Mark as Purchased / Executed</span>
+                </button>
+              </div>
+            )}
+
+            {/* PURCHASED_EXECUTED → ON_THE_WAY */}
+            {order.status === 'PURCHASED_EXECUTED' && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 space-y-3 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2 text-emerald-800">
+                  <Truck className="w-5 h-5 text-emerald-600 animate-pulse" />
+                  <span className="font-extrabold text-sm">Next Step: Start Delivery</span>
+                </div>
+                <p className="text-xs text-emerald-700/80 font-medium">
+                  Heading to the customer's delivery address? Tap below to let them know you're on the way.
+                </p>
+                <button
+                  onClick={() => handleUpdateStatus('ON_THE_WAY')}
+                  className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2"
+                >
+                  <Truck className="w-5 h-5" />
+                  <span>I'm On The Way!</span>
+                </button>
+              </div>
+            )}
+
+            {/* ON_THE_WAY → ARRIVED */}
+            {order.status === 'ON_THE_WAY' && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-teal-50 to-emerald-50 border border-teal-200 space-y-3 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2 text-teal-800">
+                  <MapPin className="w-5 h-5 text-teal-600" />
+                  <span className="font-extrabold text-sm">Next Step: Arrived at Location</span>
+                </div>
+                <p className="text-xs text-teal-700/80 font-medium">
+                  Have you reached the customer's delivery location? Mark your arrival below.
+                </p>
+                <button
+                  onClick={() => handleUpdateStatus('ARRIVED')}
+                  className="w-full py-3.5 rounded-2xl bg-teal-600 hover:bg-teal-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-teal-600/25 transition-all flex items-center justify-center space-x-2"
+                >
+                  <MapPin className="w-5 h-5" />
+                  <span>I've Arrived at Location!</span>
+                </button>
+              </div>
+            )}
+
+            {/* ARRIVED → DELIVERED */}
+            {order.status === 'ARRIVED' && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 border border-emerald-700 space-y-3 shadow-lg animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2 text-white">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+                  <span className="font-extrabold text-sm text-white">Final Step: Mark as Delivered!</span>
+                </div>
+                <p className="text-xs text-emerald-100/90 font-medium">
+                  Hand over the order to the customer and confirm delivery below to complete this order.
+                </p>
+                <button
+                  onClick={() => handleUpdateStatus('DELIVERED')}
+                  className="w-full py-4 rounded-2xl bg-white hover:bg-emerald-50 active:scale-98 text-emerald-800 font-extrabold text-sm shadow-md transition-all flex items-center justify-center space-x-2"
+                >
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  <span>Confirm Order Delivered!</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Request Cancellation Trigger */}
         {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
           <div className="pt-2">
@@ -397,7 +486,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
               </div>
             ) : (
               <button
-                onClick={() => setShowCancelModal(true)}
+                onClick={handleRequestCancellation}
                 className="w-full py-3.5 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs transition-colors flex items-center justify-center space-x-1.5"
               >
                 <AlertOctagon className="w-4 h-4" />
@@ -488,42 +577,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
                   className="flex-1 py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md"
                 >
                   Save Fee
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Request Cancellation Modal */}
-      {showCancelModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-gray-900 text-red-600">Request Cancellation</h3>
-            <p className="text-xs text-gray-600">
-              Helpers cannot cancel directly. Please specify the reason for admin and customer review.
-            </p>
-            <form onSubmit={handleRequestCancellation} className="space-y-3">
-              <textarea
-                value={cancelReason}
-                onChange={(e) => setCancelReason(e.target.value)}
-                placeholder="কারণ লিখুন (যেমন: দোকান বন্ধ, গ্রাহক ফোন ধরছেন না...)"
-                className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-24 outline-none focus:border-red-500"
-                required
-              />
-              <div className="flex space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCancelModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 rounded-2xl bg-red-600 text-white font-bold text-xs shadow-md"
-                >
-                  Submit Request
                 </button>
               </div>
             </form>

@@ -1,12 +1,12 @@
 import { PricingSettings } from '@/types';
 
 export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
-  '🛒 চাল, ডাল, তেল, তরকারি বা ঘরের বাজার...',
-  '🧺 লন্ড্রির কাপড় পাঠানো বা দোকান থেকে আনা...',
-  '🍔 পছন্দের রেস্তোরাঁ থেকে গরম খাবার...',
-  '📦 যেকোনো জরুরি পার্সেল এক স্থান থেকে অন্য স্থানে...',
-  '💊 ফার্মেসি থেকে জরুরি প্রয়োজনীয় ওষুধ...',
-  '🌀 অন্য যেকোনো কাজ যা আপনার প্রয়োজন...',
+  'চাল, ডাল, তেল, তরকারি বা ঘরের বাজার...',
+  'লন্ড্রির কাপড় পাঠানো বা দোকান থেকে আনা...',
+  'পছন্দের রেস্তোরাঁ থেকে গরম খাবার...',
+  'যেকোনো জরুরি পার্সেল এক স্থান থেকে অন্য স্থানে...',
+  'ফার্মেসি থেকে জরুরি প্রয়োজনীয় ওষুধ...',
+  'অন্য যেকোনো কাজ যা আপনার প্রয়োজন...',
 ];
 
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
@@ -17,6 +17,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   ],
   helperCommissionPercent: 80,
   minWithdrawalAmount: 100,
+  helperActiveOrderLimit: 5,
   inputPlaceholders: DEFAULT_INPUT_PLACEHOLDERS,
 };
 

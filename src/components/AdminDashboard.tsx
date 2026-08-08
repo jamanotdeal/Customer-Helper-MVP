@@ -33,6 +33,8 @@ import {
   Trash2,
   TrendingUp,
   BarChart2,
+  Bell,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -42,6 +44,7 @@ import { CustomerHistoryModal } from './admin/CustomerHistoryModal';
 import { HelperHistoryModal } from './admin/HelperHistoryModal';
 import { UserDetailsModal } from './admin/UserDetailsModal';
 import { RevenueAnalytics } from './admin/RevenueAnalytics';
+import { AdminPushNotificationModal } from './admin/AdminPushNotificationModal';
 
 export const AdminDashboard: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -59,11 +62,13 @@ export const AdminDashboard: React.FC = () => {
   const [placeholdersText, setPlaceholdersText] = useState<string>('');
 
   // Modals state
+  const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [assignHelperOrder, setAssignHelperOrder] = useState<Order | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+
 
   // Search, Filter & Pagination states
   const [searchQuery, setSearchQuery] = useState('');
@@ -478,7 +483,15 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-3">
-            <span className="text-xs font-extrabold px-3.5 py-1.5 rounded-full bg-amber-400 text-purple-950 flex items-center space-x-1.5 shadow-md">
+            <button
+              onClick={() => setShowPushNotificationModal(true)}
+              className="text-xs font-extrabold px-4 py-2 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center space-x-2 shadow-lg shadow-purple-950/40 transition-all border border-purple-400/30 active:scale-95"
+            >
+              <Bell className="w-4 h-4 text-purple-200" />
+              <span>Send Push Notification</span>
+            </button>
+
+            <span className="text-xs font-extrabold px-3.5 py-2 rounded-2xl bg-amber-400 text-purple-950 flex items-center space-x-1.5 shadow-md">
               <AlertCircle className="w-4 h-4" />
               <span>Needs Attention: {totalExceptionsCount}</span>
             </span>
@@ -1316,9 +1329,9 @@ export const AdminDashboard: React.FC = () => {
                       <td className="py-4 px-5">{app.email}</td>
                       <td className="py-4 px-5">
                         <div className="flex gap-1 text-[10px] font-bold">
-                          {app.hasSmartphone && <span className="px-2 py-0.5 rounded bg-gray-100">📱 Phone</span>}
-                          {app.hasCycle && <span className="px-2 py-0.5 rounded bg-gray-100">🚲 Cycle</span>}
-                          {app.hasBike && <span className="px-2 py-0.5 rounded bg-gray-100">🛵 Bike</span>}
+                          {app.hasSmartphone && <span className="px-2 py-0.5 rounded bg-gray-100">Phone</span>}
+                          {app.hasCycle && <span className="px-2 py-0.5 rounded bg-gray-100">Cycle</span>}
+                          {app.hasBike && <span className="px-2 py-0.5 rounded bg-gray-100">Bike</span>}
                         </div>
                       </td>
                       <td className="py-4 px-5">
@@ -1339,7 +1352,10 @@ export const AdminDashboard: React.FC = () => {
                             Approve Helper
                           </button>
                         ) : (
-                          <span className="text-emerald-700 font-bold text-xs">Approved ✓</span>
+                          <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Approved</span>
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -1501,6 +1517,26 @@ export const AdminDashboard: React.FC = () => {
                 required
               />
             </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                Max Active Orders per Helper
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={pricing.helperActiveOrderLimit ?? 5}
+                onChange={(e) =>
+                  setPricing({ ...pricing, helperActiveOrderLimit: Number(e.target.value) })
+                }
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                required
+              />
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                A helper cannot accept new requests once they hit this limit. Default is 5.
+              </p>
+            </div>
           </div>
 
           <div>
@@ -1572,6 +1608,13 @@ export const AdminDashboard: React.FC = () => {
           userId={selectedUserId}
           onClose={() => setSelectedUserId(null)}
           onUserUpdated={() => setUsers(Array.from(fallbackStore.users.values()))}
+        />
+      )}
+
+      {/* 6. Admin Custom Push Notification Modal */}
+      {showPushNotificationModal && (
+        <AdminPushNotificationModal
+          onClose={() => setShowPushNotificationModal(false)}
         />
       )}
     </div>

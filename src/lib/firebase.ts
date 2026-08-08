@@ -157,7 +157,7 @@ class FallbackStore {
           });
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore Orders sync note: Permission or connection restricted. Store using local persistence.', err)
+        (err) => console.warn('[Firestore] Orders sync note: Permission or connection restricted. Store using local persistence.', err)
       );
 
       // 2. Notifications Listener
@@ -178,7 +178,7 @@ class FallbackStore {
           this.notifications = map;
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore Notifications sync note:', err)
+        (err) => console.warn('[Firestore] Notifications sync note:', err)
       );
 
       // 3. Helper Applications Listener
@@ -191,7 +191,7 @@ class FallbackStore {
           });
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore HelperApplications sync note:', err)
+        (err) => console.warn('[Firestore] HelperApplications sync note:', err)
       );
 
       // 4. Withdrawals Listener
@@ -204,7 +204,7 @@ class FallbackStore {
           });
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore Withdrawals sync note:', err)
+        (err) => console.warn('[Firestore] Withdrawals sync note:', err)
       );
 
       // 5. Users Listener
@@ -217,7 +217,7 @@ class FallbackStore {
           });
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore Users sync note:', err)
+        (err) => console.warn('[Firestore] Users sync note:', err)
       );
 
       // 6. Wallets Listener
@@ -230,7 +230,7 @@ class FallbackStore {
           });
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore Wallets sync note:', err)
+        (err) => console.warn('[Firestore] Wallets sync note:', err)
       );
 
       // 7. Wallet Transactions Listener
@@ -251,7 +251,7 @@ class FallbackStore {
           this.walletTransactions = map;
           this.notify();
         },
-        (err) => console.warn('🔥 Firestore WalletTransactions sync note:', err)
+        (err) => console.warn('[Firestore] WalletTransactions sync note:', err)
       );
 
       // 8. Pricing & Settings Listener
@@ -263,10 +263,10 @@ class FallbackStore {
             this.notify();
           }
         },
-        (err) => console.warn('🔥 Firestore PricingSettings sync note:', err)
+        (err) => console.warn('[Firestore] PricingSettings sync note:', err)
       );
     } catch (e) {
-      console.error('🔥 Firestore Realtime init failed:', e);
+      console.error('[Firestore] Realtime init failed:', e);
     }
   }
 
@@ -290,7 +290,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore saveUser note (stored locally):', e?.message || e);
+      console.warn('[Firestore] saveUser note (stored locally):', e?.message || e);
     }
   }
 
@@ -307,7 +307,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore blockUser note (stored locally):', e?.message || e);
+      console.warn('[Firestore] blockUser note (stored locally):', e?.message || e);
     }
   }
 
@@ -317,7 +317,7 @@ class FallbackStore {
     try {
       await deleteDoc(doc(db, 'users', uid));
     } catch (e: any) {
-      console.warn('🔥 Firestore deleteUser note (stored locally):', e?.message || e);
+      console.warn('[Firestore] deleteUser note (stored locally):', e?.message || e);
     }
   }
 
@@ -333,7 +333,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore updateUserLabels note (stored locally):', e?.message || e);
+      console.warn('[Firestore] updateUserLabels note (stored locally):', e?.message || e);
     }
   }
 
@@ -351,7 +351,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore setAdminRole note (stored locally):', e?.message || e);
+      console.warn('[Firestore] setAdminRole note (stored locally):', e?.message || e);
     }
   }
 
@@ -362,7 +362,7 @@ class FallbackStore {
     this.addNotification({
       id: `notif-${Date.now()}`,
       userId: 'all-helpers',
-      title: '📦 নতুন রিকোয়েস্ট এসেছে!',
+      title: 'নতুন রিকোয়েস্ট এসেছে!',
       body: `${order.title} (ফি: ৳${order.deliveryFee}) - আপনার জন্য বরাদ্দ হতে প্রস্তুত।`,
       orderId: order.id,
       read: false,
@@ -374,7 +374,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'orders', order.id), cleanForFirestore(order));
     } catch (e: any) {
-      console.warn('🔥 Firestore addOrder note (saved locally):', e?.message || e);
+      console.warn('[Firestore] addOrder note (saved locally):', e?.message || e);
     }
   }
 
@@ -393,22 +393,22 @@ class FallbackStore {
       let notifBody = '';
 
       if (updated.status === 'ACCEPTED') {
-        notifTitle = '🛵 রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
+        notifTitle = 'রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
         notifBody = `${updated.helperName || 'হেলপার'} আপনার অর্ডার #${updated.id} গ্রহণ করেছেন।`;
       } else if (updated.status === 'PURCHASED_EXECUTED') {
-        notifTitle = '🛍️ পণ্য ক্রয় সম্পন্ন!';
+        notifTitle = 'পণ্য ক্রয় সম্পন্ন!';
         notifBody = `${updated.helperName || 'হেলপার'} আপনার প্রয়োজনীয় জিনিসপত্র কিনেছেন।`;
       } else if (updated.status === 'ON_THE_WAY') {
-        notifTitle = '🚀 হেলপার আপনার পথে আছেন!';
+        notifTitle = 'হেলপার আপনার পথে আছেন!';
         notifBody = `${updated.helperName || 'হেলপার'} ডেলিভারি দিতে রওনা হয়েছেন।`;
       } else if (updated.status === 'ARRIVED') {
-        notifTitle = '📍 হেলপার আপনার ঠিকানায় পৌঁছেছেন!';
+        notifTitle = 'হেলপার আপনার ঠিকানায় পৌঁছেছেন!';
         notifBody = `আপনার বাসার সামনে হেলপার উপস্থিত আছেন।`;
       } else if (updated.status === 'DELIVERED') {
-        notifTitle = '🎉 অর্ডার সম্পন্ন হয়েছে!';
+        notifTitle = 'অর্ডার সম্পন্ন হয়েছে!';
         notifBody = `ধন্যবাদ! আপনার অর্ডার #${updated.id} সফলভাবে ডেলিভারি হয়েছে।`;
       } else if (updated.status === 'CANCELED') {
-        notifTitle = '❌ অর্ডার বাতিল হয়েছে';
+        notifTitle = 'অর্ডার বাতিল হয়েছে';
         notifBody = `অর্ডার #${updated.id} বাতিল করা হয়েছে।`;
       }
 
@@ -430,7 +430,7 @@ class FallbackStore {
       this.addNotification({
         id: `notif-${Date.now()}-fee`,
         userId: updated.customerId,
-        title: '⚠️ ডেলিভারি ফি সমন্বয় অনুরোধ',
+        title: 'ডেলিভারি ফি সমন্বয় অনুরোধ',
         body: `হেলপার ডেলিভারি ফি ৳${updated.feeAdjustment.amount} টাকা করার অনুরোধ করেছেন।`,
         orderId: updated.id,
         read: false,
@@ -449,7 +449,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore updateOrder note (saved locally):', e?.message || e);
+      console.warn('[Firestore] updateOrder note (saved locally):', e?.message || e);
     }
   }
 
@@ -485,7 +485,7 @@ class FallbackStore {
       await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
     } catch (e: any) {
-      console.warn('🔥 Firestore creditHelperEarning note (saved locally):', e?.message || e);
+      console.warn('[Firestore] creditHelperEarning note (saved locally):', e?.message || e);
     }
   }
 
@@ -512,7 +512,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
     } catch (e: any) {
-      console.warn('🔥 Firestore submitWithdrawal note (saved locally):', e?.message || e);
+      console.warn('[Firestore] submitWithdrawal note (saved locally):', e?.message || e);
     }
     return req;
   }
@@ -547,7 +547,7 @@ class FallbackStore {
         await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(wallet), { merge: true });
         await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       } catch (e: any) {
-        console.warn('🔥 Firestore approveWithdrawal wallet sync note (saved locally):', e?.message || e);
+        console.warn('[Firestore] approveWithdrawal wallet sync note (saved locally):', e?.message || e);
       }
     }
     this.notify();
@@ -555,7 +555,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore approveWithdrawal note (saved locally):', e?.message || e);
+      console.warn('[Firestore] approveWithdrawal note (saved locally):', e?.message || e);
     }
   }
 
@@ -570,7 +570,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore rejectWithdrawal note (saved locally):', e?.message || e);
+      console.warn('[Firestore] rejectWithdrawal note (saved locally):', e?.message || e);
     }
   }
 
@@ -581,7 +581,7 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app));
     } catch (e: any) {
-      console.warn('🔥 Firestore submitHelperApp note (saved locally):', e?.message || e);
+      console.warn('[Firestore] submitHelperApp note (saved locally):', e?.message || e);
     }
   }
 
@@ -602,17 +602,14 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'helperApplications', appId), cleanForFirestore(app), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore approveHelperApp note (saved locally):', e?.message || e);
+      console.warn('[Firestore] approveHelperApp note (saved locally):', e?.message || e);
     }
   }
 
   public async addNotification(notif: AppNotification) {
-    const list = this.notifications.get(notif.userId) || [];
-    list.unshift(notif);
-    this.notifications.set(notif.userId, list);
+    const target = notif.userId;
 
-    // Also send to all-helpers list if target is helper role broadcast
-    if (notif.userId === 'all-helpers') {
+    if (target === 'all-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper) {
           const userList = this.notifications.get(u.uid) || [];
@@ -620,23 +617,51 @@ class FallbackStore {
           this.notifications.set(u.uid, userList);
         }
       });
+    } else if (target === 'all-customers') {
+      this.users.forEach((u) => {
+        if (!u.isHelper || u.role === 'customer') {
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
+      });
+    } else if (target === 'all') {
+      this.users.forEach((u) => {
+        const userList = this.notifications.get(u.uid) || [];
+        userList.unshift({ ...notif, userId: u.uid });
+        this.notifications.set(u.uid, userList);
+      });
+    } else {
+      const list = this.notifications.get(notif.userId) || [];
+      list.unshift(notif);
+      this.notifications.set(notif.userId, list);
     }
 
     this.notify();
+    playNotificationSound();
 
-    // Trigger System Native Browser Notification if supported & granted
+    // Trigger System Native Browser / Service Worker Notification if supported & granted
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'granted') {
         try {
           if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'SHOW_NOTIFICATION',
+              title: notif.title,
+              body: notif.body,
+              tag: notif.id,
+              url: '/',
+            });
+          } else if ('serviceWorker' in navigator) {
             navigator.serviceWorker.ready.then((reg) => {
               reg.showNotification(notif.title, {
                 body: notif.body,
                 icon: '/Jamanot-Logo.png',
                 badge: '/Jamanot-Logo.png',
                 tag: notif.id,
+                vibrate: [200, 100, 200],
                 data: { orderId: notif.orderId },
-              });
+              } as any);
             });
           } else {
             new Notification(notif.title, {
@@ -654,8 +679,33 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'notifications', notif.id), cleanForFirestore(notif));
     } catch (e: any) {
-      console.warn('🔥 Firestore addNotification note (saved locally):', e?.message || e);
+      console.warn('[Firestore] addNotification note (saved locally):', e?.message || e);
     }
+  }
+
+  public async sendAdminPushNotification(
+    targetAudience: 'helpers' | 'customers' | 'all' | string,
+    title: string,
+    body: string,
+    orderId?: string
+  ) {
+    const notifId = `admin-notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    let mappedAudience = targetAudience;
+    if (targetAudience === 'helpers') mappedAudience = 'all-helpers';
+    if (targetAudience === 'customers') mappedAudience = 'all-customers';
+
+    const notif: AppNotification = {
+      id: notifId,
+      userId: mappedAudience,
+      title: title,
+      body: body,
+      orderId: orderId,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    await this.addNotification(notif);
+    return notif;
   }
 
   public async markNotificationsRead(userId: string) {
@@ -670,7 +720,7 @@ class FallbackStore {
         await setDoc(doc(db, 'notifications', n.id), cleanForFirestore(n), { merge: true });
       }
     } catch (e: any) {
-      console.warn('🔥 Firestore markNotificationsRead note (saved locally):', e?.message || e);
+      console.warn('[Firestore] markNotificationsRead note (saved locally):', e?.message || e);
     }
   }
 
@@ -680,12 +730,39 @@ class FallbackStore {
     try {
       await setDoc(doc(db, 'settings', 'pricing'), cleanForFirestore(settings), { merge: true });
     } catch (e: any) {
-      console.warn('🔥 Firestore savePricingSettings note (saved locally):', e?.message || e);
+      console.warn('[Firestore] savePricingSettings note (saved locally):', e?.message || e);
     }
   }
 }
 
 export const fallbackStore = new FallbackStore();
+
+export function playNotificationSound() {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    // Friendly 2-tone chime: E5 (659.25Hz) -> A5 (880Hz)
+    osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
+
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.4);
+  } catch (e) {
+    // Ignore audio context block
+  }
+}
 
 export async function requestBrowserNotificationPermission(): Promise<boolean> {
   if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -700,4 +777,5 @@ export async function requestBrowserNotificationPermission(): Promise<boolean> {
   }
   return false;
 }
+
 
