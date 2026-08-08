@@ -1,0 +1,703 @@
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
+import {
+  Order,
+  HelperApplication,
+  Wallet,
+  WalletTransaction,
+  WithdrawalRequest,
+  PricingSettings,
+  AppNotification,
+  UserProfile,
+} from '@/types';
+import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission } from './pricing';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'jamanot-pwa.firebaseapp.com',
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'jamanot-pwa',
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'jamanot-pwa.firebasestorage.app',
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '685363529279',
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:685363529279:web:fcdd94d0e5181b7b4b9a8a',
+};
+
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+export const db = getFirestore(app);
+
+// Helper to recursively strip undefined properties before saving to Firestore
+function cleanForFirestore<T>(data: T): T {
+  if (data === undefined || data === null) return data;
+  return JSON.parse(JSON.stringify(data));
+}
+
+// -------------------------------------------------------------
+// Live Realtime State Store with Firestore Synchronization
+// -------------------------------------------------------------
+type Listener = () => void;
+
+class FallbackStore {
+  private listeners: Set<Listener> = new Set();
+
+  public users: Map<string, UserProfile> = new Map();
+  public orders: Map<string, Order> = new Map();
+  public helperApplications: Map<string, HelperApplication> = new Map();
+  public wallets: Map<string, Wallet> = new Map();
+  public walletTransactions: Map<string, WalletTransaction[]> = new Map();
+  public withdrawals: Map<string, WithdrawalRequest> = new Map();
+  public notifications: Map<string, AppNotification[]> = new Map();
+  public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
+
+  private isFirestoreInitialized = false;
+
+  constructor() {
+    this.loadFromLocalStorage();
+    this.initFirestoreListeners();
+  }
+
+  private loadFromLocalStorage() {
+    if (typeof window === 'undefined') return;
+    try {
+      const savedOrders = localStorage.getItem('jamanot_orders_store');
+      if (savedOrders) {
+        const parsed: [string, Order][] = JSON.parse(savedOrders);
+        parsed.forEach(([id, order]) => this.orders.set(id, order));
+      }
+
+      const savedUsers = localStorage.getItem('jamanot_users_store');
+      if (savedUsers) {
+        const parsed: [string, UserProfile][] = JSON.parse(savedUsers);
+        parsed.forEach(([id, u]) => this.users.set(id, u));
+      }
+
+      const savedHelperApps = localStorage.getItem('jamanot_helper_apps_store');
+      if (savedHelperApps) {
+        const parsed: [string, HelperApplication][] = JSON.parse(savedHelperApps);
+        parsed.forEach(([id, app]) => this.helperApplications.set(id, app));
+      }
+
+      const savedWallets = localStorage.getItem('jamanot_wallets_store');
+      if (savedWallets) {
+        const parsed: [string, Wallet][] = JSON.parse(savedWallets);
+        parsed.forEach(([id, w]) => this.wallets.set(id, w));
+      }
+
+      const savedTxs = localStorage.getItem('jamanot_wallet_txs_store');
+      if (savedTxs) {
+        const parsed: [string, WalletTransaction[]][] = JSON.parse(savedTxs);
+        parsed.forEach(([id, list]) => this.walletTransactions.set(id, list));
+      }
+
+      const savedWithdrawals = localStorage.getItem('jamanot_withdrawals_store');
+      if (savedWithdrawals) {
+        const parsed: [string, WithdrawalRequest][] = JSON.parse(savedWithdrawals);
+        parsed.forEach(([id, wd]) => this.withdrawals.set(id, wd));
+      }
+
+      const savedNotifs = localStorage.getItem('jamanot_notifications_store');
+      if (savedNotifs) {
+        const parsed: [string, AppNotification[]][] = JSON.parse(savedNotifs);
+        parsed.forEach(([id, list]) => this.notifications.set(id, list));
+      }
+
+      const savedPricing = localStorage.getItem('jamanot_pricing_store');
+      if (savedPricing) {
+        this.pricingSettings = JSON.parse(savedPricing);
+      }
+    } catch (e) {
+      console.warn('Local storage hydration error:', e);
+    }
+  }
+
+  private saveLocalStore() {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('jamanot_orders_store', JSON.stringify(Array.from(this.orders.entries())));
+      localStorage.setItem('jamanot_users_store', JSON.stringify(Array.from(this.users.entries())));
+      localStorage.setItem('jamanot_helper_apps_store', JSON.stringify(Array.from(this.helperApplications.entries())));
+      localStorage.setItem('jamanot_wallets_store', JSON.stringify(Array.from(this.wallets.entries())));
+      localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(Array.from(this.walletTransactions.entries())));
+      localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
+      localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
+      localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
+    } catch (e) {
+      console.warn('Local storage persist error:', e);
+    }
+  }
+
+  private initFirestoreListeners() {
+    if (typeof window === 'undefined' || this.isFirestoreInitialized) return;
+    this.isFirestoreInitialized = true;
+
+    try {
+      // 1. Orders Listener
+      onSnapshot(
+        collection(db, 'orders'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            const data = change.doc.data() as Order;
+            if (change.type === 'removed') {
+              this.orders.delete(change.doc.id);
+            } else {
+              this.orders.set(change.doc.id, data);
+            }
+          });
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore Orders sync note: Permission or connection restricted. Store using local persistence.', err)
+      );
+
+      // 2. Notifications Listener
+      onSnapshot(
+        collection(db, 'notifications'),
+        (snapshot) => {
+          const map = new Map<string, AppNotification[]>();
+          snapshot.docs.forEach((docSnap) => {
+            const data = docSnap.data() as AppNotification;
+            const userList = map.get(data.userId) || [];
+            userList.push(data);
+            map.set(data.userId, userList);
+          });
+          map.forEach((list, key) => {
+            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            map.set(key, list);
+          });
+          this.notifications = map;
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore Notifications sync note:', err)
+      );
+
+      // 3. Helper Applications Listener
+      onSnapshot(
+        collection(db, 'helperApplications'),
+        (snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const appData = docSnap.data() as HelperApplication;
+            this.helperApplications.set(appData.id, appData);
+          });
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore HelperApplications sync note:', err)
+      );
+
+      // 4. Withdrawals Listener
+      onSnapshot(
+        collection(db, 'withdrawals'),
+        (snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const wd = docSnap.data() as WithdrawalRequest;
+            this.withdrawals.set(wd.id, wd);
+          });
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore Withdrawals sync note:', err)
+      );
+
+      // 5. Users Listener
+      onSnapshot(
+        collection(db, 'users'),
+        (snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const userProfile = docSnap.data() as UserProfile;
+            this.users.set(userProfile.uid, userProfile);
+          });
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore Users sync note:', err)
+      );
+
+      // 6. Wallets Listener
+      onSnapshot(
+        collection(db, 'wallets'),
+        (snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const wallet = docSnap.data() as Wallet;
+            this.wallets.set(wallet.userId, wallet);
+          });
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore Wallets sync note:', err)
+      );
+
+      // 7. Wallet Transactions Listener
+      onSnapshot(
+        collection(db, 'walletTransactions'),
+        (snapshot) => {
+          const map = new Map<string, WalletTransaction[]>();
+          snapshot.docs.forEach((docSnap) => {
+            const tx = docSnap.data() as WalletTransaction;
+            const list = map.get(tx.userId) || [];
+            list.push(tx);
+            map.set(tx.userId, list);
+          });
+          map.forEach((list, key) => {
+            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            map.set(key, list);
+          });
+          this.walletTransactions = map;
+          this.notify();
+        },
+        (err) => console.warn('🔥 Firestore WalletTransactions sync note:', err)
+      );
+
+      // 8. Pricing & Settings Listener
+      onSnapshot(
+        doc(db, 'settings', 'pricing'),
+        (docSnap) => {
+          if (docSnap.exists()) {
+            this.pricingSettings = docSnap.data() as PricingSettings;
+            this.notify();
+          }
+        },
+        (err) => console.warn('🔥 Firestore PricingSettings sync note:', err)
+      );
+    } catch (e) {
+      console.error('🔥 Firestore Realtime init failed:', e);
+    }
+  }
+
+  public subscribe(listener: Listener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  public notify() {
+    this.saveLocalStore();
+    this.listeners.forEach((l) => l());
+  }
+
+  // --- Actions with Firebase Persistence & Dynamic Notifications ---
+
+  public async saveUser(user: UserProfile) {
+    this.users.set(user.uid, user);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore saveUser note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async blockUser(uid: string, isBlocked: boolean, reason?: string) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+    const updated: UserProfile = {
+      ...existing,
+      isBlocked,
+      blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
+    };
+    this.users.set(uid, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore blockUser note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async deleteUser(uid: string) {
+    this.users.delete(uid);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'users', uid));
+    } catch (e: any) {
+      console.warn('🔥 Firestore deleteUser note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async updateUserLabels(uid: string, labels: string[]) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+    const updated: UserProfile = {
+      ...existing,
+      labels,
+    };
+    this.users.set(uid, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore updateUserLabels note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async setAdminRole(uid: string, isAdmin: boolean) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+    const updated: UserProfile = {
+      ...existing,
+      isAdmin,
+      role: isAdmin ? 'admin' : (existing.isHelper ? 'helper' : 'customer'),
+      lastActiveMode: isAdmin ? 'admin' : (existing.lastActiveMode === 'admin' ? 'customer' : existing.lastActiveMode),
+    };
+    this.users.set(uid, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore setAdminRole note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async addOrder(order: Order) {
+    this.orders.set(order.id, order);
+    
+    // Dynamic notification to helpers & admins
+    this.addNotification({
+      id: `notif-${Date.now()}`,
+      userId: 'all-helpers',
+      title: '📦 নতুন রিকোয়েস্ট এসেছে!',
+      body: `${order.title} (ফি: ৳${order.deliveryFee}) - আপনার জন্য বরাদ্দ হতে প্রস্তুত।`,
+      orderId: order.id,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'orders', order.id), cleanForFirestore(order));
+    } catch (e: any) {
+      console.warn('🔥 Firestore addOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async updateOrder(orderId: string, updater: (order: Order) => Order) {
+    const existing = this.orders.get(orderId);
+    if (!existing) return;
+
+    const previousStatus = existing.status;
+    const updated = updater(existing);
+    updated.updatedAt = new Date().toISOString();
+    this.orders.set(orderId, updated);
+
+    // Dynamic Notifications based on Order Status changes
+    if (updated.status !== previousStatus) {
+      let notifTitle = '';
+      let notifBody = '';
+
+      if (updated.status === 'ACCEPTED') {
+        notifTitle = '🛵 রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
+        notifBody = `${updated.helperName || 'হেলপার'} আপনার অর্ডার #${updated.id} গ্রহণ করেছেন।`;
+      } else if (updated.status === 'PURCHASED_EXECUTED') {
+        notifTitle = '🛍️ পণ্য ক্রয় সম্পন্ন!';
+        notifBody = `${updated.helperName || 'হেলপার'} আপনার প্রয়োজনীয় জিনিসপত্র কিনেছেন।`;
+      } else if (updated.status === 'ON_THE_WAY') {
+        notifTitle = '🚀 হেলপার আপনার পথে আছেন!';
+        notifBody = `${updated.helperName || 'হেলপার'} ডেলিভারি দিতে রওনা হয়েছেন।`;
+      } else if (updated.status === 'ARRIVED') {
+        notifTitle = '📍 হেলপার আপনার ঠিকানায় পৌঁছেছেন!';
+        notifBody = `আপনার বাসার সামনে হেলপার উপস্থিত আছেন।`;
+      } else if (updated.status === 'DELIVERED') {
+        notifTitle = '🎉 অর্ডার সম্পন্ন হয়েছে!';
+        notifBody = `ধন্যবাদ! আপনার অর্ডার #${updated.id} সফলভাবে ডেলিভারি হয়েছে।`;
+      } else if (updated.status === 'CANCELED') {
+        notifTitle = '❌ অর্ডার বাতিল হয়েছে';
+        notifBody = `অর্ডার #${updated.id} বাতিল করা হয়েছে।`;
+      }
+
+      if (notifTitle && updated.customerId) {
+        this.addNotification({
+          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          userId: updated.customerId,
+          title: notifTitle,
+          body: notifBody,
+          orderId: updated.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Fee adjustment notification to customer
+    if (updated.feeAdjustment && updated.feeAdjustment.status === 'PENDING' && existing.feeAdjustment?.status !== 'PENDING') {
+      this.addNotification({
+        id: `notif-${Date.now()}-fee`,
+        userId: updated.customerId,
+        title: '⚠️ ডেলিভারি ফি সমন্বয় অনুরোধ',
+        body: `হেলপার ডেলিভারি ফি ৳${updated.feeAdjustment.amount} টাকা করার অনুরোধ করেছেন।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // If completed, automatically calculate helper commission atomically
+    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.helperId) {
+      const commission = calculateHelperCommission(updated.deliveryFee, this.pricingSettings);
+      this.creditHelperEarning(updated.helperId, commission, updated.id);
+    }
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore updateOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async creditHelperEarning(helperId: string, amount: number, orderId: string) {
+    const wallet = this.wallets.get(helperId) || {
+      userId: helperId,
+      balance: 0,
+      totalEarned: 0,
+      totalWithdrawn: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    wallet.balance += amount;
+    wallet.totalEarned += amount;
+    wallet.updatedAt = new Date().toISOString();
+    this.wallets.set(helperId, wallet);
+
+    const txs = this.walletTransactions.get(helperId) || [];
+    const newTx: WalletTransaction = {
+      id: `tx-${Date.now()}`,
+      userId: helperId,
+      amount: amount,
+      type: 'EARNING',
+      orderId: orderId,
+      description: `Order #${orderId} completed (Commission ${this.pricingSettings.helperCommissionPercent}%)`,
+      createdAt: new Date().toISOString(),
+    };
+    txs.unshift(newTx);
+    this.walletTransactions.set(helperId, txs);
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+    } catch (e: any) {
+      console.warn('🔥 Firestore creditHelperEarning note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async submitWithdrawalRequest(
+    helperId: string,
+    helperName: string,
+    amount: number,
+    paymentMethod: string,
+    accountNumber: string
+  ) {
+    const req: WithdrawalRequest = {
+      id: `wd-${Date.now()}`,
+      helperId,
+      helperName,
+      amount,
+      status: 'PENDING',
+      paymentMethod,
+      accountNumber,
+      createdAt: new Date().toISOString(),
+    };
+    this.withdrawals.set(req.id, req);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+    } catch (e: any) {
+      console.warn('🔥 Firestore submitWithdrawal note (saved locally):', e?.message || e);
+    }
+    return req;
+  }
+
+  public async approveWithdrawal(withdrawalId: string) {
+    const req = this.withdrawals.get(withdrawalId);
+    if (!req || req.status !== 'PENDING') return;
+    req.status = 'APPROVED';
+    req.processedAt = new Date().toISOString();
+    this.withdrawals.set(withdrawalId, req);
+
+    const wallet = this.wallets.get(req.helperId);
+    if (wallet) {
+      wallet.balance -= req.amount;
+      wallet.totalWithdrawn += req.amount;
+      wallet.updatedAt = new Date().toISOString();
+      this.wallets.set(req.helperId, wallet);
+
+      const txs = this.walletTransactions.get(req.helperId) || [];
+      const newTx: WalletTransaction = {
+        id: `tx-${Date.now()}`,
+        userId: req.helperId,
+        amount: -req.amount,
+        type: 'WITHDRAWAL',
+        description: `Withdrawal approved (#${req.id})`,
+        createdAt: new Date().toISOString(),
+      };
+      txs.unshift(newTx);
+      this.walletTransactions.set(req.helperId, txs);
+      
+      try {
+        await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(wallet), { merge: true });
+        await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      } catch (e: any) {
+        console.warn('🔥 Firestore approveWithdrawal wallet sync note (saved locally):', e?.message || e);
+      }
+    }
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore approveWithdrawal note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async rejectWithdrawal(withdrawalId: string) {
+    const req = this.withdrawals.get(withdrawalId);
+    if (!req || req.status !== 'PENDING') return;
+    req.status = 'REJECTED';
+    req.processedAt = new Date().toISOString();
+    this.withdrawals.set(withdrawalId, req);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore rejectWithdrawal note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async submitHelperApp(app: HelperApplication) {
+    this.helperApplications.set(app.id, app);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app));
+    } catch (e: any) {
+      console.warn('🔥 Firestore submitHelperApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async approveHelperApp(appId: string) {
+    const app = this.helperApplications.get(appId);
+    if (!app) return;
+    app.status = 'APPROVED';
+    this.helperApplications.set(appId, app);
+
+    const user = this.users.get(app.userId);
+    if (user) {
+      user.isHelper = true;
+      this.users.set(app.userId, user);
+      await this.saveUser(user);
+    }
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'helperApplications', appId), cleanForFirestore(app), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore approveHelperApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async addNotification(notif: AppNotification) {
+    const list = this.notifications.get(notif.userId) || [];
+    list.unshift(notif);
+    this.notifications.set(notif.userId, list);
+
+    // Also send to all-helpers list if target is helper role broadcast
+    if (notif.userId === 'all-helpers') {
+      this.users.forEach((u) => {
+        if (u.isHelper) {
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
+      });
+    }
+
+    this.notify();
+
+    // Trigger System Native Browser Notification if supported & granted
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.ready.then((reg) => {
+              reg.showNotification(notif.title, {
+                body: notif.body,
+                icon: '/Jamanot-Logo.png',
+                badge: '/Jamanot-Logo.png',
+                tag: notif.id,
+                data: { orderId: notif.orderId },
+              });
+            });
+          } else {
+            new Notification(notif.title, {
+              body: notif.body,
+              icon: '/Jamanot-Logo.png',
+              tag: notif.id,
+            });
+          }
+        } catch (err) {
+          console.warn('Native Browser Notification note:', err);
+        }
+      }
+    }
+
+    try {
+      await setDoc(doc(db, 'notifications', notif.id), cleanForFirestore(notif));
+    } catch (e: any) {
+      console.warn('🔥 Firestore addNotification note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async markNotificationsRead(userId: string) {
+    const list = this.notifications.get(userId) || [];
+    const updated = list.map((n) => ({ ...n, read: true }));
+    this.notifications.set(userId, updated);
+    this.notify();
+
+    try {
+      for (const n of updated) {
+        if (!n.read) continue;
+        await setDoc(doc(db, 'notifications', n.id), cleanForFirestore(n), { merge: true });
+      }
+    } catch (e: any) {
+      console.warn('🔥 Firestore markNotificationsRead note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async savePricingSettings(settings: PricingSettings) {
+    this.pricingSettings = settings;
+    this.notify();
+    try {
+      await setDoc(doc(db, 'settings', 'pricing'), cleanForFirestore(settings), { merge: true });
+    } catch (e: any) {
+      console.warn('🔥 Firestore savePricingSettings note (saved locally):', e?.message || e);
+    }
+  }
+}
+
+export const fallbackStore = new FallbackStore();
+
+export async function requestBrowserNotificationPermission(): Promise<boolean> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return false;
+  }
+  if (Notification.permission === 'granted') {
+    return true;
+  }
+  if (Notification.permission !== 'denied') {
+    const permission = await Notification.requestPermission();
+    return permission === 'granted';
+  }
+  return false;
+}
+

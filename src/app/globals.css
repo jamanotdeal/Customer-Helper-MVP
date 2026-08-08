@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-inter: 'Inter', sans-serif;
+  --font-bengali: 'Hind Siliguri', 'Inter', sans-serif;
+}
+
+body {
+  font-family: var(--font-bengali);
+  background-color: #f3f4f6;
+  color: #111827;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Custom scrollbar hiding utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Mobile viewport container constraint for desktop viewing */
+.mobile-container {
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 100vh;
+  background-color: #ffffff;
+  box-shadow: 0 0 50px rgba(0, 0, 0, 0.05);
+}
