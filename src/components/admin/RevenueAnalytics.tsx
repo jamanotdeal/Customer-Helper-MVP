@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Order, PricingSettings } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
+import { fallbackStore } from '@/lib/firebase';
 import { PaginationControl } from './PaginationControl';
 import {
   DollarSign,
@@ -132,6 +133,29 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       return t >= startMs && t <= endMs;
     });
 
+    // Get all withdrawals
+    const allWithdrawals = Array.from(fallbackStore.withdrawals.values());
+    const approvedWithdrawalsInRange = allWithdrawals.filter((w) => {
+      if (w.status !== 'APPROVED') return false;
+      const t = new Date(w.processedAt || w.createdAt).getTime();
+      return t >= startMs && t <= endMs;
+    });
+    const pendingWithdrawals = allWithdrawals.filter((w) => w.status === 'PENDING');
+
+    const totalApprovedPayouts = approvedWithdrawalsInRange.reduce((sum, w) => sum + w.amount, 0);
+    const totalPendingPayouts = pendingWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+
+    // Get total outstanding liability (wallet balances)
+    const allWallets = Array.from(fallbackStore.wallets.values());
+    const totalOutstandingLiability = allWallets.reduce((sum, w) => sum + (w.balance || 0), 0);
+
+    // Calculate all-time figures for the ledger to avoid date range mismatch
+    const allDeliveredOrders = orders.filter((o) => o.status === 'DELIVERED');
+    const allTimeGrossDeliveryFees = allDeliveredOrders.reduce((sum, o) => sum + o.deliveryFee, 0);
+    const allTimeApprovedPayouts = allWithdrawals
+      .filter((w) => w.status === 'APPROVED')
+      .reduce((sum, w) => sum + w.amount, 0);
+
     let grossDeliveryFees = 0;
     let totalProductCosts = 0;
     let totalHelperPayouts = 0;
@@ -147,6 +171,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         productCosts: number;
         helperPayouts: number;
         netRevenue: number;
+        approvedWithdrawals: number;
       }
     >();
 
@@ -171,6 +196,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         productCosts: 0,
         helperPayouts: 0,
         netRevenue: 0,
+        approvedWithdrawals: 0,
       };
 
       existing.completedCount += 1;
@@ -179,6 +205,24 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       existing.helperPayouts += helperPayout;
       existing.netRevenue += platformShare;
 
+      dailyMap.set(dateStr, existing);
+    });
+
+    approvedWithdrawalsInRange.forEach((w) => {
+      const t = new Date(w.processedAt || w.createdAt).getTime();
+      const dateStr = getLocalYYYYMMDD(new Date(t));
+
+      const existing = dailyMap.get(dateStr) || {
+        dateStr,
+        completedCount: 0,
+        grossFees: 0,
+        productCosts: 0,
+        helperPayouts: 0,
+        netRevenue: 0,
+        approvedWithdrawals: 0,
+      };
+
+      existing.approvedWithdrawals += w.amount;
       dailyMap.set(dateStr, existing);
     });
 
@@ -193,6 +237,11 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       totalProductCosts,
       totalHelperPayouts,
       netPlatformRevenue,
+      totalApprovedPayouts,
+      totalPendingPayouts,
+      totalOutstandingLiability,
+      allTimeGrossDeliveryFees,
+      allTimeApprovedPayouts,
       dailyBreakdown,
     };
   }, [orders, pricing, startDate, endDate]);
@@ -371,6 +420,62 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         </div>
       </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-t border-gray-100 pt-6">
+        {/* Approved Withdrawals (Disbursed) */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Approved Cash Payouts
+            </span>
+            <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-700">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="text-3xl font-black text-emerald-800 mb-1">
+            ৳{analyticsData.allTimeApprovedPayouts}
+          </div>
+          <p className="text-[11px] text-emerald-600 font-medium">
+            Total cash sent to helpers (All-time)
+          </p>
+        </div>
+
+        {/* Pending Withdrawals (Requested) */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Pending Withdrawal Requests
+            </span>
+            <div className="p-2 rounded-2xl bg-amber-100 text-amber-700">
+              <Calendar className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="text-3xl font-black text-amber-800 mb-1">
+            ৳{analyticsData.totalPendingPayouts}
+          </div>
+          <p className="text-[11px] text-amber-600 font-medium">
+            Awaiting admin approval
+          </p>
+        </div>
+
+        {/* Outstanding Helper Wallets Liability */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Outstanding Wallet Liability
+            </span>
+            <div className="p-2 rounded-2xl bg-indigo-100 text-indigo-700">
+              <Bike className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="text-3xl font-black text-indigo-900 mb-1">
+            ৳{analyticsData.totalOutstandingLiability}
+          </div>
+          <p className="text-[11px] text-indigo-700 font-semibold">
+            Helper wallet balances (owed)
+          </p>
+        </div>
+      </div>
+
       {/* Date-by-Date Financial Breakdown Table */}
       <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
         <div className="p-5 border-b border-gray-100 flex items-center justify-between">
@@ -401,6 +506,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
                     <th className="py-3.5 px-5">Completed Orders</th>
                     <th className="py-3.5 px-5">Total Goods Value (৳)</th>
                     <th className="py-3.5 px-5">Gross Delivery Fee (৳)</th>
+                    <th className="py-3.5 px-5">Approved Payouts (৳)</th>
                     <th className="py-3.5 px-5">Helper Payout (৳)</th>
                     <th className="py-3.5 px-5 text-right">Net Platform Revenue (৳)</th>
                   </tr>
@@ -421,6 +527,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
                       </td>
                       <td className="py-4 px-5 font-bold text-gray-700">৳{row.productCosts}</td>
                       <td className="py-4 px-5 font-bold text-gray-900">৳{row.grossFees}</td>
+                      <td className="py-4 px-5 font-bold text-red-600">৳{row.approvedWithdrawals}</td>
                       <td className="py-4 px-5 font-bold text-indigo-900">৳{row.helperPayouts}</td>
                       <td className="py-4 px-5 text-right font-black text-purple-900 text-sm">
                         +৳{row.netRevenue}

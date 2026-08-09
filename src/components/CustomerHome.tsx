@@ -7,8 +7,7 @@ import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { PaginationControl } from './admin/PaginationControl';
-import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X } from 'lucide-react';
+import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X, ChevronDown } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 
@@ -18,8 +17,7 @@ export const CustomerHome: React.FC = () => {
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
     const syncOrders = () => {
@@ -49,10 +47,9 @@ export const CustomerHome: React.FC = () => {
     return true;
   });
 
-  // Pagination
-  const totalOrderItems = filteredOrders.length;
-  const totalOrderPages = Math.ceil(totalOrderItems / pageSize) || 1;
-  const paginatedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // Load More
+  const visibleOrders = filteredOrders.slice(0, visibleCount);
+  const hasMore = filteredOrders.length > visibleCount;
 
   if (selectedOrderId) {
     return (
@@ -151,23 +148,33 @@ export const CustomerHome: React.FC = () => {
 
           {/* Horizontal Scrollable Filter Chips */}
           <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-1">
-            {(['ALL', 'ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED'] as const).map((filter) => (
-              <button
-                key={filter}
-                onClick={() => { setSelectedFilter(filter); setCurrentPage(1); }}
-                className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all ${
-                  selectedFilter === filter
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-                }`}
-              >
-                {filter === 'ALL' && 'All'}
-                {filter === 'ACTIVE' && 'Active'}
-                {filter === 'PENDING' && 'Pending'}
-                {filter === 'COMPLETED' && 'Completed'}
-                {filter === 'CANCELLED' && 'Cancelled'}
-              </button>
-            ))}
+            {(['ALL', 'ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED'] as const).map((filter) => {
+              const activeCount = orders.filter((o) => ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status)).length;
+              const isActiveChip = filter === 'ACTIVE';
+              const hasActiveOrders = activeCount > 0 && isActiveChip;
+              return (
+                <button
+                  key={filter}
+                  onClick={() => { setSelectedFilter(filter); setVisibleCount(10); }}
+                  className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all relative ${
+                    selectedFilter === filter
+                      ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
+                      : hasActiveOrders
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                      : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {filter === 'ALL' && 'All'}
+                  {filter === 'ACTIVE' && `Active${activeCount > 0 ? ` (${activeCount})` : ''}`}
+                  {filter === 'PENDING' && 'Pending'}
+                  {filter === 'COMPLETED' && 'Completed'}
+                  {filter === 'CANCELLED' && 'Cancelled'}
+                  {hasActiveOrders && selectedFilter !== filter && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse border-2 border-white" />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           {/* Orders List */}
@@ -181,27 +188,24 @@ export const CustomerHome: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {paginatedOrders.map((order) => (
+              {visibleOrders.map((order) => (
                 <OrderCard
                   key={order.id}
                   order={order}
                   onClick={() => setSelectedOrderId(order.id)}
+                  customerView
                 />
               ))}
 
-              {/* Pagination */}
-              {totalOrderItems > 0 && (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                  <PaginationControl
-                    currentPage={currentPage}
-                    totalPages={totalOrderPages}
-                    totalItems={totalOrderItems}
-                    pageSize={pageSize}
-                    pageSizeOptions={[5, 10, 20, 50]}
-                    onPageChange={(p) => setCurrentPage(p)}
-                    onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
-                  />
-                </div>
+              {/* Load More */}
+              {hasMore && (
+                <button
+                  onClick={() => setVisibleCount((c) => c + 10)}
+                  className="w-full py-3.5 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 font-bold text-sm hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50/40 transition-all flex items-center justify-center space-x-2"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  <span>Load More ({filteredOrders.length - visibleCount} remaining)</span>
+                </button>
               )}
             </div>
           )}

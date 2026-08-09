@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { Wallet, WalletTransaction, WithdrawalRequest } from '@/types';
+import { Wallet, WalletTransaction, WithdrawalRequest, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
 import {
@@ -21,6 +21,7 @@ export const HelperWallet: React.FC = () => {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('100');
@@ -99,10 +100,15 @@ export const HelperWallet: React.FC = () => {
         };
         const txs = fallbackStore.walletTransactions.get(user.uid) || [];
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
+        const allOrders = Array.from(fallbackStore.orders.values());
+        const helperOrders = allOrders.filter(
+          (o) => o.helperId === user.uid && o.status === 'DELIVERED'
+        );
 
         setWallet({ ...w });
         setTransactions([...txs]);
         setWithdrawals([...wds]);
+        setDeliveredOrders(helperOrders);
       }
     };
 
@@ -133,6 +139,18 @@ export const HelperWallet: React.FC = () => {
       return true;
     });
   }, [withdrawals, startDate, endDate]);
+
+  // Filtered Delivered Orders based on selected Date Range
+  const filteredOrders = useMemo(() => {
+    return deliveredOrders.filter((ord) => {
+      const orderDate = ord.deliveredAt || ord.createdAt;
+      const t = new Date(orderDate).getTime();
+      if (isNaN(t)) return true;
+      if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
+      if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
+      return true;
+    });
+  }, [deliveredOrders, startDate, endDate]);
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
@@ -299,27 +317,38 @@ export const HelperWallet: React.FC = () => {
       </div>
 
       {/* Stats Summary */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-xs text-gray-400 font-bold block">
-            {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned in Range'}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
+          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
+            {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned'}
           </span>
-          <span className="text-xl font-extrabold text-gray-900 block">
+          <span className="text-sm font-black text-gray-900 block truncate">
             ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.earned}
           </span>
           {activePreset !== 'ALL_TIME' && (
-            <span className="text-[10px] text-gray-400 block">Total All-Time: ৳{wallet?.totalEarned || 0}</span>
+            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalEarned || 0}</span>
           )}
         </div>
-        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-xs text-gray-400 font-bold block">
-            {activePreset === 'ALL_TIME' ? 'Total Withdrawn' : 'Withdrawn in Range'}
+        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
+          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
+            {activePreset === 'ALL_TIME' ? 'Total Withdrawn' : 'Withdrawn'}
           </span>
-          <span className="text-xl font-extrabold text-emerald-700 block">
+          <span className="text-sm font-black text-emerald-700 block truncate">
             ৳{activePreset === 'ALL_TIME' ? (wallet?.totalWithdrawn || 0) : rangeMetrics.withdrawn}
           </span>
           {activePreset !== 'ALL_TIME' && (
-            <span className="text-[10px] text-gray-400 block">Total All-Time: ৳{wallet?.totalWithdrawn || 0}</span>
+            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalWithdrawn || 0}</span>
+          )}
+        </div>
+        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
+          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
+            {activePreset === 'ALL_TIME' ? 'Delivered Orders' : 'Delivered'}
+          </span>
+          <span className="text-sm font-black text-blue-700 block truncate">
+            {activePreset === 'ALL_TIME' ? deliveredOrders.length : filteredOrders.length}
+          </span>
+          {activePreset !== 'ALL_TIME' && (
+            <span className="text-[8px] text-gray-400 block truncate">All-Time: {deliveredOrders.length}</span>
           )}
         </div>
       </div>

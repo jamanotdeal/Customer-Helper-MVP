@@ -60,6 +60,8 @@ export const AdminDashboard: React.FC = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [pricing, setPricing] = useState<PricingSettings>(fallbackStore.pricingSettings);
   const [placeholdersText, setPlaceholdersText] = useState<string>('');
+  const [confirmationMsg, setConfirmationMsg] = useState<string>('');
+  const [servicesText, setServicesText] = useState<string>('');
 
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
@@ -73,6 +75,7 @@ export const AdminDashboard: React.FC = () => {
   // Search, Filter & Pagination states
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'OLDEST' | 'FEE_HIGH' | 'FEE_LOW' | 'ORDERS_HIGH' | 'SPENT_HIGH'>('NEWEST');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -80,7 +83,7 @@ export const AdminDashboard: React.FC = () => {
   // Reset page number on tab / search / filter / sort changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, searchQuery, statusFilter, sortBy]);
+  }, [activeTab, searchQuery, statusFilter, withdrawalStatusFilter, sortBy]);
 
   useEffect(() => {
     const syncAdminData = () => {
@@ -91,6 +94,8 @@ export const AdminDashboard: React.FC = () => {
       const settings = { ...fallbackStore.pricingSettings };
       setPricing(settings);
       setPlaceholdersText((settings.inputPlaceholders || []).join('\n'));
+      setConfirmationMsg(settings.orderConfirmationMessage || '');
+      setServicesText((settings.services || []).join('\n'));
     };
 
     syncAdminData();
@@ -139,6 +144,93 @@ export const AdminDashboard: React.FC = () => {
     showAlert('উইথড্রয়াল বাতিল', 'উইথড্রয়াল আবেদন বাতিল করা হয়েছে।', 'info');
   };
 
+  const handleApproveCancellation = (orderId: string) => {
+    const order = fallbackStore.orders.get(orderId);
+    if (!order) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      status: 'CANCELED',
+      cancelledAt: new Date().toISOString(),
+      cancellationRequest: o.cancellationRequest
+        ? { ...o.cancellationRequest, status: 'APPROVED' }
+        : undefined,
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: 'CANCELED',
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: 'Cancellation approved by Admin',
+        },
+      ],
+    }));
+    showAlert('ক্যানসেলেশন মঞ্জুর', 'অর্ডার ক্যানসেলেশন মনঞ্জুর করা হয়েছে।', 'info');
+  };
+
+  const handleRejectCancellation = (orderId: string) => {
+    const order = fallbackStore.orders.get(orderId);
+    if (!order) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      cancellationRequest: o.cancellationRequest
+        ? { ...o.cancellationRequest, status: 'REJECTED' }
+        : undefined,
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: 'Cancellation request rejected by Admin',
+        },
+      ],
+    }));
+    showAlert('রিকোয়েস্ট অগ্রাহ্য', 'ক্যানসেলেশন রিকোয়েস্ট রিজেক্ট করা হয়েছে।', 'info');
+  };
+
+  const handleApproveFeeAdjustment = (orderId: string) => {
+    const order = fallbackStore.orders.get(orderId);
+    if (!order || !order.feeAdjustment) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      deliveryFee: o.feeAdjustment!.amount,
+      feeAdjustment: { ...o.feeAdjustment!, status: 'APPROVED' },
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: `Approved fee adjustment to ৳${o.feeAdjustment!.amount}`,
+        },
+      ],
+    }));
+    showAlert('ফি সমন্বয় অনুমোদিত', 'ডেলিভারি ফি আপডেট করা হয়েছে।', 'success');
+  };
+
+  const handleRejectFeeAdjustment = (orderId: string) => {
+    const order = fallbackStore.orders.get(orderId);
+    if (!order || !order.feeAdjustment) return;
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: 'Rejected fee adjustment',
+        },
+      ],
+    }));
+    showAlert('ফি সমন্বয় বাতিল', 'ডেলিভারি ফি সমন্বয় বাতিল করা হয়েছে।', 'info');
+  };
+
   const handleSavePricing = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedList = placeholdersText
@@ -146,9 +238,16 @@ export const AdminDashboard: React.FC = () => {
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
+    const parsedServices = servicesText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
     const updatedPricing: PricingSettings = {
       ...pricing,
       inputPlaceholders: parsedList.length > 0 ? parsedList : undefined,
+      orderConfirmationMessage: confirmationMsg.trim() || undefined,
+      services: parsedServices.length > 0 ? parsedServices : undefined,
     };
 
     await fallbackStore.savePricingSettings(updatedPricing);
@@ -201,7 +300,11 @@ export const AdminDashboard: React.FC = () => {
 
     // Status filter
     if (statusFilter !== 'ALL') {
-      list = list.filter((o) => o.status === statusFilter);
+      if (statusFilter === 'UNASSIGNED') {
+        list = list.filter((o) => !o.helperId && o.status !== 'CANCELED' && o.status !== 'DELIVERED');
+      } else {
+        list = list.filter((o) => o.status === statusFilter);
+      }
     }
 
     // Sorting (Default Latest First)
@@ -700,6 +803,7 @@ export const AdminDashboard: React.FC = () => {
                   className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
                 >
                   <option value="ALL">All Statuses</option>
+                  {activeTab === 'ORDERS' && <option value="UNASSIGNED">Unassigned Orders</option>}
                   <option value="PENDING">Pending (Not Accepted)</option>
                   <option value="ACCEPTED">Accepted</option>
                   <option value="PURCHASED_EXECUTED">Purchased / Executed</option>
@@ -707,6 +811,40 @@ export const AdminDashboard: React.FC = () => {
                   <option value="ARRIVED">Arrived</option>
                   <option value="DELIVERED">Delivered</option>
                   <option value="CANCELED">Canceled</option>
+                </select>
+              </div>
+            )}
+
+            {activeTab === 'USERS_LIST' && (
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                <Filter className="w-4 h-4 text-gray-400" />
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Users</option>
+                  <option value="CUSTOMER">Customers Only</option>
+                  <option value="HELPER">Helpers Only</option>
+                  <option value="ADMIN">Admins Only</option>
+                  <option value="BLOCKED">Blocked Users</option>
+                  <option value="LABELED">Labeled Users</option>
+                </select>
+              </div>
+            )}
+
+            {activeTab === 'WITHDRAWALS' && (
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                <Filter className="w-4 h-4 text-gray-400" />
+                <select
+                  value={withdrawalStatusFilter}
+                  onChange={(e) => setWithdrawalStatusFilter(e.target.value)}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="PENDING">Pending Payouts</option>
+                  <option value="APPROVED">Approved Payouts</option>
+                  <option value="REJECTED">Rejected Payouts</option>
                 </select>
               </div>
             )}
@@ -743,114 +881,291 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'EXCEPTIONS' && (() => {
         const notAccepted = getProcessedOrders(notAcceptedRequests);
         const cancelling = getProcessedOrders(cancellingRequests);
-        const { totalPages, paginatedItems, totalItems } = paginateList([...cancelling, ...notAccepted]);
+        const feeAdjustments = getProcessedOrders(feeAdjustmentsPending);
+
+        const hasExceptions =
+          cancelling.length > 0 ||
+          notAccepted.length > 0 ||
+          feeAdjustments.length > 0 ||
+          pendingApps.length > 0 ||
+          pendingWds.length > 0;
 
         return (
-          <div className="space-y-4">
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-3xl p-4 flex items-center justify-between text-amber-900 text-xs font-extrabold">
-              <span className="flex items-center space-x-2">
-                <AlertCircle className="w-5 h-5 text-amber-600" />
-                <span>Showing Cancelling Request Orders ({cancelling.length}) and Not-Accepted Requests ({notAccepted.length})</span>
-              </span>
-            </div>
-
-            {totalItems === 0 && pendingApps.length === 0 && pendingWds.length === 0 ? (
+          <div className="space-y-6">
+            {!hasExceptions ? (
               <div className="py-16 bg-white rounded-3xl border border-gray-100 text-center p-8 shadow-soft space-y-3">
                 <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
                   <Check className="w-8 h-8" />
                 </div>
                 <h4 className="font-extrabold text-gray-900 text-base">সবকিছু ঠিকঠাক চলছে!</h4>
                 <p className="text-xs text-gray-500 max-w-sm mx-auto">
-                  এই মুহূর্তে কোনো হেলপার রিকোয়েস্ট ক্যানসেলেশন বা পেন্ডিং উইথড্রয়াল নেই। সিস্টেম স্বয়ংক্রিয়ভাবে চলছে।
+                  এই মুহূর্তে কোনো হেলপার রিকোয়েস্ট ক্যানসেলেশন, পেন্ডিং উইথড্রয়াল, ফি সমন্বয় বা হেলপার আবেদন নেই।
                 </p>
               </div>
             ) : (
-              <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-extrabold text-base text-gray-900">Needs Attention Action Queue</h3>
-                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-900">
-                    {totalItems} items requiring action
-                  </span>
-                </div>
-
-                {/* Table View */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600">
-                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                      <tr>
-                        <th className="py-3.5 px-5">Order ID</th>
-                        <th className="py-3.5 px-5">Issue / Status</th>
-                        <th className="py-3.5 px-5">Customer</th>
-                        <th className="py-3.5 px-5">Title & Items</th>
-                        <th className="py-3.5 px-5">Fee</th>
-                        <th className="py-3.5 px-5 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-medium">
-                      {paginatedItems.map((ord) => {
-                        const isCancelling = ord.cancellationRequest || ord.status === 'CANCELED';
-                        return (
-                          <tr
-                            key={ord.id}
-                            className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                            onClick={() => setSelectedOrderId(ord.id)}
-                          >
-                            <td className="py-4 px-5 font-bold text-gray-900">#{ord.id}</td>
-                            <td className="py-4 px-5">
-                              {isCancelling ? (
-                                <span className="px-2.5 py-1 rounded-full font-extrabold text-[10px] bg-red-100 text-red-800 uppercase tracking-wider">
-                                  Cancelling Request
-                                </span>
-                              ) : (
-                                <span className="px-2.5 py-1 rounded-full font-extrabold text-[10px] bg-amber-100 text-amber-800 uppercase tracking-wider">
-                                  Not Accepted (Pending)
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-4 px-5">
-                              <div className="font-extrabold text-gray-900">{ord.customerName}</div>
-                              <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
-                            </td>
-                            <td className="py-4 px-5">
-                              <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
-                              <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
-                            </td>
-                            <td className="py-4 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
-                            <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex justify-end space-x-2">
-                                <button
-                                  onClick={() => setAssignHelperOrder(ord)}
-                                  className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                                >
-                                  Assign Helper
-                                </button>
-                                <button
-                                  onClick={() => setSelectedOrderId(ord.id)}
-                                  className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
-                                >
-                                  View Details
-                                </button>
-                              </div>
-                            </td>
+              <div className="space-y-6">
+                {/* 1. Pending Helper Applications */}
+                {pendingApps.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <Users className="w-4 h-4 text-purple-700" />
+                        <span>Pending Helper Applications ({pendingApps.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Legal Name</th>
+                            <th className="py-3 px-5">NID #</th>
+                            <th className="py-3 px-5">WhatsApp</th>
+                            <th className="py-3 px-5">Vehicles / Assets</th>
+                            <th className="py-3 px-5 text-right">Action</th>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {pendingApps.map((app) => (
+                            <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">{app.legalName}</td>
+                              <td className="py-3.5 px-5 font-mono">{app.nid}</td>
+                              <td className="py-3.5 px-5 text-emerald-700 font-bold">{app.whatsapp}</td>
+                              <td className="py-3.5 px-5">
+                                <div className="flex gap-1 text-[10px] font-bold">
+                                  {app.hasSmartphone && <span className="px-1.5 py-0.5 rounded bg-gray-100">Phone</span>}
+                                  {app.hasCycle && <span className="px-1.5 py-0.5 rounded bg-gray-100">Cycle</span>}
+                                  {app.hasBike && <span className="px-1.5 py-0.5 rounded bg-gray-100">Bike</span>}
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-5 text-right">
+                                <button
+                                  onClick={() => handleApproveApp(app.id)}
+                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                >
+                                  Approve Helper
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
-                {/* Pagination */}
-                <PaginationControl
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  totalItems={totalItems}
-                  pageSize={pageSize}
-                  onPageChange={(p) => setCurrentPage(p)}
-                  onPageSizeChange={(s) => {
-                    setPageSize(s);
-                    setCurrentPage(1);
-                  }}
-                />
+                {/* 2. Pending Withdrawals */}
+                {pendingWds.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <DollarSign className="w-4 h-4 text-emerald-600" />
+                        <span>Pending Withdrawal Payouts ({pendingWds.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Helper Name</th>
+                            <th className="py-3 px-5">Amount</th>
+                            <th className="py-3 px-5">Method</th>
+                            <th className="py-3 px-5">Account Number</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {pendingWds.map((w) => (
+                            <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">{w.helperName}</td>
+                              <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
+                              <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
+                              <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end space-x-1.5">
+                                  <button
+                                    onClick={() => handleApproveWd(w.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectWd(w.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Pending Fee Adjustments */}
+                {feeAdjustments.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <TrendingUp className="w-4 h-4 text-indigo-700" />
+                        <span>Pending Fee Adjustments ({feeAdjustments.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Order ID</th>
+                            <th className="py-3 px-5">Customer & Helper</th>
+                            <th className="py-3 px-5">Fee Adjustment</th>
+                            <th className="py-3 px-5">Reason</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {feeAdjustments.map((ord) => (
+                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                                <div className="text-[11px] text-purple-950 font-bold">Helper: {ord.helperName}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <span className="text-gray-400 line-through mr-1.5">৳{ord.deliveryFee}</span>
+                                <span className="font-black text-emerald-700">৳{ord.feeAdjustment?.amount}</span>
+                              </td>
+                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">{ord.feeAdjustment?.reason}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end space-x-1.5">
+                                  <button
+                                    onClick={() => handleApproveFeeAdjustment(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectFeeAdjustment(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Cancellation Requests */}
+                {cancelling.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <XCircle className="w-4 h-4 text-red-600" />
+                        <span>Order Cancellation Requests ({cancelling.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Order ID</th>
+                            <th className="py-3 px-5">Requested By</th>
+                            <th className="py-3 px-5">Reason</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {cancelling.map((ord) => (
+                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
+                              <td className="py-3.5 px-5 uppercase font-bold text-red-800">{ord.cancellationRequest?.requestedBy}</td>
+                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">{ord.cancellationRequest?.reason}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end space-x-1.5">
+                                  <button
+                                    onClick={() => handleApproveCancellation(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                  >
+                                    Approve Cancellation
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectCancellation(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Unaccepted / Pending Requests */}
+                {notAccepted.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <Clock className="w-4 h-4 text-amber-600" />
+                        <span>Pending Orders (Not Accepted) ({notAccepted.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3.5 px-5">Order ID</th>
+                            <th className="py-3.5 px-5">Customer</th>
+                            <th className="py-3.5 px-5">Title & Items</th>
+                            <th className="py-3.5 px-5">Fee</th>
+                            <th className="py-3.5 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {notAccepted.map((ord) => (
+                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                                <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
+                                <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
+                              </td>
+                              <td className="py-3.5 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end space-x-2">
+                                  <button
+                                    onClick={() => setAssignHelperOrder(ord)}
+                                    className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                                  >
+                                    Assign Helper
+                                  </button>
+                                  <button
+                                    onClick={() => setSelectedOrderId(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
+                                  >
+                                    Details
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1383,6 +1698,9 @@ export const AdminDashboard: React.FC = () => {
       {/* --- TAB 6: WITHDRAWALS TAB --- */}
       {activeTab === 'WITHDRAWALS' && (() => {
         let filtered = [...withdrawals];
+        if (withdrawalStatusFilter !== 'ALL') {
+          filtered = filtered.filter((w) => w.status === withdrawalStatusFilter);
+        }
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
           filtered = filtered.filter(
@@ -1541,6 +1859,22 @@ export const AdminDashboard: React.FC = () => {
 
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1.5">
+              সার্ভিস ড্রপডাউন অপশন সমূহ (প্রতি লাইনে ১টি):
+            </label>
+            <textarea
+              value={servicesText}
+              onChange={(e) => setServicesText(e.target.value)}
+              placeholder="প্রতিটি সার্ভিস আলাদা লাইনে লিখুন..."
+              rows={6}
+              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+            />
+            <p className="text-[11px] text-gray-500 mt-1.5">
+              রিকোয়েস্ট ফর্মের সার্ভিস ড্রপডাউনে এই সার্ভিসগুলো দেখাবে।
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-gray-700 block mb-1.5">
               হোম পেজ রিকোয়েস্ট ইনপুট প্লেসহোল্ডার সমূহ (প্রতি লাইনে ১টি):
             </label>
             <textarea
@@ -1552,6 +1886,22 @@ export const AdminDashboard: React.FC = () => {
             />
             <p className="text-[11px] text-gray-500 mt-1.5">
               ব্যবহারকারী রিকোয়েস্ট ইনপুট বক্সে এই প্লেসহোল্ডার লেখাগুলি পরপর পরিবর্তন (rotate) হতে দেখবে।
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-gray-700 block mb-1.5">
+              অর্ডার সাবমিটের পর কনফার্মেশন বার্তা (Thank You message):
+            </label>
+            <input
+              type="text"
+              value={confirmationMsg}
+              onChange={(e) => setConfirmationMsg(e.target.value)}
+              placeholder="যেমন: আপনার অনুরোধ পেয়েছি! শীঘ্রই একজন হেলপার গ্রহণ করবে।"
+              className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+            />
+            <p className="text-[11px] text-gray-500 mt-1.5">
+              গ্রাহক অর্ডার সফলভাবে জমা দেওয়ার পর এই বার্তাটি &ldquo;ধন্যবাদ!&rdquo; শিরোনামসহ পপআপে দেখাবে।
             </p>
           </div>
 

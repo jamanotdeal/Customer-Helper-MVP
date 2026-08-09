@@ -2,17 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateDeliveryFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
-import { formatCreatedAt, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
 
 interface HelperActiveOrderViewProps {
   order: Order;
   onBack: () => void;
+  onAccept?: (orderId: string) => void;
+  activeOrdersCount?: number;
+  activeOrderLimit?: number;
 }
 
-export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ order, onBack }) => {
+export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
+  order,
+  onBack,
+  onAccept,
+  activeOrdersCount,
+  activeOrderLimit,
+}) => {
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
@@ -70,6 +79,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
   };
 
   const toggleItemPurchased = (itemId: string) => {
+    if (isDone) return;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       items: o.items.map((i) => (i.id === itemId ? { ...i, purchased: !i.purchased } : i)),
@@ -166,7 +176,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
         deliveryFee: val,
         feeAdjustment: feeReason.trim()
           ? {
-              amount: val,
+               amount: val,
               reason: feeReason.trim(),
               status: 'APPROVED',
               requestedAt: new Date().toISOString(),
@@ -209,38 +219,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
           <ArrowLeft className="w-5 h-5" />
           <span className="text-xs font-bold">Back</span>
         </button>
-        <span className="font-extrabold text-sm text-gray-800">Helper Order #{order.id}</span>
+        <div className="flex flex-col items-center">
+          <span className="font-extrabold text-sm text-gray-800">{order.service || order.title || 'Helper Order'}</span>
+          <span className="text-[10px] font-bold text-gray-500">Order ID: #{order.id}</span>
+        </div>
         <div className="w-8" />
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-5">
-        {/* 1. ORDER TITLE & EYE-CATCHING BIG COUNTERUP TIMER HEADER */}
-        <div className="p-5 rounded-3xl bg-gray-900 text-white shadow-xl space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Order Title</span>
-            <span className={`text-xs font-extrabold px-3 py-1 rounded-full ${badge.color}`}>
-              {badge.label} (৳{order.deliveryFee})
+        {/* TIMER BLOCK */}
+        <div className="w-full border border-red-500 rounded-2xl py-2.5 px-4 flex items-center justify-center bg-red-50/10">
+          <div className="flex items-center space-x-2.5 text-red-600">
+            <Clock className="w-5 h-5 animate-pulse" />
+            <span className="text-xs font-black uppercase tracking-wider">
+              {isDone ? 'Duration:' : 'Live:'}
             </span>
-          </div>
-          <h3 className="text-lg font-black text-white">{`Order-#${order.id}`}</h3>
-          
-          {/* Prominent Eye-Catching Counterup Timer Card */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950 via-gray-900 to-teal-950 border border-emerald-500/40 flex items-center justify-between shadow-inner">
-            <div className="flex items-center space-x-2">
-              <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                <Clock className="w-5 h-5 animate-pulse" />
-              </div>
-              <div>
-                <span className="text-[10px] font-extrabold text-emerald-400/90 uppercase tracking-widest block">
-                  {isDone ? 'Total Delivery Duration' : 'Live Counterup Timer'}
-                </span>
-                <span className="text-xl sm:text-2xl font-black tracking-tight text-emerald-300 font-mono">
-                  {elapsed}
-                </span>
-              </div>
-            </div>
-            <span className="text-[10px] text-gray-400 font-medium self-end">
-              {formatCreatedAt(order.createdAt)}
+            <span className="text-xl font-black font-mono">
+              {elapsed}
             </span>
           </div>
         </div>
@@ -262,59 +257,36 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
               {order.items.map((i) => (
                 <div
                   key={i.id}
-                  onClick={() => toggleItemPurchased(i.id)}
-                  className={`flex items-center justify-between text-xs p-3 rounded-2xl border transition-all cursor-pointer select-none ${
-                    i.purchased
+                  onClick={() => !isDone && toggleItemPurchased(i.id)}
+                  className={`flex items-center justify-between text-sm p-3.5 rounded-2xl border transition-all select-none ${
+                    isDone
+                      ? 'cursor-default bg-gray-50/50 border-gray-100 text-gray-400'
+                      : 'cursor-pointer hover:border-gray-300'
+                  } ${
+                    !isDone && i.purchased
                       ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950 font-bold shadow-xs'
-                      : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-gray-300'
+                      : !isDone
+                      ? 'bg-gray-50 border-gray-200 text-gray-800'
+                      : i.purchased
+                      ? 'bg-emerald-50/40 border-emerald-200/60 text-emerald-900/60 font-bold'
+                      : 'bg-gray-50/30 border-gray-200/50 text-gray-400'
                   }`}
                 >
                   <div className="flex items-center space-x-2.5">
                     <input
                       type="checkbox"
                       checked={!!i.purchased}
+                      disabled={isDone}
                       onChange={() => {}} // Handled by parent container onClick
-                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer disabled:cursor-default disabled:opacity-50"
                     />
-                    <span className={i.purchased ? 'line-through text-emerald-800' : 'font-semibold'}>
+                    <span className={i.purchased ? 'line-through text-emerald-850 opacity-80' : 'font-semibold'}>
                       {i.name}
                     </span>
                   </div>
-                  <span className={`font-bold px-2 py-0.5 rounded-md border text-[11px] ${
-                    i.purchased
-                      ? 'bg-emerald-100 text-emerald-900 border-emerald-200'
-                      : 'bg-white text-gray-700 border-gray-200'
-                  }`}>
-                    {i.qty}
-                  </span>
                 </div>
               ))}
             </div>
-          </div>
-
-          {/* 2. ALTERNATIVES (If anything is missing) */}
-          <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1.5">
-              <HelpCircle className="w-4 h-4 text-emerald-600" />
-              <span>Alternatives (If anything is missing)</span>
-            </h4>
-            <p className="p-3 rounded-2xl bg-gray-50 text-xs text-gray-800 font-semibold border border-gray-200">
-              {order.missingItemPreference === 'SKIP' && 'Skip missing item(s)'}
-              {order.missingItemPreference === 'SIMILAR' && 'Purchase similar alternative'}
-              {order.missingItemPreference === 'CALL' && 'Call customer for instructions'}
-              {!order.missingItemPreference && 'Skip missing item(s)'}
-            </p>
-          </div>
-
-          {/* 3. ADDITIONAL NOTES */}
-          <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1.5">
-              <FileText className="w-4 h-4 text-emerald-600" />
-              <span>Additional Notes</span>
-            </h4>
-            <p className="p-3 rounded-2xl bg-amber-50/70 border border-amber-100 text-xs text-amber-950 font-medium">
-              {order.additionalNote || 'No additional notes specified.'}
-            </p>
           </div>
 
           {/* 4. PRODUCT COST BLOCK */}
@@ -329,15 +301,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
                   {order.productCost !== undefined ? `৳${order.productCost}` : 'Not Entered Yet'}
                 </span>
               </div>
-              <button
-                onClick={() => {
-                  setProductCostInput(order.productCost !== undefined ? String(order.productCost) : '');
-                  setShowCostModal(true);
-                }}
-                className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all"
-              >
-                {order.productCost !== undefined ? 'Edit Cost' : '+ Enter Cost'}
-              </button>
+              {!isDone && (
+                <button
+                  onClick={() => {
+                    setProductCostInput(order.productCost !== undefined ? String(order.productCost) : '');
+                    setShowCostModal(true);
+                  }}
+                  className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all"
+                >
+                  {order.productCost !== undefined ? 'Edit Cost' : '+ Enter Cost'}
+                </button>
+              )}
             </div>
 
             {/* Fee Editing Option - Appears below product cost block once product cost is set */}
@@ -357,16 +331,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={() => {
-                    setFeeInput(String(order.deliveryFee));
-                    setShowFeeModal(true);
-                  }}
-                  className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-all flex items-center space-x-1"
-                >
-                  <FileEdit className="w-3.5 h-3.5" />
-                  <span>Edit Fee</span>
-                </button>
+                {!isDone && (
+                  <button
+                     onClick={() => {
+                      setFeeInput(String(order.deliveryFee));
+                      setShowFeeModal(true);
+                    }}
+                    className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-all flex items-center space-x-1"
+                  >
+                    <FileEdit className="w-3.5 h-3.5" />
+                    <span>Edit Fee</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -382,7 +358,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
                 <span className="font-bold text-gray-900 text-sm block">
                   {order.alternativePhone || order.customerPhone || 'Not provided'}
                 </span>
-                <span className="text-[11px] text-gray-500">{order.customerName} — Number given in request form</span>
+                <span className="text-[11px] text-gray-500">{order.customerName}</span>
               </div>
               {(order.alternativePhone || order.customerPhone) && (
                 <div className="flex items-center space-x-2">
@@ -429,31 +405,33 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
         {/* Status Progression Action Buttons */}
         {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
           <div className="space-y-3">
+            {/* PENDING → ACCEPTED */}
+            {order.status === 'PENDING' && onAccept && (
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 space-y-3 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center space-x-2 text-emerald-800">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  <span className="font-extrabold text-sm">Accept This Request</span>
+                </div>
+                <p className="text-xs text-emerald-700/80 font-medium">
+                  Ready to assist this customer? Accept the request to assign yourself as the helper.
+                </p>
+                <button
+                  onClick={() => onAccept(order.id)}
+                  disabled={activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit}
+                  className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>{activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit ? `Limit Reached (${activeOrderLimit} Max)` : 'Accept Request'}</span>
+                </button>
+              </div>
+            )}
             {/* Fee/Cost Validation Warning Banner */}
             {!hasCostAndFee && order.status === 'ACCEPTED' && (
-              <div className="p-4 rounded-3xl bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 space-y-2.5 shadow-sm animate-in fade-in duration-200">
-                <div className="flex items-center space-x-2.5">
-                  <div className="p-2 rounded-2xl bg-orange-100 text-orange-700 flex-shrink-0">
-                    <AlertTriangle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-black text-sm text-orange-900">Product Cost Required</h4>
-                    <p className="text-[11px] text-orange-700 font-semibold mt-0.5">
-                      Enter the total product cost above to auto-calculate & confirm the delivery fee before proceeding.
-                    </p>
-                  </div>
+              <div className="p-4 rounded-3xl bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-center justify-center space-x-2.5 py-1">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                  <span className="font-bold text-sm text-orange-950">Order er total bill ta add korun</span>
                 </div>
-                <div className="flex items-start space-x-2 text-[11px] text-orange-800 font-medium bg-orange-100/60 p-3 rounded-2xl border border-orange-200">
-                  <span className="font-black text-orange-600 text-base leading-none">1.</span>
-                  <span>Enter <strong>Product Cost</strong> in the section above — this auto-calculates the delivery fee.</span>
-                </div>
-                <div className="flex items-start space-x-2 text-[11px] text-orange-800 font-medium bg-orange-100/60 p-3 rounded-2xl border border-orange-200">
-                  <span className="font-black text-orange-600 text-base leading-none">2.</span>
-                  <span>Optionally adjust the <strong>Delivery Fee</strong> if needed (requires admin approval).</span>
-                </div>
-                <p className="text-[10px] text-orange-600 font-bold text-center pt-1">
-                  You cannot mark this order as Purchased/Executed without completing this step.
-                </p>
               </div>
             )}
 
@@ -573,7 +551,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
       {/* Enter Product Cost Modal */}
       {showCostModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 relative">
+            <button
+              type="button"
+              onClick={() => setShowCostModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
             <h3 className="font-bold text-base text-gray-900">Enter Product Cost</h3>
             <form onSubmit={handleSaveProductCost} className="space-y-3">
               <input
@@ -608,7 +593,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
       {/* Edit Delivery Fee Modal */}
       {showFeeModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative">
+            <button
+              type="button"
+              onClick={() => setShowFeeModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
             <h3 className="font-bold text-base text-gray-900">Edit Delivery Fee</h3>
             <p className="text-xs text-gray-600">
               Set or adjust the delivery fee for this order. Current fee: ৳{order.deliveryFee}.
@@ -661,7 +653,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({ or
       {/* Unchecked Items Note Custom Modal */}
       {showUncheckedModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 border border-amber-100 animate-in zoom-in-95 duration-200">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 border border-amber-100 animate-in zoom-in-95 duration-200 relative">
+            <button
+              type="button"
+              onClick={() => { setShowUncheckedModal(false); setPendingNextStatus(null); }}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
             <div className="flex items-center space-x-3 text-amber-800">
               <div className="p-2.5 rounded-2xl bg-amber-100 text-amber-700">
                 <AlertOctagon className="w-6 h-6" />

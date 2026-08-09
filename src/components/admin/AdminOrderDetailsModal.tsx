@@ -302,7 +302,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               </div>
               <div>
                 <div className="flex items-center space-x-2">
-                  <h3 className="font-extrabold text-lg">Order #{order.id}</h3>
+                  <h3 className="font-extrabold text-lg">Order-#{order.id}</h3>
                   <span
                     className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
                       order.status === 'DELIVERED'
@@ -417,9 +417,6 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   {order.items.map((it) => (
                     <div key={it.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 border border-gray-100 font-medium">
                       <span className="text-gray-800 font-bold">{it.name}</span>
-                      <span className="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-900 font-extrabold text-[11px]">
-                        {it.qty}
-                      </span>
                     </div>
                   ))}
                 </div>

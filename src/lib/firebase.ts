@@ -612,6 +612,36 @@ class FallbackStore {
     }
   }
 
+  public async removeHelperEligibility(uid: string) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+    const updated: UserProfile = {
+      ...existing,
+      isHelper: false,
+      role: existing.isAdmin ? 'admin' : 'customer',
+      lastActiveMode: existing.lastActiveMode === 'helper' ? 'customer' : existing.lastActiveMode,
+    };
+    this.users.set(uid, updated);
+
+    const app = Array.from(this.helperApplications.values()).find((a) => a.userId === uid);
+    if (app) {
+      app.status = 'REJECTED';
+      this.helperApplications.set(app.id, app);
+      try {
+        await setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app), { merge: true });
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] removeHelperEligibility note (stored locally):', e?.message || e);
+    }
+  }
+
   public async addNotification(notif: AppNotification) {
     const target = notif.userId;
 

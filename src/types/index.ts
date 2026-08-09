@@ -57,8 +57,9 @@ export interface Order {
   alternativePhone?: string;
   
   title: string;
+  service?: string;
   items: OrderItem[];
-  missingItemPreference: MissingItemPref;
+  missingItemPreference?: MissingItemPref;
   
   pickupLocation?: LocationData;
   deliveryLocation: LocationData;
@@ -165,6 +166,8 @@ export interface PricingSettings {
   minWithdrawalAmount: number;     // e.g. 100
   helperActiveOrderLimit?: number; // Max concurrent active orders a helper can hold (default 5)
   inputPlaceholders?: string[];    // Admin configured placeholder texts
+  orderConfirmationMessage?: string; // Admin configured thank-you message shown after order submission
+  services?: string[];             // Admin configured service dropdown options
 }
 
 export interface AppNotification {

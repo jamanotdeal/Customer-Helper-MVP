@@ -795,11 +795,42 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                           </div>
                         </form>
                       )}
-                    </div>
-                  )}
                 </div>
+              )}
+            </div>
 
-                {/* 3. Permanent Account Deletion Section */}
+            {/* Helper Eligibility Section */}
+            {user.isHelper && (
+              <div className="p-4 rounded-2xl bg-white border border-gray-200 space-y-3">
+                <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
+                  <Bike className="w-4 h-4 text-indigo-700" />
+                  <span>Helper Eligibility Management</span>
+                </h4>
+                <p className="text-gray-600">
+                  এই ব্যবহারকারী বর্তমানে একজন হেলপার (Helper)। আপনি চাইলে তার হেলপার যোগ্যতা/এলিজিবিলিটি বাতিল করতে পারেন।
+                </p>
+                <button
+                  onClick={async () => {
+                    const confirmed = await showConfirm(
+                      'হেলপার যোগ্যতা বাতিল',
+                      `আপনি কি নিশ্চিত যে ${user.displayName}-এর হেলপার যোগ্যতা বাতিল করতে চান?`,
+                      'হ্যাঁ, বাতিল করুন',
+                      'ফিরে যান'
+                    );
+                    if (!confirmed) return;
+                    await fallbackStore.removeHelperEligibility(user.uid);
+                    showAlert('সফল', 'হেলপার যোগ্যতা বাতিল করা হয়েছে।', 'success');
+                    if (onUserUpdated) onUserUpdated();
+                  }}
+                  className="py-2.5 px-5 bg-orange-600 hover:bg-orange-700 text-white font-extrabold rounded-xl text-xs shadow-sm transition-all flex items-center space-x-1.5"
+                >
+                  <Ban className="w-4 h-4" />
+                  <span>Remove Helper Eligibility</span>
+                </button>
+              </div>
+            )}
+
+            {/* 3. Permanent Account Deletion Section */}
                 <div className="p-4 rounded-2xl bg-red-50/50 border border-red-200 space-y-3">
                   <h4 className="font-extrabold text-xs text-red-950 uppercase tracking-wider flex items-center space-x-1.5">
                     <Trash2 className="w-4 h-4 text-red-600" />

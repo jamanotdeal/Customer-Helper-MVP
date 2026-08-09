@@ -9,6 +9,16 @@ export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
   'অন্য যেকোনো কাজ যা আপনার প্রয়োজন...',
 ];
 
+export const DEFAULT_SERVICES: string[] = [
+  'Bazar-sodai korte hobe',
+  'Khabar ante hobe',
+  'Medicine ante hobe',
+  'zuta selai korte hobe',
+  'amar parcel recive kore dite hobe',
+  'mix',
+  'onno kicu',
+];
+
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   rules: [
     { maxOrderValue: 100, fee: 20 },
@@ -19,6 +29,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   minWithdrawalAmount: 100,
   helperActiveOrderLimit: 5,
   inputPlaceholders: DEFAULT_INPUT_PLACEHOLDERS,
+  services: DEFAULT_SERVICES,
 };
 
 export function calculateDeliveryFee(estimatedValue: number, settings: PricingSettings = DEFAULT_PRICING_SETTINGS): number {
