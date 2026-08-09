@@ -905,92 +905,41 @@ export const AdminDashboard: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* 1. Pending Helper Applications */}
-                {pendingApps.length > 0 && (
+                {/* 1. Cancellation Requests (Order Related) */}
+                {cancelling.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                     <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
                       <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
-                        <Users className="w-4 h-4 text-purple-700" />
-                        <span>Pending Helper Applications ({pendingApps.length})</span>
+                        <XCircle className="w-4 h-4 text-red-600" />
+                        <span>Order Cancellation Requests ({cancelling.length})</span>
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs text-gray-600">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
-                            <th className="py-3 px-5">Legal Name</th>
-                            <th className="py-3 px-5">NID #</th>
-                            <th className="py-3 px-5">WhatsApp</th>
-                            <th className="py-3 px-5">Vehicles / Assets</th>
-                            <th className="py-3 px-5 text-right">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 font-medium">
-                          {pendingApps.map((app) => (
-                            <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">{app.legalName}</td>
-                              <td className="py-3.5 px-5 font-mono">{app.nid}</td>
-                              <td className="py-3.5 px-5 text-emerald-700 font-bold">{app.whatsapp}</td>
-                              <td className="py-3.5 px-5">
-                                <div className="flex gap-1 text-[10px] font-bold">
-                                  {app.hasSmartphone && <span className="px-1.5 py-0.5 rounded bg-gray-100">Phone</span>}
-                                  {app.hasCycle && <span className="px-1.5 py-0.5 rounded bg-gray-100">Cycle</span>}
-                                  {app.hasBike && <span className="px-1.5 py-0.5 rounded bg-gray-100">Bike</span>}
-                                </div>
-                              </td>
-                              <td className="py-3.5 px-5 text-right">
-                                <button
-                                  onClick={() => handleApproveApp(app.id)}
-                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
-                                >
-                                  Approve Helper
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* 2. Pending Withdrawals */}
-                {pendingWds.length > 0 && (
-                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
-                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
-                        <DollarSign className="w-4 h-4 text-emerald-600" />
-                        <span>Pending Withdrawal Payouts ({pendingWds.length})</span>
-                      </h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
-                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                          <tr>
-                            <th className="py-3 px-5">Helper Name</th>
-                            <th className="py-3 px-5">Amount</th>
-                            <th className="py-3 px-5">Method</th>
-                            <th className="py-3 px-5">Account Number</th>
+                            <th className="py-3 px-5">Order ID</th>
+                            <th className="py-3 px-5">Requested By</th>
+                            <th className="py-3 px-5">Reason</th>
                             <th className="py-3 px-5 text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {pendingWds.map((w) => (
-                            <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">{w.helperName}</td>
-                              <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
-                              <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
-                              <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
+                          {cancelling.map((ord) => (
+                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
+                              <td className="py-3.5 px-5 uppercase font-bold text-red-800">{ord.cancellationRequest?.requestedBy}</td>
+                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">{ord.cancellationRequest?.reason}</td>
                               <td className="py-3.5 px-5 text-right">
                                 <div className="flex justify-end space-x-1.5">
                                   <button
-                                    onClick={() => handleApproveWd(w.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    onClick={() => handleApproveCancellation(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
                                   >
-                                    Approve
+                                    Approve Cancellation
                                   </button>
                                   <button
-                                    onClick={() => handleRejectWd(w.id)}
+                                    onClick={() => handleRejectCancellation(ord.id)}
                                     className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
                                   >
                                     Reject
@@ -1005,7 +954,7 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* 3. Pending Fee Adjustments */}
+                {/* 2. Pending Fee Adjustments (Order Related) */}
                 {feeAdjustments.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                     <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
@@ -1062,41 +1011,149 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* 4. Cancellation Requests */}
-                {cancelling.length > 0 && (
+                {/* 3. Unaccepted / Pending Requests (Order Related) */}
+                {notAccepted.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                     <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
                       <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
-                        <XCircle className="w-4 h-4 text-red-600" />
-                        <span>Order Cancellation Requests ({cancelling.length})</span>
+                        <Clock className="w-4 h-4 text-amber-600" />
+                        <span>Pending Orders (Not Accepted) ({notAccepted.length})</span>
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs text-gray-600">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
-                            <th className="py-3 px-5">Order ID</th>
-                            <th className="py-3 px-5">Requested By</th>
-                            <th className="py-3 px-5">Reason</th>
+                            <th className="py-3.5 px-5">Order ID</th>
+                            <th className="py-3.5 px-5">Customer</th>
+                            <th className="py-3.5 px-5">Title & Items</th>
+                            <th className="py-3.5 px-5">Fee</th>
+                            <th className="py-3.5 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {notAccepted.map((ord) => (
+                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                                <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
+                                <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
+                              </td>
+                              <td className="py-3.5 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end space-x-2">
+                                  <button
+                                    onClick={() => setAssignHelperOrder(ord)}
+                                    className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                                  >
+                                    Assign Helper
+                                  </button>
+                                  <button
+                                    onClick={() => setSelectedOrderId(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
+                                  >
+                                    Details
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Pending Helper Applications */}
+                {pendingApps.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <Users className="w-4 h-4 text-purple-700" />
+                        <span>Pending Helper Applications ({pendingApps.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Legal Name</th>
+                            <th className="py-3 px-5">NID #</th>
+                            <th className="py-3 px-5">WhatsApp</th>
+                            <th className="py-3 px-5">Vehicles / Assets</th>
+                            <th className="py-3 px-5 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {pendingApps.map((app) => (
+                            <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">{app.legalName}</td>
+                              <td className="py-3.5 px-5 font-mono">{app.nid}</td>
+                              <td className="py-3.5 px-5 text-emerald-700 font-bold">{app.whatsapp}</td>
+                              <td className="py-3.5 px-5">
+                                <div className="flex gap-1 text-[10px] font-bold">
+                                  {app.hasSmartphone && <span className="px-1.5 py-0.5 rounded bg-gray-100">Phone</span>}
+                                  {app.hasCycle && <span className="px-1.5 py-0.5 rounded bg-gray-100">Cycle</span>}
+                                  {app.hasBike && <span className="px-1.5 py-0.5 rounded bg-gray-100">Bike</span>}
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-5 text-right">
+                                <button
+                                  onClick={() => handleApproveApp(app.id)}
+                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                >
+                                  Approve Helper
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Pending Withdrawals */}
+                {pendingWds.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <DollarSign className="w-4 h-4 text-emerald-600" />
+                        <span>Pending Withdrawal Payouts ({pendingWds.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Helper Name</th>
+                            <th className="py-3 px-5">Amount</th>
+                            <th className="py-3 px-5">Method</th>
+                            <th className="py-3 px-5">Account Number</th>
                             <th className="py-3 px-5 text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {cancelling.map((ord) => (
-                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
-                              <td className="py-3.5 px-5 uppercase font-bold text-red-800">{ord.cancellationRequest?.requestedBy}</td>
-                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">{ord.cancellationRequest?.reason}</td>
+                          {pendingWds.map((w) => (
+                            <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">{w.helperName}</td>
+                              <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
+                              <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
+                              <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
                               <td className="py-3.5 px-5 text-right">
                                 <div className="flex justify-end space-x-1.5">
                                   <button
-                                    onClick={() => handleApproveCancellation(ord.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    onClick={() => handleApproveWd(w.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
                                   >
-                                    Approve Cancellation
+                                    Approve
                                   </button>
                                   <button
-                                    onClick={() => handleRejectCancellation(ord.id)}
+                                    onClick={() => handleRejectWd(w.id)}
                                     className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
                                   >
                                     Reject
@@ -1110,14 +1167,7 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
                 )}
-
-                {/* 5. Unaccepted / Pending Requests */}
-                {notAccepted.length > 0 && (
-                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                    <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
-                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
-                        <Clock className="w-4 h-4 text-amber-600" />
-                        <span>Pending Orders (Not Accepted) ({notAccepted.length})</span>
+              </div>
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
