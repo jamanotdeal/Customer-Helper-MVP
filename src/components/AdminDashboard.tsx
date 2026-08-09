@@ -35,6 +35,7 @@ import {
   BarChart2,
   Bell,
   CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
