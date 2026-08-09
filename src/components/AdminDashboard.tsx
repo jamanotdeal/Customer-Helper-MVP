@@ -1168,56 +1168,6 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
               </div>
-                      </h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
-                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                          <tr>
-                            <th className="py-3.5 px-5">Order ID</th>
-                            <th className="py-3.5 px-5">Customer</th>
-                            <th className="py-3.5 px-5">Title & Items</th>
-                            <th className="py-3.5 px-5">Fee</th>
-                            <th className="py-3.5 px-5 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 font-medium">
-                          {notAccepted.map((ord) => (
-                            <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
-                              <td className="py-3.5 px-5">
-                                <div className="font-extrabold text-gray-900">{ord.customerName}</div>
-                                <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
-                              </td>
-                              <td className="py-3.5 px-5">
-                                <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
-                                <div className="text-[11px] text-gray-500">{ord.items.length} items</div>
-                              </td>
-                              <td className="py-3.5 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
-                              <td className="py-3.5 px-5 text-right">
-                                <div className="flex justify-end space-x-2">
-                                  <button
-                                    onClick={() => setAssignHelperOrder(ord)}
-                                    className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                                  >
-                                    Assign Helper
-                                  </button>
-                                  <button
-                                    onClick={() => setSelectedOrderId(ord.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
-                                  >
-                                    Details
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
             )}
           </div>
         );
