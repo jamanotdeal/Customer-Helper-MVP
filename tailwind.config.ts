@@ -24,7 +24,7 @@ const config: Config = {
         }
       },
       fontFamily: {
-        sans: ['Inter', 'Hind Siliguri', 'sans-serif'],
+        sans: ['Inter', 'Noto Sans Bengali', 'sans-serif'],
       },
       boxShadow: {
         'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 6px -1px rgba(0, 0, 0, 0.03)',
