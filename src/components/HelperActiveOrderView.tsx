@@ -430,7 +430,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="p-4 rounded-3xl bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 shadow-sm animate-in fade-in duration-200">
                 <div className="flex items-center justify-center space-x-2.5 py-1">
                   <AlertTriangle className="w-5 h-5 text-orange-600" />
-                  <span className="font-bold text-sm text-orange-950">Order er total bill ta add korun</span>
+                  <span className="font-bold text-sm text-orange-950">অর্ডারের মোট বিলটি Add করুন।</span>
                 </div>
               </div>
             )}
