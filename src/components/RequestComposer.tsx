@@ -15,7 +15,7 @@ interface RequestComposerProps {
 
 export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
   const { user, loginWithGoogle, updateCustomerPreferences } = useAuth();
-  const { showAlert } = useModal();
+  const { showAlert, showConfirm } = useModal();
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -134,6 +134,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         'অনুগ্রহ করে ১১ ডিজিটের সঠিক সচল মোবাইল নম্বর (যেমন: 01712345678) লিখুন।',
         'error'
       );
+      return;
+    }
+
+    const isConfirmed = await showConfirm(
+      'অর্ডার নিশ্চিত করুন',
+      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান? ভুলবশত বা টেস্ট করার জন্য হলে বাতিল করুন।',
+      'হ্যাঁ, সাবমিট করুন',
+      'বাতিল'
+    );
+
+    if (!isConfirmed) {
       return;
     }
 
