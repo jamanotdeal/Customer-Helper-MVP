@@ -36,6 +36,8 @@ import {
   Bell,
   CheckCircle2,
   XCircle,
+  Plus,
+  Edit,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -46,6 +48,7 @@ import { HelperHistoryModal } from './admin/HelperHistoryModal';
 import { UserDetailsModal } from './admin/UserDetailsModal';
 import { RevenueAnalytics } from './admin/RevenueAnalytics';
 import { AdminPushNotificationModal } from './admin/AdminPushNotificationModal';
+import { AdminHelperAppModal } from './admin/AdminHelperAppModal';
 
 export const AdminDashboard: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -71,6 +74,10 @@ export const AdminDashboard: React.FC = () => {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+
+  // CRUD Helper Application states
+  const [showAddAppModal, setShowAddAppModal] = useState<boolean>(false);
+  const [editingApp, setEditingApp] = useState<HelperApplication | null>(null);
 
 
   // Search, Filter & Pagination states
@@ -132,7 +139,24 @@ export const AdminDashboard: React.FC = () => {
 
   const handleApproveApp = (appId: string) => {
     fallbackStore.approveHelperApp(appId);
+    setApplications(Array.from(fallbackStore.helperApplications.values()));
+    setUsers(Array.from(fallbackStore.users.values()));
     showAlert('হেলপার অনুমোদিত', 'হেলপার আবেদন সফলভাবে অনুমোদন করা হয়েছে।', 'success');
+  };
+
+  const handleDeleteApp = async (appId: string) => {
+    const isConfirmed = await showConfirm(
+      'আবেদন মুছে ফেলার নিশ্চিতকরণ',
+      'আপনি কি নিশ্চিতভাবে এই হেলপার আবেদনটি মুছে ফেলতে চান? এটি আবেদনকারীর হেলপার স্ট্যাটাস বাতিল করতে পারে।',
+      'হ্যাঁ, মুছে ফেলুন',
+      'বাতিল'
+    );
+    if (isConfirmed) {
+      await fallbackStore.deleteHelperApp(appId);
+      setApplications(Array.from(fallbackStore.helperApplications.values()));
+      setUsers(Array.from(fallbackStore.users.values()));
+      showAlert('সফল', 'হেলপার আবেদনটি সফলভাবে মুছে ফেলা হয়েছে।', 'success');
+    }
   };
 
   const handleApproveWd = (wdId: string) => {
@@ -1416,6 +1440,27 @@ export const AdminDashboard: React.FC = () => {
                             >
                               View History & Actions
                             </button>
+                            {u.uid !== currentUser?.uid && !u.isSuperAdmin && (
+                              <button
+                                onClick={async () => {
+                                  const confirmed = await showConfirm(
+                                    'একাউন্ট ডিলিট স্থায়ী সতর্কতা',
+                                    `আপনি কি নিশ্চিত যে ${u.displayName}-এর প্রোফাইল স্থায়ীভাবে ডিলিট করতে চান? এই প্রক্রিয়া ফিরিয়ে আনা সম্ভব নয়।`,
+                                    'হ্যাঁ, ডিলিট করুন',
+                                    'বাতিল'
+                                  );
+                                  if (!confirmed) return;
+                                  await fallbackStore.deleteUser(u.uid);
+                                  setUsers(Array.from(fallbackStore.users.values()));
+                                  showAlert('ডিলিট সম্পন্ন', 'ব্যবহারকারী প্রোফাইল সিস্টেম থেকে মুছে ফেলা হয়েছে।', 'success');
+                                }}
+                                className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-750 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                                title="Delete user account"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Delete</span>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1602,10 +1647,19 @@ export const AdminDashboard: React.FC = () => {
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">Helper Registrations & Applications</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                {totalItems} total registered
-              </span>
+              <div>
+                <h3 className="font-extrabold text-base text-gray-900">Helper Registrations & Applications</h3>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                  {totalItems} total registered
+                </span>
+              </div>
+              <button
+                onClick={() => setShowAddAppModal(true)}
+                className="py-2 px-4 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Application</span>
+              </button>
             </div>
 
             {/* Desktop Table View */}
@@ -1660,19 +1714,35 @@ export const AdminDashboard: React.FC = () => {
                         </span>
                       </td>
                       <td className="py-4 px-5 text-right">
-                        {app.status === 'PENDING' ? (
+                        <div className="flex justify-end items-center space-x-2">
+                          {app.status === 'PENDING' ? (
+                            <button
+                              onClick={() => handleApproveApp(app.id)}
+                              className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                            >
+                              Approve Helper
+                            </button>
+                          ) : (
+                            <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1 bg-emerald-50 px-2 py-1 rounded-lg">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Approved</span>
+                            </span>
+                          )}
                           <button
-                            onClick={() => handleApproveApp(app.id)}
-                            className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                            onClick={() => setEditingApp(app)}
+                            className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all"
+                            title="Edit Application"
                           >
-                            Approve Helper
+                            <Edit className="w-3.5 h-3.5" />
                           </button>
-                        ) : (
-                          <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Approved</span>
-                          </span>
-                        )}
+                          <button
+                            onClick={() => handleDeleteApp(app.id)}
+                            className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 transition-all"
+                            title="Delete Application"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1966,6 +2036,22 @@ export const AdminDashboard: React.FC = () => {
       {showPushNotificationModal && (
         <AdminPushNotificationModal
           onClose={() => setShowPushNotificationModal(false)}
+        />
+      )}
+
+      {/* 7. Admin Helper Application Create/Edit Modals */}
+      {(showAddAppModal || editingApp) && (
+        <AdminHelperAppModal
+          application={editingApp}
+          users={users}
+          onClose={() => {
+            setShowAddAppModal(false);
+            setEditingApp(null);
+          }}
+          onSaved={() => {
+            setApplications(Array.from(fallbackStore.helperApplications.values()));
+            setUsers(Array.from(fallbackStore.users.values()));
+          }}
         />
       )}
     </div>

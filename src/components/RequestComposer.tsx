@@ -8,6 +8,7 @@ import { fallbackStore } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown } from 'lucide-react';
+import { updateSEOMetadataClient } from '@/lib/seo';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -45,6 +46,23 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     fallbackStore.pricingSettings.inputPlaceholders || DEFAULT_INPUT_PLACEHOLDERS
   );
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
+
+  // Pre-fill service from URL query param if present
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const serviceParam = params.get('service');
+      if (serviceParam) {
+        setService(serviceParam);
+        setIsExpanded(true);
+      }
+    }
+  }, []);
+
+  // Update SEO metadata dynamically when selected service changes
+  useEffect(() => {
+    updateSEOMetadataClient(service);
+  }, [service]);
 
   // Sync admin placeholders and services from store
   useEffect(() => {

@@ -147,13 +147,14 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'orders'),
         (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            const data = change.doc.data() as Order;
-            if (change.type === 'removed') {
-              this.orders.delete(change.doc.id);
-            } else {
-              this.orders.set(change.doc.id, data);
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of this.orders.keys()) {
+            if (!currentIds.has(key)) {
+              this.orders.delete(key);
             }
+          }
+          snapshot.docs.forEach((docSnap) => {
+            this.orders.set(docSnap.id, docSnap.data() as Order);
           });
           this.notify();
         },
@@ -185,6 +186,12 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'helperApplications'),
         (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of this.helperApplications.keys()) {
+            if (!currentIds.has(key)) {
+              this.helperApplications.delete(key);
+            }
+          }
           snapshot.docs.forEach((docSnap) => {
             const appData = docSnap.data() as HelperApplication;
             this.helperApplications.set(appData.id, appData);
@@ -198,6 +205,12 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'withdrawals'),
         (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of this.withdrawals.keys()) {
+            if (!currentIds.has(key)) {
+              this.withdrawals.delete(key);
+            }
+          }
           snapshot.docs.forEach((docSnap) => {
             const wd = docSnap.data() as WithdrawalRequest;
             this.withdrawals.set(wd.id, wd);
@@ -211,6 +224,12 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of this.users.keys()) {
+            if (!currentIds.has(key)) {
+              this.users.delete(key);
+            }
+          }
           snapshot.docs.forEach((docSnap) => {
             const userProfile = docSnap.data() as UserProfile;
             this.users.set(userProfile.uid, userProfile);
@@ -224,6 +243,12 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'wallets'),
         (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of this.wallets.keys()) {
+            if (!currentIds.has(key)) {
+              this.wallets.delete(key);
+            }
+          }
           snapshot.docs.forEach((docSnap) => {
             const wallet = docSnap.data() as Wallet;
             this.wallets.set(wallet.userId, wallet);
@@ -767,6 +792,87 @@ class FallbackStore {
       await setDoc(doc(db, 'settings', 'pricing'), cleanForFirestore(settings), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] savePricingSettings note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async addHelperAppAdmin(app: HelperApplication) {
+    this.helperApplications.set(app.id, app);
+    if (app.status === 'APPROVED') {
+      const user = this.users.get(app.userId);
+      if (user) {
+        const updatedUser = {
+          ...user,
+          isHelper: true,
+          alternativePhone: app.whatsapp || user.alternativePhone,
+        };
+        this.users.set(app.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    }
+    this.notify();
+    try {
+      await setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app));
+    } catch (e: any) {
+      console.warn('[Firestore] addHelperAppAdmin note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async updateHelperApp(appId: string, updatedFields: Partial<HelperApplication>) {
+    const existing = this.helperApplications.get(appId);
+    if (!existing) return;
+    const updated = { ...existing, ...updatedFields };
+    this.helperApplications.set(appId, updated);
+
+    if (updated.status === 'APPROVED' && existing.status !== 'APPROVED') {
+      const user = this.users.get(updated.userId);
+      if (user) {
+        const updatedUser = {
+          ...user,
+          isHelper: true,
+          alternativePhone: updated.whatsapp || user.alternativePhone,
+        };
+        this.users.set(updated.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    } else if (updated.status !== 'APPROVED' && existing.status === 'APPROVED') {
+      const user = this.users.get(updated.userId);
+      if (user) {
+        const updatedUser = {
+          ...user,
+          isHelper: false,
+        };
+        this.users.set(updated.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    }
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'helperApplications', appId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateHelperApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteHelperApp(appId: string) {
+    const existing = this.helperApplications.get(appId);
+    if (existing && existing.status === 'APPROVED') {
+      const user = this.users.get(existing.userId);
+      if (user) {
+        const updatedUser = {
+          ...user,
+          isHelper: false,
+        };
+        this.users.set(existing.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    }
+    this.helperApplications.delete(appId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'helperApplications', appId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteHelperApp note (saved locally):', e?.message || e);
     }
   }
 }

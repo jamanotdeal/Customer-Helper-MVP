@@ -55,6 +55,35 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
   // Fetch real-time user data
   const user = fallbackStore.users.get(userId);
+
+  // Edit info states
+  const [isEditingInfo, setIsEditingInfo] = useState(false);
+  const [editName, setEditName] = useState(user?.displayName || '');
+  const [editEmail, setEditEmail] = useState(user?.email || '');
+  const [editPhone, setEditPhone] = useState(user?.alternativePhone || '');
+
+  React.useEffect(() => {
+    if (user) {
+      setEditName(user.displayName);
+      setEditEmail(user.email || '');
+      setEditPhone(user.alternativePhone || '');
+    }
+  }, [user]);
+
+  const handleSaveInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const updatedUser = {
+      ...user,
+      displayName: editName.trim(),
+      email: editEmail.trim() || undefined,
+      alternativePhone: editPhone.trim() || undefined,
+    };
+    await fallbackStore.saveUser(updatedUser);
+    setIsEditingInfo(false);
+    showAlert('আপডেট সম্পন্ন', 'ব্যবহারকারীর তথ্য সফলভাবে আপডেট করা হয়েছে।', 'success');
+    if (onUserUpdated) onUserUpdated();
+  };
   const allOrders = Array.from(fallbackStore.orders.values());
   const helperApp = Array.from(fallbackStore.helperApplications.values()).find((a) => a.userId === userId);
   const wallet = fallbackStore.wallets.get(userId) || {
@@ -381,20 +410,85 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
                 {/* Profile Details Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Account Information */}
+                   {/* Account Information */}
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
-                    <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-                      <User className="w-4 h-4 text-purple-700" />
-                      <span>Account Profile Details</span>
-                    </h4>
-                    <div className="space-y-1.5 text-slate-700 font-medium">
-                      <p><strong>Name:</strong> {user.displayName}</p>
-                      <p><strong>Email:</strong> {user.email || 'N/A'}</p>
-                      <p><strong>Whatsapp Number (Contact):</strong> <span className="font-extrabold text-slate-900">{user.alternativePhone || 'N/A'}</span></p>
-                      <p><strong>Saved Delivery Address:</strong> <span className="font-extrabold text-emerald-800">{user.defaultDeliveryLocation?.address || 'N/A'}</span></p>
-                      <p><strong>Preferred Missing Item Action:</strong> {user.missingItemPreference || 'DEFAULT (SKIP)'}</p>
-                      <p><strong>Primary Mode:</strong> {user.lastActiveMode}</p>
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
+                        <User className="w-4 h-4 text-purple-700" />
+                        <span>Account Profile Details</span>
+                      </h4>
+                      {!isEditingInfo && (
+                        <button
+                          onClick={() => setIsEditingInfo(true)}
+                          className="py-1 px-3 bg-purple-900 hover:bg-purple-950 text-white rounded-xl text-[10px] font-extrabold transition-all"
+                        >
+                          Edit
+                        </button>
+                      )}
                     </div>
+                    {isEditingInfo ? (
+                      <form onSubmit={handleSaveInfo} className="space-y-2.5 pt-1">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Name</label>
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Email</label>
+                          <input
+                            type="email"
+                            value={editEmail}
+                            onChange={(e) => setEditEmail(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Whatsapp Number</label>
+                          <input
+                            type="text"
+                            value={editPhone}
+                            onChange={(e) => setEditPhone(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                          />
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="submit"
+                            className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEditingInfo(false);
+                              if (user) {
+                                setEditName(user.displayName);
+                                setEditEmail(user.email || '');
+                                setEditPhone(user.alternativePhone || '');
+                              }
+                            }}
+                            className="py-1.5 px-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-extrabold transition-all"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="space-y-1.5 text-slate-700 font-medium">
+                        <p><strong>Name:</strong> {user.displayName}</p>
+                        <p><strong>Email:</strong> {user.email || 'N/A'}</p>
+                        <p><strong>Whatsapp Number (Contact):</strong> <span className="font-extrabold text-slate-900">{user.alternativePhone || 'N/A'}</span></p>
+                        <p><strong>Saved Delivery Address:</strong> <span className="font-extrabold text-emerald-800">{user.defaultDeliveryLocation?.address || 'N/A'}</span></p>
+                        <p><strong>Preferred Missing Item Action:</strong> {user.missingItemPreference || 'DEFAULT (SKIP)'}</p>
+                        <p><strong>Primary Mode:</strong> {user.lastActiveMode}</p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Helper Information */}
