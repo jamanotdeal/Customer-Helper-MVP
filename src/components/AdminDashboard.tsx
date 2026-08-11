@@ -66,6 +66,8 @@ export const AdminDashboard: React.FC = () => {
   const [placeholdersText, setPlaceholdersText] = useState<string>('');
   const [confirmationMsg, setConfirmationMsg] = useState<string>('');
   const [servicesText, setServicesText] = useState<string>('');
+  // Single-box format: "ServiceName = placeholder text" (one per line)
+  const [serviceHintsText, setServiceHintsText] = useState<string>('');
 
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
@@ -104,6 +106,13 @@ export const AdminDashboard: React.FC = () => {
       setPlaceholdersText((settings.inputPlaceholders || []).join('\n'));
       setConfirmationMsg(settings.orderConfirmationMessage || '');
       setServicesText((settings.services || []).join('\n'));
+      // Convert the hints map back to the single-box "Key = Value" format
+      const hints = settings.serviceDescriptionHints || {};
+      setServiceHintsText(
+        Object.entries(hints)
+          .map(([k, v]) => `${k} = ${v}`)
+          .join('\n')
+      );
     };
 
     syncAdminData();
@@ -256,6 +265,19 @@ export const AdminDashboard: React.FC = () => {
     showAlert('ফি সমন্বয় বাতিল', 'ডেলিভারি ফি সমন্বয় বাতিল করা হয়েছে।', 'info');
   };
 
+  /** Parses "ServiceName = placeholder" lines into a Record<string,string> */
+  const parseServiceHintsText = (raw: string): Record<string, string> => {
+    const result: Record<string, string> = {};
+    raw.split('\n').forEach((line) => {
+      const eqIdx = line.indexOf('=');
+      if (eqIdx < 1) return;
+      const key = line.slice(0, eqIdx).trim();
+      const val = line.slice(eqIdx + 1).trim();
+      if (key && val) result[key] = val;
+    });
+    return result;
+  };
+
   const handleSavePricing = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedList = placeholdersText
@@ -268,15 +290,37 @@ export const AdminDashboard: React.FC = () => {
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
+    const cleanedHints = parseServiceHintsText(serviceHintsText);
+
     const updatedPricing: PricingSettings = {
       ...pricing,
       inputPlaceholders: parsedList.length > 0 ? parsedList : undefined,
       orderConfirmationMessage: confirmationMsg.trim() || undefined,
       services: parsedServices.length > 0 ? parsedServices : undefined,
+      serviceDescriptionHints: Object.keys(cleanedHints).length > 0 ? cleanedHints : undefined,
     };
 
     await fallbackStore.savePricingSettings(updatedPricing);
     await showAlert('সেটিংস আপডেট', 'পিকআপ/ডেলিভারি, কমিশন এবং ইনপুট প্লেসহোল্ডার সেটিংস সফলভাবে আপডেট হয়েছে।', 'success');
+  };
+
+  /**
+   * Returns a Set of order IDs that are the customer's very first order.
+   * An order is "first" when no other order from the same customerId was
+   * placed before it (earlier createdAt). This is computed against the
+   * full orders list available in the component.
+   */
+  const getFirstOrderIds = (orderList: Order[]): Set<string> => {
+    // Map: customerId -> earliest createdAt timestamp
+    const earliest: Record<string, string> = {};
+    const firstId: Record<string, string> = {};
+    orderList.forEach((o) => {
+      if (!earliest[o.customerId] || o.createdAt < earliest[o.customerId]) {
+        earliest[o.customerId] = o.createdAt;
+        firstId[o.customerId] = o.id;
+      }
+    });
+    return new Set(Object.values(firstId));
   };
 
   const handleToggleAdminRole = async (targetUser: UserProfile, makeAdmin: boolean) => {
@@ -909,6 +953,7 @@ export const AdminDashboard: React.FC = () => {
         const notAccepted = getProcessedOrders(notAcceptedRequests);
         const cancelling = getProcessedOrders(cancellingRequests);
         const feeAdjustments = getProcessedOrders(feeAdjustmentsPending);
+        const firstOrderIds = getFirstOrderIds(orders);
 
         const hasExceptions =
           cancelling.length > 0 ||
@@ -1079,11 +1124,20 @@ export const AdminDashboard: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {notAccepted.map((ord) => (
+                          {notAccepted.map((ord) => {
+                            const isFirst = firstOrderIds.has(ord.id);
+                            return (
                             <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
                               <td className="py-3.5 px-5">
-                                <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                                <div className="font-extrabold text-gray-900 flex items-center gap-1.5">
+                                  {ord.customerName}
+                                  {isFirst && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide shadow-sm shrink-0">
+                                      🥇 1st Order
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
                               </td>
                               <td className="py-3.5 px-5">
@@ -1108,7 +1162,7 @@ export const AdminDashboard: React.FC = () => {
                                 </div>
                               </td>
                             </tr>
-                          ))}
+                          )})}
                         </tbody>
                       </table>
                     </div>
@@ -1224,6 +1278,7 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'ORDERS' && (() => {
         const processed = getProcessedOrders(orders);
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
+        const firstOrderIds = getFirstOrderIds(orders);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden space-y-2">
@@ -1257,7 +1312,14 @@ export const AdminDashboard: React.FC = () => {
                     >
                       <td className="py-4 px-5 font-bold text-gray-900">#{ord.id}</td>
                       <td className="py-4 px-5">
-                        <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                        <div className="font-extrabold text-gray-900 flex items-center gap-1.5">
+                          {ord.customerName}
+                          {firstOrderIds.has(ord.id) && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide shadow-sm shrink-0">
+                              🥇 1st Order
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
                       </td>
                       <td className="py-4 px-5">
@@ -1949,6 +2011,23 @@ export const AdminDashboard: React.FC = () => {
             />
             <p className="text-[11px] text-gray-500 mt-1.5">
               রিকোয়েস্ট ফর্মের সার্ভিস ড্রপডাউনে এই সার্ভিসগুলো দেখাবে।
+            </p>
+          </div>
+
+          {/* Per-service description placeholder hints — single textarea, "Key = Value" per line */}
+          <div>
+            <label className="text-xs font-bold text-gray-700 block mb-1.5">
+              সার্ভিস অনুযায়ী বিবরণ প্লেসহোল্ডার (প্রতি লাইনে: সার্ভিস নাম = প্লেসহোল্ডার টেক্সট):
+            </label>
+            <textarea
+              value={serviceHintsText}
+              onChange={(e) => setServiceHintsText(e.target.value)}
+              placeholder={`উদাহরণ:\nবাজার-সদাই করে দিন = (গ্যাস, শাকসবজি, মাছ-মাংস — যা যা লাগবে লিখুন)\nখাবার এনে দিন = (কোন রেস্তোরাঁ থেকে, কোন খাবার, কত পরিমাণ)`}
+              rows={6}
+              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+            />
+            <p className="text-[11px] text-gray-500 mt-1.5">
+              প্রতিটি লাইনে <strong>সার্ভিস নাম = প্লেসহোল্ডার টেক্সট</strong> ফরম্যাটে লিখুন। গ্রাহক ওই সার্ভিস সিলেক্ট করলে ডান পাশের টেক্সটটি description textarea-তে দেখাবে।
             </p>
           </div>
 

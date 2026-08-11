@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES } from '@/lib/pricing';
+import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
@@ -283,7 +283,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="কী লাগবে বা করতে হবে তা এখানে বিস্তারিত লিখুন...."
+                placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
                 className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
                 required
               />

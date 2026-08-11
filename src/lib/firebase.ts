@@ -742,28 +742,41 @@ class FallbackStore {
     this.notify();
     playNotificationSound();
 
+    // Vibrate device directly (Android foreground / PWA)
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+    }
+
     // Trigger System Native Browser / Service Worker Notification if supported & granted
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'granted') {
         try {
-          if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-            navigator.serviceWorker.controller.postMessage({
-              type: 'SHOW_NOTIFICATION',
-              title: notif.title,
-              body: notif.body,
-              tag: notif.id,
-              url: '/',
-            });
-          } else if ('serviceWorker' in navigator) {
+          // Prefer SW registration.showNotification — works in foreground & background (iOS 16.4+ PWA, Android)
+          if ('serviceWorker' in navigator) {
             navigator.serviceWorker.ready.then((reg) => {
               reg.showNotification(notif.title, {
                 body: notif.body,
                 icon: '/Jamanot-Logo.png',
                 badge: '/Jamanot-Logo.png',
                 tag: notif.id,
-                vibrate: [200, 100, 200],
-                data: { orderId: notif.orderId },
-              } as any);
+                vibrate: [200, 100, 200, 100, 200],
+                renotify: true,
+                data: { orderId: notif.orderId, url: '/' },
+              } as any).catch(() => {
+                // Fallback to basic Notification if SW showNotification fails
+                new Notification(notif.title, {
+                  body: notif.body,
+                  icon: '/Jamanot-Logo.png',
+                  tag: notif.id,
+                });
+              });
+            }).catch(() => {
+              // SW not ready — use basic Notification
+              new Notification(notif.title, {
+                body: notif.body,
+                icon: '/Jamanot-Logo.png',
+                tag: notif.id,
+              });
             });
           } else {
             new Notification(notif.title, {

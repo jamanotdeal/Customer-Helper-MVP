@@ -169,6 +169,7 @@ export interface PricingSettings {
   inputPlaceholders?: string[];    // Admin configured placeholder texts
   orderConfirmationMessage?: string; // Admin configured thank-you message shown after order submission
   services?: string[];             // Admin configured service dropdown options
+  serviceDescriptionHints?: Record<string, string>; // Per-service description placeholder hints
 }
 
 export interface AppNotification {

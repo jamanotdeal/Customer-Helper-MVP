@@ -10,6 +10,7 @@ interface HelperRequestCardProps {
   activeOrdersCount: number;
   activeOrderLimit: number;
   isNew?: boolean;
+  isFirstOrder?: boolean;
 }
 
 export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
@@ -19,6 +20,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   activeOrdersCount,
   activeOrderLimit,
   isNew = false,
+  isFirstOrder = false,
 }) => {
   const isCapReached = activeOrdersCount >= activeOrderLimit;
   const [elapsed, setElapsed] = useState(() => getElapsedTime(order.createdAt));
@@ -50,6 +52,11 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
             <span className="inline-flex items-center space-x-0.5 px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-extrabold animate-pulse shadow-sm shrink-0">
               <Sparkles className="w-2.5 h-2.5" />
               <span>NEW</span>
+            </span>
+          )}
+          {isFirstOrder && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide shadow-sm shrink-0">
+              🥇 1st Order
             </span>
           )}
         </div>

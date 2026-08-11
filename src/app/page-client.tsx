@@ -20,8 +20,12 @@ export default function PageClient() {
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker
-        .register('/sw.js')
-        .then((reg) => console.log('ServiceWorker registered:', reg.scope))
+        .register('/sw.js', { updateViaCache: 'none' })
+        .then((reg) => {
+          console.log('ServiceWorker registered:', reg.scope);
+          // Force SW update check so latest version is always active
+          reg.update().catch(() => {});
+        })
         .catch((err) => console.warn('ServiceWorker registration note:', err));
     }
 

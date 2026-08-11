@@ -19,6 +19,7 @@ export const HelperDashboard: React.FC = () => {
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [firstOrderIds, setFirstOrderIds] = useState<Set<string>>(new Set());
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
   );
@@ -169,6 +170,17 @@ export const HelperDashboard: React.FC = () => {
         setActiveOrders(act);
         setCompletedOrders(comp);
         setActiveOrderLimit(fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5);
+
+        // Compute which orders are each customer's very first
+        const earliest: Record<string, string> = {};
+        const fid: Record<string, string> = {};
+        all.forEach((o) => {
+          if (!earliest[o.customerId] || o.createdAt < earliest[o.customerId]) {
+            earliest[o.customerId] = o.createdAt;
+            fid[o.customerId] = o.id;
+          }
+        });
+        setFirstOrderIds(new Set(Object.values(fid)));
       }
     };
 
@@ -406,6 +418,7 @@ export const HelperDashboard: React.FC = () => {
                   activeOrdersCount={activeOrders.length}
                   activeOrderLimit={activeOrderLimit}
                   isNew={newOrderIds.has(ord.id)}
+                  isFirstOrder={firstOrderIds.has(ord.id)}
                 />
               ))}
               {newVisibleCount < visibleAvailable.length && (
