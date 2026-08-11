@@ -148,7 +148,7 @@ class FallbackStore {
         collection(db, 'orders'),
         (snapshot) => {
           const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of this.orders.keys()) {
+          for (const key of Array.from(this.orders.keys())) {
             if (!currentIds.has(key)) {
               this.orders.delete(key);
             }
@@ -187,7 +187,7 @@ class FallbackStore {
         collection(db, 'helperApplications'),
         (snapshot) => {
           const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of this.helperApplications.keys()) {
+          for (const key of Array.from(this.helperApplications.keys())) {
             if (!currentIds.has(key)) {
               this.helperApplications.delete(key);
             }
@@ -206,7 +206,7 @@ class FallbackStore {
         collection(db, 'withdrawals'),
         (snapshot) => {
           const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of this.withdrawals.keys()) {
+          for (const key of Array.from(this.withdrawals.keys())) {
             if (!currentIds.has(key)) {
               this.withdrawals.delete(key);
             }
@@ -225,7 +225,7 @@ class FallbackStore {
         collection(db, 'users'),
         (snapshot) => {
           const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of this.users.keys()) {
+          for (const key of Array.from(this.users.keys())) {
             if (!currentIds.has(key)) {
               this.users.delete(key);
             }
@@ -244,7 +244,7 @@ class FallbackStore {
         collection(db, 'wallets'),
         (snapshot) => {
           const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of this.wallets.keys()) {
+          for (const key of Array.from(this.wallets.keys())) {
             if (!currentIds.has(key)) {
               this.wallets.delete(key);
             }
