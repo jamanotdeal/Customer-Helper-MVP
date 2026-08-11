@@ -156,10 +156,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     }
 
     const isConfirmed = await showConfirm(
-      'অর্ডার নিশ্চিত করুন',
+      'Confirm Your Request',
       'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান? ভুলবশত বা টেস্ট করার জন্য হলে বাতিল করুন।',
-      'হ্যাঁ, সাবমিট করুন',
-      'বাতিল'
+      'Yes, Submit Request',
+      'Cancel'
     );
 
     if (!isConfirmed) {
@@ -336,7 +336,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             onClick={handleInputInteract}
             className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
           >
-            <span>অর্ডার করুন</span>
+            <span>Submit Your Request</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         ) : (

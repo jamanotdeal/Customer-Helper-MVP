@@ -87,19 +87,19 @@ export const CustomerHome: React.FC = () => {
                 <span className="w-7 h-7 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-xs shrink-0 shadow-xs">
                   1
                 </span>
-                <span className="text-gray-900 font-extrabold text-sm">আপনি বলুন কী দরকার</span>
+                <span className="text-gray-900 font-extrabold text-sm">Just Submit Request</span>
               </div>
               <div className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl shadow-xs border border-emerald-100/50">
                 <span className="w-7 h-7 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-xs shrink-0 shadow-xs">
                   2
                 </span>
-                <span className="text-gray-900 font-extrabold text-sm">কাছের helper আপনার request নেবে</span>
+                <span className="text-gray-900 font-extrabold text-sm">Than Relax করুন</span>
               </div>
               <div className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl shadow-xs border border-emerald-100/50">
                 <span className="w-7 h-7 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-xs shrink-0 shadow-xs">
                   3
                 </span>
-                <span className="text-gray-900 font-extrabold text-sm">আমরা কাজটি সম্পন্ন করবো</span>
+                <span className="text-gray-900 font-extrabold text-sm">আপনার Helper বাকিটা সামলে নেবে।</span>
               </div>
             </div>
           </div>
@@ -156,13 +156,12 @@ export const CustomerHome: React.FC = () => {
                 <button
                   key={filter}
                   onClick={() => { setSelectedFilter(filter); setVisibleCount(10); }}
-                  className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all relative ${
-                    selectedFilter === filter
-                      ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-                      : hasActiveOrders
+                  className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all relative ${selectedFilter === filter
+                    ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
+                    : hasActiveOrders
                       ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
                       : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-                  }`}
+                    }`}
                 >
                   {filter === 'ALL' && 'All'}
                   {filter === 'ACTIVE' && `Active${activeCount > 0 ? ` (${activeCount})` : ''}`}
