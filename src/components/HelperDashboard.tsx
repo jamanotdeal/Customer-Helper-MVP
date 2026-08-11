@@ -28,6 +28,99 @@ export const HelperDashboard: React.FC = () => {
   const [seenOrderIds, setSeenOrderIds] = useState<Set<string>>(new Set());
   const seenOrderIdsRef = useRef<Set<string>>(new Set());
 
+  // Alarm state for sound/vibration loop
+  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+
+  useEffect(() => {
+    if (newOrderIds.size > 0) {
+      setIsAlarmPlaying(true);
+    } else {
+      setIsAlarmPlaying(false);
+    }
+  }, [newOrderIds]);
+
+  // Audio Context and Vibration looping
+  useEffect(() => {
+    if (!isAlarmPlaying) return;
+
+    let active = true;
+    let audioCtx: AudioContext | null = null;
+    let intervalId: any = null;
+
+    const startAlarm = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass();
+        }
+      } catch (e) {
+        console.warn('AudioContext init failed:', e);
+      }
+
+      const triggerAlert = () => {
+        if (!active) return;
+
+        // Vibrate: heavy pulse pattern
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate([500, 250, 500, 250, 500]);
+        }
+
+        // Sound: loud dual tone beep
+        if (audioCtx) {
+          try {
+            if (audioCtx.state === 'suspended') {
+              audioCtx.resume();
+            }
+            const osc1 = audioCtx.createOscillator();
+            const osc2 = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc1.type = 'sawtooth';
+            osc1.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
+
+            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
+
+            osc1.connect(gain);
+            osc2.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc1.start();
+            osc2.start();
+            osc1.stop(audioCtx.currentTime + 0.8);
+            osc2.stop(audioCtx.currentTime + 0.8);
+          } catch (e) {
+            console.warn('Oscillator failed:', e);
+          }
+        }
+      };
+
+      // Initial fire
+      triggerAlert();
+
+      // Repeat alert every 1.5 seconds
+      intervalId = setInterval(triggerAlert, 1500);
+    };
+
+    startAlarm();
+
+    // Auto stop after 60 seconds (to avoid battery drainage if they left their phone)
+    const timeoutId = setTimeout(() => {
+      setIsAlarmPlaying(false);
+    }, 60000);
+
+    return () => {
+      active = false;
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [isAlarmPlaying]);
+
   // Track which ACTIVE orders the helper has viewed (clicked on the card)
   const [viewedActiveOrderIds, setViewedActiveOrderIds] = useState<Set<string>>(new Set());
 
@@ -408,6 +501,72 @@ export const HelperDashboard: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Premium New Order Alert Overlay */}
+      {isAlarmPlaying && newOrderIds.size > 0 && (() => {
+        const newOrderIdList = Array.from(newOrderIds);
+        const orderIdToShow = newOrderIdList[newOrderIdList.length - 1];
+        const nextOrder = fallbackStore.orders.get(orderIdToShow);
+        if (!nextOrder) return null;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-red-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
+            <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border-4 border-red-500 text-center space-y-6 animate-in zoom-in-95 duration-300 relative overflow-hidden">
+              <div className="absolute inset-0 bg-red-50/30 animate-pulse pointer-events-none" />
+              
+              <div className="relative">
+                <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto animate-bounce shadow-md">
+                  <Bell className="w-10 h-10 animate-pulse" />
+                </div>
+                <div className="absolute top-0 right-1/3 -mr-2 bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full animate-ping">
+                  Alert
+                </div>
+              </div>
+
+              <div className="space-y-2 relative">
+                <h3 className="text-xl font-black text-red-950">🚨 নতুন অর্ডার এসেছে!</h3>
+                <p className="text-xs text-gray-500 font-bold">একটি নতুন রিকুয়েস্ট পাওয়া গিয়েছে। দ্রুত গ্রহণ করুন!</p>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 text-left space-y-2 relative">
+                <div className="flex justify-between items-center text-xs font-black">
+                  <span className="text-gray-400">Order ID: #{nextOrder.id}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 uppercase text-[9px]">
+                    ৳{nextOrder.deliveryFee} Fee
+                  </span>
+                </div>
+                <h4 className="font-extrabold text-sm text-gray-900 line-clamp-1">{nextOrder.title || nextOrder.items?.[0]?.name}</h4>
+                <p className="text-[11px] text-gray-500 font-medium">ডেলিভারি এলাকা: {nextOrder.deliveryLocation.address}</p>
+                {nextOrder.productCost && nextOrder.productCost > 0 && (
+                  <p className="text-[11px] text-purple-900 font-bold">পণ্য মূল্য: ৳{nextOrder.productCost}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 relative">
+                <button
+                  onClick={async () => {
+                    setIsAlarmPlaying(false);
+                    setNewOrderIds(new Set());
+                    await handleAcceptOrder(nextOrder.id);
+                  }}
+                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm shadow-lg active:scale-98 transition-all"
+                >
+                  Accept Order (অর্ডার নিন)
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAlarmPlaying(false);
+                    setNewOrderIds(new Set());
+                  }}
+                  className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-bold text-xs transition-all"
+                >
+                  Mute & Dismiss (বাতিল করুন)
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

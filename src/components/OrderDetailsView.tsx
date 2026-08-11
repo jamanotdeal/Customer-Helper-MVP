@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from 'react';
 import { Order, OrderItem, OrderStatus } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { useModal } from './CustomModal';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
@@ -18,7 +17,6 @@ interface OrderDetailsViewProps {
 }
 
 export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onBack }) => {
-  const { showConfirm } = useModal();
   const [order, setOrder] = useState<Order | null>(null);
 
   // Edit modal state
@@ -28,6 +26,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const [editPhone, setEditPhone] = useState('');
   const [editNote, setEditNote] = useState('');
   const [editError, setEditError] = useState('');
+
+  // Cancellation modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState('');
 
   useEffect(() => {
     const syncOrder = () => {
@@ -84,18 +87,28 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     return 'UPCOMING';
   };
 
-  const handleCancelOrder = async () => {
-    const confirmed = await showConfirm(
-      'অর্ডার বাতিল',
-      'আপনি কি সত্যিই অর্ডারটি বাতিল করতে চান?',
-      'হ্যাঁ, বাতিল করুন',
-      'ফিরে যান'
-    );
-    if (!confirmed) return;
+  const handleCancelOrder = () => {
+    setCancelReason('');
+    setCancelError('');
+    setShowCancelModal(true);
+  };
+
+  const handleConfirmCancel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelReason.trim()) {
+      setCancelError('অর্ডারটি বাতিল করার কারণ অনুগ্রহ করে উল্লেখ করুন।');
+      return;
+    }
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       status: 'CANCELED',
       cancelledAt: new Date().toISOString(),
+      cancellationRequest: {
+        requestedBy: 'customer',
+        reason: cancelReason.trim(),
+        status: 'APPROVED',
+        createdAt: new Date().toISOString(),
+      },
       statusHistory: [
         ...o.statusHistory,
         {
@@ -103,10 +116,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           status: 'CANCELED',
           timestamp: new Date().toISOString(),
           actor: 'Customer',
-          note: 'Cancelled by customer',
+          note: `Cancelled by customer. Reason: ${cancelReason.trim()}`,
         },
       ],
     }));
+    setShowCancelModal(false);
   };
 
   // Open edit modal pre-filled with current order data
@@ -194,12 +208,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         }`}>
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Your Order</span>
-            <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center space-x-1 ${
-              isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
-            }`}>
-              <BadgeIcon className="w-3 h-3" />
-              <span>{badge.label}</span>
-            </span>
+            {order.status !== 'PENDING' && (
+              <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center space-x-1 ${
+                isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
+              }`}>
+                <BadgeIcon className="w-3 h-3" />
+                <span>{badge.label}</span>
+              </span>
+            )}
           </div>
           <h2 className="text-xl font-black mb-1">Order-#{order.id}</h2>
           <p className="text-xs text-white/60 flex items-center space-x-1">
@@ -332,8 +348,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           <div className="bg-amber-50 rounded-3xl border border-amber-200 p-4 text-center space-y-1 shadow-soft">
             <Clock className="w-6 h-6 text-amber-500 mx-auto animate-pulse" />
             <p className="font-extrabold text-sm text-amber-900">Waiting for a Helper</p>
-            <p className="text-[11px] text-amber-700 font-medium">
+            <p className="text-[11px] text-amber-700 font-medium mb-2">
               A nearby helper will accept your order soon. Their contact will appear here once assigned.
+            </p>
+            <p className="text-xs text-emerald-800 font-bold bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100/50">
+              আপনার অর্ডারটি দেখা হচ্ছে। ধৈর্য ধরে অপেক্ষা করার জন্য আপনাকে অনেক অনেক ধন্যবাদ।
             </p>
           </div>
         )}
@@ -542,6 +561,75 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 Save Changes
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CANCELLATION REASON MODAL ── */}
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-red-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
+              <div>
+                <h3 className="font-black text-base text-gray-900">অর্ডার বাতিল করুন</h3>
+                <p className="text-[11px] text-gray-500 font-medium mt-0.5">অনুগ্রহ করে অর্ডারটি বাতিলের কারণ জানান</p>
+              </div>
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmCancel} className="flex flex-col flex-1">
+              <div className="px-5 py-4 space-y-4">
+                <div className="p-3.5 rounded-2xl bg-red-50 border border-red-100 flex items-start space-x-2.5">
+                  <AlertTriangle className="w-5 h-5 text-red-650 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-800 font-medium leading-relaxed">
+                    অর্ডারটি বাতিল করার পর পুনরায় চালু করা যাবে না। যদি কোনো হেলপার ইতিমধ্যেই কোনো খরচ বা পরিশ্রম করে থাকেন, তবে তার সাথে যোগাযোগ করার অনুরোধ রইল।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">বাতিলের কারণ / ফিডব্যাক</label>
+                  <textarea
+                    value={cancelReason}
+                    onChange={(e) => {
+                      setCancelReason(e.target.value);
+                      if (e.target.value.trim()) setCancelError('');
+                    }}
+                    placeholder="যেমন: আর প্রয়োজন নেই, ভুল অর্ডার করেছি, অন্য ঠিকানা ইত্যাদি..."
+                    className="w-full px-3.5 py-3.5 rounded-2xl border border-gray-200 text-xs font-semibold text-gray-900 outline-none focus:border-red-400 focus:ring-4 focus:ring-red-500/10 resize-none h-28"
+                    required
+                  />
+                </div>
+
+                {cancelError && (
+                  <p className="text-[11px] text-red-600 font-bold bg-red-50 px-3 py-2 rounded-xl border border-red-100">
+                    {cancelError}
+                  </p>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                >
+                  ফিরে যান
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md shadow-red-600/25 transition-all"
+                >
+                  অর্ডার বাতিল করুন
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

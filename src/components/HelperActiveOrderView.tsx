@@ -29,6 +29,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showFeeModal, setShowFeeModal] = useState(false);
   const { showConfirm, showAlert } = useModal();
 
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState('');
+
   // Validation: helper must enter product cost (which auto-sets delivery fee) before advancing
   const hasCostAndFee = order.productCost !== undefined;
 
@@ -188,24 +192,38 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setShowFeeModal(false);
   };
 
-  const handleRequestCancellation = async () => {
-    const confirmed = await showConfirm(
-      'অর্ডার বাতিলের অনুরোধ',
-      'আপনি কি এই অর্ডারটি বাতিলের অনুরোধ পাঠাতে চান? প্রশাসন এবং গ্রাহক রিভিউ করবেন। হেলপার সরাসরি অর্ডার বাতিল করতে পারে না।',
-      'হ্যাঁ, অনুরোধ পাঠান',
-      'ফিরে যান'
-    );
-    if (!confirmed) return;
+  const handleRequestCancellation = () => {
+    setCancelReason('');
+    setCancelError('');
+    setShowCancelModal(true);
+  };
 
+  const handleConfirmCancellationRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelReason.trim()) {
+      setCancelError('বাতিলের কারণ অনুগ্রহ করে উল্লেখ করুন।');
+      return;
+    }
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       cancellationRequest: {
         requestedBy: 'helper',
-        reason: 'Cancellation requested by helper',
+        reason: cancelReason.trim(),
         status: 'PENDING',
         createdAt: new Date().toISOString(),
       },
+      statusHistory: [
+        ...o.statusHistory,
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: `Helper (${o.helperName || 'Helper'})`,
+          note: `Requested order cancellation. Reason: ${cancelReason.trim()}`,
+        },
+      ],
     }));
+    setShowCancelModal(false);
   };
 
   return (
@@ -711,6 +729,70 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-600/20 transition-all"
                 >
                   নোটসহ জমা দিন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Helper Cancellation Request Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-red-100">
+            <button
+              type="button"
+              onClick={() => setShowCancelModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            
+            <div className="flex items-center space-x-3 text-red-800">
+              <div className="p-2.5 rounded-2xl bg-red-100 text-red-650 flex items-center justify-center">
+                <AlertOctagon className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-gray-900 leading-tight">অর্ডার বাতিলের অনুরোধ</h3>
+                <span className="text-[11px] text-red-700 font-bold">এডমিন এবং কাস্টমার রিভিউ করবেন</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed font-medium">
+              হেলপার সরাসরি অর্ডার বাতিল করতে পারে না। অনুগ্রহ করে বাতিলের কারণটি বিশদভাবে লিখুন, যাতে এডমিন সেটি দেখে অনুমোদন করতে পারেন:
+            </p>
+
+            <form onSubmit={handleConfirmCancellationRequest} className="space-y-3">
+              <textarea
+                value={cancelReason}
+                onChange={(e) => {
+                  setCancelReason(e.target.value);
+                  if (e.target.value.trim()) setCancelError('');
+                }}
+                placeholder="যেমন: বাইক নষ্ট হয়ে গেছে, কাস্টমার ফোন ধরছেন না, কাস্টমারের অনুরোধ ইত্যাদি..."
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs h-24 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-500/10 text-gray-900 font-semibold"
+                required
+              />
+
+              {cancelError && (
+                <p className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded-xl border border-red-100">
+                  {cancelError}
+                </p>
+              )}
+
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+                >
+                  ফিরে যান
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md shadow-red-600/25 transition-all"
+                >
+                  অনুরোধ পাঠান
                 </button>
               </div>
             </form>

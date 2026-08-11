@@ -610,18 +610,20 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center flex-wrap gap-2">
             <button
               onClick={() => setShowPushNotificationModal(true)}
-              className="text-xs font-extrabold px-4 py-2 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center space-x-2 shadow-lg shadow-purple-950/40 transition-all border border-purple-400/30 active:scale-95"
+              className="text-xs font-extrabold px-3 py-2 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center space-x-2 shadow-lg shadow-purple-950/40 transition-all border border-purple-400/30 active:scale-95"
             >
               <Bell className="w-4 h-4 text-purple-200" />
-              <span>Send Push Notification</span>
+              <span className="hidden sm:inline">Send Push Notification</span>
+              <span className="sm:hidden">Notify</span>
             </button>
 
-            <span className="text-xs font-extrabold px-3.5 py-2 rounded-2xl bg-amber-400 text-purple-950 flex items-center space-x-1.5 shadow-md">
+            <span className="text-xs font-extrabold px-3 py-2 rounded-2xl bg-amber-400 text-purple-950 flex items-center space-x-1.5 shadow-md">
               <AlertCircle className="w-4 h-4" />
-              <span>Needs Attention: {totalExceptionsCount}</span>
+              <span className="hidden sm:inline">Needs Attention: {totalExceptionsCount}</span>
+              <span className="sm:hidden">{totalExceptionsCount} Alerts</span>
             </span>
           </div>
         </div>
@@ -786,7 +788,7 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <DollarSign className="w-4 h-4 text-purple-600" />
-          <span>Withdrawals ({pendingWds.length})</span>
+          <span>Helper Commissions ({pendingWds.length})</span>
         </button>
 
         <button
@@ -804,20 +806,20 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
       {activeTab !== 'PRICING' && (
-        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col md:flex-row gap-3 items-center justify-between">
+        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
           {/* Search Box */}
-          <div className="relative w-full md:w-96">
+          <div className="relative w-full">
             <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
             <input
               type="text"
-              placeholder="Search by Order ID, customer, helper, phone, address..."
+              placeholder="Search orders, customers, helpers, phone..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 transition-all"
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <div className="flex flex-wrap items-center gap-2 w-full">
             {/* Status Filter (for Orders / Exceptions) */}
             {(activeTab === 'ORDERS' || activeTab === 'EXCEPTIONS') && (
               <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
@@ -939,35 +941,56 @@ export const AdminDashboard: React.FC = () => {
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[650px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
                             <th className="py-3 px-5">Order ID</th>
                             <th className="py-3 px-5">Requested By</th>
-                            <th className="py-3 px-5">Reason</th>
+                            <th className="py-3 px-5">Reason / Feedback</th>
                             <th className="py-3 px-5 text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
                           {cancelling.map((ord) => (
                             <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
-                              <td className="py-3.5 px-5 uppercase font-bold text-red-800">{ord.cancellationRequest?.requestedBy}</td>
-                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">{ord.cancellationRequest?.reason}</td>
+                              <td className="py-3.5 px-5 font-bold text-gray-900">
+                                <button
+                                  onClick={() => setSelectedOrderId(ord.id)}
+                                  className="text-purple-900 hover:text-purple-950 hover:underline font-extrabold"
+                                >
+                                  #{ord.id}
+                                </button>
+                              </td>
+                              <td className="py-3.5 px-5 uppercase font-bold text-red-800">
+                                {ord.cancellationRequest?.requestedBy || (ord.status === 'CANCELED' ? 'customer' : 'N/A')}
+                              </td>
+                              <td className="py-3.5 px-5 text-gray-600 italic font-normal max-w-xs truncate">
+                                {ord.cancellationRequest?.reason || 'Direct cancellation / no feedback'}
+                              </td>
                               <td className="py-3.5 px-5 text-right">
-                                <div className="flex justify-end space-x-1.5">
+                                <div className="flex justify-end items-center space-x-1.5 flex-wrap gap-1">
                                   <button
-                                    onClick={() => handleApproveCancellation(ord.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    onClick={() => setSelectedOrderId(ord.id)}
+                                    className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
                                   >
-                                    Approve Cancellation
+                                    Details
                                   </button>
-                                  <button
-                                    onClick={() => handleRejectCancellation(ord.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
-                                  >
-                                    Reject
-                                  </button>
+                                  {ord.cancellationRequest?.status === 'PENDING' && (
+                                    <>
+                                      <button
+                                        onClick={() => handleApproveCancellation(ord.id)}
+                                        className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                      >
+                                        Approve
+                                      </button>
+                                      <button
+                                        onClick={() => handleRejectCancellation(ord.id)}
+                                        className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                      >
+                                        Reject
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -988,7 +1011,7 @@ export const AdminDashboard: React.FC = () => {
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[600px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
                             <th className="py-3 px-5">Order ID</th>
@@ -1045,7 +1068,7 @@ export const AdminDashboard: React.FC = () => {
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[580px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
                             <th className="py-3.5 px-5">Order ID</th>
@@ -1102,7 +1125,7 @@ export const AdminDashboard: React.FC = () => {
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[550px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
                             <th className="py-3 px-5">Legal Name</th>
@@ -1141,23 +1164,23 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* 5. Pending Withdrawals */}
+                {/* 5. Pending Paybacks */}
                 {pendingWds.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                     <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
                       <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
                         <DollarSign className="w-4 h-4 text-emerald-600" />
-                        <span>Pending Withdrawal Payouts ({pendingWds.length})</span>
+                        <span>Pending Commission Paybacks ({pendingWds.length})</span>
                       </h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs text-gray-600">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[580px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
                             <th className="py-3 px-5">Helper Name</th>
                             <th className="py-3 px-5">Amount</th>
                             <th className="py-3 px-5">Method</th>
-                            <th className="py-3 px-5">Account Number</th>
+                            <th className="py-3 px-5">Mobile / TxID</th>
                             <th className="py-3 px-5 text-right">Actions</th>
                           </tr>
                         </thead>
@@ -1213,7 +1236,7 @@ export const AdminDashboard: React.FC = () => {
 
             {/* Desktop Table View */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">Order ID</th>
@@ -1318,7 +1341,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">User Profile</th>
@@ -1505,7 +1528,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[650px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">Customer Name</th>
@@ -1573,7 +1596,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">Helper Name</th>
@@ -1664,7 +1687,7 @@ export const AdminDashboard: React.FC = () => {
 
             {/* Desktop Table View */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">Legal Name</th>
@@ -1788,20 +1811,20 @@ export const AdminDashboard: React.FC = () => {
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">Helper Payout & Withdrawal Requests</h3>
+              <h3 className="font-extrabold text-base text-gray-900">Helper Commission Payback Requests</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {totalItems} total payout requests
+                {totalItems} total payback requests
               </span>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
                     <th className="py-3.5 px-5">Helper Name</th>
                     <th className="py-3.5 px-5">Amount (৳)</th>
                     <th className="py-3.5 px-5">Payment Method</th>
-                    <th className="py-3.5 px-5">Account / Number</th>
+                    <th className="py-3.5 px-5">Mobile / TxID</th>
                     <th className="py-3.5 px-5">Status</th>
                     <th className="py-3.5 px-5 text-right">Actions</th>
                   </tr>
@@ -1886,21 +1909,6 @@ export const AdminDashboard: React.FC = () => {
                 value={pricing.helperCommissionPercent}
                 onChange={(e) =>
                   setPricing({ ...pricing, helperCommissionPercent: Number(e.target.value) })
-                }
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                Minimum Withdrawal Amount (৳)
-              </label>
-              <input
-                type="number"
-                value={pricing.minWithdrawalAmount}
-                onChange={(e) =>
-                  setPricing({ ...pricing, minWithdrawalAmount: Number(e.target.value) })
                 }
                 className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
                 required

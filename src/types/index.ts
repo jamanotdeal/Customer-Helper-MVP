@@ -129,7 +129,7 @@ export interface WalletTransaction {
   id: string;
   userId: string;
   amount: number; // positive for earnings, negative for withdrawal
-  type: 'EARNING' | 'WITHDRAWAL' | 'ADJUSTMENT';
+  type: 'EARNING' | 'WITHDRAWAL' | 'ADJUSTMENT' | 'PAYBACK';
   orderId?: string;
   description: string;
   createdAt: string;
@@ -140,6 +140,7 @@ export interface Wallet {
   balance: number;
   totalEarned: number;
   totalWithdrawn: number;
+  totalPaidCommission?: number;
   updatedAt: string;
 }
 

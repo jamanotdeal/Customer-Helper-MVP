@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Wallet, WalletTransaction, WithdrawalRequest, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
+import { calculateHelperCommission } from '@/lib/pricing';
 import {
   Wallet as WalletIcon,
   ArrowUpRight,
@@ -155,32 +156,33 @@ export const HelperWallet: React.FC = () => {
   // Range Metrics
   const rangeMetrics = useMemo(() => {
     let earned = 0;
-    let withdrawn = 0;
+    let commissionDue = 0;
+    let paidCommission = 0;
 
-    filteredTransactions.forEach((tx) => {
-      if (tx.amount > 0) {
-        earned += tx.amount;
-      }
+    filteredOrders.forEach((o) => {
+      const helperShare = calculateHelperCommission(o.deliveryFee, fallbackStore.pricingSettings);
+      earned += helperShare;
+      commissionDue += (o.deliveryFee - helperShare);
     });
 
     filteredWithdrawals.forEach((w) => {
       if (w.status === 'APPROVED') {
-        withdrawn += w.amount;
+        paidCommission += w.amount;
       }
     });
 
-    return { earned, withdrawn };
-  }, [filteredTransactions, filteredWithdrawals]);
+    return { earned, commissionDue, paidCommission };
+  }, [filteredOrders, filteredWithdrawals]);
 
-  const canWithdraw = (wallet?.balance || 0) >= minWithdrawal;
+  const canPayback = (wallet?.balance || 0) > 0;
 
-  const handleWithdrawSubmit = async (e: React.FormEvent) => {
+  const handlePaybackSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(withdrawAmount);
-    if (!user || isNaN(amt) || amt < minWithdrawal || amt > (wallet?.balance || 0)) {
+    if (!user || isNaN(amt) || amt <= 0 || amt > (wallet?.balance || 0)) {
       await showAlert(
-        'উত্তোলন অনুপযোগী',
-        `নূন্যতম উত্তোলন পরিমাণ ৳${minWithdrawal} এবং আপনার ব্যালেন্সের মধ্যে হতে হবে।`,
+        'কমিশন পরিশোধের তথ্য ভুল',
+        `অনুগ্রহ করে ১ থেকে ৳${wallet?.balance || 0} এর মধ্যে বকেয়া কমিশন পরিশোধ করুন।`,
         'warning'
       );
       return;
@@ -190,27 +192,24 @@ export const HelperWallet: React.FC = () => {
     await fallbackStore.submitWithdrawalRequest(user.uid, user.displayName, amt, paymentMethod, accountNumber);
     setSubmitting(false);
     setShowWithdrawModal(false);
-    await showAlert('অনুরোধ সফল', 'আপনার ব্যালেন্স উত্তোলনের অনুরোধ জমা হয়েছে।', 'success');
+    await showAlert('অনুরোধ সফল', 'কমিশন পরিশোধের তথ্য ভেরিফিকেশনের জন্য অ্যাডমিনের কাছে পাঠানো হয়েছে।', 'success');
   };
 
   return (
     <div className="space-y-6 pb-24 animate-in fade-in duration-200">
       {/* Balance Card */}
-      <div className="bg-gradient-to-br from-emerald-600 via-teal-700 to-emerald-900 rounded-3xl p-6 text-white shadow-floating relative overflow-hidden">
+      <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 text-white shadow-floating relative overflow-hidden">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-2">
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
-              <WalletIcon className="w-5 h-5" />
+              <WalletIcon className="w-5 h-5 text-indigo-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Helper Wallet</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Commission Ledger</span>
           </div>
-          <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-white/20 text-emerald-100">
-            Min ৳{minWithdrawal}
-          </span>
         </div>
 
         <div className="mb-5">
-          <span className="text-xs text-emerald-200 block mb-1">Available Balance</span>
+          <span className="text-xs text-indigo-200 block mb-1">Outstanding Due Commission</span>
           <h2 className="text-4xl font-black text-white tracking-tight">
             ৳{wallet?.balance || 0}
           </h2>
@@ -218,14 +217,14 @@ export const HelperWallet: React.FC = () => {
 
         <button
           onClick={() => setShowWithdrawModal(true)}
-          disabled={!canWithdraw}
+          disabled={!canPayback}
           className={`w-full py-3.5 rounded-2xl font-extrabold text-sm shadow-md transition-all ${
-            canWithdraw
-              ? 'bg-white text-emerald-900 hover:bg-emerald-50 active:scale-98'
+            canPayback
+              ? 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-98'
               : 'bg-white/20 text-white/60 cursor-not-allowed'
           }`}
         >
-          {canWithdraw ? 'Withdraw Balance' : `Minimum ৳${minWithdrawal} Required`}
+          {canPayback ? 'Pay Commission to Platform' : 'No Due Commission'}
         </button>
       </div>
 
@@ -331,24 +330,26 @@ export const HelperWallet: React.FC = () => {
         </div>
         <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
           <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Withdrawn' : 'Withdrawn'}
+            {activePreset === 'ALL_TIME' ? 'Paid Commission' : 'Paid Comm.'}
           </span>
           <span className="text-sm font-black text-emerald-700 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalWithdrawn || 0) : rangeMetrics.withdrawn}
+            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
           </span>
           {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalWithdrawn || 0}</span>
+            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalPaidCommission || 0}</span>
           )}
         </div>
         <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
           <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Delivered Orders' : 'Delivered'}
+            {activePreset === 'ALL_TIME' ? 'Total Commission' : 'Commission'}
           </span>
           <span className="text-sm font-black text-blue-700 block truncate">
-            {activePreset === 'ALL_TIME' ? deliveredOrders.length : filteredOrders.length}
+            ৳{activePreset === 'ALL_TIME' 
+              ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
+              : rangeMetrics.commissionDue}
           </span>
           {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: {deliveredOrders.length}</span>
+            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0))}</span>
           )}
         </div>
       </div>
@@ -358,7 +359,7 @@ export const HelperWallet: React.FC = () => {
         <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-              Withdrawal History ({filteredWithdrawals.length})
+              Payback History ({filteredWithdrawals.length})
             </h3>
           </div>
           <div className="space-y-2">
@@ -432,15 +433,15 @@ export const HelperWallet: React.FC = () => {
       {showWithdrawModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
-            <h3 className="font-bold text-lg text-gray-900">Withdrawal Request</h3>
-            <form onSubmit={handleWithdrawSubmit} className="space-y-3">
+            <h3 className="font-bold text-lg text-gray-900">কমিশন পরিশোধের অনুরোধ (Payback)</h3>
+            <form onSubmit={handlePaybackSubmit} className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">
-                  Withdrawal Amount (৳) (Available: ৳{wallet?.balance})
+                  Payback Amount (৳) ( বকেয়া কমিশন: ৳{wallet?.balance} )
                 </label>
                 <input
                   type="number"
-                  min={minWithdrawal}
+                  min={1}
                   max={wallet?.balance || 0}
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}
@@ -470,12 +471,12 @@ export const HelperWallet: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Account / Mobile Number</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">মোবাইল নম্বর / ট্রানজেকশন আইডি (TxID)</label>
                 <input
-                  type="tel"
+                  type="text"
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
-                  placeholder="01XXXXXXXXX"
+                  placeholder="মোবাইল বা TxID লিখুন..."
                   className="w-full p-3.5 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none"
                   required
                 />
@@ -487,14 +488,14 @@ export const HelperWallet: React.FC = () => {
                   onClick={() => setShowWithdrawModal(false)}
                   className="flex-1 py-3.5 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
                 >
-                  Cancel
+                  বাতিল
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
                   className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700"
                 >
-                  Submit Request
+                  তথ্য জমা দিন
                 </button>
               </div>
             </form>
@@ -504,4 +505,3 @@ export const HelperWallet: React.FC = () => {
     </div>
   );
 };
-

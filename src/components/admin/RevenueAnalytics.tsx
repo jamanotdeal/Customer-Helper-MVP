@@ -156,6 +156,14 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       .filter((w) => w.status === 'APPROVED')
       .reduce((sum, w) => sum + w.amount, 0);
 
+    const allTimePlatformCommission = allDeliveredOrders.reduce((sum, o) => {
+      const helperPayout = calculateHelperCommission(o.deliveryFee, pricing);
+      return sum + (o.deliveryFee - helperPayout);
+    }, 0);
+
+    const totalPlatformCommissionPaidBack = allWallets.reduce((sum, w) => sum + (w.totalPaidCommission || 0), 0);
+    const totalPlatformCommissionOutstandingDue = Math.max(0, allTimePlatformCommission - totalPlatformCommissionPaidBack);
+
     let grossDeliveryFees = 0;
     let totalProductCosts = 0;
     let totalHelperPayouts = 0;
@@ -242,6 +250,9 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       totalOutstandingLiability,
       allTimeGrossDeliveryFees,
       allTimeApprovedPayouts,
+      allTimePlatformCommission,
+      totalPlatformCommissionPaidBack,
+      totalPlatformCommissionOutstandingDue,
       dailyBreakdown,
     };
   }, [orders, pricing, startDate, endDate]);
@@ -473,6 +484,37 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
           <p className="text-[11px] text-indigo-700 font-semibold">
             Helper wallet balances (owed)
           </p>
+        </div>
+      </div>
+
+      {/* Rider Commission & Outstanding Collection Summary */}
+      <div className="p-6 rounded-3xl bg-slate-900 text-white space-y-4 shadow-xl border border-slate-800">
+        <div>
+          <h4 className="font-extrabold text-sm text-indigo-300 uppercase tracking-wider flex items-center space-x-2">
+            <Bike className="w-5 h-5 text-indigo-400" />
+            <span>Rider Cash Collection & Commission Ledger (Overall Summary)</span>
+          </h4>
+          <p className="text-[11px] text-slate-300 mt-1">
+            যেহেতু হেলপার কাস্টমারের কাছ থেকে সরাসরি নগদ মূল্য (পণ্য ও ডেলিভারি ফি) সংগ্রহ করে, তাই হেলপারের কাছ থেকে প্লাটফর্ম কমিশন পাওনা থাকে।
+          </p>
+        </div>
+        
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Platform Commission Earned</span>
+            <span className="text-2xl font-black text-white">৳{analyticsData.allTimePlatformCommission}</span>
+            <p className="text-[9px] text-slate-400 mt-1">All-time platform share</p>
+          </div>
+          <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Commission Paid Back</span>
+            <span className="text-2xl font-black text-emerald-400">৳{analyticsData.totalPlatformCommissionPaidBack}</span>
+            <p className="text-[9px] text-slate-400 mt-1">Collected from riders</p>
+          </div>
+          <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Remaining Due / Outstanding</span>
+            <span className={`text-2xl font-black ${analyticsData.totalPlatformCommissionOutstandingDue > 0 ? 'text-red-400' : 'text-slate-300'}`}>৳{analyticsData.totalPlatformCommissionOutstandingDue}</span>
+            <p className="text-[9px] text-slate-400 mt-1">Yet to collect from riders</p>
+          </div>
         </div>
       </div>
 

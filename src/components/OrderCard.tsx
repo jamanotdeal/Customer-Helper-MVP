@@ -204,14 +204,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </p>
             </div>
 
-            <div className="shrink-0">
-              <span
-                className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${badge.color}`}
-              >
-                <BadgeIcon className="w-3 h-3" />
-                <span>{badge.label}</span>
-              </span>
-            </div>
+            {order.status !== 'PENDING' && (
+              <div className="shrink-0">
+                <span
+                  className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${badge.color}`}
+                >
+                  <BadgeIcon className="w-3 h-3" />
+                  <span>{badge.label}</span>
+                </span>
+              </div>
+            )}
           </div>
 
           <button

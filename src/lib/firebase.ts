@@ -466,7 +466,7 @@ class FallbackStore {
     // If completed, automatically calculate helper commission atomically
     if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.helperId) {
       const commission = calculateHelperCommission(updated.deliveryFee, this.pricingSettings);
-      this.creditHelperEarning(updated.helperId, commission, updated.id);
+      this.creditHelperEarning(updated.helperId, commission, updated.deliveryFee, updated.id);
     }
 
     this.notify();
@@ -478,16 +478,21 @@ class FallbackStore {
     }
   }
 
-  public async creditHelperEarning(helperId: string, amount: number, orderId: string) {
+  public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
     const wallet = this.wallets.get(helperId) || {
       userId: helperId,
       balance: 0,
       totalEarned: 0,
       totalWithdrawn: 0,
+      totalPaidCommission: 0,
       updatedAt: new Date().toISOString(),
     };
-    wallet.balance += amount;
-    wallet.totalEarned += amount;
+    const platformShare = deliveryFee - helperShare;
+    
+    // Helper gets the full delivery fee, so their earnings increase by the helperShare
+    wallet.totalEarned += helperShare;
+    // They owe Jamanot the platform's share (commission)
+    wallet.balance += platformShare;
     wallet.updatedAt = new Date().toISOString();
     this.wallets.set(helperId, wallet);
 
@@ -495,10 +500,10 @@ class FallbackStore {
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
       userId: helperId,
-      amount: amount,
+      amount: platformShare,
       type: 'EARNING',
       orderId: orderId,
-      description: `Order #${orderId} completed (Commission ${this.pricingSettings.helperCommissionPercent}%)`,
+      description: `Order #${orderId} completed (Commission ${100 - this.pricingSettings.helperCommissionPercent}% due: ৳${platformShare})`,
       createdAt: new Date().toISOString(),
     };
     txs.unshift(newTx);
@@ -511,6 +516,42 @@ class FallbackStore {
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
     } catch (e: any) {
       console.warn('[Firestore] creditHelperEarning note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async recordHelperPayback(helperId: string, amount: number, note: string) {
+    const wallet = this.wallets.get(helperId) || {
+      userId: helperId,
+      balance: 0,
+      totalEarned: 0,
+      totalWithdrawn: 0,
+      totalPaidCommission: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    
+    wallet.totalPaidCommission = (wallet.totalPaidCommission || 0) + amount;
+    wallet.updatedAt = new Date().toISOString();
+    this.wallets.set(helperId, wallet);
+
+    const txs = this.walletTransactions.get(helperId) || [];
+    const newTx: WalletTransaction = {
+      id: `tx-${Date.now()}`,
+      userId: helperId,
+      amount: amount,
+      type: 'PAYBACK',
+      description: `Paid back commission to platform: ৳${amount} (${note})`,
+      createdAt: new Date().toISOString(),
+    };
+    txs.unshift(newTx);
+    this.walletTransactions.set(helperId, txs);
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+    } catch (e: any) {
+      console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
   }
 
@@ -551,8 +592,8 @@ class FallbackStore {
 
     const wallet = this.wallets.get(req.helperId);
     if (wallet) {
-      wallet.balance -= req.amount;
-      wallet.totalWithdrawn += req.amount;
+      wallet.balance -= req.amount; // Outstanding due decreases
+      wallet.totalPaidCommission = (wallet.totalPaidCommission || 0) + req.amount;
       wallet.updatedAt = new Date().toISOString();
       this.wallets.set(req.helperId, wallet);
 
@@ -561,8 +602,8 @@ class FallbackStore {
         id: `tx-${Date.now()}`,
         userId: req.helperId,
         amount: -req.amount,
-        type: 'WITHDRAWAL',
-        description: `Withdrawal approved (#${req.id})`,
+        type: 'PAYBACK',
+        description: `Commission payback approved (#${req.id})`,
         createdAt: new Date().toISOString(),
       };
       txs.unshift(newTx);

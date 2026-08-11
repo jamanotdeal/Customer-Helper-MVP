@@ -53,6 +53,27 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Payback states
+  const [paybackAmount, setPaybackAmount] = useState('');
+  const [paybackNote, setPaybackNote] = useState('');
+  const [recordingPayback, setRecordingPayback] = useState(false);
+
+  const handleRecordPayback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(paybackAmount);
+    if (isNaN(amt) || amt <= 0) {
+      showAlert('ভুল পরিমাণ', 'সঠিক পরিমাণ প্রদান করুন।', 'warning');
+      return;
+    }
+    setRecordingPayback(true);
+    await fallbackStore.recordHelperPayback(userId, amt, paybackNote.trim() || 'Recorded by admin');
+    setRecordingPayback(false);
+    setPaybackAmount('');
+    setPaybackNote('');
+    showAlert('পেমেন্ট রেকর্ড সম্পন্ন', `হেলপারের পরিশোধিত ৳${amt} পেমেন্ট রেকর্ড করা হয়েছে।`, 'success');
+    if (onUserUpdated) onUserUpdated();
+  };
+
   // Fetch real-time user data
   const user = fallbackStore.users.get(userId);
 
@@ -327,8 +348,12 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
               <span className="text-[10px] text-emerald-600 block font-bold">{completedHelperOrders.length} completed</span>
             </div>
             <div className="p-3 bg-white rounded-2xl border border-gray-200 shadow-sm">
-              <span className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider block">Wallet Balance</span>
-              <span className="text-xl font-black text-emerald-600">৳{wallet.balance}</span>
+              <span className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider block">
+                {user.isHelper ? 'Outstanding Due' : 'Wallet Balance'}
+              </span>
+              <span className={`text-xl font-black ${user.isHelper && wallet.balance > 0 ? 'text-red-650' : 'text-emerald-600'}`}>
+                ৳{wallet.balance}
+              </span>
               <span className="text-[10px] text-indigo-700 block font-semibold">৳{wallet.totalEarned} earned</span>
             </div>
           </div>
@@ -683,46 +708,128 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
             )}
 
             {/* TAB 4: WALLET TRANSACTIONS */}
-            {activeTab === 'WALLET' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-extrabold text-xs text-gray-700 uppercase tracking-wider">
-                    Wallet Ledger ({walletTxs.length})
-                  </h4>
-                  <div className="text-xs font-bold text-gray-700">
-                    Current Balance: <strong className="text-emerald-600 font-extrabold">৳{wallet.balance}</strong>
-                  </div>
-                </div>
+            {activeTab === 'WALLET' && (() => {
+              const pricing = fallbackStore.pricingSettings;
+              const helperCommissionPercent = pricing.helperCommissionPercent || 80;
+              const totalRiderEarned = completedHelperOrders.reduce((sum, o) => {
+                return sum + (o.deliveryFee * helperCommissionPercent) / 100;
+              }, 0);
+              const totalPlatformShare = completedHelperOrders.reduce((sum, o) => {
+                return sum + (o.deliveryFee - (o.deliveryFee * helperCommissionPercent) / 100);
+              }, 0);
+              const totalPaidCommission = wallet.totalPaidCommission || 0;
+              const remainingDueCommission = Math.max(0, totalPlatformShare - totalPaidCommission);
 
-                {walletTxs.length === 0 ? (
-                  <div className="py-12 text-center text-gray-400">
-                    <Wallet className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                    <p className="font-bold">No wallet transactions recorded.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {walletTxs.map((tx) => (
-                      <div
-                        key={tx.id}
-                        className="p-3.5 rounded-2xl bg-white border border-gray-200 flex items-center justify-between"
-                      >
-                        <div>
-                          <p className="font-extrabold text-gray-900">{tx.description}</p>
-                          <p className="text-[11px] text-gray-400">{new Date(tx.createdAt).toLocaleString()}</p>
+              return (
+                <div className="space-y-4">
+                  {user.isHelper && (
+                    <div className="p-5 bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 text-white rounded-3xl space-y-4 shadow-md border border-indigo-800/40">
+                      <h4 className="font-extrabold text-sm text-indigo-300 uppercase tracking-wider flex items-center space-x-2">
+                        <Bike className="w-5 h-5 text-indigo-400" />
+                        <span>Rider Cash Collection & Commission Ledger</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-300 font-medium">
+                        যেহেতু হেলপার কাস্টমারের কাছ থেকে সরাসরি নগদ মূল্য (পণ্য ও ডেলিভারি ফি) সংগ্রহ করে, তাই হেলপারের কাছ থেকে প্লাটফর্ম কমিশন পাওনা থাকে।
+                      </p>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                        <div className="p-3 bg-white/5 rounded-2xl border border-white/10">
+                          <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Earned (Rider)</span>
+                          <span className="text-lg font-black text-white">৳{totalRiderEarned}</span>
                         </div>
-                        <span
-                          className={`font-black text-sm ${
-                            tx.amount > 0 ? 'text-emerald-600' : 'text-purple-900'
-                          }`}
-                        >
-                          {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
-                        </span>
+                        <div className="p-3 bg-white/5 rounded-2xl border border-white/10">
+                          <span className="text-[10px] text-indigo-200 uppercase block font-bold">Platform Share</span>
+                          <span className="text-lg font-black text-amber-300">৳{totalPlatformShare}</span>
+                        </div>
+                        <div className="p-3 bg-white/5 rounded-2xl border border-white/10">
+                          <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Paid Back</span>
+                          <span className="text-lg font-black text-emerald-400">৳{totalPaidCommission}</span>
+                        </div>
+                        <div className="p-3 bg-white/5 rounded-2xl border border-white/10">
+                          <span className="text-[10px] text-indigo-200 uppercase block font-bold">Remaining Due</span>
+                          <span className={`text-lg font-black ${remainingDueCommission > 0 ? 'text-red-400 font-black' : 'text-slate-300'}`}>৳{remainingDueCommission}</span>
+                        </div>
                       </div>
-                    ))}
+
+                      {/* Record Commission Payback Form */}
+                      <form onSubmit={handleRecordPayback} className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-3">
+                        <h5 className="font-extrabold text-xs text-indigo-200">হেলপারের পরিশোধিত কমিশন রেকর্ড করুন (Record Payment from Rider):</h5>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder="Amount (৳)..."
+                            value={paybackAmount}
+                            onChange={(e) => setPaybackAmount(e.target.value)}
+                            className="flex-1 px-4 py-2 bg-white/10 border border-white/20 rounded-xl text-xs font-semibold text-white focus:outline-none focus:border-indigo-400 outline-none"
+                            required
+                          />
+                          <input
+                            type="text"
+                            placeholder="Payment details (e.g. bKash TxID, cash)..."
+                            value={paybackNote}
+                            onChange={(e) => setPaybackNote(e.target.value)}
+                            className="flex-1 px-4 py-2 bg-white/10 border border-white/20 rounded-xl text-xs font-semibold text-white focus:outline-none focus:border-indigo-400 outline-none"
+                            required
+                          />
+                          <button
+                            type="submit"
+                            disabled={recordingPayback}
+                            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-1"
+                          >
+                            <span>Record Payment</span>
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2">
+                    <h4 className="font-extrabold text-xs text-gray-700 uppercase tracking-wider">
+                      Wallet Ledger ({walletTxs.length})
+                    </h4>
+                    <div className="text-xs font-bold text-gray-700">
+                      {user.isHelper ? 'Outstanding Due: ' : 'Current Balance: '}
+                      <strong className={`font-extrabold ${user.isHelper && wallet.balance > 0 ? 'text-red-650' : 'text-emerald-600'}`}>
+                        ৳{wallet.balance}
+                      </strong>
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
+
+                  {walletTxs.length === 0 ? (
+                    <div className="py-12 text-center text-gray-400">
+                      <Wallet className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                      <p className="font-bold">No wallet transactions recorded.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {walletTxs.map((tx) => (
+                        <div
+                          key={tx.id}
+                          className="p-3.5 rounded-2xl bg-white border border-gray-200 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-extrabold text-gray-900">{tx.description}</p>
+                            <p className="text-[11px] text-gray-400">{new Date(tx.createdAt).toLocaleString()}</p>
+                          </div>
+                          <span
+                            className={`font-black text-sm ${
+                              tx.amount > 0 
+                                ? tx.type === 'PAYBACK' 
+                                  ? 'text-indigo-600' 
+                                  : 'text-emerald-600' 
+                                : 'text-purple-900'
+                            }`}
+                          >
+                            {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* TAB 5: MANAGEMENT, LABELING, BLOCKING & DELETION */}
             {activeTab === 'MANAGEMENT' && (
