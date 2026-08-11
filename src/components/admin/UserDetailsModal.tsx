@@ -97,7 +97,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     const updatedUser = {
       ...user,
       displayName: editName.trim(),
-      email: editEmail.trim() || undefined,
+      email: editEmail.trim() || '',
       alternativePhone: editPhone.trim() || undefined,
     };
     await fallbackStore.saveUser(updatedUser);
