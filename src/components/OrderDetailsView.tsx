@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, OrderItem, OrderStatus } from '@/types';
+import { Order, OrderStatus } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
-  AlertTriangle, Check, ChevronRight, Edit2, Plus, Trash2, X,
+  AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
 } from 'lucide-react';
+import { DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
 
@@ -21,11 +22,27 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editItems, setEditItems] = useState<OrderItem[]>([]);
+  const [editService, setEditService] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editPickup, setEditPickup] = useState('');
   const [editAddress, setEditAddress] = useState('');
   const [editPhone, setEditPhone] = useState('');
-  const [editNote, setEditNote] = useState('');
   const [editError, setEditError] = useState('');
+
+  // Services list synced from admin panel
+  const [editServices, setEditServices] = useState<string[]>(
+    fallbackStore.pricingSettings.services || DEFAULT_SERVICES
+  );
+
+  useEffect(() => {
+    const sync = () => {
+      const s = fallbackStore.pricingSettings.services;
+      if (s && s.length > 0) setEditServices(s);
+    };
+    sync();
+    const unsub = fallbackStore.subscribe(sync);
+    return () => unsub();
+  }, []);
 
   // Cancellation modal state
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -125,40 +142,35 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Open edit modal pre-filled with current order data
   const openEditModal = () => {
-    setEditItems(order.items.map((it) => ({ ...it })));
+    setEditService(order.service || order.title || '');
+    // The description is stored in items[0].name (single-item format used by the order form)
+    setEditDescription(order.items[0]?.name || '');
+    setEditPickup(order.pickupLocation?.address || '');
     setEditAddress(order.deliveryLocation.address);
     setEditPhone(order.alternativePhone || order.customerPhone || '');
-    setEditNote(order.additionalNote || '');
     setEditError('');
     setShowEditModal(true);
   };
 
-  // Item helpers
-  const handleEditItemName = (id: string, name: string) => {
-    setEditItems((prev) => prev.map((it) => (it.id === id ? { ...it, name } : it)));
-  };
-  const handleEditItemQty = (id: string, qty: string) => {
-    setEditItems((prev) => prev.map((it) => (it.id === id ? { ...it, qty } : it)));
-  };
-  const handleAddItem = () => {
-    setEditItems((prev) => [...prev, { id: `item-${Date.now()}`, name: '', qty: '1' }]);
-  };
-  const handleRemoveItem = (id: string) => {
-    setEditItems((prev) => prev.filter((it) => it.id !== id));
-  };
-
   const handleSaveEdit = () => {
-    // Validate
-    if (!editAddress.trim()) { setEditError('Delivery address cannot be empty.'); return; }
-    const validItems = editItems.filter((it) => it.name.trim());
-    if (validItems.length === 0) { setEditError('At least one item is required.'); return; }
+    if (!editService.trim()) { setEditError('অনুগ্রহ করে একটি সার্ভিস সিলেক্ট করুন।'); return; }
+    if (!editDescription.trim()) { setEditError('অনুগ্রহ করে কী করতে হবে তা লিখুন।'); return; }
+    if (!editAddress.trim()) { setEditError('ডেলিভারি ঠিকানা খালি রাখা যাবে না।'); return; }
+    if (!editPhone.trim()) { setEditError('অনুগ্রহ করে হোয়াটসঅ্যাপ নম্বর দিন।'); return; }
+    if (!/^01[3-9]\d{8}$/.test(editPhone.trim())) {
+      setEditError('অনুগ্রহ করে ১১ ডিজিটের সঠিক মোবাইল নম্বর দিন (যেমন: 01712345678)।');
+      return;
+    }
 
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
-      items: validItems,
+      service: editService.trim(),
+      title: editService.trim(),
+      items: [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
+      pickupLocation: editPickup.trim() ? { address: editPickup.trim() } : undefined,
       deliveryLocation: { ...o.deliveryLocation, address: editAddress.trim() },
-      alternativePhone: editPhone.trim() || undefined,
-      additionalNote: editNote.trim() || undefined,
+      alternativePhone: editPhone.trim(),
+      customerPhone: editPhone.trim(),
       updatedAt: new Date().toISOString(),
       statusHistory: [
         ...o.statusHistory,
@@ -459,82 +471,82 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </button>
             </div>
 
-            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
-              {/* Items */}
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
+
+              {/* Service Selection */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider">Items</label>
-                  <button
-                    type="button"
-                    onClick={handleAddItem}
-                    className="flex items-center space-x-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 rounded-xl border border-emerald-200 transition-all"
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">সার্ভিস *</label>
+                <div className="relative">
+                  <select
+                    value={editService}
+                    onChange={(e) => { setEditService(e.target.value); setEditError(''); }}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
                   >
-                    <Plus className="w-3 h-3" />
-                    <span>Add Item</span>
-                  </button>
+                    <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
+                    {editServices.map((srv) => (
+                      <option key={srv} value={srv}>{srv}</option>
+                    ))}
+                  </select>
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  {editItems.map((it, idx) => (
-                    <div key={it.id} className="flex items-center space-x-2">
-                      <input
-                        type="text"
-                        value={it.name}
-                        onChange={(e) => handleEditItemName(it.id, e.target.value)}
-                        placeholder={`Item ${idx + 1} name`}
-                        className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveItem(it.id)}
-                        className="p-2 rounded-xl bg-red-50 text-red-400 hover:bg-red-100 hover:text-red-600 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Details</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => { setEditDescription(e.target.value); setEditError(''); }}
+                  placeholder={getServiceDescriptionHint(editService, fallbackStore.pricingSettings)}
+                  className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
+                />
+              </div>
+
+              {/* Pickup / Source Location (optional) */}
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">কোথা থেকে নিতে হবে?</label>
+                <div className="relative">
+                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={editPickup}
+                    onChange={(e) => setEditPickup(e.target.value)}
+                    placeholder="কোথা থেকে নিতে হবে? (optional)"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                  />
                 </div>
               </div>
 
               {/* Delivery Address */}
               <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Delivery Address</label>
-                <div className="flex items-start space-x-2 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-                  <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <textarea
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">ডেলিভারি ঠিকানা *</label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
                     value={editAddress}
-                    onChange={(e) => setEditAddress(e.target.value)}
-                    placeholder="Full delivery address..."
-                    className="flex-1 bg-transparent text-sm font-semibold text-gray-900 outline-none resize-none min-h-[48px]"
-                    rows={2}
+                    onChange={(e) => { setEditAddress(e.target.value); setEditError(''); }}
+                    placeholder="ডেলিভারি ঠিকানা *"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
                   />
                 </div>
               </div>
 
-              {/* Contact Number */}
+              {/* WhatsApp Number */}
               <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Contact Number</label>
-                <div className="flex items-center space-x-2 p-3 rounded-2xl bg-gray-50 border border-gray-200">
-                  <Phone className="w-4 h-4 text-gray-400 shrink-0" />
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">হোয়াটসঅ্যাপ নম্বর *</label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                   <input
                     type="tel"
                     value={editPhone}
-                    onChange={(e) => setEditPhone(e.target.value)}
-                    placeholder="e.g. 01XXXXXXXXX"
-                    className="flex-1 bg-transparent text-sm font-semibold text-gray-900 outline-none"
+                    onChange={(e) => { setEditPhone(e.target.value); setEditError(''); }}
+                    placeholder="হোয়াটসঅ্যাপ নম্বর *"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
                   />
                 </div>
-              </div>
-
-              {/* Additional Note */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Additional Note</label>
-                <textarea
-                  value={editNote}
-                  onChange={(e) => setEditNote(e.target.value)}
-                  placeholder="Any special instructions for the helper..."
-                  className="w-full px-3 py-3 rounded-2xl border border-amber-100 bg-amber-50/60 text-xs font-medium text-amber-950 outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-300/20 resize-none"
-                  rows={3}
-                />
               </div>
 
               {editError && (

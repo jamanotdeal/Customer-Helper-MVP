@@ -107,6 +107,7 @@ export interface UserProfile {
   isBlocked?: boolean;
   blockedReason?: string;
   labels?: string[];
+  fcmToken?: string; // FCM push subscription token for this device
 }
 
 export interface HelperApplication {
@@ -170,6 +171,10 @@ export interface PricingSettings {
   orderConfirmationMessage?: string; // Admin configured thank-you message shown after order submission
   services?: string[];             // Admin configured service dropdown options
   serviceDescriptionHints?: Record<string, string>; // Per-service description placeholder hints
+  orderTimingType?: 'always_on' | 'always_off' | 'custom_range';
+  orderTimingStart?: string; // HH:mm format
+  orderTimingEnd?: string;   // HH:mm format
+  orderTimingMessage?: string;
 }
 
 export interface AppNotification {

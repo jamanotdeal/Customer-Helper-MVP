@@ -36,13 +36,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Fetch wallet & transactions
-  const wallet = fallbackStore.wallets.get(helperId) || {
-    userId: helperId,
-    balance: 0,
-    totalEarned: 0,
-    totalWithdrawn: 0,
-    updatedAt: new Date().toISOString(),
-  };
+  const wallet = fallbackStore.getHelperWallet(helperId);
   const walletTxs = fallbackStore.walletTransactions.get(helperId) || [];
 
   // Metrics

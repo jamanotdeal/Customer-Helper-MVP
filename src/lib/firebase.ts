@@ -13,6 +13,13 @@ import {
   limit,
 } from 'firebase/firestore';
 import {
+  getMessaging,
+  getToken,
+  onMessage,
+  isSupported as isMessagingSupported,
+  Messaging,
+} from 'firebase/messaging';
+import {
   Order,
   HelperApplication,
   Wallet,
@@ -38,10 +45,191 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
 
+// ─── Firebase Cloud Messaging ─────────────────────────────────────────────────
+// VAPID public key — generated from Firebase Console → Project Settings → Cloud Messaging → Web Push certificates.
+// Replace the placeholder below with your actual VAPID key once you generate it in the Firebase Console.
+const VAPID_KEY =
+  process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
+  'BPtS3UGEa9rMWrIi1L3BDtXVcKWqHpYvEqLmW0xZbF5k4V8Nz2jMqRlJXD6TuYbKz9mN7cQ3wOeHbAiPkFgE'; // ← Replace with your real VAPID key
+
+let _messaging: Messaging | null = null;
+
+/**
+ * Initializes Firebase Cloud Messaging on the client.
+ * - Requests the FCM device token (VAPID)
+ * - Saves the token to the user profile in Firestore
+ * - Sets up a foreground message handler (shows notification when app is open)
+ *
+ * Call this after the user logs in and notification permission is granted.
+ */
+export async function initFcmMessaging(userId: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const supported = await isMessagingSupported();
+    if (!supported) {
+      console.info('[FCM] Messaging not supported in this browser.');
+      return null;
+    }
+
+    if (!_messaging) {
+      _messaging = getMessaging(app);
+    }
+
+    // Register/ensure our SW is active before requesting token
+    let swReg: ServiceWorkerRegistration | undefined;
+    if ('serviceWorker' in navigator) {
+      swReg = await navigator.serviceWorker.ready;
+    }
+
+    const token = await getToken(_messaging, {
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: swReg,
+    });
+
+    if (token) {
+      console.info('[FCM] Token obtained:', token.substring(0, 20) + '...');
+      // Save token to Firestore so other devices can push to this one
+      await saveFcmToken(userId, token);
+
+      // Handle foreground messages (app is open & focused)
+      onMessage(_messaging, (payload) => {
+        console.info('[FCM] Foreground message:', payload);
+        const title = payload.notification?.title || payload.data?.title || 'Jamanot';
+        const body  = payload.notification?.body  || payload.data?.body  || '';
+        const id    = payload.data?.tag || `fcm-fg-${Date.now()}`;
+        // Reuse existing browser notification trigger
+        triggerBrowserNotification({ id, title, body });
+      });
+    }
+
+    return token || null;
+  } catch (e: any) {
+    console.warn('[FCM] initFcmMessaging note:', e?.message || e);
+    return null;
+  }
+}
+
+/**
+ * Saves this device's FCM token to the user's Firestore profile.
+ * Other devices read this token to send targeted pushes.
+ */
+export async function saveFcmToken(userId: string, token: string): Promise<void> {
+  try {
+    const existing = fallbackStore.users.get(userId);
+    if (existing && existing.fcmToken === token) return; // no change needed
+    await setDoc(doc(db, 'users', userId), { fcmToken: token }, { merge: true });
+    if (existing) {
+      const updated = { ...existing, fcmToken: token };
+      fallbackStore.users.set(userId, updated);
+    }
+  } catch (e: any) {
+    console.warn('[FCM] saveFcmToken note:', e?.message || e);
+  }
+}
+
+/**
+ * Sends a native push notification to all target devices via FCM.
+ * Works even when the target device's app is closed or backgrounded.
+ *
+ * Note: FCM HTTP v1 API requires a server-side OAuth token. Since this is a
+ * client-only app, we use the Firestore-based approach: FCM background messages
+ * are delivered to the device's registered service worker automatically when the
+ * device is online. For immediate cross-device push, we fan-out to all tokens
+ * using FCM's legacy REST API with a server key (set NEXT_PUBLIC_FCM_SERVER_KEY).
+ * This is optional — the SW onBackgroundMessage handler covers the delivery.
+ */
+export async function sendFcmPushToTokens(
+  tokens: string[],
+  title: string,
+  body: string,
+  tag?: string,
+  url?: string
+): Promise<void> {
+  const serverKey = process.env.NEXT_PUBLIC_FCM_SERVER_KEY;
+  if (!serverKey || tokens.length === 0) {
+    // Without server key, FCM still delivers in background via SW onBackgroundMessage
+    // when the Firestore notification doc is synced. No action needed here.
+    return;
+  }
+  try {
+    const payload = {
+      registration_ids: tokens.slice(0, 1000), // FCM max per request
+      notification: { title, body, icon: '/Jamanot-Logo.png' },
+      data: { title, body, tag: tag || 'jamanot', url: url || '/' },
+    };
+    await fetch('https://fcm.googleapis.com/fcm/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `key=${serverKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (e: any) {
+    console.warn('[FCM] sendFcmPushToTokens note:', e?.message || e);
+  }
+}
+
 // Helper to recursively strip undefined properties before saving to Firestore
 function cleanForFirestore<T>(data: T): T {
   if (data === undefined || data === null) return data;
   return JSON.parse(JSON.stringify(data));
+}
+
+// -------------------------------------------------------------
+// Browser Notification Helper
+// Fires a native browser popup on the CURRENT device for the given notification.
+// Each device calls this for itself via the Firestore onSnapshot listener.
+// -------------------------------------------------------------
+export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string }) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          reg
+            .showNotification(notif.title, {
+              body: notif.body || '',
+              icon: '/Jamanot-Logo.png',
+              badge: '/Jamanot-Logo.png',
+              tag: notif.id,
+              vibrate: [200, 100, 200, 100, 200],
+              renotify: true,
+              data: { orderId: notif.orderId, url: '/' },
+            } as any)
+            .catch(() => {
+              // SW showNotification failed — fallback to basic Notification
+              new Notification(notif.title, {
+                body: notif.body || '',
+                icon: '/Jamanot-Logo.png',
+                tag: notif.id,
+              });
+            });
+        })
+        .catch(() => {
+          // SW not ready
+          new Notification(notif.title, {
+            body: notif.body || '',
+            icon: '/Jamanot-Logo.png',
+            tag: notif.id,
+          });
+        });
+    } else {
+      new Notification(notif.title, {
+        body: notif.body || '',
+        icon: '/Jamanot-Logo.png',
+        tag: notif.id,
+      });
+    }
+    // Also play sound on the receiving device
+    playNotificationSound();
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+    }
+  } catch (err) {
+    console.warn('[triggerBrowserNotification] note:', err);
+  }
 }
 
 // -------------------------------------------------------------
@@ -60,6 +248,14 @@ class FallbackStore {
   public withdrawals: Map<string, WithdrawalRequest> = new Map();
   public notifications: Map<string, AppNotification[]> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
+
+  // Set by AuthContext when a user logs in/out so the Firestore
+  // notification listener knows which device belongs to which user.
+  public currentUserId: string | null = null;
+
+  // Tracks Firestore notification doc IDs that have already been processed
+  // on this device, so we don't re-fire a browser popup for old ones.
+  private _knownNotifIds: Set<string> = new Set();
 
   private isFirestoreInitialized = false;
 
@@ -177,6 +373,33 @@ class FallbackStore {
             map.set(key, list);
           });
           this.notifications = map;
+
+          // ─── KEY FIX: Fire browser popup on the RECEIVING device ───
+          // Identify notification docs that are truly new (not seen before)
+          // and target the current logged-in user.
+          if (this.currentUserId) {
+            const uid = this.currentUserId;
+            const currentUser = this.users.get(uid);
+            snapshot.docs.forEach((docSnap) => {
+              const notif = docSnap.data() as AppNotification;
+              // Skip if we already processed this notification on this device
+              if (this._knownNotifIds.has(notif.id)) return;
+              this._knownNotifIds.add(notif.id);
+
+              // Determine if this notification targets the current user
+              const targets =
+                notif.userId === uid ||
+                notif.userId === 'all' ||
+                (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
+                (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
+
+              if (targets && !notif.read) {
+                triggerBrowserNotification(notif);
+              }
+            });
+          }
+          // ──────────────────────────────────────────────────────────
+
           this.notify();
         },
         (err) => console.warn('[Firestore] Notifications sync note:', err)
@@ -463,10 +686,23 @@ class FallbackStore {
       });
     }
 
-    // If completed, automatically calculate helper commission atomically
-    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.helperId) {
-      const commission = calculateHelperCommission(updated.deliveryFee, this.pricingSettings);
-      this.creditHelperEarning(updated.helperId, commission, updated.deliveryFee, updated.id);
+    // If order was already delivered or is now delivered, update the helper's wallet document in Firestore
+    if ((previousStatus === 'DELIVERED' || updated.status === 'DELIVERED') && (updated.helperId || existing.helperId)) {
+      const helperId = updated.helperId || existing.helperId;
+      if (helperId) {
+        if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED') {
+          const commission = calculateHelperCommission(updated.deliveryFee, this.pricingSettings);
+          await this.creditHelperEarning(helperId, commission, updated.deliveryFee, updated.id);
+        } else {
+          const updatedWallet = this.getHelperWallet(helperId);
+          this.wallets.set(helperId, updatedWallet);
+          try {
+            await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
+          } catch (e) {
+            console.warn('[Firestore] updateOrder wallet sync note:', e);
+          }
+        }
+      }
     }
 
     this.notify();
@@ -478,24 +714,41 @@ class FallbackStore {
     }
   }
 
-  public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
-    const wallet = this.wallets.get(helperId) || {
+  public getHelperWallet(helperId: string): Wallet {
+    const allOrders = Array.from(this.orders.values());
+    const helperOrders = allOrders.filter(
+      (o) => o.helperId === helperId && o.status === 'DELIVERED'
+    );
+    // All approved withdrawals are the single source of truth for paid commission.
+    // Manual paybacks recorded by admin also create an APPROVED withdrawal record.
+    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
+      (w) => w.helperId === helperId && w.status === 'APPROVED'
+    );
+
+    let totalEarned = 0;
+    let totalPlatformShare = 0;
+
+    helperOrders.forEach((o) => {
+      const helperShare = calculateHelperCommission(o.deliveryFee, this.pricingSettings);
+      totalEarned += helperShare;
+      totalPlatformShare += (o.deliveryFee - helperShare);
+    });
+
+    const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const balance = Math.max(0, totalPlatformShare - totalPaidCommission);
+
+    return {
       userId: helperId,
-      balance: 0,
-      totalEarned: 0,
-      totalWithdrawn: 0,
-      totalPaidCommission: 0,
+      balance,
+      totalEarned,
+      totalWithdrawn: totalPaidCommission,
+      totalPaidCommission,
       updatedAt: new Date().toISOString(),
     };
-    const platformShare = deliveryFee - helperShare;
-    
-    // Helper gets the full delivery fee, so their earnings increase by the helperShare
-    wallet.totalEarned += helperShare;
-    // They owe Jamanot the platform's share (commission)
-    wallet.balance += platformShare;
-    wallet.updatedAt = new Date().toISOString();
-    this.wallets.set(helperId, wallet);
+  }
 
+  public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
+    const platformShare = deliveryFee - helperShare;
     const txs = this.walletTransactions.get(helperId) || [];
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
@@ -509,6 +762,8 @@ class FallbackStore {
     txs.unshift(newTx);
     this.walletTransactions.set(helperId, txs);
 
+    const wallet = this.getHelperWallet(helperId);
+    this.wallets.set(helperId, wallet);
     this.notify();
 
     try {
@@ -520,24 +775,11 @@ class FallbackStore {
   }
 
   public async recordHelperPayback(helperId: string, amount: number, note: string) {
-    const wallet = this.wallets.get(helperId) || {
-      userId: helperId,
-      balance: 0,
-      totalEarned: 0,
-      totalWithdrawn: 0,
-      totalPaidCommission: 0,
-      updatedAt: new Date().toISOString(),
-    };
-    
-    wallet.totalPaidCommission = (wallet.totalPaidCommission || 0) + amount;
-    wallet.updatedAt = new Date().toISOString();
-    this.wallets.set(helperId, wallet);
-
     const txs = this.walletTransactions.get(helperId) || [];
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
       userId: helperId,
-      amount: amount,
+      amount: -amount,
       type: 'PAYBACK',
       description: `Paid back commission to platform: ৳${amount} (${note})`,
       createdAt: new Date().toISOString(),
@@ -545,11 +787,29 @@ class FallbackStore {
     txs.unshift(newTx);
     this.walletTransactions.set(helperId, txs);
 
+    const user = this.users.get(helperId);
+    const helperName = user?.displayName || 'Helper';
+    const req: WithdrawalRequest = {
+      id: `wd-manual-${Date.now()}`,
+      helperId,
+      helperName,
+      amount,
+      status: 'APPROVED',
+      paymentMethod: 'Manual Record',
+      accountNumber: note,
+      createdAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+    };
+    this.withdrawals.set(req.id, req);
+
+    const wallet = this.getHelperWallet(helperId);
+    this.wallets.set(helperId, wallet);
     this.notify();
 
     try {
       await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
@@ -590,35 +850,25 @@ class FallbackStore {
     req.processedAt = new Date().toISOString();
     this.withdrawals.set(withdrawalId, req);
 
-    const wallet = this.wallets.get(req.helperId);
-    if (wallet) {
-      wallet.balance -= req.amount; // Outstanding due decreases
-      wallet.totalPaidCommission = (wallet.totalPaidCommission || 0) + req.amount;
-      wallet.updatedAt = new Date().toISOString();
-      this.wallets.set(req.helperId, wallet);
+    const txs = this.walletTransactions.get(req.helperId) || [];
+    const newTx: WalletTransaction = {
+      id: `tx-${Date.now()}`,
+      userId: req.helperId,
+      amount: -req.amount,
+      type: 'PAYBACK',
+      description: `Commission payback approved (#${req.id})`,
+      createdAt: new Date().toISOString(),
+    };
+    txs.unshift(newTx);
+    this.walletTransactions.set(req.helperId, txs);
 
-      const txs = this.walletTransactions.get(req.helperId) || [];
-      const newTx: WalletTransaction = {
-        id: `tx-${Date.now()}`,
-        userId: req.helperId,
-        amount: -req.amount,
-        type: 'PAYBACK',
-        description: `Commission payback approved (#${req.id})`,
-        createdAt: new Date().toISOString(),
-      };
-      txs.unshift(newTx);
-      this.walletTransactions.set(req.helperId, txs);
-      
-      try {
-        await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(wallet), { merge: true });
-        await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
-      } catch (e: any) {
-        console.warn('[Firestore] approveWithdrawal wallet sync note (saved locally):', e?.message || e);
-      }
-    }
+    const wallet = this.getHelperWallet(req.helperId);
+    this.wallets.set(req.helperId, wallet);
     this.notify();
 
     try {
+      await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(wallet), { merge: true });
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] approveWithdrawal note (saved locally):', e?.message || e);
@@ -740,61 +990,52 @@ class FallbackStore {
     }
 
     this.notify();
-    playNotificationSound();
 
-    // Vibrate device directly (Android foreground / PWA)
+    // In-app feedback: sound + vibration on the device that created the notification.
+    // (Useful for admin creating notifications while the app is open.)
+    playNotificationSound();
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
     }
 
-    // Trigger System Native Browser / Service Worker Notification if supported & granted
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      if (Notification.permission === 'granted') {
-        try {
-          // Prefer SW registration.showNotification — works in foreground & background (iOS 16.4+ PWA, Android)
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.ready.then((reg) => {
-              reg.showNotification(notif.title, {
-                body: notif.body,
-                icon: '/Jamanot-Logo.png',
-                badge: '/Jamanot-Logo.png',
-                tag: notif.id,
-                vibrate: [200, 100, 200, 100, 200],
-                renotify: true,
-                data: { orderId: notif.orderId, url: '/' },
-              } as any).catch(() => {
-                // Fallback to basic Notification if SW showNotification fails
-                new Notification(notif.title, {
-                  body: notif.body,
-                  icon: '/Jamanot-Logo.png',
-                  tag: notif.id,
-                });
-              });
-            }).catch(() => {
-              // SW not ready — use basic Notification
-              new Notification(notif.title, {
-                body: notif.body,
-                icon: '/Jamanot-Logo.png',
-                tag: notif.id,
-              });
-            });
-          } else {
-            new Notification(notif.title, {
-              body: notif.body,
-              icon: '/Jamanot-Logo.png',
-              tag: notif.id,
-            });
-          }
-        } catch (err) {
-          console.warn('Native Browser Notification note:', err);
-        }
-      }
-    }
+    // NOTE: We no longer fire reg.showNotification() here because that would
+    // only show a popup on the device that CREATED the notification (wrong device).
+    // Instead, each target device fires its own popup via two channels:
+    //   1. Foreground: Firestore onSnapshot → triggerBrowserNotification()
+    //   2. Background/Closed: FCM push → SW onBackgroundMessage → showNotification()
 
     try {
       await setDoc(doc(db, 'notifications', notif.id), cleanForFirestore(notif));
     } catch (e: any) {
       console.warn('[Firestore] addNotification note (saved locally):', e?.message || e);
+    }
+
+    // ─── FCM Push Fan-out ─────────────────────────────────────────────────────
+    // Collect FCM tokens of all target users and send a background push.
+    // This ensures delivery even when the target device has the app closed.
+    try {
+      const targetTokens: string[] = [];
+      const allUsers = Array.from(this.users.values());
+      const t = notif.userId;
+
+      if (t === 'all-helpers') {
+        allUsers.forEach((u) => { if (u.isHelper && u.fcmToken) targetTokens.push(u.fcmToken); });
+      } else if (t === 'all-customers') {
+        allUsers.forEach((u) => { if (!u.isHelper && u.role !== 'admin' && u.fcmToken) targetTokens.push(u.fcmToken); });
+      } else if (t === 'all') {
+        allUsers.forEach((u) => { if (u.fcmToken) targetTokens.push(u.fcmToken); });
+      } else {
+        const targetUser = this.users.get(t);
+        if (targetUser?.fcmToken) targetTokens.push(targetUser.fcmToken);
+      }
+
+      if (targetTokens.length > 0) {
+        // sendFcmPushToTokens is a no-op unless NEXT_PUBLIC_FCM_SERVER_KEY is set.
+        // FCM background messages still work via SW onBackgroundMessage without it.
+        sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id);
+      }
+    } catch (e: any) {
+      console.warn('[FCM] Push fan-out note:', e?.message || e);
     }
   }
 

@@ -5,9 +5,9 @@ import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
+import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown } from 'lucide-react';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 
 interface RequestComposerProps {
@@ -234,129 +234,150 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     onOrderCreated(newOrder);
   };
 
+  const timingStatus = isOrderTimingOpen(fallbackStore.pricingSettings);
+
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
-      {/* Header */}
-      <button
-        type="button"
-        onClick={handleInputInteract}
-        className="w-full text-center mb-4 group outline-none"
-      >
-        <h2 className="font-extrabold text-lg text-gray-900 mb-1">কী করতে হবে?</h2>
-        <p
-          key={placeholderIndex}
-          className="text-sm font-semibold text-emerald-600 animate-in fade-in duration-500 min-h-[1.25rem] mt-1"
-        >
-          {currentPlaceholder}
-        </p>
-        <p className="text-[11px] text-gray-400 mt-1">আপনার কাজটি বলুন — আমরা বাকিটা সামলে নেব।</p>
-      </button>
-
-      <form onSubmit={handleSubmit} className="space-y-3">
-
-        {/* Expanded Form Fields */}
-        {isExpanded && user && (
-          <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
-
-            {/* Service Selection Dropdown */}
-            <div className="relative">
-              <select
-                value={service}
-                onChange={(e) => setService(e.target.value)}
-                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
-                required
-              >
-                <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
-                {services.map((srv) => (
-                  <option key={srv} value={srv}>
-                    {srv}
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                <ChevronDown className="w-4 h-4" />
-              </div>
-            </div>
-
-            {/* Description box */}
-            <div className="relative">
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
-                className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
-                required
-              />
-            </div>
-
-            {/* Pickup / Source Location (optional) */}
-            <div className="relative">
-              <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-              <input
-                type="text"
-                value={pickupNote}
-                onChange={(e) => setPickupNote(e.target.value)}
-                placeholder="কোথা থেকে নিতে হবে? (optional)"
-                className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-              />
-            </div>
-
-            {/* Delivery Address */}
-            <div className="relative">
-              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-              <input
-                type="text"
-                value={deliveryAddress}
-                onChange={(e) => setDeliveryAddress(e.target.value)}
-                placeholder="ডেলিভারি ঠিকানা *"
-                className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                required
-              />
-            </div>
-
-            {/* WhatsApp Number */}
-            <div className="relative">
-              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-              <input
-                type="tel"
-                value={altPhone}
-                onChange={(e) => setAltPhone(e.target.value)}
-                placeholder="হোয়াটসঅ্যাপ নম্বর *"
-                className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                required
-              />
-            </div>
+      {!timingStatus.isOpen ? (
+        <div className="text-center py-6 px-4 space-y-4 animate-in fade-in duration-300">
+          <div className="inline-flex p-4 rounded-3xl bg-amber-50 border border-amber-200 text-amber-800 shadow-xs">
+            <Clock className="w-8 h-8 animate-pulse text-amber-700" />
           </div>
-        )}
-
-        {/* CTA / Submit Button */}
-        {!isExpanded ? (
+          <div className="space-y-2">
+            <h3 className="font-extrabold text-base text-gray-900">অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে</h3>
+            <p className="text-xs font-semibold text-emerald-800 bg-emerald-50/80 border border-emerald-100 px-4 py-2 rounded-2xl inline-block leading-relaxed">
+              {timingStatus.message}
+            </p>
+          </div>
+          <p className="text-[11px] text-gray-400 font-medium">
+            পরবর্তীতে পুনরায় চেষ্টা করার জন্য অনুরোধ করা হলো। ধন্যবাদ!
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Header */}
           <button
             type="button"
             onClick={handleInputInteract}
-            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
+            className="w-full text-center mb-4 group outline-none"
           >
-            <span>Submit Your Request</span>
-            <ArrowRight className="w-4 h-4" />
+            <h2 className="font-extrabold text-lg text-gray-900 mb-1">কী করতে হবে?</h2>
+            <p
+              key={placeholderIndex}
+              className="text-sm font-semibold text-emerald-600 animate-in fade-in duration-500 min-h-[1.25rem] mt-1"
+            >
+              {currentPlaceholder}
+            </p>
+            <p className="text-[11px] text-gray-400 mt-1">আপনার কাজটি বলুন — আমরা বাকিটা সামলে নেব।</p>
           </button>
-        ) : (
-          <button
-            type={user ? 'submit' : 'button'}
-            onClick={!user ? handleInputInteract : undefined}
-            disabled={submitting}
-            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2 disabled:opacity-60"
-          >
-            {submitting ? (
-              <span>Submitting...</span>
-            ) : (
-              <>
-                <span>{user ? 'Submit' : 'Login to Submit'}</span>
-                <ArrowRight className="w-4 h-4" />
-              </>
+
+          <form onSubmit={handleSubmit} className="space-y-3">
+
+            {/* Expanded Form Fields */}
+            {isExpanded && user && (
+              <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+
+                {/* Service Selection Dropdown */}
+                <div className="relative">
+                  <select
+                    value={service}
+                    onChange={(e) => setService(e.target.value)}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
+                    required
+                  >
+                    <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
+                    {services.map((srv) => (
+                      <option key={srv} value={srv}>
+                        {srv}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
+                </div>
+
+                {/* Description box */}
+                <div className="relative">
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
+                    className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
+                    required
+                  />
+                </div>
+
+                {/* Pickup / Source Location (optional) */}
+                <div className="relative">
+                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={pickupNote}
+                    onChange={(e) => setPickupNote(e.target.value)}
+                    placeholder="কোথা থেকে নিতে হবে? (optional)"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                  />
+                </div>
+
+                {/* Delivery Address */}
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    placeholder="ডেলিভারি ঠিকানা *"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                    required
+                  />
+                </div>
+
+                {/* WhatsApp Number */}
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="tel"
+                    value={altPhone}
+                    onChange={(e) => setAltPhone(e.target.value)}
+                    placeholder="হোয়াটসঅ্যাপ নম্বর *"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                    required
+                  />
+                </div>
+              </div>
             )}
-          </button>
-        )}
-      </form>
+
+            {/* CTA / Submit Button */}
+            {!isExpanded ? (
+              <button
+                type="button"
+                onClick={handleInputInteract}
+                className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
+              >
+                <span>Submit Your Request</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                type={user ? 'submit' : 'button'}
+                onClick={!user ? handleInputInteract : undefined}
+                disabled={submitting}
+                className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2 disabled:opacity-60"
+              >
+                {submitting ? (
+                  <span>Submitting...</span>
+                ) : (
+                  <>
+                    <span>{user ? 'Submit' : 'Login to Submit'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            )}
+          </form>
+        </>
+      )}
     </div>
   );
 };

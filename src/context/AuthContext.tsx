@@ -2,11 +2,10 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { UserProfile, ActiveMode, HelperApplication } from '@/types';
-import { auth, googleProvider, fallbackStore } from '@/lib/firebase';
+import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission } from '@/lib/firebase';
 import {
   signInWithPopup,
   signInWithRedirect,
-  getRedirectResult,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
@@ -103,50 +102,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     });
 
-    // Flags: loading resolves once BOTH the auth listener fires AND redirect check is done.
+    // Loading resolves as soon as the Firebase auth state listener fires.
+    // We no longer use signInWithRedirect (popup-only), so redirect check is skipped.
     let authReady = false;
-    let redirectReady = false;
     const maybeFinishLoading = () => {
-      if (authReady && redirectReady) {
+      if (authReady) {
         setLoading(false);
       }
     };
 
-    // Safety net: if Firebase stalls for any reason, unblock after 6s
+    // Safety net: if Firebase auth stalls (e.g. network issues), unblock after 3s
     const safetyTimer = setTimeout(() => {
       authReady = true;
-      redirectReady = true;
       maybeFinishLoading();
-    }, 6000);
-
-    // Check if returning from a signInWithRedirect
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result?.user) {
-          const profile = buildProfile(result.user, savedMode);
-          applyProfile(profile, savedMode);
-        }
-      })
-      .catch((err: any) => {
-        console.warn('[Auth] getRedirectResult error:', err?.code, err?.message);
-        if (err?.code === 'auth/unauthorized-domain') {
-          alert(
-            `Domain Not Authorized!\n\nYour domain is not added to Firebase Authorized Domains.\n\nPlease add it in Firebase Console → Authentication → Settings → Authorized domains.`
-          );
-        }
-      })
-      .finally(() => {
-        redirectReady = true;
-        maybeFinishLoading();
-      });
+    }, 3000);
 
     // Firebase Auth state listener
     const unsubscribeAuth = onAuthStateChanged(auth, (fbUser) => {
       if (fbUser) {
         const profile = buildProfile(fbUser, savedMode);
         applyProfile(profile, savedMode);
+        // Tell the Firestore notification listener which user is on this device
+        fallbackStore.currentUserId = fbUser.uid;
+        // Initialize FCM push token for this device (async, non-blocking)
+        requestBrowserNotificationPermission().then((granted) => {
+          if (granted) {
+            initFcmMessaging(fbUser.uid).catch(() => {});
+          }
+        });
       } else {
         setUser(null);
+        fallbackStore.currentUserId = null;
       }
       authReady = true;
       maybeFinishLoading();
@@ -219,6 +205,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         fallbackStore.saveUser(demoProfile);
         setUser(demoProfile);
+        // Tell the Firestore notification listener which user is on this device
+        fallbackStore.currentUserId = demoProfile.uid;
+        // Initialize FCM push token for this device (async, non-blocking)
+        requestBrowserNotificationPermission().then((granted) => {
+          if (granted) {
+            initFcmMessaging(demoProfile.uid).catch(() => {});
+          }
+        });
         setActiveMode(demoProfile.lastActiveMode);
         setLoading(false);
         return;
@@ -262,6 +256,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Ignored
     }
     setUser(null);
+    fallbackStore.currentUserId = null;
     setActiveModeState('customer');
   };
 

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { UserProfile, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
 import {
   X,
@@ -107,13 +108,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   };
   const allOrders = Array.from(fallbackStore.orders.values());
   const helperApp = Array.from(fallbackStore.helperApplications.values()).find((a) => a.userId === userId);
-  const wallet = fallbackStore.wallets.get(userId) || {
-    userId,
-    balance: 0,
-    totalEarned: 0,
-    totalWithdrawn: 0,
-    updatedAt: new Date().toISOString(),
-  };
+  const wallet = fallbackStore.getHelperWallet(userId);
   const walletTxs = fallbackStore.walletTransactions.get(userId) || [];
 
   if (!user) {
@@ -710,12 +705,11 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
             {/* TAB 4: WALLET TRANSACTIONS */}
             {activeTab === 'WALLET' && (() => {
               const pricing = fallbackStore.pricingSettings;
-              const helperCommissionPercent = pricing.helperCommissionPercent || 80;
               const totalRiderEarned = completedHelperOrders.reduce((sum, o) => {
-                return sum + (o.deliveryFee * helperCommissionPercent) / 100;
+                return sum + calculateHelperCommission(o.deliveryFee, pricing);
               }, 0);
               const totalPlatformShare = completedHelperOrders.reduce((sum, o) => {
-                return sum + (o.deliveryFee - (o.deliveryFee * helperCommissionPercent) / 100);
+                return sum + (o.deliveryFee - calculateHelperCommission(o.deliveryFee, pricing));
               }, 0);
               const totalPaidCommission = wallet.totalPaidCommission || 0;
               const remainingDueCommission = Math.max(0, totalPlatformShare - totalPaidCommission);

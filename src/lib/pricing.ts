@@ -79,7 +79,59 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   helperActiveOrderLimit: 5,
   inputPlaceholders: DEFAULT_INPUT_PLACEHOLDERS,
   services: DEFAULT_SERVICES,
+  orderTimingType: 'always_on',
+  orderTimingStart: '08:00',
+  orderTimingEnd: '22:00',
+  orderTimingMessage: 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।',
 };
+
+/**
+ * Checks if the platform is currently open for orders based on the admin settings and current local time.
+ */
+export function isOrderTimingOpen(settings?: PricingSettings): { isOpen: boolean; message: string } {
+  if (!settings) return { isOpen: true, message: '' };
+
+  const type = settings.orderTimingType || 'always_on';
+  const customMessage = settings.orderTimingMessage || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে।';
+
+  if (type === 'always_on') {
+    return { isOpen: true, message: '' };
+  }
+  if (type === 'always_off') {
+    return { isOpen: false, message: customMessage };
+  }
+
+  if (type === 'custom_range') {
+    const startStr = settings.orderTimingStart || '08:00';
+    const endStr = settings.orderTimingEnd || '22:00';
+
+    const [startH, startM] = startStr.split(':').map(Number);
+    const [endH, endM] = endStr.split(':').map(Number);
+
+    const now = new Date();
+    const currentH = now.getHours();
+    const currentM = now.getMinutes();
+
+    const currentTimeMinutes = currentH * 60 + currentM;
+    const startTimeMinutes = startH * 60 + startM;
+    const endTimeMinutes = endH * 60 + endM;
+
+    let isOpen = false;
+    if (startTimeMinutes <= endTimeMinutes) {
+      isOpen = currentTimeMinutes >= startTimeMinutes && currentTimeMinutes <= endTimeMinutes;
+    } else {
+      // Overnight range, e.g. 22:00 - 06:00 (10 PM to 6 AM)
+      isOpen = currentTimeMinutes >= startTimeMinutes || currentTimeMinutes <= endTimeMinutes;
+    }
+
+    return {
+      isOpen,
+      message: isOpen ? '' : customMessage,
+    };
+  }
+
+  return { isOpen: true, message: '' };
+}
 
 export function calculateDeliveryFee(estimatedValue: number, settings: PricingSettings = DEFAULT_PRICING_SETTINGS): number {
   if (!estimatedValue || estimatedValue <= 0) {

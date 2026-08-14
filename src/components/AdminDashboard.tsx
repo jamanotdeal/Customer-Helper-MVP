@@ -38,6 +38,7 @@ import {
   XCircle,
   Plus,
   Edit,
+  Calendar,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -90,10 +91,37 @@ export const AdminDashboard: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // Reset page number on tab / search / filter / sort changes
+  // Tab-specific Date Filters
+  const [ordersStartDate, setOrdersStartDate] = useState('');
+  const [ordersEndDate, setOrdersEndDate] = useState('');
+
+  const [usersStartDate, setUsersStartDate] = useState('');
+  const [usersEndDate, setUsersEndDate] = useState('');
+
+  const [appsStartDate, setAppsStartDate] = useState('');
+  const [appsEndDate, setAppsEndDate] = useState('');
+
+  const [withdrawalsStartDate, setWithdrawalsStartDate] = useState('');
+  const [withdrawalsEndDate, setWithdrawalsEndDate] = useState('');
+
+  // Reset page number on tab / search / filter / sort / date changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, searchQuery, statusFilter, withdrawalStatusFilter, sortBy]);
+  }, [
+    activeTab,
+    searchQuery,
+    statusFilter,
+    withdrawalStatusFilter,
+    sortBy,
+    ordersStartDate,
+    ordersEndDate,
+    usersStartDate,
+    usersEndDate,
+    appsStartDate,
+    appsEndDate,
+    withdrawalsStartDate,
+    withdrawalsEndDate,
+  ]);
 
   useEffect(() => {
     const syncAdminData = () => {
@@ -352,6 +380,16 @@ export const AdminDashboard: React.FC = () => {
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
 
+    // Date range filter
+    if (ordersStartDate) {
+      const startMs = new Date(`${ordersStartDate}T00:00:00`).getTime();
+      list = list.filter((o) => new Date(o.createdAt).getTime() >= startMs);
+    }
+    if (ordersEndDate) {
+      const endMs = new Date(`${ordersEndDate}T23:59:59.999`).getTime();
+      list = list.filter((o) => new Date(o.createdAt).getTime() <= endMs);
+    }
+
     // Search query filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -502,7 +540,7 @@ export const AdminDashboard: React.FC = () => {
 
     // Seed from helper applications & wallets
     applications.forEach((app) => {
-      const w = fallbackStore.wallets.get(app.userId);
+      const w = fallbackStore.getHelperWallet(app.userId);
       helperMap.set(app.userId, {
         id: app.userId,
         name: app.legalName || app.userName,
@@ -511,9 +549,9 @@ export const AdminDashboard: React.FC = () => {
         status: app.status,
         completedJobs: 0,
         activeOrders: 0,
-        totalEarned: w?.totalEarned || 0,
-        balance: w?.balance || 0,
-        totalWithdrawn: w?.totalWithdrawn || 0,
+        totalEarned: w.totalEarned,
+        balance: w.balance,
+        totalWithdrawn: w.totalWithdrawn,
         createdAt: app.createdAt,
       });
     });
@@ -521,6 +559,7 @@ export const AdminDashboard: React.FC = () => {
     // Aggregate from orders
     orders.forEach((o) => {
       if (!o.helperId) return;
+      const w = fallbackStore.getHelperWallet(o.helperId);
       const existing = helperMap.get(o.helperId) || {
         id: o.helperId,
         name: o.helperName || 'Helper',
@@ -528,9 +567,9 @@ export const AdminDashboard: React.FC = () => {
         status: 'APPROVED',
         completedJobs: 0,
         activeOrders: 0,
-        totalEarned: 0,
-        balance: 0,
-        totalWithdrawn: 0,
+        totalEarned: w.totalEarned,
+        balance: w.balance,
+        totalWithdrawn: w.totalWithdrawn,
         createdAt: o.createdAt,
       };
 
@@ -590,6 +629,16 @@ export const AdminDashboard: React.FC = () => {
         totalOrdersCount: customerOrdersCount + helperOrdersCount,
       };
     });
+
+    // Date range filter
+    if (usersStartDate) {
+      const startMs = new Date(`${usersStartDate}T00:00:00`).getTime();
+      list = list.filter((item) => new Date(item.user.createdAt).getTime() >= startMs);
+    }
+    if (usersEndDate) {
+      const endMs = new Date(`${usersEndDate}T23:59:59.999`).getTime();
+      list = list.filter((item) => new Date(item.user.createdAt).getTime() <= endMs);
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -1289,6 +1338,45 @@ export const AdminDashboard: React.FC = () => {
               </span>
             </div>
 
+            {/* Date Range Filter Bar */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <Calendar className="w-4 h-4 text-purple-700" />
+                <span className="font-extrabold text-gray-900">Filter by Date Range</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
+                  <input
+                    type="date"
+                    value={ordersStartDate}
+                    onChange={(e) => setOrdersStartDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
+                  <input
+                    type="date"
+                    value={ordersEndDate}
+                    onChange={(e) => setOrdersEndDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                {(ordersStartDate || ordersEndDate) && (
+                  <button
+                    onClick={() => {
+                      setOrdersStartDate('');
+                      setOrdersEndDate('');
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Desktop Table View */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
@@ -1400,6 +1488,45 @@ export const AdminDashboard: React.FC = () => {
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
                 {totalItems} total users recorded
               </span>
+            </div>
+
+            {/* Date Range Filter Bar */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <Calendar className="w-4 h-4 text-purple-700" />
+                <span className="font-extrabold text-gray-900">Filter by Registration Date Range</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
+                  <input
+                    type="date"
+                    value={usersStartDate}
+                    onChange={(e) => setUsersStartDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
+                  <input
+                    type="date"
+                    value={usersEndDate}
+                    onChange={(e) => setUsersEndDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                {(usersStartDate || usersEndDate) && (
+                  <button
+                    onClick={() => {
+                      setUsersStartDate('');
+                      setUsersEndDate('');
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1716,6 +1843,14 @@ export const AdminDashboard: React.FC = () => {
       {/* --- TAB 5: HELPER APPLICATIONS TAB --- */}
       {activeTab === 'APPLICATIONS' && (() => {
         let filtered = [...applications];
+        if (appsStartDate) {
+          const startMs = new Date(`${appsStartDate}T00:00:00`).getTime();
+          filtered = filtered.filter((a) => new Date(a.createdAt).getTime() >= startMs);
+        }
+        if (appsEndDate) {
+          const endMs = new Date(`${appsEndDate}T23:59:59.999`).getTime();
+          filtered = filtered.filter((a) => new Date(a.createdAt).getTime() <= endMs);
+        }
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
           filtered = filtered.filter(
@@ -1745,6 +1880,45 @@ export const AdminDashboard: React.FC = () => {
                 <Plus className="w-4 h-4" />
                 <span>Add Application</span>
               </button>
+            </div>
+
+            {/* Date Range Filter Bar */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <Calendar className="w-4 h-4 text-purple-700" />
+                <span className="font-extrabold text-gray-900">Filter by Application Date Range</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
+                  <input
+                    type="date"
+                    value={appsStartDate}
+                    onChange={(e) => setAppsStartDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
+                  <input
+                    type="date"
+                    value={appsEndDate}
+                    onChange={(e) => setAppsEndDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                {(appsStartDate || appsEndDate) && (
+                  <button
+                    onClick={() => {
+                      setAppsStartDate('');
+                      setAppsEndDate('');
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Desktop Table View */}
@@ -1857,6 +2031,14 @@ export const AdminDashboard: React.FC = () => {
         if (withdrawalStatusFilter !== 'ALL') {
           filtered = filtered.filter((w) => w.status === withdrawalStatusFilter);
         }
+        if (withdrawalsStartDate) {
+          const startMs = new Date(`${withdrawalsStartDate}T00:00:00`).getTime();
+          filtered = filtered.filter((w) => new Date(w.createdAt).getTime() >= startMs);
+        }
+        if (withdrawalsEndDate) {
+          const endMs = new Date(`${withdrawalsEndDate}T23:59:59.999`).getTime();
+          filtered = filtered.filter((w) => new Date(w.createdAt).getTime() <= endMs);
+        }
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
           filtered = filtered.filter(
@@ -1877,6 +2059,45 @@ export const AdminDashboard: React.FC = () => {
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
                 {totalItems} total payback requests
               </span>
+            </div>
+
+            {/* Date Range Filter Bar */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <Calendar className="w-4 h-4 text-purple-700" />
+                <span className="font-extrabold text-gray-900">Filter by Request Date Range</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
+                  <input
+                    type="date"
+                    value={withdrawalsStartDate}
+                    onChange={(e) => setWithdrawalsStartDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
+                  <input
+                    type="date"
+                    value={withdrawalsEndDate}
+                    onChange={(e) => setWithdrawalsEndDate(e.target.value)}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
+                  />
+                </div>
+                {(withdrawalsStartDate || withdrawalsEndDate) && (
+                  <button
+                    onClick={() => {
+                      setWithdrawalsStartDate('');
+                      setWithdrawalsEndDate('');
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1995,6 +2216,86 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-[11px] text-gray-500 mt-1.5">
                 A helper cannot accept new requests once they hit this limit. Default is 5.
               </p>
+            </div>
+          </div>
+
+          {/* Order Timing Controls Block */}
+          <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider flex items-center space-x-2">
+              <Clock className="w-5 h-5 text-purple-700" />
+              <span>Order Timing & Form Controls</span>
+            </h4>
+            <p className="text-[11px] text-gray-500">
+              গ্রাহকদের অর্ডার করার সময়সীমা নিয়ন্ত্রণ করুন। অর্ডার বন্ধ থাকলে গ্রাহকদের একটি কাস্টম বার্তা দেখানো হবে।
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Order Accept Type
+                </label>
+                <select
+                  value={pricing.orderTimingType || 'always_on'}
+                  onChange={(e) =>
+                    setPricing({
+                      ...pricing,
+                      orderTimingType: e.target.value as any,
+                    })
+                  }
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                >
+                  <option value="always_on">Always Open (সরাসরি চালু)</option>
+                  <option value="always_off">Always Closed (সাময়িকভাবে বন্ধ)</option>
+                  <option value="custom_range">Custom Time Range (নির্দিষ্ট সময়সীমা)</option>
+                </select>
+              </div>
+
+              {pricing.orderTimingType === 'custom_range' && (
+                <>
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                      Open From (শুরু)
+                    </label>
+                    <input
+                      type="time"
+                      value={pricing.orderTimingStart || '08:00'}
+                      onChange={(e) =>
+                        setPricing({ ...pricing, orderTimingStart: e.target.value })
+                      }
+                      className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                      Close At (শেষ)
+                    </label>
+                    <input
+                      type="time"
+                      value={pricing.orderTimingEnd || '22:00'}
+                      onChange={(e) =>
+                        setPricing({ ...pricing, orderTimingEnd: e.target.value })
+                      }
+                      className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                অর্ডার বন্ধ থাকাকালীন নোটিশ বার্তা (Closed Message shown to Customer):
+              </label>
+              <input
+                type="text"
+                value={pricing.orderTimingMessage || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।'}
+                onChange={(e) =>
+                  setPricing({ ...pricing, orderTimingMessage: e.target.value })
+                }
+                placeholder="যেমন: আমাদের সার্ভিস এখন বন্ধ আছে। সকাল ৮ টা থেকে রাত ১০ টার মধ্যে অর্ডার করুন।"
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+              />
             </div>
           </div>
 

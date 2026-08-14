@@ -5,6 +5,7 @@ import { Order, PricingSettings } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
 import { PaginationControl } from './PaginationControl';
+import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
 import {
   DollarSign,
   Calendar,
@@ -83,6 +84,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+  const [showOutstandingModal, setShowOutstandingModal] = useState<boolean>(false);
 
   // Reset page to 1 when date filter changes
   useEffect(() => {
@@ -146,8 +148,14 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
     const totalPendingPayouts = pendingWithdrawals.reduce((sum, w) => sum + w.amount, 0);
 
     // Get total outstanding liability (wallet balances)
-    const allWallets = Array.from(fallbackStore.wallets.values());
-    const totalOutstandingLiability = allWallets.reduce((sum, w) => sum + (w.balance || 0), 0);
+    const allUsersWithActivity = new Set([
+      ...Array.from(fallbackStore.orders.values()).map(o => o.helperId).filter(Boolean),
+      ...Array.from(fallbackStore.withdrawals.values()).map(w => w.helperId).filter(Boolean),
+      ...Array.from(fallbackStore.wallets.keys())
+    ]) as Set<string>;
+    
+    const allWallets = Array.from(allUsersWithActivity).map(uid => fallbackStore.getHelperWallet(uid));
+    const totalOutstandingLiability = allWallets.reduce((sum, w) => sum + w.balance, 0);
 
     // Calculate all-time figures for the ledger to avoid date range mismatch
     const allDeliveredOrders = orders.filter((o) => o.status === 'DELIVERED');
@@ -238,6 +246,71 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       (a, b) => new Date(b.dateStr).getTime() - new Date(a.dateStr).getTime()
     );
 
+    // Dynamic metrics in range
+    const allOrdersInRange = orders.filter((o) => {
+      const t = getTimestampFromField(o.createdAt);
+      return t >= startMs && t <= endMs;
+    });
+
+    // Total Orders metrics in range
+    const totalOrdersCount = allOrdersInRange.length;
+    const totalGoodsValueAllOrders = allOrdersInRange.reduce((sum, o) => sum + (o.productCost || 0), 0);
+    const totalDeliveryFeesAllOrders = allOrdersInRange.reduce((sum, o) => sum + (o.deliveryFee || 0), 0);
+    const totalOrderValueAllOrders = totalGoodsValueAllOrders + totalDeliveryFeesAllOrders;
+
+    // Successful Orders metrics in range (deliveredInRange is already calculated above)
+    const successfulGoodsValue = deliveredInRange.reduce((sum, o) => sum + (o.productCost || 0), 0);
+    const successfulDeliveryFees = deliveredInRange.reduce((sum, o) => sum + (o.deliveryFee || 0), 0);
+    const successfulOrderValue = successfulGoodsValue + successfulDeliveryFees;
+
+    // Cancelled Orders metrics in range (canceledInRange is already calculated above)
+    const cancelledGoodsValue = canceledInRange.reduce((sum, o) => sum + (o.productCost || 0), 0);
+    const cancelledDeliveryFees = canceledInRange.reduce((sum, o) => sum + (o.deliveryFee || 0), 0);
+    const cancelledOrderValue = cancelledGoodsValue + cancelledDeliveryFees;
+
+    const platformCommissionEarnedInRange = deliveredInRange.reduce((sum, o) => {
+      const helperPayout = calculateHelperCommission(o.deliveryFee, pricing);
+      return sum + (o.deliveryFee - helperPayout);
+    }, 0);
+
+    // Sum PAYBACK transactions in range (absolute value)
+    const allTxs = Array.from(fallbackStore.walletTransactions.values()).flat();
+    const paybacksInRangeTx = allTxs.filter((tx) => {
+      if (tx.type !== 'PAYBACK') return false;
+      const t = new Date(tx.createdAt).getTime();
+      return t >= startMs && t <= endMs;
+    });
+    const platformCommissionPaidBackInRange = paybacksInRangeTx.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+    const platformCommissionOutstandingDueInRange = Math.max(0, platformCommissionEarnedInRange - platformCommissionPaidBackInRange);
+
+    // Payback requests (withdrawals) stats in range
+    const paybacksInRange = allWithdrawals.filter((w) => {
+      const t = new Date(w.createdAt).getTime();
+      return t >= startMs && t <= endMs;
+    });
+    const approvedPaybacksInRange = paybacksInRange.filter((w) => w.status === 'APPROVED');
+    const pendingPaybacksInRange = paybacksInRange.filter((w) => w.status === 'PENDING');
+    const rejectedPaybacksInRange = paybacksInRange.filter((w) => w.status === 'REJECTED');
+
+    const approvedPaybacksAmountInRange = approvedPaybacksInRange.reduce((sum, w) => sum + w.amount, 0);
+    const pendingPaybacksAmountInRange = pendingPaybacksInRange.reduce((sum, w) => sum + w.amount, 0);
+    const rejectedPaybacksAmountInRange = rejectedPaybacksInRange.reduce((sum, w) => sum + w.amount, 0);
+
+    const approvedPaybacksCountInRange = approvedPaybacksInRange.length;
+    const pendingPaybacksCountInRange = pendingPaybacksInRange.length;
+    const rejectedPaybacksCountInRange = rejectedPaybacksInRange.length;
+    const totalPaybacksCountInRange = paybacksInRange.length;
+
+    const allTimeApprovedPaybacksAmount = allWithdrawals
+      .filter((w) => w.status === 'APPROVED')
+      .reduce((sum, w) => sum + w.amount, 0);
+
+    // Outstanding Wallet Commission Stats
+    const helpersWithBalanceCount = allWallets.filter((w) => (w.balance || 0) > 0).length;
+    const averageDuePerHelper = helpersWithBalanceCount > 0
+      ? Math.round(totalOutstandingLiability / helpersWithBalanceCount)
+      : 0;
+
     return {
       completedCount: deliveredInRange.length,
       canceledCount: canceledInRange.length,
@@ -253,6 +326,38 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       allTimePlatformCommission,
       totalPlatformCommissionPaidBack,
       totalPlatformCommissionOutstandingDue,
+      
+      // New order value breakdowns
+      totalOrdersCount,
+      totalGoodsValueAllOrders,
+      totalDeliveryFeesAllOrders,
+      totalOrderValueAllOrders,
+
+      successfulGoodsValue,
+      successfulDeliveryFees,
+      successfulOrderValue,
+
+      cancelledGoodsValue,
+      cancelledDeliveryFees,
+      cancelledOrderValue,
+
+      // Payback request stats
+      approvedPaybacksAmountInRange,
+      pendingPaybacksAmountInRange,
+      rejectedPaybacksAmountInRange,
+      approvedPaybacksCountInRange,
+      pendingPaybacksCountInRange,
+      rejectedPaybacksCountInRange,
+      totalPaybacksCountInRange,
+      allTimeApprovedPaybacksAmount,
+
+      // Outstanding commission stats
+      helpersWithBalanceCount,
+      averageDuePerHelper,
+
+      platformCommissionEarnedInRange,
+      platformCommissionPaidBackInRange,
+      platformCommissionOutstandingDueInRange,
       dailyBreakdown,
     };
   }, [orders, pricing, startDate, endDate]);
@@ -356,8 +461,8 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         </div>
       </div>
 
-      {/* Financial Metrics Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Core Revenue Cards Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Net Platform Revenue (Primary Highlight) */}
         <div className="p-5 rounded-3xl bg-gradient-to-br from-purple-950 via-purple-900 to-indigo-950 text-white shadow-xl border border-purple-800/30">
           <div className="flex items-center justify-between mb-2">
@@ -411,79 +516,189 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
             Helper share ({pricing.helperCommissionPercent}%)
           </p>
         </div>
+      </div>
 
-        {/* Product Goods Value */}
-        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
-              Total Goods Value
-            </span>
-            <div className="p-2 rounded-2xl bg-purple-100 text-purple-700">
-              <ShoppingBag className="w-5 h-5" />
+      {/* Order & Goods Values Cards Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Total Orders Overview */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Total Orders Value
+              </span>
+              <div className="p-2 rounded-2xl bg-purple-100 text-purple-700">
+                <ShoppingBag className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-gray-900 mb-1">
+              ৳{analyticsData.totalOrderValueAllOrders}
+            </div>
+            <p className="text-[11px] text-purple-955 font-bold mb-3">
+              Total {analyticsData.totalOrdersCount} orders created
+            </p>
+          </div>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>Goods Value:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.totalGoodsValueAllOrders}</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Delivery Fees:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.totalDeliveryFeesAllOrders}</span>
             </div>
           </div>
-          <div className="text-3xl font-black text-gray-900 mb-1">
-            ৳{analyticsData.totalProductCosts}
+        </div>
+
+        {/* Successful Orders Overview */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Successful Orders Value
+              </span>
+              <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-700">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-emerald-800 mb-1">
+              ৳{analyticsData.successfulOrderValue}
+            </div>
+            <p className="text-[11px] text-emerald-705 font-bold mb-3">
+              {analyticsData.completedCount} orders completed
+            </p>
           </div>
-          <p className="text-[11px] text-gray-500 font-medium">
-            Canceled in period: <span className="text-red-600 font-bold">{analyticsData.canceledCount}</span>
-          </p>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>Goods Value:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.successfulGoodsValue}</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Delivery Fees:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.successfulDeliveryFees}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Cancelled Orders Overview */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Cancelled Orders Value
+              </span>
+              <div className="p-2 rounded-2xl bg-red-100 text-red-700">
+                <XCircle className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-red-650 mb-1">
+              ৳{analyticsData.cancelledOrderValue}
+            </div>
+            <p className="text-[11px] text-red-655 font-bold mb-3">
+              {analyticsData.canceledCount} orders cancelled
+            </p>
+          </div>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>Goods Value:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.cancelledGoodsValue}</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Delivery Fees:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.cancelledDeliveryFees}</span>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-t border-gray-100 pt-6">
-        {/* Approved Withdrawals (Disbursed) */}
-        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
-              Approved Cash Payouts
-            </span>
-            <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-700">
-              <CheckCircle2 className="w-5 h-5" />
+        {/* Approved Commission Paybacks */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Approved Commission Paybacks
+              </span>
+              <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-700">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-emerald-800 mb-1">
+              ৳{analyticsData.approvedPaybacksAmountInRange}
+            </div>
+            <p className="text-[11px] text-emerald-650 font-bold mb-3">
+              {analyticsData.approvedPaybacksCountInRange} payback requests approved
+            </p>
+          </div>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>All-Time Approved:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.allTimeApprovedPaybacksAmount}</span>
             </div>
           </div>
-          <div className="text-3xl font-black text-emerald-800 mb-1">
-            ৳{analyticsData.allTimeApprovedPayouts}
-          </div>
-          <p className="text-[11px] text-emerald-600 font-medium">
-            Total cash sent to helpers (All-time)
-          </p>
         </div>
 
-        {/* Pending Withdrawals (Requested) */}
-        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
-              Pending Withdrawal Requests
-            </span>
-            <div className="p-2 rounded-2xl bg-amber-100 text-amber-700">
-              <Calendar className="w-5 h-5" />
+        {/* Pending & Rejected Paybacks */}
+        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Pending & Cancelled Paybacks
+              </span>
+              <div className="p-2 rounded-2xl bg-amber-100 text-amber-700">
+                <Calendar className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-amber-800 mb-1">
+              ৳{analyticsData.pendingPaybacksAmountInRange}
+            </div>
+            <p className="text-[11px] text-amber-650 font-bold mb-3">
+              {analyticsData.pendingPaybacksCountInRange} pending payback requests
+            </p>
+          </div>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>Cancelled/Rejected:</span>
+              <span className="font-extrabold text-red-650">{analyticsData.rejectedPaybacksCountInRange} requests (৳{analyticsData.rejectedPaybacksAmountInRange})</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Total Received:</span>
+              <span className="font-extrabold text-gray-900">{analyticsData.totalPaybacksCountInRange} requests</span>
             </div>
           </div>
-          <div className="text-3xl font-black text-amber-800 mb-1">
-            ৳{analyticsData.totalPendingPayouts}
-          </div>
-          <p className="text-[11px] text-amber-600 font-medium">
-            Awaiting admin approval
-          </p>
         </div>
 
-        {/* Outstanding Helper Wallets Liability */}
-        <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
-              Outstanding Wallet Liability
-            </span>
-            <div className="p-2 rounded-2xl bg-indigo-100 text-indigo-700">
-              <Bike className="w-5 h-5" />
+        {/* Outstanding Helper Wallets Commissions */}
+        <div
+          onClick={() => setShowOutstandingModal(true)}
+          className="p-5 rounded-3xl bg-white border border-gray-100 hover:border-indigo-300 shadow-soft flex flex-col justify-between cursor-pointer transition-all hover:shadow-md"
+        >
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+                Outstanding Wallet Commissions
+              </span>
+              <div className="p-2 rounded-2xl bg-indigo-100 text-indigo-700">
+                <Bike className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="text-3xl font-black text-indigo-900 mb-1">
+              ৳{analyticsData.totalOutstandingLiability}
+            </div>
+            <p className="text-[11px] text-indigo-700 font-bold mb-3">
+              Remaining commissions on helper wallets
+            </p>
+          </div>
+          <div className="pt-3 border-t border-gray-100 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-600">
+              <span>Helpers with Balance:</span>
+              <span className="font-extrabold text-gray-900">{analyticsData.helpersWithBalanceCount} helpers</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Average Owed:</span>
+              <span className="font-extrabold text-gray-900">৳{analyticsData.averageDuePerHelper} / helper</span>
             </div>
           </div>
-          <div className="text-3xl font-black text-indigo-900 mb-1">
-            ৳{analyticsData.totalOutstandingLiability}
-          </div>
-          <p className="text-[11px] text-indigo-700 font-semibold">
-            Helper wallet balances (owed)
-          </p>
         </div>
       </div>
 
@@ -492,7 +707,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         <div>
           <h4 className="font-extrabold text-sm text-indigo-300 uppercase tracking-wider flex items-center space-x-2">
             <Bike className="w-5 h-5 text-indigo-400" />
-            <span>Rider Cash Collection & Commission Ledger (Overall Summary)</span>
+            <span>Rider Cash Collection & Commission Ledger (Selected Range)</span>
           </h4>
           <p className="text-[11px] text-slate-300 mt-1">
             যেহেতু হেলপার কাস্টমারের কাছ থেকে সরাসরি নগদ মূল্য (পণ্য ও ডেলিভারি ফি) সংগ্রহ করে, তাই হেলপারের কাছ থেকে প্লাটফর্ম কমিশন পাওনা থাকে।
@@ -501,19 +716,19 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
         
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
-            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Platform Commission Earned</span>
-            <span className="text-2xl font-black text-white">৳{analyticsData.allTimePlatformCommission}</span>
-            <p className="text-[9px] text-slate-400 mt-1">All-time platform share</p>
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Commission Earned (Range)</span>
+            <span className="text-2xl font-black text-white">৳{analyticsData.platformCommissionEarnedInRange}</span>
+            <p className="text-[9px] text-slate-400 mt-1">All-time: ৳{analyticsData.allTimePlatformCommission}</p>
           </div>
           <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
-            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Total Commission Paid Back</span>
-            <span className="text-2xl font-black text-emerald-400">৳{analyticsData.totalPlatformCommissionPaidBack}</span>
-            <p className="text-[9px] text-slate-400 mt-1">Collected from riders</p>
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Commission Paid Back (Range)</span>
+            <span className="text-2xl font-black text-emerald-400">৳{analyticsData.platformCommissionPaidBackInRange}</span>
+            <p className="text-[9px] text-slate-400 mt-1">All-time: ৳{analyticsData.totalPlatformCommissionPaidBack}</p>
           </div>
           <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
-            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Remaining Due / Outstanding</span>
+            <span className="text-[10px] text-indigo-200 uppercase block font-bold">Outstanding Due (All-time)</span>
             <span className={`text-2xl font-black ${analyticsData.totalPlatformCommissionOutstandingDue > 0 ? 'text-red-400' : 'text-slate-300'}`}>৳{analyticsData.totalPlatformCommissionOutstandingDue}</span>
-            <p className="text-[9px] text-slate-400 mt-1">Yet to collect from riders</p>
+            <p className="text-[9px] text-slate-400 mt-1">Range Outstanding: ৳{analyticsData.platformCommissionOutstandingDueInRange}</p>
           </div>
         </div>
       </div>
@@ -548,7 +763,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
                     <th className="py-3.5 px-5">Completed Orders</th>
                     <th className="py-3.5 px-5">Total Goods Value (৳)</th>
                     <th className="py-3.5 px-5">Gross Delivery Fee (৳)</th>
-                    <th className="py-3.5 px-5">Approved Payouts (৳)</th>
+                    <th className="py-3.5 px-5">Approved Paybacks (৳)</th>
                     <th className="py-3.5 px-5">Helper Payout (৳)</th>
                     <th className="py-3.5 px-5 text-right">Net Platform Revenue (৳)</th>
                   </tr>
@@ -569,7 +784,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
                       </td>
                       <td className="py-4 px-5 font-bold text-gray-700">৳{row.productCosts}</td>
                       <td className="py-4 px-5 font-bold text-gray-900">৳{row.grossFees}</td>
-                      <td className="py-4 px-5 font-bold text-red-600">৳{row.approvedWithdrawals}</td>
+                      <td className="py-4 px-5 font-bold text-emerald-650">৳{row.approvedWithdrawals}</td>
                       <td className="py-4 px-5 font-bold text-indigo-900">৳{row.helperPayouts}</td>
                       <td className="py-4 px-5 text-right font-black text-purple-900 text-sm">
                         +৳{row.netRevenue}
@@ -595,6 +810,13 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
           </>
         )}
       </div>
+
+      {showOutstandingModal && (
+        <OutstandingCommissionsModal
+          onClose={() => setShowOutstandingModal(false)}
+          totalOutstanding={analyticsData.totalOutstandingLiability}
+        />
+      )}
     </div>
   );
 };

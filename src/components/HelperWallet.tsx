@@ -92,13 +92,7 @@ export const HelperWallet: React.FC = () => {
   useEffect(() => {
     const syncWallet = () => {
       if (user) {
-        const w = fallbackStore.wallets.get(user.uid) || {
-          userId: user.uid,
-          balance: 0,
-          totalEarned: 0,
-          totalWithdrawn: 0,
-          updatedAt: new Date().toISOString(),
-        };
+        const w = fallbackStore.getHelperWallet(user.uid);
         const txs = fallbackStore.walletTransactions.get(user.uid) || [];
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
         const allOrders = Array.from(fallbackStore.orders.values());
