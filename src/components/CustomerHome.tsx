@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
@@ -19,13 +19,20 @@ export const CustomerHome: React.FC = () => {
   const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
   const [visibleCount, setVisibleCount] = useState(10);
 
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loaderRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     const syncOrders = () => {
       if (user) {
         const all = Array.from(fallbackStore.orders.values()).filter(
           (o) => o.customerId === user.uid
         );
-        all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        all.sort((a, b) => {
+          const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
+          const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+          return timeB - timeA;
+        });
         setOrders(all);
       } else {
         setOrders([]);
@@ -47,9 +54,25 @@ export const CustomerHome: React.FC = () => {
     return true;
   });
 
-  // Load More
+  // Infinite Scroll logic
   const visibleOrders = filteredOrders.slice(0, visibleCount);
   const hasMore = filteredOrders.length > visibleCount;
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount((prev) => prev + 10);
+        }
+      },
+      { threshold: 0.1, rootMargin: '100px' }
+    );
+    if (loaderRef.current) {
+      observer.observe(loaderRef.current);
+    }
+    return () => observer.disconnect();
+  }, [hasMore, visibleOrders.length]);
 
   if (selectedOrderId) {
     return (
@@ -196,15 +219,12 @@ export const CustomerHome: React.FC = () => {
                 />
               ))}
 
-              {/* Load More */}
+              {/* Infinite Scroll Loader Sentinel */}
               {hasMore && (
-                <button
-                  onClick={() => setVisibleCount((c) => c + 10)}
-                  className="w-full py-3.5 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 font-bold text-sm hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50/40 transition-all flex items-center justify-center space-x-2"
-                >
-                  <ChevronDown className="w-4 h-4" />
-                  <span>Load More ({filteredOrders.length - visibleCount} remaining)</span>
-                </button>
+                <div ref={loaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading more requests... ({filteredOrders.length - visibleCount} remaining)</span>
+                </div>
               )}
             </div>
           )}

@@ -8,7 +8,7 @@ import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
 import { useModal } from './CustomModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X } from 'lucide-react';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar } from 'lucide-react';
 
 export const HelperDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -23,6 +23,7 @@ export const HelperDashboard: React.FC = () => {
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
   );
+  const [selectedDate, setSelectedDate] = useState<string>('');
 
   // Track new available orders (not yet seen when they first appeared)
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
@@ -147,8 +148,14 @@ export const HelperDashboard: React.FC = () => {
             o.helperId === user.uid &&
             ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status)
         );
-        // Completed: delivered orders by current helper
-        const comp = all.filter((o) => o.helperId === user.uid && o.status === 'DELIVERED');
+        // Completed: delivered orders by current helper, sorted recent to old
+        const comp = all
+          .filter((o) => o.helperId === user.uid && o.status === 'DELIVERED')
+          .sort((a, b) => {
+            const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
+            const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+            return timeB - timeA;
+          });
 
         // Track new available orders that haven't been seen
         setAvailableOrders((prev) => {
@@ -257,6 +264,83 @@ export const HelperDashboard: React.FC = () => {
     setSelectedOrderId(orderId);
   };
 
+  // Date filtering logic
+  const getLocalDateString = (isoStr?: string) => {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const filterByDate = (ordersList: Order[]) => {
+    if (!selectedDate) return ordersList;
+    return ordersList.filter((ord) => {
+      const createdDate = getLocalDateString(ord.createdAt);
+      const deliveredDate = getLocalDateString(ord.deliveredAt);
+      return createdDate === selectedDate || deliveredDate === selectedDate;
+    });
+  };
+
+  const visibleAvailable = filterByDate(availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id)));
+  const filteredActiveOrders = filterByDate(activeOrders);
+  const filteredCompletedOrders = filterByDate(completedOrders);
+
+  // Unviewed active orders = active orders whose IDs are NOT in viewedActiveOrderIds
+  const unviewedActiveCount = filteredActiveOrders.filter((o) => !viewedActiveOrderIds.has(o.id)).length;
+
+  // Infinite Scroll Observer Refs
+  const newLoaderRef = useRef<HTMLDivElement | null>(null);
+  const activeLoaderRef = useRef<HTMLDivElement | null>(null);
+  const completedLoaderRef = useRef<HTMLDivElement | null>(null);
+
+  const hasMoreNew = newVisibleCount < visibleAvailable.length;
+  useEffect(() => {
+    if (activeTab !== 'NEW' || !hasMoreNew) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setNewVisibleCount((prev) => prev + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.1, rootMargin: '100px' }
+    );
+    if (newLoaderRef.current) observer.observe(newLoaderRef.current);
+    return () => observer.disconnect();
+  }, [activeTab, hasMoreNew, newVisibleCount, visibleAvailable.length]);
+
+  const hasMoreActive = activeVisibleCount < filteredActiveOrders.length;
+  useEffect(() => {
+    if (activeTab !== 'ACTIVE' || !hasMoreActive) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setActiveVisibleCount((prev) => prev + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.1, rootMargin: '100px' }
+    );
+    if (activeLoaderRef.current) observer.observe(activeLoaderRef.current);
+    return () => observer.disconnect();
+  }, [activeTab, hasMoreActive, activeVisibleCount, filteredActiveOrders.length]);
+
+  const hasMoreCompleted = completedVisibleCount < filteredCompletedOrders.length;
+  useEffect(() => {
+    if (activeTab !== 'COMPLETED' || !hasMoreCompleted) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setCompletedVisibleCount((prev) => prev + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.1, rootMargin: '100px' }
+    );
+    if (completedLoaderRef.current) observer.observe(completedLoaderRef.current);
+    return () => observer.disconnect();
+  }, [activeTab, hasMoreCompleted, completedVisibleCount, filteredCompletedOrders.length]);
+
   if (selectedOrderId) {
     const targetOrder = fallbackStore.orders.get(selectedOrderId);
     if (targetOrder) {
@@ -271,10 +355,6 @@ export const HelperDashboard: React.FC = () => {
       );
     }
   }
-
-  const visibleAvailable = availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id));
-  // Unviewed active orders = active orders whose IDs are NOT in viewedActiveOrderIds
-  const unviewedActiveCount = activeOrders.filter((o) => !viewedActiveOrderIds.has(o.id)).length;
 
   return (
     <div className="space-y-5 pb-24">
@@ -294,7 +374,7 @@ export const HelperDashboard: React.FC = () => {
       </div>
 
       {/* Running Order Reminder Banner */}
-      {activeOrders.length > 0 && (
+      {filteredActiveOrders.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300">
           <div className="flex items-center space-x-3">
             <div className="relative flex h-3 w-3 shrink-0">
@@ -303,7 +383,7 @@ export const HelperDashboard: React.FC = () => {
             </div>
             <div>
               <h4 className="font-extrabold text-xs text-amber-900">
-                আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
+                আপনার {filteredActiveOrders.length}টি অর্ডার রানিং আছে!
               </h4>
               <p className="text-[10px] text-amber-700 font-medium">
                 অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
@@ -318,6 +398,57 @@ export const HelperDashboard: React.FC = () => {
               দেখুন
             </button>
           )}
+        </div>
+      )}
+
+      {/* Date Filter Bar */}
+      <div className="bg-white border border-gray-100 p-3 rounded-2xl shadow-soft flex items-center justify-between gap-2">
+        <div className="flex items-center space-x-2 text-xs font-bold text-gray-700">
+          <div className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
+            <Calendar className="w-4 h-4" />
+          </div>
+          <span>তারিখ দিয়ে ফিল্টার:</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => {
+              setSelectedDate(e.target.value);
+              setNewVisibleCount(PAGE_SIZE);
+              setActiveVisibleCount(PAGE_SIZE);
+              setCompletedVisibleCount(PAGE_SIZE);
+            }}
+            className="px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
+          />
+          {selectedDate && (
+            <button
+              onClick={() => {
+                setSelectedDate('');
+                setNewVisibleCount(PAGE_SIZE);
+                setActiveVisibleCount(PAGE_SIZE);
+                setCompletedVisibleCount(PAGE_SIZE);
+              }}
+              className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all flex items-center space-x-1 shrink-0"
+              title="Clear Date Filter"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Clear</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Filter Active Badge Notification */}
+      {selectedDate && (
+        <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50/80 border border-emerald-200/60 px-3 py-1.5 rounded-xl flex items-center justify-between">
+          <span>📅 {selectedDate} তারিখের অর্ডারসমূহ দেখানো হচ্ছে</span>
+          <button
+            onClick={() => setSelectedDate('')}
+            className="text-emerald-800 hover:underline font-extrabold"
+          >
+            সব দেখুন
+          </button>
         </div>
       )}
 
@@ -353,18 +484,18 @@ export const HelperDashboard: React.FC = () => {
           className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all relative flex items-center justify-center space-x-1.5 ${
             activeTab === 'ACTIVE'
               ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-              : activeOrders.length > 0
+              : filteredActiveOrders.length > 0
               ? 'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          {activeOrders.length > 0 && (
+          {filteredActiveOrders.length > 0 && (
             <span className="relative flex h-2 w-2 shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
             </span>
           )}
-          <span>Running ({activeOrders.length})</span>
+          <span>Running ({filteredActiveOrders.length})</span>
           {unviewedActiveCount > 0 && activeTab !== 'ACTIVE' && (
             <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-500 text-white text-[10px] font-extrabold flex items-center justify-center animate-bounce shadow-md">
               {unviewedActiveCount}
@@ -380,7 +511,7 @@ export const HelperDashboard: React.FC = () => {
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          Completed ({completedOrders.length})
+          Completed ({filteredCompletedOrders.length})
         </button>
       </div>
 
@@ -404,8 +535,12 @@ export const HelperDashboard: React.FC = () => {
           {visibleAvailable.length === 0 ? (
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <h4 className="font-bold text-gray-900 text-sm mb-1">এখন আশেপাশে কোনো নতুন request নেই</h4>
-              <p className="text-xs text-gray-500">নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।</p>
+              <h4 className="font-bold text-gray-900 text-sm mb-1">
+                {selectedDate ? 'এই তারিখে কোনো রিকুয়েস্ট নেই' : 'এখন আশেপাশে কোনো নতুন request নেই'}
+              </h4>
+              <p className="text-xs text-gray-500">
+                {selectedDate ? 'অন্য তারিখ বেছে নিন অথবা ফিল্টার ক্লিয়ার করুন।' : 'নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।'}
+              </p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -421,14 +556,11 @@ export const HelperDashboard: React.FC = () => {
                   isFirstOrder={firstOrderIds.has(ord.id)}
                 />
               ))}
-              {newVisibleCount < visibleAvailable.length && (
-                <button
-                  onClick={() => setNewVisibleCount((c) => c + PAGE_SIZE)}
-                  className="w-full py-3.5 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 font-bold text-sm hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50/40 transition-all flex items-center justify-center space-x-2"
-                >
-                  <ChevronDown className="w-4 h-4" />
-                  <span>Load More ({visibleAvailable.length - newVisibleCount} remaining)</span>
-                </button>
+              {hasMoreNew && (
+                <div ref={newLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading more orders... ({visibleAvailable.length - newVisibleCount} remaining)</span>
+                </div>
               )}
             </div>
           )}
@@ -451,14 +583,16 @@ export const HelperDashboard: React.FC = () => {
             </div>
           )}
 
-          {activeOrders.length === 0 ? (
+          {filteredActiveOrders.length === 0 ? (
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <CheckCircle2 className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <h4 className="font-bold text-gray-900 text-sm">কোনো রানিং অর্ডার নেই</h4>
+              <h4 className="font-bold text-gray-900 text-sm">
+                {selectedDate ? 'এই তারিখে কোনো রানিং অর্ডার নেই' : 'কোনো রানিং অর্ডার নেই'}
+              </h4>
             </div>
           ) : (
             <div className="space-y-3">
-              {activeOrders.slice(0, activeVisibleCount).map((ord) => (
+              {filteredActiveOrders.slice(0, activeVisibleCount).map((ord) => (
                 <OrderCard
                   key={ord.id}
                   order={ord}
@@ -468,14 +602,11 @@ export const HelperDashboard: React.FC = () => {
                   helperActiveView={true}
                 />
               ))}
-              {activeVisibleCount < activeOrders.length && (
-                <button
-                  onClick={() => setActiveVisibleCount((c) => c + PAGE_SIZE)}
-                  className="w-full py-3.5 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 font-bold text-sm hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50/40 transition-all flex items-center justify-center space-x-2"
-                >
-                  <ChevronDown className="w-4 h-4" />
-                  <span>Load More ({activeOrders.length - activeVisibleCount} remaining)</span>
-                </button>
+              {hasMoreActive && (
+                <div ref={activeLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading more orders... ({filteredActiveOrders.length - activeVisibleCount} remaining)</span>
+                </div>
               )}
             </div>
           )}
@@ -485,14 +616,16 @@ export const HelperDashboard: React.FC = () => {
       {/* ── COMPLETED TAB ── */}
       {activeTab === 'COMPLETED' && (
         <div className="space-y-3">
-          {completedOrders.length === 0 ? (
+          {filteredCompletedOrders.length === 0 ? (
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <Layers className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <h4 className="font-bold text-gray-900 text-sm">কোনো সম্পন্ন অর্ডার নেই</h4>
+              <h4 className="font-bold text-gray-900 text-sm">
+                {selectedDate ? 'এই তারিখে কোনো সম্পন্ন অর্ডার নেই' : 'কোনো সম্পন্ন অর্ডার নেই'}
+              </h4>
             </div>
           ) : (
             <div className="space-y-3">
-              {completedOrders.slice(0, completedVisibleCount).map((ord) => (
+              {filteredCompletedOrders.slice(0, completedVisibleCount).map((ord) => (
                 <OrderCard
                   key={ord.id}
                   order={ord}
@@ -501,14 +634,11 @@ export const HelperDashboard: React.FC = () => {
                   helperActiveView={true}
                 />
               ))}
-              {completedVisibleCount < completedOrders.length && (
-                <button
-                  onClick={() => setCompletedVisibleCount((c) => c + PAGE_SIZE)}
-                  className="w-full py-3.5 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 font-bold text-sm hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50/40 transition-all flex items-center justify-center space-x-2"
-                >
-                  <ChevronDown className="w-4 h-4" />
-                  <span>Load More ({completedOrders.length - completedVisibleCount} remaining)</span>
-                </button>
+              {hasMoreCompleted && (
+                <div ref={completedLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading more orders... ({filteredCompletedOrders.length - completedVisibleCount} remaining)</span>
+                </div>
               )}
             </div>
           )}
