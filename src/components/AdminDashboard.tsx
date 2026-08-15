@@ -39,6 +39,8 @@ import {
   Plus,
   Edit,
   Calendar,
+  Globe,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -50,6 +52,9 @@ import { UserDetailsModal } from './admin/UserDetailsModal';
 import { RevenueAnalytics } from './admin/RevenueAnalytics';
 import { AdminPushNotificationModal } from './admin/AdminPushNotificationModal';
 import { AdminHelperAppModal } from './admin/AdminHelperAppModal';
+import { TimePickerInput } from './admin/TimePickerInput';
+import { AdminHelperMapView } from './admin/AdminHelperMapView';
+import { DraggableTabsContainer } from './admin/DraggableTabsContainer';
 
 export const AdminDashboard: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -57,6 +62,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
     'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'CUSTOMERS' | 'HELPERS' | 'APPLICATIONS' | 'WITHDRAWALS' | 'PRICING'
   >('EXCEPTIONS');
+  const [helperViewMode, setHelperViewMode] = useState<'MAP' | 'TABLE'>('MAP');
 
   // Realtime Data state
   const [orders, setOrders] = useState<Order[]>([]);
@@ -69,6 +75,24 @@ export const AdminDashboard: React.FC = () => {
   const [servicesText, setServicesText] = useState<string>('');
   // Single-box format: "ServiceName = placeholder text" (one per line)
   const [serviceHintsText, setServiceHintsText] = useState<string>('');
+  const [eduEmailDomainsText, setEduEmailDomainsText] = useState<string>('@diu.edu.bd');
+  const [dedicatedDelayMins, setDedicatedDelayMins] = useState<number>(7);
+  const [receiverRule, setReceiverRule] = useState<'commuter_first' | 'dedicated_first' | 'both_simultaneous'>('commuter_first');
+  const [helperRadiusKm, setHelperRadiusKm] = useState<number>(3.5);
+  const [mapLocationPref, setMapLocationPref] = useState<'BD' | 'GLOBAL' | 'CUSTOM'>('BD');
+  const [customCountryCode, setCustomCountryCode] = useState<string>('bd');
+
+  // PWA Install Prompt Admin Controls
+  const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
+  const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
+  const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
+  const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
+
+  // Permission Alert Modal Content Controls
+  const [locPermModalTitle, setLocPermModalTitle] = useState<string>('লোকেশন পারমিশন আবশ্যক (Location Required)');
+  const [locPermModalBody, setLocPermModalBody] = useState<string>('কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক। অনুগ্রহ করে ব্রাউজার সেটিংসে Location Allow করুন।');
+  const [notifPermModalTitle, setNotifPermModalTitle] = useState<string>('নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)');
+  const [notifPermModalBody, setNotifPermModalBody] = useState<string>('জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।');
 
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
@@ -134,6 +158,29 @@ export const AdminDashboard: React.FC = () => {
       setPlaceholdersText((settings.inputPlaceholders || []).join('\n'));
       setConfirmationMsg(settings.orderConfirmationMessage || '');
       setServicesText((settings.services || []).join('\n'));
+      setEduEmailDomainsText((settings.eduEmailDomains || ['@diu.edu.bd']).join(', '));
+      setDedicatedDelayMins(settings.dedicatedHelperDelayMinutes ?? 7);
+      setReceiverRule(settings.orderReceiverRule || 'commuter_first');
+      setHelperRadiusKm(settings.helperRadiusKm ?? 3.5);
+      setMapLocationPref(settings.mapLocationPreference || 'BD');
+      setCustomCountryCode(settings.customCountryCode || 'bd');
+      setPwaInstallPromptEnabled(settings.pwaInstallPromptEnabled !== false);
+      setPwaInstallPromptTitle(settings.pwaInstallPromptTitle || 'Install Jamanot App');
+      setPwaInstallPromptDescription(
+        settings.pwaInstallPromptDescription ||
+          'আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!'
+      );
+      setPwaInstallButtonText(settings.pwaInstallButtonText || 'Install Jamanot');
+      setLocPermModalTitle(settings.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)');
+      setLocPermModalBody(
+        settings.locationPermissionModalBody ||
+          'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক। অনুগ্রহ করে ব্রাউজার সেটিংসে Location Allow করুন।'
+      );
+      setNotifPermModalTitle(settings.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)');
+      setNotifPermModalBody(
+        settings.notificationPermissionModalBody ||
+          'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।'
+      );
       // Convert the hints map back to the single-box "Key = Value" format
       const hints = settings.serviceDescriptionHints || {};
       setServiceHintsText(
@@ -320,16 +367,35 @@ export const AdminDashboard: React.FC = () => {
 
     const cleanedHints = parseServiceHintsText(serviceHintsText);
 
+    const parsedEduDomains = eduEmailDomainsText
+      .split(',')
+      .map((d) => d.trim())
+      .filter((d) => d.length > 0);
+
     const updatedPricing: PricingSettings = {
       ...pricing,
       inputPlaceholders: parsedList.length > 0 ? parsedList : undefined,
       orderConfirmationMessage: confirmationMsg.trim() || undefined,
       services: parsedServices.length > 0 ? parsedServices : undefined,
       serviceDescriptionHints: Object.keys(cleanedHints).length > 0 ? cleanedHints : undefined,
+      eduEmailDomains: parsedEduDomains.length > 0 ? parsedEduDomains : ['@diu.edu.bd'],
+      dedicatedHelperDelayMinutes: Number(dedicatedDelayMins) || 7,
+      orderReceiverRule: receiverRule,
+      helperRadiusKm: Number(helperRadiusKm) || 3.5,
+      mapLocationPreference: mapLocationPref,
+      customCountryCode: customCountryCode.trim().toLowerCase() || 'bd',
+      pwaInstallPromptEnabled: pwaInstallPromptEnabled,
+      pwaInstallPromptTitle: pwaInstallPromptTitle.trim() || undefined,
+      pwaInstallPromptDescription: pwaInstallPromptDescription.trim() || undefined,
+      pwaInstallButtonText: pwaInstallButtonText.trim() || undefined,
+      locationPermissionModalTitle: locPermModalTitle.trim() || undefined,
+      locationPermissionModalBody: locPermModalBody.trim() || undefined,
+      notificationPermissionModalTitle: notifPermModalTitle.trim() || undefined,
+      notificationPermissionModalBody: notifPermModalBody.trim() || undefined,
     };
 
     await fallbackStore.savePricingSettings(updatedPricing);
-    await showAlert('সেটিংস আপডেট', 'পিকআপ/ডেলিভারি, কমিশন এবং ইনপুট প্লেসহোল্ডার সেটিংস সফলভাবে আপডেট হয়েছে।', 'success');
+    await showAlert('সেটিংস আপডেট', 'পিকআপ/ডেলিভারি, কমিশন, এডুকেশন ডোমেইন, ম্যাপ এরিয়া ফিল্টার এবং হেলপার নোটিফিকেশন সময়সীমা সেটিংস সফলভাবে আপডেট হয়েছে।', 'success');
   };
 
   /**
@@ -806,19 +872,20 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Navigation Tabs Bar */}
-      <div className="flex items-center space-x-2 bg-gray-100/80 p-1.5 rounded-2xl overflow-x-auto no-scrollbar border border-gray-200/60 text-xs font-extrabold">
+      <DraggableTabsContainer containerClassName="w-full" activeKey={activeTab}>
         <button
           onClick={() => setActiveTab('EXCEPTIONS')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'EXCEPTIONS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'EXCEPTIONS'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <AlertCircle className="w-4 h-4 text-amber-500" />
+          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
           <span>Needs Attention</span>
           {totalExceptionsCount > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px]">
+            <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] shrink-0 font-bold">
               {totalExceptionsCount}
             </span>
           )}
@@ -826,76 +893,108 @@ export const AdminDashboard: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('ORDERS')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'ORDERS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'ORDERS'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <ShoppingBag className="w-4 h-4 text-emerald-600" />
+          <ShoppingBag className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>All Orders ({orders.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('USERS_LIST')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'USERS_LIST'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'USERS_LIST'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <Users className="w-4 h-4 text-purple-600" />
+          <Users className="w-4 h-4 text-purple-600 shrink-0" />
           <span>User Lists ({users.length})</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('REVENUE')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
-            activeTab === 'REVENUE'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+          onClick={() => setActiveTab('HELPERS')}
+          data-active={activeTab === 'HELPERS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'HELPERS'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <TrendingUp className="w-4 h-4 text-emerald-600" />
+          <Bike className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>Helpers Fleet ({approvedHelpersCount || getProcessedHelpers().length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('CUSTOMERS')}
+          data-active={activeTab === 'CUSTOMERS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'CUSTOMERS'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <User className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span>Customers</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('REVENUE')}
+          data-active={activeTab === 'REVENUE'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'REVENUE'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>Revenue Analytics</span>
         </button>
 
         <button
           onClick={() => setActiveTab('APPLICATIONS')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'APPLICATIONS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'APPLICATIONS'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <Users className="w-4 h-4 text-indigo-600" />
+          <Users className="w-4 h-4 text-indigo-600 shrink-0" />
           <span>Applications ({pendingApps.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('WITHDRAWALS')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'WITHDRAWALS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'WITHDRAWALS'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <DollarSign className="w-4 h-4 text-purple-600" />
+          <DollarSign className="w-4 h-4 text-purple-600 shrink-0" />
           <span>Helper Commissions ({pendingWds.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('PRICING')}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 ${
+          data-active={activeTab === 'PRICING'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
             activeTab === 'PRICING'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
           }`}
         >
-          <Settings className="w-4 h-4 text-gray-600" />
+          <Settings className="w-4 h-4 text-gray-600 shrink-0" />
           <span>Pricing & Settings</span>
         </button>
-      </div>
+      </DraggableTabsContainer>
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
       {activeTab !== 'PRICING' && (
@@ -1775,67 +1874,178 @@ export const AdminDashboard: React.FC = () => {
         const processed = getProcessedHelpers();
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
 
+        const handleUpdateHelperType = async (userId: string, newType: 'commuter' | 'dedicated') => {
+          const helperUser = fallbackStore.users.get(userId);
+          if (helperUser) {
+            const updated = { ...helperUser, helperType: newType, isHelper: true };
+            await fallbackStore.saveUser(updated);
+            setUsers(Array.from(fallbackStore.users.values()));
+            showAlert(
+              'স্ট্যাটাস পরিবর্তিত',
+              `${helperUser.displayName}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`,
+              'success'
+            );
+          }
+        };
+
         return (
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                {totalItems} helpers recorded
-              </span>
+          <div className="space-y-6">
+            {/* View Mode Header Switcher */}
+            <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-soft flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="font-extrabold text-base sm:text-lg text-gray-900 flex items-center gap-2">
+                  <Bike className="w-5 h-5 text-emerald-600" />
+                  <span>Helper Fleet Operations & Earth Location Map</span>
+                </h3>
+                <p className="text-xs text-gray-500 font-medium mt-0.5">
+                  Monitor commuter helpers & dedicated riders live on Google satellite earth map.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 text-xs font-extrabold shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setHelperViewMode('MAP')}
+                  className={`px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 ${
+                    helperViewMode === 'MAP'
+                      ? 'bg-purple-950 text-white shadow-md'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Globe className="w-4 h-4 text-emerald-400" />
+                  <span>🗺️ Earth Map</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHelperViewMode('TABLE')}
+                  className={`px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 ${
+                    helperViewMode === 'TABLE'
+                      ? 'bg-purple-950 text-white shadow-md'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Users className="w-4 h-4 text-indigo-400" />
+                  <span>📋 Table List</span>
+                </button>
+              </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
-                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                  <tr>
-                    <th className="py-3.5 px-5">Helper Name</th>
-                    <th className="py-3.5 px-5">NID #</th>
-                    <th className="py-3.5 px-5">Completed Jobs</th>
-                    <th className="py-3.5 px-5">Active Assigned Jobs</th>
-                    <th className="py-3.5 px-5">Total Earned</th>
-                    <th className="py-3.5 px-5">Wallet Balance</th>
-                    <th className="py-3.5 px-5 text-right">Work History</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedItems.map((h) => (
-                    <tr
-                      key={h.id}
-                      className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                      onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
-                    >
-                      <td className="py-4 px-5 font-extrabold text-gray-900">{h.name}</td>
-                      <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
-                      <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
-                      <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
-                      <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
-                      <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
-                      <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
-                          className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                        >
-                          View Work History
-                        </button>
-                      </td>
+            {/* Live Earth Satellite Map View Component */}
+            {helperViewMode === 'MAP' && (
+              <AdminHelperMapView
+                users={users}
+                orders={orders}
+                applications={applications}
+                onSelectHelper={(h) => setSelectedHelper(h)}
+                onSelectUser={(uid) => setSelectedUserId(uid)}
+                onUpdateHelperType={handleUpdateHelperType}
+              />
+            )}
+
+            {/* Helper Performance Table View Component */}
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                  {totalItems} helpers recorded
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
+                  <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                    <tr>
+                      <th className="py-3.5 px-5">Helper Name</th>
+                      <th className="py-3.5 px-5">Helper Type / Status</th>
+                      <th className="py-3.5 px-5">NID #</th>
+                      <th className="py-3.5 px-5">Completed Jobs</th>
+                      <th className="py-3.5 px-5">Active Assigned Jobs</th>
+                      <th className="py-3.5 px-5">Total Earned</th>
+                      <th className="py-3.5 px-5">Wallet Balance</th>
+                      <th className="py-3.5 px-5 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 font-medium">
+                    {paginatedItems.map((h) => {
+                      const helperUser = fallbackStore.users.get(h.id);
+                      const helperType = helperUser?.helperType || 'commuter';
+                      const isEdu = helperUser?.isEduVerified;
 
-            {/* Pagination Controls */}
-            <PaginationControl
-              currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              pageSize={pageSize}
-              onPageChange={(p) => setCurrentPage(p)}
-              onPageSizeChange={(s) => {
-                setPageSize(s);
-                setCurrentPage(1);
-              }}
-            />
+                      return (
+                        <tr
+                          key={h.id}
+                          className="hover:bg-gray-50/80 transition-colors cursor-pointer"
+                          onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                        >
+                          <td className="py-4 px-5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-gray-900">{h.name}</span>
+                              {isEdu && (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
+                                  <Check className="w-2.5 h-2.5 text-blue-600" />
+                                  <span>Edu</span>
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
+                            <select
+                              value={helperType}
+                              onChange={async (e) => {
+                                const newType = e.target.value as 'commuter' | 'dedicated';
+                                if (helperUser) {
+                                  const updated = { ...helperUser, helperType: newType, isHelper: true };
+                                  await fallbackStore.saveUser(updated);
+                                  setUsers(Array.from(fallbackStore.users.values()));
+                                  showAlert('স্ট্যাটাস পরিবর্তিত', `${h.name}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`, 'success');
+                                }
+                              }}
+                              className="px-2 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="commuter">🚲 Commuter Helper</option>
+                              <option value="dedicated">⚡ Dedicated Rider</option>
+                            </select>
+                          </td>
+                          <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
+                          <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
+                          <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
+                          <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
+                          <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
+                          <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => setSelectedUserId(h.id)}
+                              className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
+                            >
+                              Profile
+                            </button>
+                            <button
+                              onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                            >
+                              History
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination Controls */}
+              <PaginationControl
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                pageSize={pageSize}
+                onPageChange={(p) => setCurrentPage(p)}
+                onPageSizeChange={(s) => {
+                  setPageSize(s);
+                  setCurrentPage(1);
+                }}
+              />
+            </div>
           </div>
         );
       })()}
@@ -2219,6 +2429,269 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
+          {/* Commuter vs Dedicated Helper & Edu Email Domain Settings */}
+          <div className="p-5 rounded-3xl bg-blue-50/70 border border-blue-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-blue-900 uppercase tracking-wider flex items-center space-x-2">
+              <Bike className="w-5 h-5 text-blue-700" />
+              <span>Commuter vs Dedicated Helper & Edu Email Settings</span>
+            </h4>
+            <p className="text-[11px] text-blue-700">
+              এডুকেশন ইমেইল ভেরিফাইড ব্যাজ ডোমেইন তালিকা এবং হেলপার নোটিফিকেশন টাইমিং ও অর্ডারের সিরিয়াল নির্ধারণ করুন।
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Education Email Domains (Comma separated)
+                </label>
+                <input
+                  type="text"
+                  value={eduEmailDomainsText}
+                  onChange={(e) => setEduEmailDomainsText(e.target.value)}
+                  placeholder="যেমন: @diu.edu.bd, @bracu.ac.bd"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-purple-600"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  এই ডোমেইনের ইউজারগণ ভেরিফাইড ব্যাজ পাবেন।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Helper Location Radius Limit (km)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min={0.5}
+                  max={50}
+                  value={helperRadiusKm}
+                  onChange={(e) => setHelperRadiusKm(Number(e.target.value))}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  অর্ডার পিকআপ/ডেলিভারি থেকে কত কি.মি. (Radius) ভেতরের হেলপারগণ রিকোয়েস্ট ও নোটিফিকেশন পাবেন (ডিফল্ট: 3.5 km)।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Dedicated Helper Delay (Minutes)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={dedicatedDelayMins}
+                  onChange={(e) => setDedicatedDelayMins(Number(e.target.value))}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  অর্ডার পিকআপ না হলে কত মিনিট পর ডেডিকেটেড রাইডার নোটিফিকেশন পাবে (ডিফল্ট: 7 মিনিট)।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Order Receiver Routing Rule
+                </label>
+                <select
+                  value={receiverRule}
+                  onChange={(e) => setReceiverRule(e.target.value as any)}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                >
+                  <option value="commuter_first">Commuter First (সময় পার হলে Dedicated পাবে & Commuter থেকে ব্যানিশ)</option>
+                  <option value="dedicated_first">Dedicated First Only</option>
+                  <option value="both_simultaneous">Both Simultaneously (সবাই একসাথে)</option>
+                </select>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  কাদের প্রথমে নোটিফিকেশন যাবে তা নির্বাচন করুন।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Map & Location Search Region Preference Settings */}
+          <div className="p-5 rounded-3xl bg-emerald-50/80 border border-emerald-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-emerald-900 uppercase tracking-wider flex items-center space-x-2">
+              <MapPin className="w-5 h-5 text-emerald-700" />
+              <span>Map & Location Search Region Preference (ম্যাপ ও স্থান খোঁজার এরিয়া ফিল্টার)</span>
+            </h4>
+            <p className="text-[11px] text-emerald-800 font-medium">
+              ম্যাপের স্থান এবং সার্চ এরিয়া ফিল্টার পছন্দ সেট করুন। ডিফল্টভাবে কেবল বাংলাদেশি স্থান এবং লোকেশন সার্চ ফিল্টার হবে।
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Location & Geocoding Search Preference
+                </label>
+                <select
+                  value={mapLocationPref}
+                  onChange={(e) => setMapLocationPref(e.target.value as any)}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600"
+                >
+                  <option value="BD">🇧🇩 Bangladesh Only (বাংলাদেশ - শুধুমাত্র বাংলাদেশি এলাকা)</option>
+                  <option value="GLOBAL">🌐 Global / Worldwide (গ্লোবাল - বিশ্বব্যাপী সকল স্থান)</option>
+                  <option value="CUSTOM">🏳️ Custom Country Code (অন্যান্য দেশ - নির্দিষ্ট কান্ট্রি কোড)</option>
+                </select>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  বাংলাদেশ ফিল্টার নির্বাচন থাকলে স্থান অনুসন্ধান (Search) শুধুমাত্র বাংলাদেশি ফলাফল রিটার্ন করবে।
+                </p>
+              </div>
+
+              {mapLocationPref === 'CUSTOM' && (
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Custom Country Code (2-letter ISO e.g. us, in, uk)
+                  </label>
+                  <input
+                    type="text"
+                    value={customCountryCode}
+                    onChange={(e) => setCustomCountryCode(e.target.value)}
+                    placeholder="e.g., in, us, uk, sa"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600 uppercase"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    নির্দিষ্ট দেশের ২-অক্ষরের ISO কান্ট্রি কোড লিখুন।
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* PWA App Installation Prompt Settings */}
+          <div className="p-5 rounded-3xl bg-indigo-50/80 border border-indigo-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-indigo-950 uppercase tracking-wider flex items-center space-x-2">
+              <Download className="w-5 h-5 text-indigo-700" />
+              <span>PWA App Installation Prompt Controls (ইনস্টল পপআপ নিয়ন্ত্রণ)</span>
+            </h4>
+            <p className="text-[11px] text-indigo-900 font-medium">
+              অর্ডার সফলভাবে জমা হওয়ার পর গ্রাহককে ইনস্টল পপআপ দেখানোর সিদ্ধান্ত ও টেক্সট কাস্টমাইজ করুন।
+            </p>
+
+            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-indigo-100">
+              <input
+                type="checkbox"
+                id="pwaInstallPromptEnabled"
+                checked={pwaInstallPromptEnabled}
+                onChange={(e) => setPwaInstallPromptEnabled(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300"
+              />
+              <label htmlFor="pwaInstallPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
+                অর্ডার সফল হলে গ্রাহককে PWA অ্যাপ ইনস্টল পপআপ (Popup) দেখান (Enable Install Prompt)
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  পপআপ টাইটেল (Popup Title)
+                </label>
+                <input
+                  type="text"
+                  value={pwaInstallPromptTitle}
+                  onChange={(e) => setPwaInstallPromptTitle(e.target.value)}
+                  placeholder="Install Jamanot App"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  ইনস্টল বাটন টেক্সট (Button Text)
+                </label>
+                <input
+                  type="text"
+                  value={pwaInstallButtonText}
+                  onChange={(e) => setPwaInstallButtonText(e.target.value)}
+                  placeholder="Install Jamanot"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                পপআপ বিবরণ / সুবিধা (Popup Description)
+              </label>
+              <textarea
+                value={pwaInstallPromptDescription}
+                onChange={(e) => setPwaInstallPromptDescription(e.target.value)}
+                placeholder="আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!"
+                rows={2}
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-indigo-600 leading-relaxed font-sans"
+              />
+            </div>
+          </div>
+
+          {/* Permission Asking Modal Content Admin Controls */}
+          <div className="p-5 rounded-3xl bg-amber-50/80 border border-amber-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
+              <ShieldCheck className="w-5 h-5 text-amber-700" />
+              <span>Permission Alert Modal Content Controls (পারমিশন মোডাল টেক্সট নিয়ন্ত্রণ)</span>
+            </h4>
+            <p className="text-[11px] text-amber-900 font-medium">
+              লোকেশন এবং নোটিফিকেশন পারমিশন চাইবার সময় গ্রাহককে দেখানো কাস্টম টাইটেল এবং বিবরণ এডিট করুন।
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  লোকেশন পারমিশন মোডাল টাইটেল (Location Permission Title)
+                </label>
+                <input
+                  type="text"
+                  value={locPermModalTitle}
+                  onChange={(e) => setLocPermModalTitle(e.target.value)}
+                  placeholder="লোকেশন পারমিশন আবশ্যক (Location Required)"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  নোটিফিকেশন পারমিশন মোডাল টাইটেল (Notification Permission Title)
+                </label>
+                <input
+                  type="text"
+                  value={notifPermModalTitle}
+                  onChange={(e) => setNotifPermModalTitle(e.target.value)}
+                  placeholder="নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  লোকেশন পারমিশন মোডাল বিবরণ (Location Permission Message)
+                </label>
+                <textarea
+                  value={locPermModalBody}
+                  onChange={(e) => setLocPermModalBody(e.target.value)}
+                  placeholder="কম্পিউটার হেলপার মোড চালু করতে জিপিএস পারমিশন আবশ্যক..."
+                  rows={3}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  নোটিফিকেশন পারমিশন মোডাল বিবরণ (Notification Permission Message)
+                </label>
+                <textarea
+                  value={notifPermModalBody}
+                  onChange={(e) => setNotifPermModalBody(e.target.value)}
+                  placeholder="জরুরি আপডেট পেতে ব্রাউজারে নোটিফিকেশন পারমিশন আবশ্যক..."
+                  rows={3}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Order Timing Controls Block */}
           <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
             <h4 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider flex items-center space-x-2">
@@ -2252,33 +2725,17 @@ export const AdminDashboard: React.FC = () => {
 
               {pricing.orderTimingType === 'custom_range' && (
                 <>
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                      Open From (শুরু)
-                    </label>
-                    <input
-                      type="time"
-                      value={pricing.orderTimingStart || '08:00'}
-                      onChange={(e) =>
-                        setPricing({ ...pricing, orderTimingStart: e.target.value })
-                      }
-                      className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600"
-                    />
-                  </div>
+                  <TimePickerInput
+                    label="Open From (শুরু)"
+                    value={pricing.orderTimingStart || '08:00'}
+                    onChange={(val) => setPricing({ ...pricing, orderTimingStart: val })}
+                  />
 
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                      Close At (শেষ)
-                    </label>
-                    <input
-                      type="time"
-                      value={pricing.orderTimingEnd || '22:00'}
-                      onChange={(e) =>
-                        setPricing({ ...pricing, orderTimingEnd: e.target.value })
-                      }
-                      className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600"
-                    />
-                  </div>
+                  <TimePickerInput
+                    label="Close At (শেষ)"
+                    value={pricing.orderTimingEnd || '22:00'}
+                    onChange={(val) => setPricing({ ...pricing, orderTimingEnd: val })}
+                  />
                 </>
               )}
             </div>

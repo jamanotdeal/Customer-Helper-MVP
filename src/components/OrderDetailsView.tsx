@@ -11,6 +11,7 @@ import {
 import { DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
+import { MapPickerModal } from './MapPickerModal';
 
 interface OrderDetailsViewProps {
   orderId: string;
@@ -25,9 +26,18 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const [editService, setEditService] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editPickup, setEditPickup] = useState('');
+  const [editPickupLat, setEditPickupLat] = useState<number | undefined>(undefined);
+  const [editPickupLng, setEditPickupLng] = useState<number | undefined>(undefined);
   const [editAddress, setEditAddress] = useState('');
+  const [editDeliveryLat, setEditDeliveryLat] = useState<number | undefined>(undefined);
+  const [editDeliveryLng, setEditDeliveryLng] = useState<number | undefined>(undefined);
   const [editPhone, setEditPhone] = useState('');
   const [editError, setEditError] = useState('');
+
+  // Map Picker Modal States
+  const [showPickupMapPicker, setShowPickupMapPicker] = useState(false);
+  const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
+  const [mapHasError, setMapHasError] = useState(false);
 
   // Services list synced from admin panel
   const [editServices, setEditServices] = useState<string[]>(
@@ -146,7 +156,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     // The description is stored in items[0].name (single-item format used by the order form)
     setEditDescription(order.items[0]?.name || '');
     setEditPickup(order.pickupLocation?.address || '');
+    setEditPickupLat(order.pickupLocation?.lat);
+    setEditPickupLng(order.pickupLocation?.lng);
     setEditAddress(order.deliveryLocation.address);
+    setEditDeliveryLat(order.deliveryLocation.lat);
+    setEditDeliveryLng(order.deliveryLocation.lng);
     setEditPhone(order.alternativePhone || order.customerPhone || '');
     setEditError('');
     setShowEditModal(true);
@@ -167,8 +181,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       service: editService.trim(),
       title: editService.trim(),
       items: [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
-      pickupLocation: editPickup.trim() ? { address: editPickup.trim() } : undefined,
-      deliveryLocation: { ...o.deliveryLocation, address: editAddress.trim() },
+      pickupLocation: editPickup.trim()
+        ? { address: editPickup.trim(), lat: editPickupLat, lng: editPickupLng }
+        : undefined,
+      deliveryLocation: {
+        ...o.deliveryLocation,
+        address: editAddress.trim(),
+        lat: editDeliveryLat,
+        lng: editDeliveryLng,
+      },
       alternativePhone: editPhone.trim(),
       customerPhone: editPhone.trim(),
       updatedAt: new Date().toISOString(),
@@ -507,31 +528,65 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               {/* Pickup / Source Location (optional) */}
               <div>
                 <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">কোথা থেকে নিতে হবে?</label>
-                <div className="relative">
-                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <div className="relative group">
+                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
                   <input
                     type="text"
                     value={editPickup}
                     onChange={(e) => setEditPickup(e.target.value)}
-                    placeholder="কোথা থেকে নিতে হবে? (optional)"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                    onClick={() => {
+                      if (!mapHasError) setShowPickupMapPicker(true);
+                    }}
+                    placeholder="কোথা থেকে নিতে হবে? (ম্যাপ সিলেক্ট করতে ক্লিক করুন)"
+                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPickupMapPicker(true)}
+                    title="ম্যাপ থেকে স্থান নির্বাচন করুন"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
+                  >
+                    <MapPin className="w-4 h-4" />
+                  </button>
                 </div>
+                {editPickupLat && editPickupLng && (
+                  <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({editPickupLat.toFixed(4)}, {editPickupLng.toFixed(4)})</span>
+                  </div>
+                )}
               </div>
 
               {/* Delivery Address */}
               <div>
                 <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">ডেলিভারি ঠিকানা *</label>
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <div className="relative group">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
                   <input
                     type="text"
                     value={editAddress}
                     onChange={(e) => { setEditAddress(e.target.value); setEditError(''); }}
-                    placeholder="ডেলিভারি ঠিকানা *"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
+                    onClick={() => {
+                      if (!mapHasError) setShowDeliveryMapPicker(true);
+                    }}
+                    placeholder="ডেলিভারি ঠিকানা (ম্যাপ সিলেক্ট করতে ক্লিক করুন) *"
+                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowDeliveryMapPicker(true)}
+                    title="ম্যাপ থেকে ঠিকানা নির্বাচন করুন"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
+                  >
+                    <MapPin className="w-4 h-4" />
+                  </button>
                 </div>
+                {editDeliveryLat && editDeliveryLng && (
+                  <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({editDeliveryLat.toFixed(4)}, {editDeliveryLng.toFixed(4)})</span>
+                  </div>
+                )}
               </div>
 
               {/* WhatsApp Number */}
@@ -645,6 +700,45 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         </div>
       )}
+
+      {/* Map Picker Modals */}
+      <MapPickerModal
+        isOpen={showPickupMapPicker}
+        onClose={() => setShowPickupMapPicker(false)}
+        title="কোথা থেকে আনতে হবে বা করতে হবে?"
+        initialLocation={{
+          address: editPickup,
+          lat: editPickupLat,
+          lng: editPickupLng,
+        }}
+        addressLabel="Name of Store, Market or Area"
+        addressPlaceholder="Name of Store, Market or Area"
+        onMapError={() => setMapHasError(true)}
+        onSelectLocation={(loc) => {
+          setEditPickup(loc.address);
+          if (loc.lat) setEditPickupLat(loc.lat);
+          if (loc.lng) setEditPickupLng(loc.lng);
+        }}
+      />
+
+      <MapPickerModal
+        isOpen={showDeliveryMapPicker}
+        onClose={() => setShowDeliveryMapPicker(false)}
+        title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
+        initialLocation={{
+          address: editAddress,
+          lat: editDeliveryLat,
+          lng: editDeliveryLng,
+        }}
+        addressLabel="Your Building name & flat no"
+        addressPlaceholder="Your Building name & flat no"
+        onMapError={() => setMapHasError(true)}
+        onSelectLocation={(loc) => {
+          setEditAddress(loc.address);
+          if (loc.lat) setEditDeliveryLat(loc.lat);
+          if (loc.lng) setEditDeliveryLng(loc.lng);
+        }}
+      />
     </div>
   );
 };

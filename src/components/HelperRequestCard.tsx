@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
-import { Clock, Sparkles } from 'lucide-react';
+import { Clock, Sparkles, MapPin } from 'lucide-react';
 import { getElapsedTime } from '@/lib/timeUtils';
+import { getOrderMinDistanceKm } from '@/lib/pricing';
 
 interface HelperRequestCardProps {
   order: Order;
@@ -11,6 +12,7 @@ interface HelperRequestCardProps {
   activeOrderLimit: number;
   isNew?: boolean;
   isFirstOrder?: boolean;
+  helperLocation?: { lat?: number; lng?: number };
 }
 
 export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
@@ -21,6 +23,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   activeOrderLimit,
   isNew = false,
   isFirstOrder = false,
+  helperLocation,
 }) => {
   const isCapReached = activeOrdersCount >= activeOrderLimit;
   const [elapsed, setElapsed] = useState(() => getElapsedTime(order.createdAt));
@@ -36,6 +39,8 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
     : 'No items listed';
 
+  const distanceKm = getOrderMinDistanceKm(helperLocation, order);
+
   return (
     <div className={`rounded-3xl border p-4 space-y-3 transition-all duration-300 ${
       isNew
@@ -44,10 +49,16 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     }`}>
       {/* Service Needed & Timer Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2 min-w-0">
+        <div className="flex items-center space-x-2 min-w-0 flex-wrap gap-y-1">
           <h4 className="font-bold text-gray-900 text-sm leading-snug truncate">
             {order.service || order.title || 'Service Needed'}
           </h4>
+          {distanceKm !== null && (
+            <span className="text-[10px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0">
+              <MapPin className="w-2.5 h-2.5 text-indigo-600" />
+              <span>{distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m` : `${distanceKm.toFixed(1)} km`} away</span>
+            </span>
+          )}
           {isNew && (
             <span className="inline-flex items-center space-x-0.5 px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-extrabold animate-pulse shadow-sm shrink-0">
               <Sparkles className="w-2.5 h-2.5" />

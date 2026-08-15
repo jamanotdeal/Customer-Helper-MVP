@@ -29,7 +29,7 @@ import {
   AppNotification,
   UserProfile,
 } from '@/types';
-import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission } from './pricing';
+import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -262,6 +262,42 @@ class FallbackStore {
   constructor() {
     this.loadFromLocalStorage();
     this.initFirestoreListeners();
+    this.startRoutingTimer();
+  }
+
+  private startRoutingTimer() {
+    if (typeof window === 'undefined') return;
+    setInterval(() => {
+      this.checkDedicatedRouting();
+    }, 15000);
+  }
+
+  private async checkDedicatedRouting() {
+    const delayMins = this.pricingSettings.dedicatedHelperDelayMinutes || 7;
+    const now = Date.now();
+    const thresholdMs = delayMins * 60 * 1000;
+
+    this.orders.forEach((order) => {
+      if (order.status === 'PENDING' && !order.routedToDedicated) {
+        const createdMs = new Date(order.createdAt).getTime();
+        if (now - createdMs >= thresholdMs) {
+          order.routedToDedicated = true;
+          order.dedicatedNotifiedAt = new Date().toISOString();
+          this.orders.set(order.id, order);
+
+          const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
+          this.addNotification({
+            id: `notif-ded-${Date.now()}-${order.id}`,
+            userId: 'all-dedicated-helpers',
+            title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
+            body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
+            orderId: order.id,
+            read: false,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+    });
   }
 
   private loadFromLocalStorage() {
@@ -605,13 +641,23 @@ class FallbackStore {
 
   public async addOrder(order: Order) {
     this.orders.set(order.id, order);
-    
-    // Dynamic notification to helpers & admins
+
+    const rule = this.pricingSettings.orderReceiverRule || 'commuter_first';
+    const targetGroup =
+      rule === 'dedicated_first'
+        ? 'all-dedicated-helpers'
+        : rule === 'both_simultaneous'
+        ? 'all-helpers'
+        : 'all-commuter-helpers';
+
+    const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
+
+    // Dynamic notification to helpers with Service Name/Title & Description
     this.addNotification({
       id: `notif-${Date.now()}`,
-      userId: 'all-helpers',
-      title: 'নতুন রিকোয়েস্ট এসেছে!',
-      body: `${order.title} (ফি: ৳${order.deliveryFee}) - আপনার জন্য বরাদ্দ হতে প্রস্তুত।`,
+      userId: targetGroup,
+      title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
+      body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation.address})`,
       orderId: order.id,
       read: false,
       createdAt: new Date().toISOString(),
@@ -909,11 +955,11 @@ class FallbackStore {
 
     const user = this.users.get(app.userId);
     if (user) {
-      // Sync helper's WhatsApp number from their application to their profile
-      // so it's available as helperPhone when they accept orders.
-      const updatedUser = {
+      const isDedicated = app.applicationType === 'dedicated';
+      const updatedUser: UserProfile = {
         ...user,
         isHelper: true,
+        helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
         alternativePhone: app.whatsapp || user.alternativePhone,
       };
       this.users.set(app.userId, updatedUser);
@@ -960,10 +1006,37 @@ class FallbackStore {
 
   public async addNotification(notif: AppNotification) {
     const target = notif.userId;
+    const radiusKm = this.pricingSettings.helperRadiusKm || 3.5;
+    const targetOrder = notif.orderId ? this.orders.get(notif.orderId) : undefined;
 
     if (target === 'all-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper) {
+          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+            return;
+          }
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
+      });
+    } else if (target === 'all-commuter-helpers') {
+      this.users.forEach((u) => {
+        if (u.isHelper && u.helperType !== 'dedicated') {
+          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+            return;
+          }
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
+      });
+    } else if (target === 'all-dedicated-helpers') {
+      this.users.forEach((u) => {
+        if (u.isHelper && u.helperType === 'dedicated') {
+          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+            return;
+          }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -1095,9 +1168,11 @@ class FallbackStore {
     if (app.status === 'APPROVED') {
       const user = this.users.get(app.userId);
       if (user) {
-        const updatedUser = {
+        const isDedicated = app.applicationType === 'dedicated';
+        const updatedUser: UserProfile = {
           ...user,
           isHelper: true,
+          helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
           alternativePhone: app.whatsapp || user.alternativePhone,
         };
         this.users.set(app.userId, updatedUser);
@@ -1121,9 +1196,11 @@ class FallbackStore {
     if (updated.status === 'APPROVED' && existing.status !== 'APPROVED') {
       const user = this.users.get(updated.userId);
       if (user) {
-        const updatedUser = {
+        const isDedicated = updated.applicationType === 'dedicated';
+        const updatedUser: UserProfile = {
           ...user,
           isHelper: true,
+          helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
           alternativePhone: updated.whatsapp || user.alternativePhone,
         };
         this.users.set(updated.userId, updatedUser);
@@ -1208,11 +1285,19 @@ export async function requestBrowserNotificationPermission(): Promise<boolean> {
   if (Notification.permission === 'granted') {
     return true;
   }
-  if (Notification.permission !== 'denied') {
-    const permission = await Notification.requestPermission();
-    return permission === 'granted';
+  try {
+    let res: string = Notification.permission;
+    const req = Notification.requestPermission((permission) => {
+      res = permission;
+    });
+    if (req && typeof (req as any).then === 'function') {
+      res = await req;
+    }
+    return (Notification.permission as string) === 'granted' || res === 'granted';
+  } catch (err) {
+    console.warn('[Notification] requestPermission note:', err);
+    return false;
   }
-  return false;
 }
 
 

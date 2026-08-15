@@ -12,6 +12,10 @@ export const metadata: Metadata = {
     statusBarStyle: 'default',
     title: 'Jamanot',
   },
+  icons: {
+    icon: '/pwa-logo.png',
+    apple: '/pwa-logo.png',
+  },
 };
 
 export const viewport: Viewport = {
@@ -30,8 +34,8 @@ export default function RootLayout({
   return (
     <html lang="bn">
       <head>
-        <link rel="icon" href="/Jamanot-Logo.png" />
-        <link rel="apple-touch-icon" href="/Jamanot-Logo.png" />
+        <link rel="icon" href="/pwa-logo.png" />
+        <link rel="apple-touch-icon" href="/pwa-logo.png" />
       </head>
       <body className="antialiased bg-gray-100 min-h-screen">
         <AuthProvider>

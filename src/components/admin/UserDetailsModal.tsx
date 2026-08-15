@@ -28,6 +28,7 @@ import {
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
 import { useAuth } from '@/context/AuthContext';
+import { DraggableTabsContainer } from './DraggableTabsContainer';
 
 interface UserDetailsModalProps {
   userId: string;
@@ -354,23 +355,30 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
           </div>
 
           {/* Sub Navigation Bar */}
-          <div className="flex border-b border-gray-200 bg-gray-100/70 px-4 pt-2 gap-2 text-xs font-extrabold overflow-x-auto no-scrollbar">
+          <DraggableTabsContainer
+            showScrollButtons={false}
+            containerClassName="bg-gray-100/70 border-b border-gray-200 rounded-none px-4 pt-2 pb-0"
+            className="bg-transparent border-none p-0 space-x-2"
+            activeKey={activeTab}
+          >
             <button
               onClick={() => setActiveTab('OVERVIEW')}
-              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap ${
+              data-active={activeTab === 'OVERVIEW'}
+              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'OVERVIEW'
-                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm'
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
+                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
               }`}
             >
               Overview & Live State
             </button>
             <button
               onClick={() => setActiveTab('CUSTOMER_ORDERS')}
-              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap ${
+              data-active={activeTab === 'CUSTOMER_ORDERS'}
+              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'CUSTOMER_ORDERS'
-                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm'
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
+                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
               }`}
             >
               Customer Orders History ({customerOrders.length})
@@ -378,10 +386,11 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
             {user.isHelper && (
               <button
                 onClick={() => setActiveTab('HELPER_DELIVERIES')}
-                className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap ${
+                data-active={activeTab === 'HELPER_DELIVERIES'}
+                className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'HELPER_DELIVERIES'
-                    ? 'bg-white border-gray-200 text-purple-950 shadow-sm'
-                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                    ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                    : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
                 }`}
               >
                 Helper Work History ({helperOrders.length})
@@ -389,25 +398,27 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
             )}
             <button
               onClick={() => setActiveTab('WALLET')}
-              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap ${
+              data-active={activeTab === 'WALLET'}
+              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'WALLET'
-                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm'
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
+                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
               }`}
             >
               Wallet Transactions ({walletTxs.length})
             </button>
             <button
               onClick={() => setActiveTab('MANAGEMENT')}
-              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap ${
+              data-active={activeTab === 'MANAGEMENT'}
+              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'MANAGEMENT'
-                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm'
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
+                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
               }`}
             >
               Labeling, Block & Actions
             </button>
-          </div>
+          </DraggableTabsContainer>
 
           {/* Modal Main Body */}
           <div className="p-5 overflow-y-auto space-y-4 flex-1 text-xs">
@@ -511,12 +522,41 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                     )}
                   </div>
 
-                  {/* Helper Information */}
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
-                    <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-                      <Bike className="w-4 h-4 text-indigo-700" />
-                      <span>Helper Verification & Application</span>
-                    </h4>
+                  {/* Helper Information & Type Status Toggle */}
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
+                        <Bike className="w-4 h-4 text-indigo-700" />
+                        <span>Helper Verification & Status</span>
+                      </h4>
+                      {user.isEduVerified && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full border border-blue-200">
+                          <Check className="w-3 h-3 text-blue-600" />
+                          <span>Edu Verified</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-gray-700">Helper Sub-Type Status:</span>
+                        <select
+                          value={user.helperType || 'commuter'}
+                          onChange={async (e) => {
+                            const newType = e.target.value as 'commuter' | 'dedicated';
+                            const updated = { ...user, helperType: newType, isHelper: true };
+                            await fallbackStore.saveUser(updated);
+                            showAlert('স্ট্যাটাস আপডেট', `হেলপার স্ট্যাটাস ${newType === 'dedicated' ? 'Dedicated Helper' : 'Commuter Helper'} হিসেবে পরিবর্তন করা হয়েছে।`, 'success');
+                            if (onUserUpdated) onUserUpdated();
+                          }}
+                          className="px-2.5 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-extrabold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="commuter">🚲 Commuter Helper</option>
+                          <option value="dedicated">⚡ Dedicated Rider</option>
+                        </select>
+                      </div>
+                    </div>
+
                     {helperApp ? (
                       <div className="space-y-1.5 text-slate-700 font-medium">
                         <p><strong>Legal Name:</strong> {helperApp.legalName}</p>
@@ -529,7 +569,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                         </p>
                       </div>
                     ) : (
-                      <p className="text-gray-500 italic py-2">কোনো হেলপার রেজিস্ট্রেশন আবেদন জমা দেওয়া হয়নি।</p>
+                      <p className="text-gray-500 italic py-1">কোনো হেলপার রেজিস্ট্রেশন আবেদন জমা দেওয়া হয়নি।</p>
                     )}
                   </div>
                 </div>

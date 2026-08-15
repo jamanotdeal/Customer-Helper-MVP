@@ -47,6 +47,7 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
         hasSmartphone,
         hasCycle,
         hasBike,
+        applicationType: 'dedicated',
       });
       setSubmitted(true);
     } catch (err) {
@@ -75,7 +76,7 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
               আবেদন সফলভাবে জমা হয়েছে!
             </h3>
             <p className="text-sm text-gray-600 mb-6">
-              আপনার হেলপার আবেদনটি এডমিন রিভিউ করছেন। অনুমোদন সম্পন্ন হলে আপনার প্রোফাইলে হেলপার মোড চালু হয়ে যাবে।
+              আপনার ডেডিকেটেড হেলপার আবেদনটি এডমিন রিভিউ করছেন। অনুমোদন সম্পন্ন হলে আপনার হেলপার অ্যাকাউন্ট ডেডিকেটেড রাইডারে উন্নীত হবে।
             </p>
             <button
               onClick={onClose}
@@ -87,12 +88,12 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="flex items-center space-x-3 mb-2">
-              <div className="p-3 rounded-2xl bg-emerald-100 text-emerald-800">
-                <Bike className="w-6 h-6" />
+              <div className="p-3 rounded-2xl bg-purple-100 text-purple-800">
+                <Bike className="w-6 h-6 text-purple-700" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-gray-900">Become a Jamanot Helper</h3>
-                <p className="text-xs text-emerald-700">আশেপাশে সার্ভিস দিয়ে ইনকাম করুন</p>
+                <h3 className="text-lg font-extrabold text-gray-900">Become a Dedicated Helper</h3>
+                <p className="text-xs text-purple-700 font-semibold">ফুল-টাইম বা ডেডিকেটেড রাইডার হিসেবে সার্ভিস দেওয়ার আবেদন</p>
               </div>
             </div>
 
@@ -208,12 +209,12 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
             <button
               type="submit"
               disabled={submitting}
-              className="w-full py-3.5 mt-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-lg shadow-emerald-500/20 active:scale-98 transition-all flex items-center justify-center space-x-2"
+              className="w-full py-3.5 mt-2 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-sm shadow-lg shadow-purple-500/20 active:scale-98 transition-all flex items-center justify-center space-x-2"
             >
               {submitting ? (
                 <span>আবেদন জমা হচ্ছে...</span>
               ) : (
-                <span>Submit Helper Application</span>
+                <span>Submit Dedicated Helper Application</span>
               )}
             </button>
           </form>

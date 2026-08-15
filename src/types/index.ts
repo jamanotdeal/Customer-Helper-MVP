@@ -78,6 +78,9 @@ export interface Order {
   cancellationRequest?: CancellationRequest;
   cancellationReason?: string;
   
+  routedToDedicated?: boolean;
+  dedicatedNotifiedAt?: string;
+  
   createdAt: string;
   acceptedAt?: string;
   purchasedAt?: string;
@@ -97,6 +100,9 @@ export interface UserProfile {
   photoURL?: string;
   role: UserRole;
   isHelper: boolean;
+  helperType?: 'commuter' | 'dedicated';
+  isEduVerified?: boolean;
+  helperLocation?: LocationData & { updatedAt?: string };
   isAdmin?: boolean;
   isSuperAdmin?: boolean;
   lastActiveMode: ActiveMode;
@@ -122,6 +128,7 @@ export interface HelperApplication {
   hasSmartphone: boolean;
   hasCycle: boolean;
   hasBike: boolean;
+  applicationType?: 'dedicated';
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   createdAt: string;
 }
@@ -162,6 +169,8 @@ export interface ValueFeeRule {
   fee: number;           // e.g. 20
 }
 
+export type MapLocationPreference = 'BD' | 'GLOBAL' | 'CUSTOM';
+
 export interface PricingSettings {
   rules: ValueFeeRule[];
   helperCommissionPercent: number; // e.g. 80
@@ -175,6 +184,20 @@ export interface PricingSettings {
   orderTimingStart?: string; // HH:mm format
   orderTimingEnd?: string;   // HH:mm format
   orderTimingMessage?: string;
+  eduEmailDomains?: string[]; // Admin configured domains for verified badge e.g. ['@diu.edu.bd']
+  dedicatedHelperDelayMinutes?: number; // Minutes before dedicated helpers get notified (default 7)
+  orderReceiverRule?: 'commuter_first' | 'dedicated_first' | 'both_simultaneous'; // Default 'commuter_first'
+  helperRadiusKm?: number; // Distance radius limit in km for helper request visibility & notifications (default 3.5)
+  mapLocationPreference?: MapLocationPreference; // Default 'BD'
+  customCountryCode?: string; // e.g. 'bd', 'in', 'us'
+  pwaInstallPromptEnabled?: boolean; // Admin toggle to enable PWA install prompt on order success
+  pwaInstallPromptTitle?: string;    // Custom title e.g. "Install Jamanot App"
+  pwaInstallPromptDescription?: string; // Custom description text
+  pwaInstallButtonText?: string;     // Custom button text e.g. "Install Jamanot"
+  locationPermissionModalTitle?: string; // Admin editable title for location permission modal
+  locationPermissionModalBody?: string;  // Admin editable body message for location permission modal
+  notificationPermissionModalTitle?: string; // Admin editable title for notification permission modal
+  notificationPermissionModalBody?: string;  // Admin editable body message for notification permission modal
 }
 
 export interface AppNotification {

@@ -11,12 +11,15 @@ import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X, Chev
 import Image from 'next/image';
 import Link from 'next/link';
 
+import { OrderSuccessPwaModal } from './PWAInstallModal';
+
 export const CustomerHome: React.FC = () => {
   const { user, loginWithGoogle } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
+  const [createdOrderForSuccessModal, setCreatedOrderForSuccessModal] = useState<Order | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -91,7 +94,7 @@ export const CustomerHome: React.FC = () => {
           if (!user) {
             setShowAuthRequiredModal(true);
           } else {
-            setSelectedOrderId(newOrder.id);
+            setCreatedOrderForSuccessModal(newOrder);
           }
         }}
       />
@@ -288,6 +291,21 @@ export const CustomerHome: React.FC = () => {
             </p>
           </div>
         </div>
+      )}
+
+      {/* Order Success PWA Modal */}
+      {createdOrderForSuccessModal && (
+        <OrderSuccessPwaModal
+          isOpen={Boolean(createdOrderForSuccessModal)}
+          onClose={() => setCreatedOrderForSuccessModal(null)}
+          orderId={createdOrderForSuccessModal.id}
+          orderTitle={createdOrderForSuccessModal.title}
+          onViewOrderDetails={() => {
+            const ordId = createdOrderForSuccessModal.id;
+            setCreatedOrderForSuccessModal(null);
+            setSelectedOrderId(ordId);
+          }}
+        />
       )}
 
       {/* Customer Bottom Footer Links */}

@@ -83,7 +83,90 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   orderTimingStart: '08:00',
   orderTimingEnd: '22:00',
   orderTimingMessage: 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।',
+  eduEmailDomains: ['@diu.edu.bd'],
+  dedicatedHelperDelayMinutes: 7,
+  orderReceiverRule: 'commuter_first',
+  helperRadiusKm: 3.5,
+  mapLocationPreference: 'BD',
+  customCountryCode: 'bd',
+  locationPermissionModalTitle: 'লোকেশন পারমিশন আবশ্যক (Location Required)',
+  locationPermissionModalBody: 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক। অনুগ্রহ করে ব্রাউজার সেটিংসে Location Allow করুন।',
+  notificationPermissionModalTitle: 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+  notificationPermissionModalBody: 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
 };
+
+/**
+ * Calculates distance in kilometers between two lat/lng points using Haversine formula.
+ */
+export function calculateDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Returns minimum distance in km from helper location to order pickup or delivery locations.
+ * Returns null if helper or order has no valid coordinates.
+ */
+export function getOrderMinDistanceKm(
+  helperLoc?: { lat?: number; lng?: number },
+  orderLocs?: { pickupLocation?: { lat?: number; lng?: number }; deliveryLocation?: { lat?: number; lng?: number } }
+): number | null {
+  if (!helperLoc?.lat || !helperLoc?.lng) return null;
+
+  const dists: number[] = [];
+  if (orderLocs?.pickupLocation?.lat && orderLocs?.pickupLocation?.lng) {
+    dists.push(
+      calculateDistanceKm(
+        helperLoc.lat,
+        helperLoc.lng,
+        orderLocs.pickupLocation.lat,
+        orderLocs.pickupLocation.lng
+      )
+    );
+  }
+  if (orderLocs?.deliveryLocation?.lat && orderLocs?.deliveryLocation?.lng) {
+    dists.push(
+      calculateDistanceKm(
+        helperLoc.lat,
+        helperLoc.lng,
+        orderLocs.deliveryLocation.lat,
+        orderLocs.deliveryLocation.lng
+      )
+    );
+  }
+
+  if (dists.length === 0) return null;
+  return Math.min(...dists);
+}
+
+/**
+ * Checks if a helper is within the configured order radius size (e.g. 3.5 km).
+ * If helper or order has no lat/lng coordinates, returns true (so missing GPS doesn't block visibility).
+ */
+export function isHelperWithinOrderRadius(
+  helperLoc?: { lat?: number; lng?: number },
+  orderLocs?: { pickupLocation?: { lat?: number; lng?: number }; deliveryLocation?: { lat?: number; lng?: number } },
+  radiusKm: number = 3.5
+): boolean {
+  if (!helperLoc?.lat || !helperLoc?.lng) return true;
+  const minDist = getOrderMinDistanceKm(helperLoc, orderLocs);
+  if (minDist === null) return true;
+  return minDist <= radiusKm;
+}
 
 /**
  * Checks if the platform is currently open for orders based on the admin settings and current local time.

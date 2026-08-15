@@ -7,8 +7,9 @@ import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock, Map } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
+import { MapPickerModal } from './MapPickerModal';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -32,8 +33,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   // Delivery Location state — pre-filled if saved
   const [deliveryAddress, setDeliveryAddress] = useState('');
-  const [deliveryLat] = useState<number | undefined>(undefined);
-  const [deliveryLng] = useState<number | undefined>(undefined);
+  const [deliveryLat, setDeliveryLat] = useState<number | undefined>(undefined);
+  const [deliveryLng, setDeliveryLng] = useState<number | undefined>(undefined);
+
+  // Pickup Location state
+  const [pickupLat, setPickupLat] = useState<number | undefined>(undefined);
+  const [pickupLng, setPickupLng] = useState<number | undefined>(undefined);
+
+  // Map Picker Modal States
+  const [showPickupMapPicker, setShowPickupMapPicker] = useState(false);
+  const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
+  const [mapHasError, setMapHasError] = useState(false);
 
   // Service selection state
   const [service, setService] = useState('');
@@ -105,13 +115,25 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   const currentPlaceholder = placeholders[placeholderIndex] || 'কী করতে হবে? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে...';
 
-  // Handle focus / click on main input (Guard unauthenticated users)
+  // Handle focus / click on main input (Guard unauthenticated users & ask location permission)
   const handleInputInteract = () => {
     if (!user) {
       loginWithGoogle();
       return;
     }
     setIsExpanded(true);
+
+    // Prompt location permission when customer starts creating order
+    if (typeof navigator !== 'undefined' && navigator.geolocation && !deliveryLat) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setDeliveryLat(pos.coords.latitude);
+          setDeliveryLng(pos.coords.longitude);
+        },
+        (err) => console.warn('[RequestComposer] Customer location permission note:', err?.message),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -197,7 +219,9 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       service: service,
       items: [singleItem],
       missingItemPreference: undefined,
-      pickupLocation: pickupNote.trim() ? { address: pickupNote.trim() } : undefined,
+      pickupLocation: pickupNote.trim()
+        ? { address: pickupNote.trim(), lat: pickupLat, lng: pickupLng }
+        : undefined,
       deliveryLocation: finalDelivLoc,
       additionalNote: undefined,
       status: 'PENDING',
@@ -222,6 +246,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     setDescription('');
     setService('');
     setPickupNote('');
+    setPickupLat(undefined);
+    setPickupLng(undefined);
     setIsExpanded(false);
     setSubmitting(false);
 
@@ -309,28 +335,68 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                 </div>
 
                 {/* Pickup / Source Location (optional) */}
-                <div className="relative">
-                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={pickupNote}
-                    onChange={(e) => setPickupNote(e.target.value)}
-                    placeholder="কোথা থেকে নিতে হবে? (optional)"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                  />
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">পছন্দের কেনাকাটার স্থান / পিকআপ লোকেশন</label>
+                  <div className="relative group">
+                    <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={pickupNote}
+                      onChange={(e) => setPickupNote(e.target.value)}
+                      onClick={() => {
+                        if (!mapHasError) setShowPickupMapPicker(true);
+                      }}
+                      placeholder="কোথা থেকে নিতে হবে? (ম্যাপ সিলেক্ট করতে ক্লিক করুন)"
+                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPickupMapPicker(true)}
+                      title="ম্যাপ থেকে স্থান নির্বাচন করুন"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
+                    >
+                      <MapPin className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {pickupLat && pickupLng && (
+                    <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({pickupLat.toFixed(4)}, {pickupLng.toFixed(4)})</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Delivery Address */}
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    placeholder="ডেলিভারি ঠিকানা *"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                    required
-                  />
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">ডেলিভারি ঠিকানা *</label>
+                  <div className="relative group">
+                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={deliveryAddress}
+                      onChange={(e) => setDeliveryAddress(e.target.value)}
+                      onClick={() => {
+                        if (!mapHasError) setShowDeliveryMapPicker(true);
+                      }}
+                      placeholder="ডেলিভারি ঠিকানা (ম্যাপ সিলেক্ট করতে ক্লিক করুন) *"
+                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDeliveryMapPicker(true)}
+                      title="ম্যাপ থেকে ঠিকানা নির্বাচন করুন"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
+                    >
+                      <MapPin className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {deliveryLat && deliveryLng && (
+                    <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({deliveryLat.toFixed(4)}, {deliveryLng.toFixed(4)})</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* WhatsApp Number */}
@@ -378,6 +444,45 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           </form>
         </>
       )}
+
+      {/* Map Picker Modals */}
+      <MapPickerModal
+        isOpen={showPickupMapPicker}
+        onClose={() => setShowPickupMapPicker(false)}
+        title="কোথা থেকে আনতে হবে বা করতে হবে?"
+        initialLocation={{
+          address: pickupNote,
+          lat: pickupLat,
+          lng: pickupLng,
+        }}
+        addressLabel="Name of Store, Market or Area"
+        addressPlaceholder="Name of Store, Market or Area"
+        onMapError={() => setMapHasError(true)}
+        onSelectLocation={(loc) => {
+          setPickupNote(loc.address);
+          if (loc.lat) setPickupLat(loc.lat);
+          if (loc.lng) setPickupLng(loc.lng);
+        }}
+      />
+
+      <MapPickerModal
+        isOpen={showDeliveryMapPicker}
+        onClose={() => setShowDeliveryMapPicker(false)}
+        title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
+        initialLocation={{
+          address: deliveryAddress,
+          lat: deliveryLat,
+          lng: deliveryLng,
+        }}
+        addressLabel="Your Building name & flat no"
+        addressPlaceholder="Your Building name & flat no"
+        onMapError={() => setMapHasError(true)}
+        onSelectLocation={(loc) => {
+          setDeliveryAddress(loc.address);
+          if (loc.lat) setDeliveryLat(loc.lat);
+          if (loc.lng) setDeliveryLng(loc.lng);
+        }}
+      />
     </div>
   );
 };

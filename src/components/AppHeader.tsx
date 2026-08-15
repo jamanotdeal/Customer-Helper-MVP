@@ -8,12 +8,15 @@ import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCi
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { fallbackStore } from '@/lib/firebase';
 
+import { useModal } from './CustomModal';
+
 interface AppHeaderProps {
   onOpenNotifications: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => {
-  const { user, activeMode, setActiveMode, loginWithGoogle, logout } = useAuth();
+  const { user, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
+  const { showAlert, showPermissionModal } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -203,9 +206,20 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                   </div>
                 )}
                 <div>
-                  <h3 className="font-bold text-gray-900 text-base leading-tight">
-                    {user.displayName}
-                  </h3>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="font-bold text-gray-900 text-base leading-tight">
+                      {user.displayName}
+                    </h3>
+                    {user.isEduVerified && (
+                      <span
+                        title="Verified Education Profile"
+                        className="inline-flex items-center gap-0.5 text-[10px] font-extrabold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800"
+                      >
+                        <CheckCircle2 className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                        <span>Verified Edu</span>
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 truncate">{user.email}</p>
                 </div>
               </div>
@@ -237,44 +251,42 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                     {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
                   </button>
 
-                  {user.isHelper ? (
-                    <button
-                      onClick={() => {
+                  <button
+                    onClick={async () => {
+                      setShowProfileMenu(false);
+                      if (user.isHelper) {
                         setActiveMode('helper');
-                        setShowProfileMenu(false);
-                      }}
-                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                        activeMode === 'helper'
-                          ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                          : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2.5">
-                        <Bike className="w-5 h-5 text-emerald-600" />
-                        <div>
-                          <div className="text-sm font-semibold">Helper Mode</div>
-                          <div className="text-[11px] text-gray-500 font-normal">Accept requests & earn</div>
+                      } else {
+                        const activated = await enableCommuterHelperWithLocation();
+                        if (!activated) {
+                          const p = fallbackStore.pricingSettings;
+                          await showPermissionModal({
+                            permissionType: 'location',
+                            title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)',
+                            message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক।',
+                            onAllow: () => enableCommuterHelperWithLocation(),
+                            allowText: 'Allow Location',
+                          });
+                        }
+                      }
+                    }}
+                    className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                      activeMode === 'helper'
+                        ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                        : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <Bike className="w-5 h-5 text-emerald-600" />
+                      <div>
+                        <div className="text-sm font-semibold">Commuter Helper Mode</div>
+                        <div className="text-[11px] text-gray-500 font-normal">
+                          {user.isHelper ? 'Accept requests & earn' : 'Switch directly & allow location'}
                         </div>
                       </div>
-                      {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setShowProfileMenu(false);
-                        setShowHelperModal(true);
-                      }}
-                      className="w-full flex items-center justify-between p-3 rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/40 text-emerald-800 hover:bg-emerald-50 transition-all text-left"
-                    >
-                      <div className="flex items-center space-x-2.5">
-                        <PlusCircle className="w-5 h-5 text-emerald-600" />
-                        <div>
-                          <div className="text-sm font-bold">Become a Helper</div>
-                          <div className="text-[11px] text-emerald-700 font-normal">Apply to fulfill nearby tasks</div>
-                        </div>
-                      </div>
-                    </button>
-                  )}
+                    </div>
+                    {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                  </button>
 
                   {/* Admin Switcher ONLY if authorized */}
                   {user.isAdmin && (

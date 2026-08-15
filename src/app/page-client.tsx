@@ -9,10 +9,12 @@ import { HelperDashboard } from '@/components/HelperDashboard';
 import { AdminDashboard } from '@/components/AdminDashboard';
 import { HelperWallet } from '@/components/HelperWallet';
 import { NotificationDrawer } from '@/components/NotificationDrawer';
-import { requestBrowserNotificationPermission } from '@/lib/firebase';
+import { requestBrowserNotificationPermission, fallbackStore } from '@/lib/firebase';
+import { useModal } from '@/components/CustomModal';
 
 export default function PageClient() {
   const { user, loading, activeMode } = useAuth();
+  const { showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
 
@@ -45,17 +47,19 @@ export default function PageClient() {
         .catch((err) => console.warn('ServiceWorker registration note:', err));
     }
 
-    // Request notification permission every time a user logs in.
-    // This ensures helpers and customers who previously dismissed the browser
-    // prompt get another chance, which is required for cross-device notifications.
+    // Automatically ask notification permission on login/load if not granted yet.
     if (user) {
       if (typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'default') {
-          // Not yet asked — request now
-          requestBrowserNotificationPermission();
+        if (Notification.permission !== 'granted') {
+          const p = fallbackStore.pricingSettings;
+          showPermissionModal({
+            permissionType: 'notification',
+            title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+            message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+            onAllow: () => requestBrowserNotificationPermission(),
+            allowText: 'Allow Notification',
+          });
         }
-        // If already 'granted', nothing more needed (FCM + Firestore listener handle popups).
-        // If 'denied', we respect the user's choice and don't re-ask.
       }
     }
   }, [user]);

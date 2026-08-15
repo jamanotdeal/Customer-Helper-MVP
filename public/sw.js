@@ -1,10 +1,11 @@
 // ─── Jamanot PWA Service Worker ───────────────────────────────────────────────
 // Handles: caching, FCM background push messages, notification clicks.
 // Cache version — bump this string to force update on all clients.
-const CACHE_NAME = 'jamanot-pwa-v4';
+const CACHE_NAME = 'jamanot-pwa-v5';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
+  '/pwa-logo.png',
   '/Jamanot-Logo.png'
 ];
 

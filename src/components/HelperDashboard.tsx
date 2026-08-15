@@ -4,16 +4,21 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
 import { useModal } from './CustomModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar } from 'lucide-react';
+import { DedicatedHelperMapView } from './DedicatedHelperMapView';
+import { HelperApplicationModal } from './HelperApplicationModal';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award } from 'lucide-react';
 
 export const HelperDashboard: React.FC = () => {
-  const { user } = useAuth();
-  const { showAlert, showConfirm } = useModal();
+  const { user, updateHelperLocation } = useAuth();
+  const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'COMPLETED'>('NEW');
+  const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('MAP');
+  const [showDedicatedAppModal, setShowDedicatedAppModal] = useState(false);
   const [rejectedOrderIds] = useState<Set<string>>(new Set());
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
@@ -23,7 +28,49 @@ export const HelperDashboard: React.FC = () => {
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
   );
-  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
+  const [locationPermissionDenied, setLocationPermissionDenied] = useState<boolean>(false);
+
+  // ─── Efficient Helper Location Tracking (every 10-15s + site open / mode change) ───
+  const captureHelperLocation = (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setLocationPermissionDenied(false);
+            updateHelperLocation({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+            });
+            resolve(true);
+          },
+          (err) => {
+            console.warn('[HelperDashboard] Geolocation note:', err?.message);
+            if (err.code === err.PERMISSION_DENIED) {
+              setLocationPermissionDenied(true);
+            }
+            resolve(false);
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      } else {
+        resolve(false);
+      }
+    });
+  };
+
+  useEffect(() => {
+    if (!user || !user.isHelper) return;
+
+    // Capture immediately on dashboard mount / mode change
+    captureHelperLocation();
+
+    // Periodic update every 12 seconds (within 5-15s requirement)
+    const intervalId = setInterval(captureHelperLocation, 12000);
+    return () => clearInterval(intervalId);
+  }, [user?.uid, user?.isHelper]);
 
   // Track new available orders (not yet seen when they first appeared)
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
@@ -140,8 +187,38 @@ export const HelperDashboard: React.FC = () => {
       if (user) {
         const all = Array.from(fallbackStore.orders.values());
 
-        // Available (New tab): status PENDING and no helper assigned
-        const avail = all.filter((o) => o.status === 'PENDING' && !o.helperId);
+        const isDedicatedHelper = user.helperType === 'dedicated';
+        const receiverRule = fallbackStore.pricingSettings.orderReceiverRule || 'commuter_first';
+        const radiusKm = fallbackStore.pricingSettings.helperRadiusKm || 3.5;
+
+        // Available (New tab): status PENDING, no helper assigned, matching helper type rule & within location radius
+        const avail = all.filter((o) => {
+          if (o.status !== 'PENDING' || o.helperId) return false;
+
+          // 1. Commuter vs Dedicated Receiver Rule Filter
+          if (receiverRule === 'commuter_first') {
+            if (isDedicatedHelper) {
+              // Dedicated rider ONLY sees order once routedToDedicated === true
+              if (!o.routedToDedicated) return false;
+            } else {
+              // Commuter helper sees order ONLY while !o.routedToDedicated. Once routed, it vanishes from commuter!
+              if (o.routedToDedicated) return false;
+            }
+          } else if (receiverRule === 'dedicated_first') {
+            if (isDedicatedHelper) {
+              if (o.routedToDedicated) return false;
+            } else {
+              if (!o.routedToDedicated) return false;
+            }
+          }
+
+          // 2. Dynamic Location-Based Radius Filter (within admin configured km radius of pickup/delivery)
+          if (!isHelperWithinOrderRadius(user.helperLocation, o, radiusKm)) {
+            return false;
+          }
+
+          return true;
+        });
         // Active: assigned to current helper and non-delivered/non-canceled
         const act = all.filter(
           (o) =>
@@ -276,16 +353,45 @@ export const HelperDashboard: React.FC = () => {
   };
 
   const filterByDate = (ordersList: Order[]) => {
-    if (!selectedDate) return ordersList;
+    if (!startDate && !endDate) return ordersList;
     return ordersList.filter((ord) => {
       const createdDate = getLocalDateString(ord.createdAt);
-      const deliveredDate = getLocalDateString(ord.deliveredAt);
-      return createdDate === selectedDate || deliveredDate === selectedDate;
+      const deliveredDate = getLocalDateString(ord.deliveredAt || ord.updatedAt);
+      const createdInRange =
+        (!startDate || (createdDate && createdDate >= startDate)) &&
+        (!endDate || (createdDate && createdDate <= endDate));
+      const deliveredInRange =
+        (!startDate || (deliveredDate && deliveredDate >= startDate)) &&
+        (!endDate || (deliveredDate && deliveredDate <= endDate));
+      return createdInRange || deliveredInRange;
     });
   };
 
-  const visibleAvailable = filterByDate(availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id)));
-  const filteredActiveOrders = filterByDate(activeOrders);
+  const handleSetPresetDate = (preset: 'today' | '7days' | '30days' | 'clear') => {
+    const today = new Date();
+    const todayStr = getLocalDateString(today.toISOString());
+    if (preset === 'today') {
+      setStartDate(todayStr);
+      setEndDate(todayStr);
+    } else if (preset === '7days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      setStartDate(getLocalDateString(d.toISOString()));
+      setEndDate(todayStr);
+    } else if (preset === '30days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      setStartDate(getLocalDateString(d.toISOString()));
+      setEndDate(todayStr);
+    } else {
+      setStartDate('');
+      setEndDate('');
+    }
+    setCompletedVisibleCount(PAGE_SIZE);
+  };
+
+  const visibleAvailable = availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id));
+  const filteredActiveOrders = activeOrders;
   const filteredCompletedOrders = filterByDate(completedOrders);
 
   // Unviewed active orders = active orders whose IDs are NOT in viewedActiveOrderIds
@@ -347,6 +453,7 @@ export const HelperDashboard: React.FC = () => {
       return (
         <HelperActiveOrderView
           order={targetOrder}
+          helperLocation={user?.helperLocation}
           onBack={() => setSelectedOrderId(null)}
           onAccept={targetOrder.status === 'PENDING' ? handleAcceptOrder : undefined}
           activeOrdersCount={activeOrders.length}
@@ -356,101 +463,136 @@ export const HelperDashboard: React.FC = () => {
     }
   }
 
+  const isDedicatedHelper = user?.helperType === 'dedicated';
+
+  // Running Order Reminder Banner Component for New & Completed Tabs
+  const renderRunningOrderBanner = () => {
+    if (activeOrders.length === 0) return null;
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300 mb-3">
+        <div className="flex items-center space-x-3">
+          <div className="relative flex h-3 w-3 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+          </div>
+          <div>
+            <h4 className="font-extrabold text-xs text-amber-900">
+              আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
+            </h4>
+            <p className="text-[10px] text-amber-700 font-medium">
+              অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => setActiveTab('ACTIVE')}
+          className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-extrabold shadow-sm transition-all active:scale-95 shrink-0"
+        >
+          দেখুন
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-5 pb-24">
-      {/* Helper Workload Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-3xl p-5 text-white shadow-floating flex items-center space-x-4">
-        <div className="p-3 rounded-2xl bg-white/20 backdrop-blur-xs shrink-0">
-          <Bike className="w-6 h-6" />
-        </div>
-        <div>
-          <h3 className="font-bold text-sm leading-snug">
-            একসাথে {activeOrderLimit}টির বেশি অর্ডার অ্যাকসেপ্ট করতে পারবেন না।
-          </h3>
-          <p className="text-xs text-emerald-100 mt-1 font-medium">
-            প্রতিটি অর্ডার আন্তরিকতার সাথে ডেলিভারি দিন।
-          </p>
-        </div>
-      </div>
-
-      {/* Running Order Reminder Banner */}
-      {filteredActiveOrders.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300">
+      {/* Mandatory Location Permission Warning Banner if missing/denied */}
+      {locationPermissionDenied && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-md flex items-center justify-between gap-3 animate-in fade-in duration-300">
           <div className="flex items-center space-x-3">
-            <div className="relative flex h-3 w-3 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+            <div className="p-2.5 rounded-2xl bg-red-100 text-red-600 shrink-0">
+              <MapPin className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <h4 className="font-extrabold text-xs text-amber-900">
-                আপনার {filteredActiveOrders.length}টি অর্ডার রানিং আছে!
+              <h4 className="font-extrabold text-xs text-red-900">
+                লোকেশন পারমিশন বাধ্যতামূলক (Location Required)
               </h4>
-              <p className="text-[10px] text-amber-700 font-medium">
-                অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
+              <p className="text-[11px] text-red-700 font-medium leading-relaxed">
+                হেলপার মোডে থাকতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।
               </p>
             </div>
           </div>
-          {activeTab !== 'ACTIVE' && (
-            <button
-              onClick={() => setActiveTab('ACTIVE')}
-              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-extrabold shadow-sm transition-all active:scale-95 shrink-0"
-            >
-              দেখুন
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Date Filter Bar */}
-      <div className="bg-white border border-gray-100 p-3 rounded-2xl shadow-soft flex items-center justify-between gap-2">
-        <div className="flex items-center space-x-2 text-xs font-bold text-gray-700">
-          <div className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
-            <Calendar className="w-4 h-4" />
-          </div>
-          <span>তারিখ দিয়ে ফিল্টার:</span>
-        </div>
-        <div className="flex items-center space-x-2">
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => {
-              setSelectedDate(e.target.value);
-              setNewVisibleCount(PAGE_SIZE);
-              setActiveVisibleCount(PAGE_SIZE);
-              setCompletedVisibleCount(PAGE_SIZE);
-            }}
-            className="px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
-          />
-          {selectedDate && (
-            <button
-              onClick={() => {
-                setSelectedDate('');
-                setNewVisibleCount(PAGE_SIZE);
-                setActiveVisibleCount(PAGE_SIZE);
-                setCompletedVisibleCount(PAGE_SIZE);
-              }}
-              className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all flex items-center space-x-1 shrink-0"
-              title="Clear Date Filter"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>Clear</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Filter Active Badge Notification */}
-      {selectedDate && (
-        <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50/80 border border-emerald-200/60 px-3 py-1.5 rounded-xl flex items-center justify-between">
-          <span>📅 {selectedDate} তারিখের অর্ডারসমূহ দেখানো হচ্ছে</span>
           <button
-            onClick={() => setSelectedDate('')}
-            className="text-emerald-800 hover:underline font-extrabold"
+            type="button"
+            onClick={async () => {
+              const success = await captureHelperLocation();
+              if (!success) {
+                const p = fallbackStore.pricingSettings;
+                await showPermissionModal({
+                  permissionType: 'location',
+                  title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন বাধ্যতামূলক (Location Required)',
+                  message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোডে থাকতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।',
+                  onAllow: () => captureHelperLocation(),
+                  allowText: 'Allow Location',
+                });
+              }
+            }}
+            className="px-3.5 py-2 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-extrabold shadow-sm transition-all shrink-0"
           >
-            সব দেখুন
+            Allow Location
           </button>
         </div>
       )}
+
+      {/* Helper Profile & Status Card */}
+      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-blue-800 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
+        <div className="flex items-center justify-between gap-3 relative z-10">
+          <div className="flex items-center space-x-3">
+            <div className="p-3 rounded-2xl bg-white/20 backdrop-blur-md shrink-0">
+              <Bike className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-extrabold text-base leading-snug">
+                  {user?.displayName || 'Helper'}
+                </h3>
+                {user?.isEduVerified && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-black bg-blue-500/30 text-blue-100 px-2 py-0.5 rounded-full border border-blue-300/40">
+                    <CheckCircle2 className="w-3 h-3 text-blue-300" />
+                    <span>Verified Student</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <span
+                  className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                    isDedicatedHelper
+                      ? 'bg-purple-500/40 text-purple-100 border border-purple-300/40'
+                      : 'bg-emerald-500/40 text-emerald-100 border border-emerald-300/40'
+                  }`}
+                >
+                  {isDedicatedHelper ? '⚡ Dedicated Rider' : '🚲 Commuter Helper'}
+                </span>
+                <span className="text-[11px] font-bold text-blue-100 bg-blue-500/20 px-2 py-0.5 rounded-full border border-blue-300/30 inline-flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-blue-200" />
+                  <span>Radius: {fallbackStore.pricingSettings.helperRadiusKm || 3.5} km</span>
+                </span>
+                <span className="text-[11px] text-emerald-100 font-medium">
+                  (Max {activeOrderLimit} active)
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Upgrade to Dedicated Helper Banner for Commuter Helpers */}
+        {!isDedicatedHelper && (
+          <div className="mt-4 pt-3 border-t border-white/15 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-100">
+              <Award className="w-4 h-4 text-amber-300 shrink-0" />
+              <span>ডেডিকেটেড হেলপার হয়ে লাইভ ম্যাপ ও সব অর্ডার দ্রুত ডেলিভারি দিন।</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDedicatedAppModal(true)}
+              className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black rounded-xl shadow-md transition-transform active:scale-95 shrink-0"
+            >
+              আবেদন করুন
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Tabs */}
       <div className="flex space-x-2 bg-gray-100 p-1.5 rounded-2xl">
@@ -518,6 +660,9 @@ export const HelperDashboard: React.FC = () => {
       {/* ── NEW TAB ── */}
       {activeTab === 'NEW' && (
         <div className="space-y-3">
+          {/* Running Order Status Block (Inside New Tab) */}
+          {renderRunningOrderBanner()}
+
           {/* New orders notification banner — only when there are unseen items */}
           {newOrderIds.size > 0 && (
             <div className="flex items-center space-x-2 p-3 rounded-2xl bg-red-50 border border-red-200 shadow-sm animate-in fade-in duration-300">
@@ -536,10 +681,10 @@ export const HelperDashboard: React.FC = () => {
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
               <h4 className="font-bold text-gray-900 text-sm mb-1">
-                {selectedDate ? 'এই তারিখে কোনো রিকুয়েস্ট নেই' : 'এখন আশেপাশে কোনো নতুন request নেই'}
+                এখন আশেপাশে কোনো নতুন request নেই
               </h4>
               <p className="text-xs text-gray-500">
-                {selectedDate ? 'অন্য তারিখ বেছে নিন অথবা ফিল্টার ক্লিয়ার করুন।' : 'নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।'}
+                নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।
               </p>
             </div>
           ) : (
@@ -554,6 +699,7 @@ export const HelperDashboard: React.FC = () => {
                   activeOrderLimit={activeOrderLimit}
                   isNew={newOrderIds.has(ord.id)}
                   isFirstOrder={firstOrderIds.has(ord.id)}
+                  helperLocation={user?.helperLocation}
                 />
               ))}
               {hasMoreNew && (
@@ -567,9 +713,50 @@ export const HelperDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* Dedicated Helper Application Modal */}
+      {showDedicatedAppModal && (
+        <HelperApplicationModal onClose={() => setShowDedicatedAppModal(false)} />
+      )}
+
       {/* ── ACTIVE TAB ── */}
       {activeTab === 'ACTIVE' && (
         <div className="space-y-3">
+          {/* Map / Normal View Toggle (For Dedicated Helpers) */}
+          {isDedicatedHelper && (
+            <div className="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-gray-100 shadow-xs">
+              <span className="text-xs font-extrabold text-gray-700 flex items-center gap-1.5">
+                <Map className="w-4 h-4 text-emerald-600" />
+                <span>ভিউ নির্বাচন:</span>
+              </span>
+              <div className="flex items-center space-x-1 bg-gray-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('LIST')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    viewMode === 'LIST'
+                      ? 'bg-white text-emerald-800 shadow-xs font-black'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Normal View</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('MAP')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    viewMode === 'MAP'
+                      ? 'bg-emerald-600 text-white shadow-xs font-black'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Map className="w-3.5 h-3.5" />
+                  <span>Map View</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Banner for unviewed active orders */}
           {unviewedActiveCount > 0 && (
             <div className="flex items-center space-x-2 p-3 rounded-2xl bg-blue-50 border border-blue-200 shadow-sm animate-in fade-in duration-300">
@@ -587,9 +774,17 @@ export const HelperDashboard: React.FC = () => {
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <CheckCircle2 className="w-10 h-10 text-gray-300 mx-auto mb-2" />
               <h4 className="font-bold text-gray-900 text-sm">
-                {selectedDate ? 'এই তারিখে কোনো রানিং অর্ডার নেই' : 'কোনো রানিং অর্ডার নেই'}
+                কোনো রানিং অর্ডার নেই
               </h4>
             </div>
+          ) : isDedicatedHelper && viewMode === 'MAP' ? (
+            <DedicatedHelperMapView
+              orders={[]}
+              activeOrders={filteredActiveOrders}
+              helperLocation={user?.helperLocation}
+              onSelectOrder={(ord) => handleActiveOrderClick(ord.id)}
+              onToggleViewMode={() => setViewMode('LIST')}
+            />
           ) : (
             <div className="space-y-3">
               {filteredActiveOrders.slice(0, activeVisibleCount).map((ord) => (
@@ -616,11 +811,111 @@ export const HelperDashboard: React.FC = () => {
       {/* ── COMPLETED TAB ── */}
       {activeTab === 'COMPLETED' && (
         <div className="space-y-3">
+          {/* Running Order Status Block (Inside Completed Tab) */}
+          {renderRunningOrderBanner()}
+
+          {/* Date Filter Bar (Inside Completed Tab) */}
+          <div className="bg-white border border-gray-100 p-3.5 rounded-2xl shadow-soft space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center space-x-2 text-xs font-bold text-gray-700">
+                <div className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <span>তারিখ সীমা (Date Range):</span>
+              </div>
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={() => handleSetPresetDate('clear')}
+                  className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all flex items-center space-x-1 shrink-0"
+                  title="Clear Date Filter"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear</span>
+                </button>
+              )}
+            </div>
+
+            {/* Inputs grid for start date and end date */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 mb-1">থেকে (From)</label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    setCompletedVisibleCount(PAGE_SIZE);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 mb-1">পর্যন্ত (To)</label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    setCompletedVisibleCount(PAGE_SIZE);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Quick preset filter buttons */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-gray-100">
+              <span className="text-[10px] text-gray-400 font-bold mr-1">দ্রুত ফিল্টার:</span>
+              <button
+                type="button"
+                onClick={() => handleSetPresetDate('today')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                  startDate === getLocalDateString(new Date().toISOString()) && endDate === getLocalDateString(new Date().toISOString())
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                আজ
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetPresetDate('7days')}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all"
+              >
+                গত ৭ দিন
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetPresetDate('30days')}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all"
+              >
+                গত ৩০ দিন
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Active Badge Notification */}
+          {(startDate || endDate) && (
+            <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50/80 border border-emerald-200/60 px-3 py-1.5 rounded-xl flex items-center justify-between gap-2">
+              <span>
+                📅 {startDate || 'শুরু'} হতে {endDate || 'বর্তমান'} পর্যন্ত ({filteredCompletedOrders.length}টি)
+              </span>
+              <button
+                type="button"
+                onClick={() => handleSetPresetDate('clear')}
+                className="text-emerald-800 hover:underline font-extrabold shrink-0"
+              >
+                সব দেখুন
+              </button>
+            </div>
+          )}
+
           {filteredCompletedOrders.length === 0 ? (
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <Layers className="w-10 h-10 text-gray-300 mx-auto mb-2" />
               <h4 className="font-bold text-gray-900 text-sm">
-                {selectedDate ? 'এই তারিখে কোনো সম্পন্ন অর্ডার নেই' : 'কোনো সম্পন্ন অর্ডার নেই'}
+                {(startDate || endDate) ? 'এই সময়সীমার মধ্যে কোনো সম্পন্ন অর্ডার নেই' : 'কোনো সম্পন্ন অর্ডার নেই'}
               </h4>
             </div>
           ) : (

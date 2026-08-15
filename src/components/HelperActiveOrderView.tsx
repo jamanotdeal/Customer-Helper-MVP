@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Order, OrderStatus } from '@/types';
+import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateDeliveryFee } from '@/lib/pricing';
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
+import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 
 interface HelperActiveOrderViewProps {
   order: Order;
+  helperLocation?: LocationData & { updatedAt?: string };
   onBack: () => void;
   onAccept?: (orderId: string) => void;
   activeOrdersCount?: number;
@@ -17,6 +19,7 @@ interface HelperActiveOrderViewProps {
 
 export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   order,
+  helperLocation,
   onBack,
   onAccept,
   activeOrdersCount,
@@ -416,6 +419,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span className="font-semibold text-gray-900">Pickup Shop/Location:</span> {order.pickupLocation.address}
                 </p>
               )}
+            </div>
+          </div>
+
+          {/* 7. LIVE ROUTE REAL EARTH MAP */}
+          <div className="pt-3 border-t border-gray-100 space-y-2">
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
+              <Truck className="w-4 h-4 text-cyan-600" />
+              <span>Live Road Route Map (Real Earth View)</span>
+            </h4>
+            <div className="rounded-2xl overflow-hidden shadow-lg border border-slate-200">
+              <DedicatedHelperMapView
+                orders={[]}
+                activeOrders={[order]}
+                helperLocation={helperLocation}
+                onSelectOrder={() => {}}
+              />
             </div>
           </div>
         </div>

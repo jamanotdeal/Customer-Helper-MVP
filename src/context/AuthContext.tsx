@@ -16,10 +16,12 @@ interface AuthContextType {
   loading: boolean;
   activeMode: ActiveMode;
   setActiveMode: (mode: ActiveMode) => void;
+  enableCommuterHelperWithLocation: () => Promise<boolean>;
   loginWithGoogle: (roleOverride?: 'customer' | 'helper' | 'admin') => Promise<void>;
   logout: () => Promise<void>;
   submitHelperApplication: (appData: Omit<HelperApplication, 'id' | 'userId' | 'userName' | 'status' | 'createdAt'>) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
+  updateHelperLocation: (loc: { lat: number; lng: number; address?: string }) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -41,6 +43,26 @@ const isUserSuperAdminEmail = (email?: string | null): boolean => {
 
 
 
+const checkEduVerified = (email?: string | null): boolean => {
+  if (!email) return false;
+  const domains = fallbackStore.pricingSettings.eduEmailDomains || ['@diu.edu.bd'];
+  const lower = email.trim().toLowerCase();
+  return domains.some((d) => lower.endsWith(d.toLowerCase().trim()));
+};
+
+export async function checkLocationPermissionState(): Promise<'granted' | 'denied' | 'prompt'> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return 'denied';
+  if ('permissions' in navigator && navigator.permissions && typeof navigator.permissions.query === 'function') {
+    try {
+      const result = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+      return result.state;
+    } catch (_) {
+      // Permission API for geolocation might throw on Safari/iOS WebKit
+    }
+  }
+  return 'prompt';
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -49,6 +71,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const buildProfile = (fbUser: import('firebase/auth').User, savedMode: ActiveMode): UserProfile => {
     const isAdmin = isUserAdminEmail(fbUser.email);
     const isSuperAdmin = isUserSuperAdminEmail(fbUser.email);
+    const isEduVerified = checkEduVerified(fbUser.email);
     let profile = fallbackStore.users.get(fbUser.uid);
 
     if (!profile) {
@@ -59,21 +82,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         photoURL: fbUser.photoURL || undefined,
         role: isAdmin ? 'admin' : 'customer',
         isHelper: false,
+        helperType: 'commuter',
+        isEduVerified: isEduVerified,
         isAdmin: isAdmin,
         isSuperAdmin: isSuperAdmin,
         lastActiveMode: isAdmin ? 'admin' : savedMode,
         createdAt: new Date().toISOString(),
       };
       fallbackStore.saveUser(profile);
-    } else if (isAdmin && (!profile.isAdmin || profile.role !== 'admin' || (isSuperAdmin && !profile.isSuperAdmin))) {
-      profile = {
-        ...profile,
-        isAdmin: true,
-        isSuperAdmin: isSuperAdmin,
-        role: 'admin',
-        lastActiveMode: 'admin',
-      };
-      fallbackStore.saveUser(profile);
+    } else {
+      let needsSave = false;
+      if (isAdmin && (!profile.isAdmin || profile.role !== 'admin' || (isSuperAdmin && !profile.isSuperAdmin))) {
+        profile = {
+          ...profile,
+          isAdmin: true,
+          isSuperAdmin: isSuperAdmin,
+          role: 'admin',
+          lastActiveMode: 'admin',
+        };
+        needsSave = true;
+      }
+      if (profile.isEduVerified !== isEduVerified) {
+        profile = {
+          ...profile,
+          isEduVerified: isEduVerified,
+        };
+        needsSave = true;
+      }
+      if (needsSave) {
+        fallbackStore.saveUser(profile);
+      }
     }
     return profile;
   };
@@ -146,13 +184,112 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const enableCommuterHelperWithLocation = async (): Promise<boolean> => {
+    if (!user) return false;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return false;
+
+    // Check if permission was already granted in browser
+    const permState = await checkLocationPermissionState();
+
+    if (permState === 'granted') {
+      const updatedUser: UserProfile = {
+        ...user,
+        isHelper: true,
+        helperType: user.helperType || 'commuter',
+        lastActiveMode: 'helper',
+      };
+      setUser(updatedUser);
+      fallbackStore.saveUser(updatedUser);
+      setActiveModeState('helper');
+      saveActiveMode('helper');
+
+      // Refresh position in background non-blocking
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          updateHelperLocation({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          });
+        },
+        (err) => console.warn('[AuthContext] Background location refresh note:', err?.message),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+      return true;
+    }
+
+    // Permission state is 'prompt' or unknown — trigger geolocation request
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const updatedUser: UserProfile = {
+            ...user,
+            isHelper: true,
+            helperType: user.helperType || 'commuter',
+            lastActiveMode: 'helper',
+            helperLocation: {
+              ...(user.helperLocation || { address: 'Current Position' }),
+              lat,
+              lng,
+              updatedAt: new Date().toISOString(),
+            },
+          };
+          setUser(updatedUser);
+          fallbackStore.saveUser(updatedUser);
+          setActiveModeState('helper');
+          saveActiveMode('helper');
+          resolve(true);
+        },
+        (err) => {
+          console.warn('[AuthContext] Commuter helper location permission note:', err?.message);
+          if (err.code === err.PERMISSION_DENIED) {
+            resolve(false);
+          } else {
+            // For non-denial errors (timeout/unavailable), allow helper mode switch
+            const updatedUser: UserProfile = {
+              ...user,
+              isHelper: true,
+              helperType: user.helperType || 'commuter',
+              lastActiveMode: 'helper',
+            };
+            setUser(updatedUser);
+            fallbackStore.saveUser(updatedUser);
+            setActiveModeState('helper');
+            saveActiveMode('helper');
+            resolve(true);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    });
+  };
+
   const setActiveMode = (mode: ActiveMode) => {
+    if (mode === 'helper' && user && !user.isHelper) {
+      enableCommuterHelperWithLocation();
+      return;
+    }
     setActiveModeState(mode);
     saveActiveMode(mode);
     if (user) {
-      const updated = { ...user, lastActiveMode: mode };
+      const updated = { ...user, lastActiveMode: mode, isHelper: mode === 'helper' ? true : user.isHelper };
       setUser(updated);
       fallbackStore.saveUser(updated);
+
+      // When switching to helper mode, immediately ask location permission & update position
+      if (mode === 'helper' && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            updateHelperLocation({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+            });
+          },
+          (err) => console.warn('[AuthContext] Helper mode location permission note:', err?.message),
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      }
     }
   };
 
@@ -207,7 +344,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(demoProfile);
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = demoProfile.uid;
-        // Initialize FCM push token for this device (async, non-blocking)
+        // Initialize FCM push token for this device & ask permission (async, non-blocking)
         requestBrowserNotificationPermission().then((granted) => {
           if (granted) {
             initFcmMessaging(demoProfile.uid).catch(() => {});
@@ -226,6 +363,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const savedMode = getSavedActiveMode();
         const profile = buildProfile(res.user, savedMode);
         applyProfile(profile, savedMode);
+
+        // Ask browser notification permission immediately after login
+        requestBrowserNotificationPermission().then((granted) => {
+          if (granted) {
+            initFcmMessaging(res.user.uid).catch(() => {});
+          }
+        });
       }
       setLoading(false);
     } catch (err: any) {
@@ -285,6 +429,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fallbackStore.saveUser(updated);
   };
 
+  const updateHelperLocation = (loc: { lat: number; lng: number; address?: string }) => {
+    if (!user) return;
+    const helperLoc = {
+      ...loc,
+      address: loc.address || user.helperLocation?.address || 'Current Position',
+      updatedAt: new Date().toISOString(),
+    };
+    const updated = {
+      ...user,
+      helperLocation: helperLoc,
+    };
+    setUser(updated);
+    fallbackStore.saveUser(updated);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -292,10 +451,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         activeMode,
         setActiveMode,
+        enableCommuterHelperWithLocation,
         loginWithGoogle,
         logout,
         submitHelperApplication,
         updateCustomerPreferences,
+        updateHelperLocation,
       }}
     >
       {children}
