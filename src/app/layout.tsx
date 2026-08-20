@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
-    statusBarStyle: 'default',
+    statusBarStyle: 'black-translucent',
     title: 'Jamanot',
   },
   icons: {
@@ -24,6 +24,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // viewport-fit=cover: use the full iPhone screen including the notch/home indicator
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({
@@ -36,6 +38,14 @@ export default function RootLayout({
       <head>
         <link rel="icon" href="/pwa-logo.png" />
         <link rel="apple-touch-icon" href="/pwa-logo.png" />
+        {/* Preconnect to speed up Firebase & Google Fonts */}
+        <link rel="preconnect" href="https://firestore.googleapis.com" />
+        <link rel="preconnect" href="https://firebase.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* Android status bar style */}
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
       <body className="antialiased bg-gray-100 min-h-screen">
         <AuthProvider>
@@ -67,3 +77,4 @@ export default function RootLayout({
     </html>
   );
 }
+

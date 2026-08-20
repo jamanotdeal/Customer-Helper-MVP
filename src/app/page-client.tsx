@@ -9,7 +9,14 @@ import { HelperDashboard } from '@/components/HelperDashboard';
 import { AdminDashboard } from '@/components/AdminDashboard';
 import { HelperWallet } from '@/components/HelperWallet';
 import { NotificationDrawer } from '@/components/NotificationDrawer';
-import { requestBrowserNotificationPermission, fallbackStore } from '@/lib/firebase';
+import {
+  requestNativePushPermission,
+  registerNativePush,
+  setupAppListeners,
+  setNativeStatusBar,
+  isNativeApp,
+} from '@/lib/native';
+import { saveFcmToken, fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
 
 export default function PageClient() {
@@ -18,12 +25,13 @@ export default function PageClient() {
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // iOS "Add to Home Screen" install banner
+  // iOS "Add to Home Screen" install banner (only shown in browser, not in native app)
   const [showIosInstallBanner, setShowIosInstallBanner] = useState(false);
 
-  // Detect iOS Safari standalone check (only show if not already installed as PWA)
+  // Detect iOS Safari standalone check (only show in browser PWA mode)
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (isNativeApp()) return; // Already running as native app — no need for install prompt
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const isInStandaloneMode =
       ('standalone' in window.navigator && (window.navigator as any).standalone === true) ||
@@ -34,34 +42,62 @@ export default function PageClient() {
     }
   }, []);
 
-  // Auto-register service worker & request browser native push notification permission
+  // Native status bar color (emerald green matching the header)
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    setNativeStatusBar('dark', '#059669');
+  }, []);
+
+  // Setup native app lifecycle listeners (Android back button, foreground/background events)
+  useEffect(() => {
+    const cleanup = setupAppListeners(() => {
+      // Android hardware back button handler
+      if (showNotifications) {
+        setShowNotifications(false);
+        return true; // Handled — don't exit app
+      }
+      return false; // Not handled — let Capacitor decide (exit or go back in history)
+    });
+    return cleanup;
+  }, [showNotifications]);
+
+  // Auto-register service worker & request push notification permission
+  useEffect(() => {
+    // Register SW only in browser/PWA mode (SW doesn't run in Capacitor WebView)
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && !isNativeApp()) {
       navigator.serviceWorker
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           console.log('ServiceWorker registered:', reg.scope);
-          // Force SW update check so latest version is always active
           reg.update().catch(() => {});
         })
         .catch((err) => console.warn('ServiceWorker registration note:', err));
     }
 
-    // Automatically ask notification permission on login/load if not granted yet.
     if (user) {
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission !== 'granted') {
+      // Request push permission via native API (OS-level) or browser fallback
+      requestNativePushPermission().then((granted) => {
+        if (granted && isNativeApp()) {
+          // Native app: register FCM push token via Capacitor plugin
+          registerNativePush(
+            (token) => {
+              // Save the native device token to Firestore so server can push to this device
+              saveFcmToken(user.uid, token).catch(() => {});
+            }
+          );
+        } else if (!granted && !isNativeApp()) {
+          // Browser fallback: show custom permission modal if OS permission not granted
           const p = fallbackStore.pricingSettings;
           showPermissionModal({
             permissionType: 'notification',
             title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
-            message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
-            onAllow: () => requestBrowserNotificationPermission(),
+            message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+            onAllow: async () => { await requestNativePushPermission(); return true; },
             allowText: 'Allow Notification',
           });
         }
-      }
+      });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Strict role view guarding
@@ -94,13 +130,13 @@ export default function PageClient() {
     user && (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel')
   );
 
-  // While Firebase auth / redirect result is still resolving, show a skeleton layout.
-  // Mirrors the real app structure so there's no jarring full-page loading screen.
+  // While Firebase auth is resolving, show a skeleton layout (mirrors real layout to avoid CLS)
   if (loading) {
     return (
       <div className="mobile-container relative flex flex-col min-h-screen bg-gray-50">
         {/* Header Skeleton */}
-        <div className="sticky top-0 z-40 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+        <div className="sticky top-0 z-40 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between"
+          style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
           <div className="w-28 h-6 rounded-xl bg-gray-200 animate-pulse" />
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
@@ -112,13 +148,11 @@ export default function PageClient() {
         <main className="flex-1 w-full p-4 pb-20 space-y-4">
           {/* Form Card Skeleton */}
           <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
-            {/* Heading lines */}
             <div className="space-y-2 text-center">
               <div className="w-40 h-5 rounded-xl bg-gray-200 animate-pulse mx-auto" />
               <div className="w-56 h-3.5 rounded-lg bg-gray-100 animate-pulse mx-auto" />
               <div className="w-44 h-3 rounded-lg bg-gray-100 animate-pulse mx-auto" />
             </div>
-            {/* CTA button skeleton */}
             <div className="w-full h-12 rounded-2xl bg-emerald-100 animate-pulse" />
           </div>
 
@@ -148,7 +182,8 @@ export default function PageClient() {
         </main>
 
         {/* Bottom Nav Skeleton */}
-        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-100 px-6 py-2 flex items-center justify-around z-50">
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-50"
+          style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
           {[1, 2].map((i) => (
             <div key={i} className="flex flex-col items-center space-y-1">
               <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
@@ -165,7 +200,7 @@ export default function PageClient() {
       {/* Header */}
       <AppHeader onOpenNotifications={() => setShowNotifications(true)} />
 
-      {/* iOS "Add to Home Screen" install banner */}
+      {/* iOS "Add to Home Screen" install banner (only shown in browser PWA mode) */}
       {showIosInstallBanner && (
         <div
           style={{
@@ -210,7 +245,6 @@ export default function PageClient() {
             ✕
           </button>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-            {/* Bell icon */}
             <div style={{
               width: '44px', height: '44px', borderRadius: '12px',
               background: 'linear-gradient(135deg, #10b981, #059669)',

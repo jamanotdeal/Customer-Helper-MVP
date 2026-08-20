@@ -1,27 +1,10 @@
 import React from 'react';
 import PageClient from './page-client';
-import { Metadata } from 'next';
-import { getSEOMetadataForService } from '@/lib/seo';
 
-interface Props {
-  searchParams: { service?: string };
-}
-
-export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
-  const service = searchParams.service;
-  const { title, description, keywords } = getSEOMetadataForService(service);
-
-  return {
-    title,
-    description,
-    keywords,
-    openGraph: {
-      title,
-      description,
-      type: 'website',
-    },
-  };
-}
+// Required for Next.js static export (Capacitor):
+// This page is 100% client-rendered via PageClient.
+// Metadata is handled statically in layout.tsx — no dynamic searchParams needed.
+export const dynamic = 'force-static';
 
 export default function Page() {
   return <PageClient />;

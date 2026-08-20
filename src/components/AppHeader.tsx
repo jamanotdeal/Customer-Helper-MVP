@@ -38,7 +38,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
 
   return (
     <>
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-sm px-4 py-3">
+      <header
+        className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-sm px-4 py-3"
+        style={{
+          // Respect iOS notch / Dynamic Island
+          paddingTop: 'max(12px, env(safe-area-inset-top))',
+        }}
+      >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           {/* Logo & Tagline */}
           <div className="flex items-center space-x-3">
