@@ -10,6 +10,8 @@ import {
   onAuthStateChanged,
 } from 'firebase/auth';
 import { getSavedActiveMode, saveActiveMode } from '@/lib/storage';
+import { getNativePosition } from '@/lib/native';
+
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -209,12 +211,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const enableCommuterHelperWithLocation = async (): Promise<boolean> => {
     if (!user) return false;
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return false;
 
-    // Check if permission was already granted in browser
-    const permState = await checkLocationPermissionState();
+    try {
+      // Use native GPS for maximum accuracy — falls back to browser geolocation on web
+      const pos = await getNativePosition({ enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
 
-    if (permState === 'granted') {
+      const updatedUser: UserProfile = {
+        ...user,
+        isHelper: true,
+        helperType: user.helperType || 'commuter',
+        lastActiveMode: 'helper',
+        helperLocation: {
+          ...(user.helperLocation || { address: 'Current Position' }),
+          lat: pos.lat,
+          lng: pos.lng,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      setUser(updatedUser);
+      fallbackStore.saveUser(updatedUser);
+      setActiveModeState('helper');
+      saveActiveMode('helper');
+      return true;
+    } catch (err: any) {
+      console.warn('[AuthContext] Commuter helper location error:', err?.message);
+      // If permission denied, return false so caller can show the permission modal
+      if (err?.message?.includes('denied') || err?.code === 1) {
+        return false;
+      }
+      // For non-denial errors (timeout/unavailable), still allow helper mode switch
       const updatedUser: UserProfile = {
         ...user,
         isHelper: true,
@@ -225,67 +250,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(updatedUser);
       setActiveModeState('helper');
       saveActiveMode('helper');
-
-      // Refresh position in background non-blocking
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          updateHelperLocation({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-          });
-        },
-        (err) => console.warn('[AuthContext] Background location refresh note:', err?.message),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
       return true;
     }
-
-    // Permission state is 'prompt' or unknown — trigger geolocation request
-    return new Promise((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
-          const updatedUser: UserProfile = {
-            ...user,
-            isHelper: true,
-            helperType: user.helperType || 'commuter',
-            lastActiveMode: 'helper',
-            helperLocation: {
-              ...(user.helperLocation || { address: 'Current Position' }),
-              lat,
-              lng,
-              updatedAt: new Date().toISOString(),
-            },
-          };
-          setUser(updatedUser);
-          fallbackStore.saveUser(updatedUser);
-          setActiveModeState('helper');
-          saveActiveMode('helper');
-          resolve(true);
-        },
-        (err) => {
-          console.warn('[AuthContext] Commuter helper location permission note:', err?.message);
-          if (err.code === err.PERMISSION_DENIED) {
-            resolve(false);
-          } else {
-            // For non-denial errors (timeout/unavailable), allow helper mode switch
-            const updatedUser: UserProfile = {
-              ...user,
-              isHelper: true,
-              helperType: user.helperType || 'commuter',
-              lastActiveMode: 'helper',
-            };
-            setUser(updatedUser);
-            fallbackStore.saveUser(updatedUser);
-            setActiveModeState('helper');
-            saveActiveMode('helper');
-            resolve(true);
-          }
-        },
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    });
   };
 
   const setActiveMode = (mode: ActiveMode) => {
@@ -300,18 +266,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(updated);
       fallbackStore.saveUser(updated);
 
-      // When switching to helper mode, immediately ask location permission & update position
-      if (mode === 'helper' && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            updateHelperLocation({
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-            });
-          },
-          (err) => console.warn('[AuthContext] Helper mode location permission note:', err?.message),
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
+      // When switching to helper mode, get native GPS location for maximum accuracy
+      if (mode === 'helper') {
+        getNativePosition({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
+          .then((pos) => {
+            updateHelperLocation({ lat: pos.lat, lng: pos.lng });
+          })
+          .catch((err) => console.warn('[AuthContext] Helper mode location note:', err?.message));
       }
     }
   };
