@@ -56,3 +56,42 @@ export const saveActiveMode = (mode: ActiveMode) => {
   if (typeof window === 'undefined') return;
   localStorage.setItem(KEYS.LAST_ACTIVE_MODE, mode);
 };
+
+// ── Per-category pickup location ─────────────────────────────────────────────
+
+const servicePickupKey = (service: string) =>
+  `jamanot_pickup_loc_${service.trim().toLowerCase().replace(/\s+/g, '_')}`;
+
+export const getServicePickupLocation = (service: string): LocationData | null => {
+  if (typeof window === 'undefined' || !service) return null;
+  const raw = localStorage.getItem(servicePickupKey(service));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+export const saveServicePickupLocation = (service: string, loc: LocationData) => {
+  if (typeof window === 'undefined' || !service) return;
+  localStorage.setItem(servicePickupKey(service), JSON.stringify(loc));
+};
+
+// ── Map guide overlay show count ─────────────────────────────────────────────
+// modalType: 'pickup' | 'delivery'
+
+const mapGuideKey = (modalType: string) => `jamanot_map_guide_count_${modalType}`;
+
+export const getMapGuideShowCount = (modalType: string): number => {
+  if (typeof window === 'undefined') return 0;
+  return parseInt(localStorage.getItem(mapGuideKey(modalType)) || '0', 10);
+};
+
+export const incrementMapGuideShowCount = (modalType: string): number => {
+  if (typeof window === 'undefined') return 0;
+  const next = getMapGuideShowCount(modalType) + 1;
+  localStorage.setItem(mapGuideKey(modalType), String(next));
+  return next;
+};
+

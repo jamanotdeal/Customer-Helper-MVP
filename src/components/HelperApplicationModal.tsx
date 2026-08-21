@@ -1,27 +1,49 @@
-'use client';
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { X, Bike, Check, AlertCircle } from 'lucide-react';
+import { X, Bike, Check, AlertCircle, Trash2, Edit3 } from 'lucide-react';
+import { fallbackStore } from '@/lib/firebase';
+import { HelperApplication } from '@/types';
 
 interface HelperApplicationModalProps {
   onClose: () => void;
 }
 
 export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ onClose }) => {
-  const { user, submitHelperApplication } = useAuth();
-  const [legalName, setLegalName] = useState(user?.displayName || '');
-  const [nid, setNid] = useState('');
-  const [email, setEmail] = useState(user?.email || '');
-  const [whatsapp, setWhatsapp] = useState(user?.alternativePhone || '');
-  const [fbProfile, setFbProfile] = useState('');
-  const [hasSmartphone, setHasSmartphone] = useState(true);
-  const [hasCycle, setHasCycle] = useState(false);
-  const [hasBike, setHasBike] = useState(true);
+  const { user, submitHelperApplication, updateHelperApplication, cancelHelperApplication } = useAuth();
+  
+  // Check if user has an existing PENDING application
+  const existingPendingApp = user
+    ? Array.from(fallbackStore.helperApplications.values()).find(
+        (app) => app.userId === user.uid && app.status === 'PENDING'
+      )
+    : undefined;
+
+  const [legalName, setLegalName] = useState(existingPendingApp?.legalName || user?.displayName || '');
+  const [nid, setNid] = useState(existingPendingApp?.nid || '');
+  const [email, setEmail] = useState(existingPendingApp?.email || user?.email || '');
+  const [whatsapp, setWhatsapp] = useState(existingPendingApp?.whatsapp || user?.alternativePhone || '');
+  const [fbProfile, setFbProfile] = useState(existingPendingApp?.fbProfile || '');
+  const [hasSmartphone, setHasSmartphone] = useState(existingPendingApp?.hasSmartphone ?? true);
+  const [hasCycle, setHasCycle] = useState(existingPendingApp?.hasCycle ?? false);
+  const [hasBike, setHasBike] = useState(existingPendingApp?.hasBike ?? true);
   
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    if (existingPendingApp) {
+      setLegalName(existingPendingApp.legalName);
+      setNid(existingPendingApp.nid);
+      setEmail(existingPendingApp.email || user?.email || '');
+      setWhatsapp(existingPendingApp.whatsapp);
+      setFbProfile(existingPendingApp.fbProfile);
+      setHasSmartphone(existingPendingApp.hasSmartphone);
+      setHasCycle(existingPendingApp.hasCycle);
+      setHasBike(existingPendingApp.hasBike);
+    }
+  }, [existingPendingApp, user]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,20 +60,49 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
     try {
       setSubmitting(true);
       setError('');
-      await submitHelperApplication({
-        legalName: legalName.trim(),
-        nid: nid.trim(),
-        email: email.trim(),
-        whatsapp: whatsapp.trim(),
-        fbProfile: fbProfile.trim(),
-        hasSmartphone,
-        hasCycle,
-        hasBike,
-        applicationType: 'dedicated',
-      });
+      if (existingPendingApp) {
+        await updateHelperApplication(existingPendingApp.id, {
+          legalName: legalName.trim(),
+          nid: nid.trim(),
+          email: email.trim(),
+          whatsapp: whatsapp.trim(),
+          fbProfile: fbProfile.trim(),
+          hasSmartphone,
+          hasCycle,
+          hasBike,
+        });
+        setSuccessMessage('আপনার আবেদনের তথ্য সফলভাবে আপডেট করা হয়েছে!');
+      } else {
+        await submitHelperApplication({
+          legalName: legalName.trim(),
+          nid: nid.trim(),
+          email: email.trim(),
+          whatsapp: whatsapp.trim(),
+          fbProfile: fbProfile.trim(),
+          hasSmartphone,
+          hasCycle,
+          hasBike,
+          applicationType: 'dedicated',
+        });
+        setSuccessMessage('আবেদন সফলভাবে জমা হয়েছে!');
+      }
       setSubmitted(true);
     } catch (err) {
-      setError('আবেদন জমা দেওয়া যায়নি। আবার চেষ্টা করুন।');
+      setError('আবেদন জমা বা আপডেট করা যায়নি। আবার চেষ্টা করুন।');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelApplication = async () => {
+    if (!existingPendingApp) return;
+    try {
+      setSubmitting(true);
+      await cancelHelperApplication(existingPendingApp.id);
+      setSuccessMessage('আপনার আবেদন বাতিল করা হয়েছে। আপনি চাইলে পুনরায় আবেদন করতে পারেন।');
+      setSubmitted(true);
+    } catch (err) {
+      setError('আবেদন বাতিল করা যায়নি।');
     } finally {
       setSubmitting(false);
     }
@@ -73,10 +124,10 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
               <Check className="w-8 h-8" />
             </div>
             <h3 className="text-xl font-bold text-gray-900 mb-2">
-              আবেদন সফলভাবে জমা হয়েছে!
+              {successMessage || 'আবেদন সফলভাবে সম্পন্ন হয়েছে!'}
             </h3>
             <p className="text-sm text-gray-600 mb-6">
-              আপনার ডেডিকেটেড হেলপার আবেদনটি এডমিন রিভিউ করছেন। অনুমোদন সম্পন্ন হলে আপনার হেলপার অ্যাকাউন্ট ডেডিকেটেড রাইডারে উন্নীত হবে।
+              আপনার ডেডিকেটেড হেলপার আবেদনের আপডেটটি অ্যাডমিন রিভিউ করছেন।
             </p>
             <button
               onClick={onClose}
@@ -92,10 +143,26 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
                 <Bike className="w-6 h-6 text-purple-700" />
               </div>
               <div>
-                <h3 className="text-lg font-extrabold text-gray-900">Become a Dedicated Helper</h3>
-                <p className="text-xs text-purple-700 font-semibold">ফুল-টাইম বা ডেডিকেটেড রাইডার হিসেবে সার্ভিস দেওয়ার আবেদন</p>
+                <h3 className="text-lg font-extrabold text-gray-900">
+                  {existingPendingApp ? 'Update Dedicated Helper Application' : 'Become a Dedicated Helper'}
+                </h3>
+                <p className="text-xs text-purple-700 font-semibold">
+                  {existingPendingApp ? 'আপনার পেন্ডিং আবেদনের তথ্য সংশোধন বা বাতিল করতে পারেন' : 'ফুল-টাইম বা ডেডিকেটেড রাইডার হিসেবে সার্ভিস দেওয়ার আবেদন'}
+                </p>
               </div>
             </div>
+
+            {existingPendingApp && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                  <Edit3 className="w-4 h-4 text-amber-700" />
+                  <span>পেন্ডিং আবেদন ইতিমধ্যে জমা দেওয়া আছে</span>
+                </div>
+                <p>
+                  আপনার একটি আবেদন অ্যাডমিনের রিভিউয়ের জন্য জমা রয়েছে। আপনি চাইলে তথ্য আপডেট করতে পারেন অথবা বর্তমান আবেদনটি বাতিল করতে পারেন।
+                </p>
+              </div>
+            )}
 
             {error && (
               <div className="p-3 rounded-2xl bg-red-50 text-red-700 text-xs font-semibold flex items-center space-x-2">
@@ -206,17 +273,30 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
               </label>
             </div>
 
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full py-3.5 mt-2 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-sm shadow-lg shadow-purple-500/20 active:scale-98 transition-all flex items-center justify-center space-x-2"
-            >
-              {submitting ? (
-                <span>আবেদন জমা হচ্ছে...</span>
-              ) : (
-                <span>Submit Dedicated Helper Application</span>
+            <div className="flex gap-2 pt-2">
+              {existingPendingApp && (
+                <button
+                  type="button"
+                  onClick={handleCancelApplication}
+                  disabled={submitting}
+                  className="flex-1 py-3.5 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs flex items-center justify-center space-x-1.5 transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>আবেদন বাতিল</span>
+                </button>
               )}
-            </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex-1 py-3.5 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-lg shadow-purple-500/20 active:scale-98 transition-all flex items-center justify-center space-x-2"
+              >
+                {submitting ? (
+                  <span>জমা হচ্ছে...</span>
+                ) : (
+                  <span>{existingPendingApp ? 'Update Application' : 'Submit Application'}</span>
+                )}
+              </button>
+            </div>
           </form>
         )}
       </div>

@@ -13,7 +13,15 @@ import Link from 'next/link';
 
 import { OrderSuccessPwaModal } from './PWAInstallModal';
 
-export const CustomerHome: React.FC = () => {
+interface CustomerHomeProps {
+  initialSelectedOrderId?: string | null;
+  onClearInitialOrder?: () => void;
+}
+
+export const CustomerHome: React.FC<CustomerHomeProps> = ({
+  initialSelectedOrderId,
+  onClearInitialOrder,
+}) => {
   const { user, loginWithGoogle } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
@@ -21,6 +29,15 @@ export const CustomerHome: React.FC = () => {
   const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
   const [createdOrderForSuccessModal, setCreatedOrderForSuccessModal] = useState<Order | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
+
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      setSelectedOrderId(initialSelectedOrderId);
+      if (onClearInitialOrder) {
+        onClearInitialOrder();
+      }
+    }
+  }, [initialSelectedOrderId, onClearInitialOrder]);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loaderRef = useRef<HTMLDivElement | null>(null);

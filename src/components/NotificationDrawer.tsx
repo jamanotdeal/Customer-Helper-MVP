@@ -14,12 +14,14 @@ interface NotificationDrawerProps {
 export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose, onSelectOrder }) => {
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
     const syncNotifs = () => {
       if (user) {
-        const list = fallbackStore.notifications.get(user.uid) || [];
-        setNotifications([...list]);
+        const list = [...(fallbackStore.notifications.get(user.uid) || [])];
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setNotifications(list);
       }
     };
     syncNotifs();
@@ -34,9 +36,12 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
     fallbackStore.markNotificationsRead(user.uid);
   };
 
+  const visibleNotifications = notifications.slice(0, visibleCount);
+  const hasMore = notifications.length > visibleCount;
+
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex justify-end"
+      className="fixed inset-0 z-[10010] bg-black/50 backdrop-blur-xs flex justify-end"
       onClick={onClose}
     >
       <div
@@ -78,7 +83,7 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
             </div>
           ) : (
             <div className="space-y-3">
-              {notifications.map((n) => (
+              {visibleNotifications.map((n) => (
                 <div
                   key={n.id}
                   onClick={() => {
@@ -102,6 +107,16 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
                   <p className="text-xs text-gray-600 leading-snug">{n.body}</p>
                 </div>
               ))}
+
+              {hasMore && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((prev) => prev + 10)}
+                  className="w-full py-3 rounded-2xl border border-gray-200 hover:bg-gray-50 text-xs font-extrabold text-emerald-700 bg-white transition-all shadow-xs active:scale-98 flex items-center justify-center space-x-1"
+                >
+                  <span>Load More Notifications</span>
+                </button>
+              )}
             </div>
           )}
         </div>

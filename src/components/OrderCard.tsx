@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye } from 'lucide-react';
-import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit } from 'lucide-react';
+import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 
 interface OrderCardProps {
   order: Order;
@@ -9,6 +9,8 @@ interface OrderCardProps {
   showDuration?: boolean;
   /** When true, card shows a "New" badge and timer; clicking marks as viewed */
   isNew?: boolean;
+  /** Optional sequence index for active orders list (e.g. 1, 2, 3) */
+  orderIndex?: number;
   /** When true, shows customer-optimised layout (no delivery location, created time, View Details button) */
   customerView?: boolean;
   /** When true, shows concise helper layout with only: what's needed, timer, status, and view details */
@@ -103,6 +105,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   onClick,
   showDuration = false,
   isNew = false,
+  orderIndex,
   customerView = false,
   helperActiveView = false,
 }) => {
@@ -111,6 +114,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const BadgeIcon = badge.icon;
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
   const endTimestamp = order.deliveredAt || order.cancelledAt || order.updatedAt;
+  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -131,32 +135,63 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
     : 'No items listed';
 
+  // Dynamic card container classes for helper views
+  const getHelperCardContainerStyle = () => {
+    if (customerView) return `${accent.border} ${accent.bg}`;
+    if (urgency.urgencyLevel === 'red') {
+      return 'bg-gradient-to-br from-red-100/90 via-rose-50 to-red-100/90 border-2 border-red-400 shadow-md shadow-red-100 ring-2 ring-red-300/80';
+    }
+    if (urgency.urgencyLevel === 'yellow') {
+      return 'bg-gradient-to-br from-amber-100/90 via-yellow-50 to-amber-100/90 border-2 border-amber-400 shadow-sm shadow-amber-100 ring-2 ring-amber-300/80';
+    }
+    if (isNew) {
+      return 'border-blue-300 bg-gradient-to-br from-white to-blue-50/50 ring-2 ring-blue-200';
+    }
+    return `${accent.border} ${accent.bg}`;
+  };
+
+  const getHelperTopBarColor = () => {
+    if (customerView) return accent.bar;
+    if (urgency.urgencyLevel === 'red') return 'bg-red-600 animate-pulse';
+    if (urgency.urgencyLevel === 'yellow') return 'bg-amber-500';
+    if (isNew) return 'bg-blue-500';
+    return accent.bar;
+  };
+
   if (helperActiveView) {
     return (
       <div
         onClick={onClick}
-        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${
-          isNew
-            ? 'border-blue-300 bg-gradient-to-br from-white to-blue-50/50 ring-2 ring-blue-200'
-            : `${accent.border} ${accent.bg}`
-        }`}
+        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${getHelperCardContainerStyle()}`}
       >
         {/* Status accent bar at top */}
-        <div className={`h-1.5 w-full ${isNew ? 'bg-blue-500' : accent.bar}`} />
+        <div className={`h-1.5 w-full ${getHelperTopBarColor()}`} />
 
         <div className="p-4 space-y-3">
-          {/* Header row: Service needed & Timer/Status */}
-          <div className="flex items-center justify-between">
-            <div className="min-w-0 flex-1 pr-2">
-              <h3 className="font-extrabold text-gray-900 text-sm leading-tight truncate">
-                {order.service || order.title || 'Service Needed'}
-              </h3>
-            </div>
+          {/* Top metadata row: Order ID badge (top-left) & Timer/Status (top-right) */}
+          <div className="flex items-center justify-between gap-2">
+            <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
+              #{order.id}
+            </span>
             <div className="flex items-center space-x-1.5 shrink-0">
+              {/* Updated Badge */}
+              {order.updatedByCustomer && (
+                <span className="flex items-center space-x-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 shrink-0 shadow-sm animate-pulse">
+                  <FileEdit className="w-2.5 h-2.5 text-white" />
+                  <span>Updated</span>
+                </span>
+              )}
+
               {/* Timer */}
-              <span className="text-xs font-black text-red-800 bg-red-50 px-2.5 py-1 rounded-lg inline-flex items-center space-x-1 border border-red-100 shrink-0">
-                <Clock className="w-4 h-4 text-red-600 animate-spin-slow" />
-                <span className="font-mono">{elapsed}</span>
+              <span className={`text-xs font-black px-2.5 py-1 rounded-lg inline-flex items-center space-x-1 border shrink-0 ${
+                urgency.urgencyLevel === 'red'
+                  ? 'text-red-950 bg-red-200 border-red-400 animate-pulse font-mono'
+                  : urgency.urgencyLevel === 'yellow'
+                  ? 'text-amber-950 bg-amber-200 border-amber-400 font-mono'
+                  : 'text-red-800 bg-red-50 border-red-100 font-mono'
+              }`}>
+                <Clock className={`w-4 h-4 ${urgency.urgencyLevel === 'red' ? 'text-red-700 animate-spin' : 'text-red-600 animate-spin-slow'}`} />
+                <span>{elapsed}</span>
               </span>
 
               {/* Status */}
@@ -166,6 +201,19 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </span>
             </div>
           </div>
+
+          {/* Service title full width */}
+          <h3 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
+            {order.service || order.title || 'Service Needed'}
+          </h3>
+
+          {/* Helper Private Note Tag if present */}
+          {order.helperNote && (
+            <div className="flex items-center space-x-1 text-[11px] font-bold text-purple-900 bg-purple-100/90 border border-purple-200 px-2.5 py-1 rounded-xl truncate">
+              <FileText className="w-3 h-3 text-purple-700 shrink-0" />
+              <span className="truncate">Note: {order.helperNote}</span>
+            </div>
+          )}
 
           {/* View Details action */}
           <button
@@ -234,14 +282,10 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   return (
     <div
       onClick={onClick}
-      className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${
-        isNew
-          ? 'border-blue-300 bg-gradient-to-br from-white to-blue-50/50 ring-2 ring-blue-200'
-          : `${accent.border} ${accent.bg}`
-      }`}
+      className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${getHelperCardContainerStyle()}`}
     >
       {/* Status accent bar at top */}
-      <div className={`h-1.5 w-full ${isNew ? 'bg-blue-500' : accent.bar}`} />
+      <div className={`h-1.5 w-full ${getHelperTopBarColor()}`} />
 
       <div className="p-5">
         {/* Header row: customer name + new badge (right) */}
@@ -250,9 +294,9 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
               {order.customerName || 'Customer'}
             </h3>
-            <p className="text-[11px] font-semibold text-gray-400 mt-0.5 font-mono">
+            <span className="inline-block mt-1 bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shadow-xs">
               #{order.id}
-            </p>
+            </span>
           </div>
 
           <div className="flex flex-col items-end space-y-1.5 shrink-0">
@@ -263,6 +307,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               <BadgeIcon className="w-3 h-3" />
               <span>{badge.label}</span>
             </span>
+
+            {/* Updated badge */}
+            {order.updatedByCustomer && (
+              <span className="flex items-center space-x-1 text-[10px] font-black px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 shadow-sm animate-pulse">
+                <FileEdit className="w-3 h-3 text-white" />
+                <span>Updated</span>
+              </span>
+            )}
 
             {/* New badge for helper unviewed orders */}
             {isNew && (

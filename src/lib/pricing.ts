@@ -68,6 +68,19 @@ export const DEFAULT_SERVICES: string[] = [
   'onno kicu',
 ];
 
+export const DEFAULT_STORE_TYPES: string[] = [
+  'Grocery & Supermarket',
+  'Pharmacy & Medicine',
+  'Restaurant & Fast Food',
+  'Meat & Fish Market',
+  'Fruits & Vegetables',
+  'Electronics & Gadgets',
+  'Stationery & Books',
+  'Clothing & Fashion',
+  'Laundry & Dry Cleaning',
+  'Other',
+];
+
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   rules: [
     { maxOrderValue: 100, fee: 20 },
@@ -93,6 +106,26 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   locationPermissionModalBody: 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক। অনুগ্রহ করে ব্রাউজার সেটিংসে Location Allow করুন।',
   notificationPermissionModalTitle: 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
   notificationPermissionModalBody: 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+  bkashInstructions: 'bKash Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
+  nagadInstructions: 'Nagad Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
+  rocketInstructions: 'Rocket Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
+  bankInstructions: 'Bank Account: Transfer due commission to Bank Name, Account: XXXX-XXXX-XXXX, Branch: XXX, and write Reference.',
+  cashInstructions: 'Cash Payment: Pay directly at the Jamanot office desk and get a receipt.',
+  storeTypes: DEFAULT_STORE_TYPES,
+  // Map picker guide overlay
+  mapPickerGuideText: 'যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।',
+  mapPickerGuideOkText: 'ঠিক আছে',
+  mapPickerGuideShowCount: 5,
+  // Services whose pickup location should NOT be saved per-category
+  noSavePickupLocationServices: [
+    'মিক্স কিছু কাজ করে দিন',
+    'না, অন্য একটা কাজ করে দিন',
+    'আমার একটা জিনিস দিয়ে আসুন',
+    'mix',
+    'onno kicu',
+    'মিক্স / একাধিক কাজ',
+    'অন্য কিছু',
+  ],
 };
 
 /**

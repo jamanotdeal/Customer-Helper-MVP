@@ -49,6 +49,20 @@ export interface CancellationRequest {
   createdAt: string;
 }
 
+export interface OrderEditChange {
+  field: string;
+  oldValue: string;
+  newValue: string;
+}
+
+export interface OrderEditHistoryItem {
+  id: string;
+  timestamp: string;
+  editedBy: 'customer' | 'helper' | 'admin';
+  editedByName?: string;
+  changes: OrderEditChange[];
+}
+
 export interface Order {
   id: string;
   customerId: string;
@@ -80,6 +94,11 @@ export interface Order {
   
   routedToDedicated?: boolean;
   dedicatedNotifiedAt?: string;
+
+  updatedByCustomer?: boolean;
+  lastEditedAt?: string;
+  lastEditedBy?: 'customer' | 'helper' | 'admin';
+  editHistory?: OrderEditHistoryItem[];
   
   createdAt: string;
   acceptedAt?: string;
@@ -91,6 +110,8 @@ export interface Order {
   updatedAt: string;
   
   statusHistory: StatusHistoryItem[];
+  feedback?: OrderFeedback;
+  helperNote?: string;
 }
 
 export interface UserProfile {
@@ -129,8 +150,94 @@ export interface HelperApplication {
   hasCycle: boolean;
   hasBike: boolean;
   applicationType?: 'dedicated';
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELED';
   createdAt: string;
+}
+
+export interface Shop {
+  id: string;
+  name: string;
+  type: string;
+  contactPerson: string;
+  whatsapp: string;
+  location: LocationData;
+  addedByHelperId?: string;
+  addedByHelperName?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface OrderFeedback {
+  id: string;
+  orderId: string;
+  customerId: string;
+  customerName?: string;
+  helperId?: string;
+  helperName?: string;
+  shopId?: string;
+  shopName?: string;
+  riderRating: number;
+  serviceRating: number;
+  shopRating: number;
+  improvementComment?: string;
+  createdAt: string;
+}
+
+export interface ModalButtonConfig {
+  label: string;
+  actionUrl?: string;
+  url?: string;
+  variant?: 'primary' | 'secondary' | 'danger' | 'outline';
+}
+
+export type ModalTargetAudience =
+  | 'ALL'
+  | 'CUSTOMERS'
+  | 'HELPERS'
+  | 'COMMUTER_HELPERS'
+  | 'DEDICATED_HELPERS'
+  | 'LOGGED_IN'
+  | 'LOGGED_OUT'
+  | 'all'
+  | 'customer'
+  | 'helper'
+  | 'dedicated_helper';
+
+export type ModalTriggerEvent =
+  | 'FIRST_VISIT'
+  | 'LOGIN'
+  | 'REQUEST_SUBMIT'
+  | 'ORDER_COMPLETE'
+  | 'DASHBOARD_OPEN'
+  | 'first_visit'
+  | 'login'
+  | 'request_submit'
+  | 'order_complete'
+  | 'dashboard_open';
+
+export type ModalDisplayFrequency =
+  | 'ONCE_EVER'
+  | 'ONCE_PER_SESSION'
+  | 'ALWAYS'
+  | 'once_ever'
+  | 'once_per_session'
+  | 'every_time';
+
+export interface AdminCustomModalConfig {
+  id: string;
+  title: string;
+  subtitle?: string;
+  bodyText?: string;
+  imageUrl?: string;
+  description: string;
+  buttons: ModalButtonConfig[];
+  targetAudience: ModalTargetAudience;
+  triggerEvent: ModalTriggerEvent;
+  displayFrequency: ModalDisplayFrequency;
+  isEnabled: boolean;
+  enabled?: boolean;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface WalletTransaction {
@@ -198,6 +305,29 @@ export interface PricingSettings {
   locationPermissionModalBody?: string;  // Admin editable body message for location permission modal
   notificationPermissionModalTitle?: string; // Admin editable title for notification permission modal
   notificationPermissionModalBody?: string;  // Admin editable body message for notification permission modal
+  bkashInstructions?: string;
+  nagadInstructions?: string;
+  rocketInstructions?: string;
+  bankInstructions?: string;
+  cashInstructions?: string;
+  storeTypes?: string[];
+  // Map picker guide overlay settings
+  mapPickerGuideText?: string;       // Bangla guide text shown as overlay when map opens
+  mapPickerGuideOkText?: string;     // OK button label (default: "ঠিক আছে")
+  mapPickerGuideShowCount?: number;  // How many times to show guide per modal (default: 5)
+  // Per-category pickup location saving
+  noSavePickupLocationServices?: string[]; // Service names whose pickup address should NOT be saved
+  // Helper Center contact info (admin updatable)
+  helperCenterEnabled?: boolean;
+  helperCenterOfficeAddress?: string;
+  helperCenterPhone1?: string;
+  helperCenterPhone2?: string;
+  helperCenterEmail?: string;
+  helperCenterFacebook?: string;
+  helperCenterLinkedin?: string;
+  helperCenterInstagram?: string;
+  helperCenterMapEmbedUrl?: string; // Optional Google Maps embed URL
+  helperCenterNote?: string; // Additional note for the center page
 }
 
 export interface AppNotification {

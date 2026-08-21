@@ -11,25 +11,55 @@ import { OrderCard } from './OrderCard';
 import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award } from 'lucide-react';
+import { AddShopModal } from './AddShopModal';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store } from 'lucide-react';
 
-export const HelperDashboard: React.FC = () => {
+interface HelperDashboardProps {
+  initialSelectedOrderId?: string | null;
+  onClearInitialOrder?: () => void;
+}
+
+export const HelperDashboard: React.FC<HelperDashboardProps> = ({
+  initialSelectedOrderId,
+  onClearInitialOrder,
+}) => {
   const { user, updateHelperLocation } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'COMPLETED'>('NEW');
-  const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('MAP');
+  const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('LIST');
   const [showDedicatedAppModal, setShowDedicatedAppModal] = useState(false);
+  const [showAddShopModal, setShowAddShopModal] = useState(false);
   const [rejectedOrderIds] = useState<Set<string>>(new Set());
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      const order = fallbackStore.orders.get(initialSelectedOrderId);
+      if (order) {
+        if (order.status === 'PENDING') {
+          setActiveTab('NEW');
+        } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
+          setActiveTab('ACTIVE');
+        } else if (order.status === 'DELIVERED') {
+          setActiveTab('COMPLETED');
+        }
+      }
+      setSelectedOrderId(initialSelectedOrderId);
+      if (onClearInitialOrder) {
+        onClearInitialOrder();
+      }
+    }
+  }, [initialSelectedOrderId, onClearInitialOrder]);
   const [firstOrderIds, setFirstOrderIds] = useState<Set<string>>(new Set());
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
   );
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+  const [showCustomRange, setShowCustomRange] = useState<boolean>(false);
 
   const [locationPermissionDenied, setLocationPermissionDenied] = useState<boolean>(false);
 
@@ -373,19 +403,23 @@ export const HelperDashboard: React.FC = () => {
     if (preset === 'today') {
       setStartDate(todayStr);
       setEndDate(todayStr);
+      setShowCustomRange(false);
     } else if (preset === '7days') {
       const d = new Date();
       d.setDate(d.getDate() - 7);
       setStartDate(getLocalDateString(d.toISOString()));
       setEndDate(todayStr);
+      setShowCustomRange(false);
     } else if (preset === '30days') {
       const d = new Date();
       d.setDate(d.getDate() - 30);
       setStartDate(getLocalDateString(d.toISOString()));
       setEndDate(todayStr);
+      setShowCustomRange(false);
     } else {
       setStartDate('');
       setEndDate('');
+      setShowCustomRange(false);
     }
     setCompletedVisibleCount(PAGE_SIZE);
   };
@@ -462,37 +496,7 @@ export const HelperDashboard: React.FC = () => {
       );
     }
   }
-
   const isDedicatedHelper = user?.helperType === 'dedicated';
-
-  // Running Order Reminder Banner Component for New & Completed Tabs
-  const renderRunningOrderBanner = () => {
-    if (activeOrders.length === 0) return null;
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300 mb-3">
-        <div className="flex items-center space-x-3">
-          <div className="relative flex h-3 w-3 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
-          </div>
-          <div>
-            <h4 className="font-extrabold text-xs text-amber-900">
-              আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
-            </h4>
-            <p className="text-[10px] text-amber-700 font-medium">
-              অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={() => setActiveTab('ACTIVE')}
-          className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-extrabold shadow-sm transition-all active:scale-95 shrink-0"
-        >
-          দেখুন
-        </button>
-      </div>
-    );
-  };
 
   return (
     <div className="space-y-5 pb-24">
@@ -508,7 +512,7 @@ export const HelperDashboard: React.FC = () => {
                 লোকেশন পারমিশন বাধ্যতামূলক (Location Required)
               </h4>
               <p className="text-[11px] text-red-700 font-medium leading-relaxed">
-                হেলপার মোডে থাকতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।
+                হেলপার মোডে থাকতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।
               </p>
             </div>
           </div>
@@ -521,7 +525,7 @@ export const HelperDashboard: React.FC = () => {
                 await showPermissionModal({
                   permissionType: 'location',
                   title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন বাধ্যতামূলক (Location Required)',
-                  message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোডে থাকতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।',
+                  message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোডে থাকতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।',
                   onAllow: () => captureHelperLocation(),
                   allowText: 'Allow Location',
                 });
@@ -534,65 +538,43 @@ export const HelperDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Helper Profile & Status Card */}
-      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-blue-800 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
-        <div className="flex items-center justify-between gap-3 relative z-10">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 rounded-2xl bg-white/20 backdrop-blur-md shrink-0">
-              <Bike className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-extrabold text-base leading-snug">
-                  {user?.displayName || 'Helper'}
-                </h3>
-                {user?.isEduVerified && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-black bg-blue-500/30 text-blue-100 px-2 py-0.5 rounded-full border border-blue-300/40">
-                    <CheckCircle2 className="w-3 h-3 text-blue-300" />
-                    <span>Verified Student</span>
-                  </span>
-                )}
-              </div>
+      {showAddShopModal && (
+        <AddShopModal onClose={() => setShowAddShopModal(false)} />
+      )}
 
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                <span
-                  className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${
-                    isDedicatedHelper
-                      ? 'bg-purple-500/40 text-purple-100 border border-purple-300/40'
-                      : 'bg-emerald-500/40 text-emerald-100 border border-emerald-300/40'
-                  }`}
-                >
-                  {isDedicatedHelper ? '⚡ Dedicated Rider' : '🚲 Commuter Helper'}
-                </span>
-                <span className="text-[11px] font-bold text-blue-100 bg-blue-500/20 px-2 py-0.5 rounded-full border border-blue-300/30 inline-flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-blue-200" />
-                  <span>Radius: {fallbackStore.pricingSettings.helperRadiusKm || 3.5} km</span>
-                </span>
-                <span className="text-[11px] text-emerald-100 font-medium">
-                  (Max {activeOrderLimit} active)
-                </span>
-              </div>
+      {/* Pre-Tab Alert Banner: Running + Unviewed Active Orders */}
+      {(activeOrders.length > 0 || unviewedActiveCount > 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="relative flex h-3 w-3 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+            </div>
+            <div className="min-w-0">
+              {unviewedActiveCount > 0 && (
+                <h4 className="font-extrabold text-xs text-amber-900">
+                  {unviewedActiveCount} order{unviewedActiveCount > 1 ? 's' : ''} not yet viewed,{' '}
+                  আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
+                </h4>
+              )}
+              {unviewedActiveCount === 0 && activeOrders.length > 0 && (
+                <h4 className="font-extrabold text-xs text-amber-900">
+                  আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
+                </h4>
+              )}
+              <p className="text-[10px] text-amber-700 font-medium">
+                অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
+              </p>
             </div>
           </div>
+          <button
+            onClick={() => setActiveTab('ACTIVE')}
+            className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-extrabold shadow-sm transition-all active:scale-95 shrink-0 ml-2"
+          >
+            দেখুন
+          </button>
         </div>
-
-        {/* Upgrade to Dedicated Helper Banner for Commuter Helpers */}
-        {!isDedicatedHelper && (
-          <div className="mt-4 pt-3 border-t border-white/15 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-100">
-              <Award className="w-4 h-4 text-amber-300 shrink-0" />
-              <span>ডেডিকেটেড হেলপার হয়ে লাইভ ম্যাপ ও সব অর্ডার দ্রুত ডেলিভারি দিন।</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowDedicatedAppModal(true)}
-              className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black rounded-xl shadow-md transition-transform active:scale-95 shrink-0"
-            >
-              আবেদন করুন
-            </button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Tabs */}
       <div className="flex space-x-2 bg-gray-100 p-1.5 rounded-2xl">
@@ -657,13 +639,9 @@ export const HelperDashboard: React.FC = () => {
         </button>
       </div>
 
-      {/* ── NEW TAB ── */}
+      {/* NEW TAB */}
       {activeTab === 'NEW' && (
         <div className="space-y-3">
-          {/* Running Order Status Block (Inside New Tab) */}
-          {renderRunningOrderBanner()}
-
-          {/* New orders notification banner — only when there are unseen items */}
           {newOrderIds.size > 0 && (
             <div className="flex items-center space-x-2 p-3 rounded-2xl bg-red-50 border border-red-200 shadow-sm animate-in fade-in duration-300">
               <div className="p-1.5 rounded-xl bg-red-100 text-red-600 shrink-0">
@@ -718,10 +696,9 @@ export const HelperDashboard: React.FC = () => {
         <HelperApplicationModal onClose={() => setShowDedicatedAppModal(false)} />
       )}
 
-      {/* ── ACTIVE TAB ── */}
+      {/* ACTIVE TAB */}
       {activeTab === 'ACTIVE' && (
         <div className="space-y-3">
-          {/* Map / Normal View Toggle (For Dedicated Helpers) */}
           {isDedicatedHelper && (
             <div className="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-gray-100 shadow-xs">
               <span className="text-xs font-extrabold text-gray-700 flex items-center gap-1.5">
@@ -757,7 +734,6 @@ export const HelperDashboard: React.FC = () => {
             </div>
           )}
 
-          {/* Banner for unviewed active orders */}
           {unviewedActiveCount > 0 && (
             <div className="flex items-center space-x-2 p-3 rounded-2xl bg-blue-50 border border-blue-200 shadow-sm animate-in fade-in duration-300">
               <div className="p-1.5 rounded-xl bg-blue-100 text-blue-600 shrink-0">
@@ -808,13 +784,10 @@ export const HelperDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* ── COMPLETED TAB ── */}
+      {/* COMPLETED TAB */}
       {activeTab === 'COMPLETED' && (
         <div className="space-y-3">
-          {/* Running Order Status Block (Inside Completed Tab) */}
-          {renderRunningOrderBanner()}
-
-          {/* Date Filter Bar (Inside Completed Tab) */}
+          {/* Date Filter Bar */}
           <div className="bg-white border border-gray-100 p-3.5 rounded-2xl shadow-soft space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center space-x-2 text-xs font-bold text-gray-700">
@@ -836,35 +809,35 @@ export const HelperDashboard: React.FC = () => {
               )}
             </div>
 
-            {/* Inputs grid for start date and end date */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[10px] font-bold text-gray-500 mb-1">থেকে (From)</label>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => {
-                    setStartDate(e.target.value);
-                    setCompletedVisibleCount(PAGE_SIZE);
-                  }}
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
-                />
+            {showCustomRange && (
+              <div className="grid grid-cols-2 gap-2 animate-in slide-in-from-top duration-200">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">থেকে (From)</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      setCompletedVisibleCount(PAGE_SIZE);
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">পর্যন্ত (To)</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => {
+                      setEndDate(e.target.value);
+                      setCompletedVisibleCount(PAGE_SIZE);
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-500 mb-1">পর্যন্ত (To)</label>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => {
-                    setEndDate(e.target.value);
-                    setCompletedVisibleCount(PAGE_SIZE);
-                  }}
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all cursor-pointer"
-                />
-              </div>
-            </div>
+            )}
 
-            {/* Quick preset filter buttons */}
             <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-gray-100">
               <span className="text-[10px] text-gray-400 font-bold mr-1">দ্রুত ফিল্টার:</span>
               <button
@@ -892,10 +865,20 @@ export const HelperDashboard: React.FC = () => {
               >
                 গত ৩০ দিন
               </button>
+              <button
+                type="button"
+                onClick={() => setShowCustomRange((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                  showCustomRange
+                    ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Custom
+              </button>
             </div>
           </div>
 
-          {/* Filter Active Badge Notification */}
           {(startDate || endDate) && (
             <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50/80 border border-emerald-200/60 px-3 py-1.5 rounded-xl flex items-center justify-between gap-2">
               <span>
@@ -940,7 +923,7 @@ export const HelperDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Premium New Order Alert Overlay — Swipeable Multi-Order */}
+      {/* Premium New Order Alert Overlay */}
       {isAlarmPlaying && newOrderIds.size > 0 && (
         <NewOrderAlertOverlay
           newOrderIds={newOrderIds}
@@ -971,10 +954,6 @@ export const HelperDashboard: React.FC = () => {
     </div>
   );
 };
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   NewOrderAlertOverlay — swipeable multi-order alert popup
-───────────────────────────────────────────────────────────────────────────── */
 
 interface NewOrderAlertOverlayProps {
   newOrderIds: Set<string>;
@@ -1063,8 +1042,8 @@ const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
         <div className="p-5 space-y-4">
           {/* Order ID & Fee row */}
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">
-              Order #{order.id.slice(-6).toUpperCase()}
+            <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2.5 py-0.5 rounded-md shadow-xs">
+              #{order.id}
             </span>
             <div className="flex items-center space-x-2">
               {order.productCost && order.productCost > 0 && (

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { calculateDeliveryFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X } from 'lucide-react';
+import { calculateDeliveryFee, calculateHelperCommission } from '@/lib/pricing';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
-import { getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
-import { DedicatedHelperMapView } from './DedicatedHelperMapView';
+
 
 interface HelperActiveOrderViewProps {
   order: Order;
@@ -36,6 +36,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [cancelReason, setCancelReason] = useState('');
   const [cancelError, setCancelError] = useState('');
 
+  // Helper Private Note state
+  const [helperNoteInput, setHelperNoteInput] = useState(order.helperNote || '');
+  const [noteSavedAlert, setNoteSavedAlert] = useState(false);
+
+  // Custom Celebratory Completion Modal state
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [earnedAmount, setEarnedAmount] = useState(0);
+
   // Validation: helper must enter product cost (which auto-sets delivery fee) before advancing
   const hasCostAndFee = order.productCost !== undefined;
 
@@ -43,6 +51,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
   const endTimestamp = order.deliveredAt || order.cancelledAt || order.updatedAt;
+  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -229,6 +238,39 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setShowCancelModal(false);
   };
 
+  const handleSaveHelperNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      helperNote: helperNoteInput.trim(),
+    }));
+    setNoteSavedAlert(true);
+    setTimeout(() => setNoteSavedAlert(false), 2500);
+  };
+
+  const getDirectionsUrl = () => {
+    const deliveryDest = order.deliveryLocation.lat && order.deliveryLocation.lng
+      ? `${order.deliveryLocation.lat},${order.deliveryLocation.lng}`
+      : encodeURIComponent(order.deliveryLocation.address);
+
+    if (order.pickupLocation?.address) {
+      const pickupWaypoint = order.pickupLocation.lat && order.pickupLocation.lng
+        ? `${order.pickupLocation.lat},${order.pickupLocation.lng}`
+        : encodeURIComponent(order.pickupLocation.address);
+
+      return `https://www.google.com/maps/dir/?api=1&destination=${deliveryDest}&waypoints=${pickupWaypoint}`;
+    }
+
+    return `https://www.google.com/maps/dir/?api=1&destination=${deliveryDest}`;
+  };
+
+  const handleConfirmDeliveryWithModal = () => {
+    const earned = calculateHelperCommission(order.deliveryFee, fallbackStore.pricingSettings);
+    setEarnedAmount(earned);
+    handleUpdateStatus('DELIVERED');
+    setShowCompletionModal(true);
+  };
+
   return (
     <div className="w-full bg-white min-h-screen pb-20 animate-in fade-in duration-200">
       {/* Top Bar */}
@@ -242,24 +284,88 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         </button>
         <div className="flex flex-col items-center">
           <span className="font-extrabold text-sm text-gray-800">{order.service || order.title || 'Helper Order'}</span>
-          <span className="text-[10px] font-bold text-gray-500">Order ID: #{order.id}</span>
+          <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 mt-0.5">#{order.id}</span>
         </div>
         <div className="w-8" />
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-5">
-        {/* TIMER BLOCK */}
-        <div className="w-full border border-red-500 rounded-2xl py-2.5 px-4 flex items-center justify-center bg-red-50/10">
-          <div className="flex items-center space-x-2.5 text-red-600">
-            <Clock className="w-5 h-5 animate-pulse" />
-            <span className="text-xs font-black uppercase tracking-wider">
+        {/* DYNAMIC URGENCIES TIMER BLOCK */}
+        <div className={`w-full rounded-2xl py-3 px-4 flex flex-col items-center justify-center transition-all ${
+          urgency.urgencyLevel === 'red'
+            ? 'bg-gradient-to-br from-red-100 via-rose-50 to-red-100 border-2 border-red-400 shadow-md shadow-red-100'
+            : urgency.urgencyLevel === 'yellow'
+            ? 'bg-gradient-to-br from-amber-100 via-yellow-50 to-amber-100 border-2 border-amber-400 shadow-sm shadow-amber-100'
+            : 'bg-red-50/10 border border-red-500'
+        }`}>
+          <div className="flex items-center space-x-2.5">
+            <Clock className={`w-5 h-5 ${
+              urgency.urgencyLevel === 'red'
+                ? 'text-red-700 animate-spin'
+                : urgency.urgencyLevel === 'yellow'
+                ? 'text-amber-700 animate-spin-slow'
+                : 'text-red-600 animate-pulse'
+            }`} />
+            <span className={`text-xs font-black uppercase tracking-wider ${
+              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+            }`}>
               {isDone ? 'Duration:' : 'Live:'}
             </span>
-            <span className="text-xl font-black font-mono">
+            <span className={`text-xl font-black font-mono ${
+              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+            }`}>
               {elapsed}
             </span>
           </div>
+
+          {!isDone && urgency.urgencyLevel === 'red' && (
+            <p className="mt-1.5 text-[11px] font-black text-red-700 bg-red-200/80 px-3 py-1 rounded-full border border-red-300 text-center animate-pulse">
+              🚨 55+ মিনিট অতিক্রান্ত! দ্রুত ডেলিভারি সম্পন্ন করুন!
+            </p>
+          )}
+
+          {!isDone && urgency.urgencyLevel === 'yellow' && (
+            <p className="mt-1.5 text-[11px] font-black text-amber-900 bg-amber-200/80 px-3 py-1 rounded-full border border-amber-300 text-center">
+              ⚠️ 40+ মিনিট অতিক্রান্ত! দ্রুত পৌঁছানোর চেষ্টা করুন।
+            </p>
+          )}
         </div>
+
+        {/* CUSTOMER EDIT ALERT BANNER */}
+        {order.updatedByCustomer && (
+          <div className="p-4 rounded-3xl bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-lg space-y-2.5 animate-in slide-in-from-top duration-300">
+            <div className="flex items-center justify-between font-black text-xs">
+              <div className="flex items-center space-x-1.5">
+                <FileEdit className="w-4 h-4 text-amber-100" />
+                <span>গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
+              </div>
+              <button
+                onClick={() => {
+                  fallbackStore.updateOrder(order.id, (o) => ({ ...o, updatedByCustomer: false }));
+                }}
+                className="px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-full text-[10px] font-extrabold transition-all"
+              >
+                ঠিক আছে
+              </button>
+            </div>
+            <p className="text-[11px] text-amber-100 font-medium leading-relaxed">
+              কাস্টমার অর্ডারের তথ্য/বিবরণ আপডেট করেছেন। নিচে পরিবর্তিত বিষয়গুলো দেখুন:
+            </p>
+            {order.editHistory && order.editHistory.length > 0 && (
+              <div className="bg-black/15 rounded-2xl p-3 text-[11px] space-y-1 border border-white/20">
+                {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
+                  <div key={idx} className="flex flex-wrap justify-between gap-1 text-white">
+                    <span className="font-bold text-amber-100">{c.field}:</span>
+                    <span className="font-semibold text-right">
+                      <span className="line-through text-white/60 mr-1">{c.oldValue}</span>
+                      <strong className="text-white bg-white/20 px-1.5 py-0.5 rounded">{c.newValue}</strong>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ORDER DETAILS IN EXACT REQUESTED SEQUENCE */}
         <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-4">
@@ -419,22 +525,59 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span className="font-semibold text-gray-900">Pickup Shop/Location:</span> {order.pickupLocation.address}
                 </p>
               )}
+              <div className="pt-2">
+                <a
+                  href={getDirectionsUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>Direction</span>
+                </a>
+              </div>
             </div>
           </div>
 
-          {/* 7. LIVE ROUTE REAL EARTH MAP */}
+          {/* 7. HELPER PRIVATE NOTE SECTION (Customer cannot see this) */}
           <div className="pt-3 border-t border-gray-100 space-y-2">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
-              <Truck className="w-4 h-4 text-cyan-600" />
-              <span>Live Road Route Map (Real Earth View)</span>
-            </h4>
-            <div className="rounded-2xl overflow-hidden shadow-lg border border-slate-200">
-              <DedicatedHelperMapView
-                orders={[]}
-                activeOrders={[order]}
-                helperLocation={helperLocation}
-                onSelectOrder={() => {}}
-              />
+            <div className="p-4 rounded-2xl bg-purple-50/80 border border-purple-200/90 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-purple-950 font-extrabold text-xs">
+                  <FileText className="w-4 h-4 text-purple-700" />
+                  <span>হেলপার প্রাইভেট নোট (Private Note)</span>
+                </div>
+                <span className="text-[10px] font-black bg-purple-200 text-purple-900 px-2.5 py-0.5 rounded-full border border-purple-300">
+                  🔒 কাস্টমার দেখবে না
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-800 font-medium leading-relaxed">
+                আপনার নিজের বা এডমিনের জন্য একটি ব্যক্তিগত নোট রাখুন (যেমন: চাবি সিকিউরিটির কাছে রেখেছি, কাস্টমার ৫টায় পেতে চেয়েছেন ইত্যাদি):
+              </p>
+              <form onSubmit={handleSaveHelperNote} className="space-y-2">
+                <textarea
+                  value={helperNoteInput}
+                  onChange={(e) => setHelperNoteInput(e.target.value)}
+                  placeholder="গোপন নোট লিখুন..."
+                  className="w-full p-3 rounded-2xl border border-purple-200 bg-white text-xs font-semibold text-gray-900 outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 h-20 resize-none"
+                />
+                <div className="flex items-center justify-between pt-1">
+                  {noteSavedAlert ? (
+                    <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-100/90 px-3 py-1 rounded-xl border border-emerald-200 animate-in fade-in">
+                      ✓ নোট সংরক্ষিত হয়েছে!
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-purple-700 font-medium italic">শুধুমাত্র আপনার ও এডমিনের নিকট দৃশ্যমান</span>
+                  )}
+                  <button
+                    type="submit"
+                    className="px-3.5 py-1.5 bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs rounded-xl shadow-sm transition-all active:scale-95 flex items-center space-x-1"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>সেভ করুন</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
@@ -554,7 +697,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   Hand over the order to the customer and confirm delivery below to complete this order.
                 </p>
                 <button
-                  onClick={() => handleUpdateStatus('DELIVERED')}
+                  onClick={handleConfirmDeliveryWithModal}
                   className="w-full py-4 rounded-2xl bg-white hover:bg-emerald-50 active:scale-98 text-emerald-800 font-extrabold text-sm shadow-md transition-all flex items-center justify-center space-x-2"
                 >
                   <CheckCircle2 className="w-5 h-5 text-emerald-600" />
@@ -815,6 +958,61 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONGRATULATIONS EARNINGS CUSTOM MODAL */}
+      {showCompletionModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-5 border border-emerald-100 text-center animate-in zoom-in-95 duration-200 relative overflow-hidden">
+            {/* Decorative glows */}
+            <div className="absolute -top-12 -left-12 w-32 h-32 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none" />
+            <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-amber-400/20 rounded-full blur-2xl pointer-events-none" />
+
+            {/* Celebratory Icon */}
+            <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 animate-bounce">
+              <Sparkles className="w-10 h-10" />
+            </div>
+
+            {(() => {
+              const commissionPercent = fallbackStore.pricingSettings?.helperCommissionPercent || 80;
+              const platformPercent = 100 - commissionPercent;
+              const netEarned = calculateHelperCommission(order.deliveryFee, fallbackStore.pricingSettings);
+              const platformCommissionFee = Math.max(0, (order.deliveryFee || 0) - netEarned);
+
+              return (
+                <div className="space-y-3">
+                  <span className="inline-flex items-center space-x-1 text-xs font-black uppercase tracking-widest text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                    🎉 Order Completed!
+                  </span>
+                  <h3 className="text-2xl font-black text-gray-900 leading-tight">
+                    Congratulations!
+                  </h3>
+                  <div className="bg-emerald-50/90 py-3.5 px-4 rounded-2xl border border-emerald-200 shadow-xs space-y-1.5">
+                    <p className="text-sm font-extrabold text-emerald-950">
+                      You earned <span className="text-emerald-700 text-2xl font-black">{netEarned} BDT</span>
+                    </p>
+                    <p className="text-[11px] text-emerald-800 font-bold bg-emerald-100/70 py-1 px-2.5 rounded-xl border border-emerald-200/80 inline-block">
+                      (ডেলিভারি ফি ৳{order.deliveryFee} হতে {platformPercent}% প্ল্যাটফর্ম কমিশন ৳{platformCommissionFee} বাদে নিট আয়)
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500 font-semibold pt-1">
+                    অর্ডার #{order.id} সফলভাবে সম্পন্ন করার জন্য আপনাকে ধন্যবাদ! এই অর্থ আপনার ওয়ালেটে জমা হয়েছে।
+                  </p>
+                </div>
+              );
+            })()}
+
+            <button
+              onClick={() => {
+                setShowCompletionModal(false);
+                onBack();
+              }}
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 active:scale-95 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 transition-all"
+            >
+              Great! Back to Orders
+            </button>
           </div>
         </div>
       )}

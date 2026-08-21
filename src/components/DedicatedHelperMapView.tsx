@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Order, LocationData } from '@/types';
-import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, Maximize2, Minimize2, X } from 'lucide-react';
+import { Order, LocationData, Shop } from '@/types';
+import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink } from 'lucide-react';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime } from '@/lib/timeUtils';
+import { fallbackStore } from '@/lib/firebase';
 
 interface DedicatedHelperMapViewProps {
   orders: Order[];
@@ -55,9 +56,28 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
   const lastOrdersHashRef = useRef<string>('');
 
   const [selectedOrder, setSelectedOrderState] = useState<Order | null>(null);
+  const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState(false);
   const [timerTick, setTimerTick] = useState(0);
+  // CSS-based fullscreen state (no native fullscreen API — avoids mobile browser lock)
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Shop listing and filter states for map loading fallback
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [shopSearch, setShopSearch] = useState('');
+  const [shopSort, setShopSort] = useState<'name-asc' | 'name-desc' | 'type' | 'newest'>('newest');
+  const [shopPage, setShopPage] = useState(1);
+
+  // Sync shops
+  useEffect(() => {
+    const syncShops = () => {
+      setShops(Array.from(fallbackStore.shops.values()));
+    };
+    syncShops();
+    const unsub = fallbackStore.subscribe(syncShops);
+    return () => unsub();
+  }, []);
 
   // Live timer tick every second for real-time countdown/elapsed time
   useEffect(() => {
@@ -66,43 +86,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, []);
-
-  // Synchronize document fullscreen state changes (e.g., ESC key or browser back)
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const isDocFullscreen = !!(
-        document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement
-      );
-      setIsFullscreen(isDocFullscreen);
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
-    };
-  }, []);
-
-  // Fullscreen toggle handler with native API fallback
-  const toggleFullscreen = () => {
-    const next = !isFullscreen;
-    setIsFullscreen(next);
-    if (next) {
-      if (mapContainerRef.current?.requestFullscreen) {
-        mapContainerRef.current.requestFullscreen().catch(() => {});
-      }
-    } else {
-      if (document.fullscreenElement && document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      }
-    }
-  };
 
   // ResizeObserver & staggered size invalidation for smooth, exact Leaflet map resizing
   useEffect(() => {
@@ -147,52 +130,76 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
     let isMounted = true;
 
+    const timeout = setTimeout(() => {
+      if (!mapReady && isMounted) {
+        console.warn('Map initialization timed out after 5s. Setting load error fallback.');
+        setMapLoadError(true);
+      }
+    }, 5000);
+
     const initMap = async () => {
-      const L = await import('leaflet');
-      if (!isMounted || !mapContainerRef.current) return;
+      try {
+        const L = await import('leaflet');
+        if (!isMounted || !mapContainerRef.current) return;
 
-      // Inject Leaflet CSS if not present
-      if (!document.getElementById('leaflet-css-picker')) {
-        const link = document.createElement('link');
-        link.id = 'leaflet-css-picker';
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(link);
-      }
-
-      if (mapInstanceRef.current) {
-        try {
-          mapInstanceRef.current.remove();
-        } catch (e) {
-          console.warn('[Leaflet] cleanup notice:', e);
+        // Inject Leaflet CSS if not present
+        if (!document.getElementById('leaflet-css-picker')) {
+          const link = document.createElement('link');
+          link.id = 'leaflet-css-picker';
+          link.rel = 'stylesheet';
+          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          document.head.appendChild(link);
         }
-        mapInstanceRef.current = null;
+
+        if (mapInstanceRef.current) {
+          try {
+            mapInstanceRef.current.remove();
+          } catch (e) {
+            console.warn('[Leaflet] cleanup notice:', e);
+          }
+          mapInstanceRef.current = null;
+        }
+
+        const helperLat = helperLocation?.lat || 23.8759;
+        const helperLng = helperLocation?.lng || 90.3795;
+
+        const map = L.map(mapContainerRef.current, {
+          dragging: true,
+          touchZoom: true,
+          doubleClickZoom: true,
+          scrollWheelZoom: true,
+        }).setView([helperLat, helperLng], 14);
+        mapInstanceRef.current = map;
+
+        // Map Tile URL: Google Hybrid Real Earth Map (Satellite View)
+        const tileUrl = 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
+        const tileAttribution = '&copy; Google Maps Satellite';
+
+        const tileLayer = L.tileLayer(tileUrl, {
+          attribution: tileAttribution,
+          maxZoom: 20,
+          subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+        }).addTo(map);
+
+        tileLayerRef.current = tileLayer;
+        if (isMounted) {
+          setMapReady(true);
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        console.error('Failed to load map:', err);
+        if (isMounted) {
+          setMapLoadError(true);
+          clearTimeout(timeout);
+        }
       }
-
-      const helperLat = helperLocation?.lat || 23.8759;
-      const helperLng = helperLocation?.lng || 90.3795;
-
-      const map = L.map(mapContainerRef.current).setView([helperLat, helperLng], 14);
-      mapInstanceRef.current = map;
-
-      // Map Tile URL: Google Hybrid Real Earth Map (Satellite View)
-      const tileUrl = 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
-      const tileAttribution = '&copy; Google Maps Satellite';
-
-      const tileLayer = L.tileLayer(tileUrl, {
-        attribution: tileAttribution,
-        maxZoom: 20,
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-      }).addTo(map);
-
-      tileLayerRef.current = tileLayer;
-      if (isMounted) setMapReady(true);
     };
 
     initMap();
 
     return () => {
       isMounted = false;
+      clearTimeout(timeout);
       setMapReady(false);
       if (mapInstanceRef.current) {
         try {
@@ -226,8 +233,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 70px; height: 80px;">
           <div style="position: relative; width: 44px; height: 44px;">
             <div style="position: absolute; inset: -4px; border-radius: 50%; background: rgba(16, 185, 129, 0.4); animation: pulse 1.5s infinite;"></div>
-            <div style="position: relative; width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #10b981, #059669); border: 3px solid white; box-shadow: 0 6px 20px rgba(16,185,129,0.8); display: flex; align-items: center; justify-content: center; color: white;">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <div style="position: relative; width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #10b981, #059669); border: 3px solid white; box-shadow: 0 6px 20px rgba(16,185,129,0.8); display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
+              <span style="font-size: 11px; font-weight: 950; line-height: 1; margin-bottom: 1px;">Me</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M5.5 17a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path>
                 <path d="M18.5 17a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path>
                 <path d="M15 6h2.5l1.5 4-3.5 1"></path>
@@ -236,9 +244,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
                 <path d="M12 9v5"></path>
               </svg>
             </div>
-          </div>
-          <div style="margin-top: 3px; background: rgba(15, 23, 42, 0.95); color: #34d399; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 8px; border: 1.5px solid #10b981; box-shadow: 0 4px 10px rgba(0,0,0,0.5); white-space: nowrap; display: flex; align-items: center; gap: 3px;">
-            <span>🛵 You</span>
           </div>
           <div style="width: 2px; height: 10px; background: #10b981; margin-top: 2px;"></div>
           <div style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 2.5px solid white; box-shadow: 0 0 10px #10b981;"></div>
@@ -261,8 +266,61 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         if (isCancelled || !isMapAlive(map)) return;
         helperMarker = L.marker([helperLat, helperLng], { icon: helperIcon })
           .addTo(map)
-          .bindPopup('<b>আপনার বর্তমান অবস্থান (You)</b>');
+          .bindPopup('<b>আপনার বর্তমান অবস্থান (Me)</b>');
         markersRef.current.set('helper', helperMarker);
+      }
+
+      // Render Shop Markers — show Store Name + Type label
+      const registeredShops = Array.from(fallbackStore.shops.values());
+
+      // Remove stale shop markers (shops that no longer exist)
+      const shopIds = new Set(registeredShops.map((s) => `shop-${s.id}`));
+      markersRef.current.forEach((_, key) => {
+        if (key.startsWith('shop-') && !shopIds.has(key)) {
+          try { markersRef.current.get(key)?.remove(); } catch (e) {}
+          markersRef.current.delete(key);
+        }
+      });
+
+      for (const shop of registeredShops) {
+        if (!shop.location?.lat || !shop.location?.lng) continue;
+        const shopMarkerKey = `shop-${shop.id}`;
+        const shortName = shop.name.length > 14 ? shop.name.slice(0, 12) + '…' : shop.name;
+        const shortType = shop.type.length > 14 ? shop.type.slice(0, 12) + '…' : shop.type;
+        const shopIconHtml = `
+          <div style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; background: rgba(15, 23, 42, 0.92); border: 1.5px solid #c084fc; border-radius: 10px; padding: 4px 7px 4px 4px; box-shadow: 0 4px 14px rgba(147,51,234,0.55); white-space: nowrap;">
+            <div style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #9333ea, #6b21a8); border: 2px solid white; display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+            </div>
+            <div style="display: flex; flex-direction: column; line-height: 1.2;">
+              <span style="color: #e9d5ff; font-size: 10px; font-weight: 800;">${shortName}</span>
+              <span style="color: #a78bfa; font-size: 8.5px; font-weight: 600;">${shortType}</span>
+            </div>
+          </div>
+        `;
+        const shopIcon = L.divIcon({
+          className: `shop-marker-${shop.id}`,
+          html: shopIconHtml,
+          iconSize: [120, 36],
+          iconAnchor: [60, 36],
+          popupAnchor: [0, -36],
+        });
+        let sMarker = markersRef.current.get(shopMarkerKey);
+        if (sMarker) {
+          sMarker.setLatLng([shop.location.lat, shop.location.lng]);
+          sMarker.setIcon(shopIcon);
+        } else {
+          sMarker = L.marker([shop.location.lat, shop.location.lng], { icon: shopIcon }).addTo(map);
+          // Click opens the Store Details Modal (React state), not just a Leaflet popup
+          sMarker.on('click', () => {
+            setSelectedShop(shop);
+            setSelectedOrderState(null); // close order drawer if open
+          });
+          markersRef.current.set(shopMarkerKey, sMarker);
+        }
       }
 
       const allBoundsPoints: [number, number][] = [[helperLat, helperLng]];
@@ -277,9 +335,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
       if (routesChanged) {
         routePolylinesRef.current.forEach((poly) => {
-          try {
-            poly.remove();
-          } catch (e) {}
+          try { poly.remove(); } catch (e) {}
         });
         routePolylinesRef.current = [];
       }
@@ -288,10 +344,8 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
       const currentOrderIds = new Set(visibleOrders.map((o) => o.id));
       currentOrderIds.add('helper');
       markersRef.current.forEach((marker, id) => {
-        if (!currentOrderIds.has(id)) {
-          try {
-            marker.remove();
-          } catch (e) {}
+        if (!id.startsWith('shop-') && !currentOrderIds.has(id)) {
+          try { marker.remove(); } catch (e) {}
           markersRef.current.delete(id);
         }
       });
@@ -312,7 +366,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const badgeColor = isPending ? '#f59e0b' : '#2563eb';
         const badgeBorderColor = isPending ? '#d97706' : '#1d4ed8';
 
-        // Timer text: Bold Red Color & Increased Text Size (13px)
         const orderIconHtml = `
           <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 190px; height: 82px;">
             <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid white; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 170px; text-align: center;">
@@ -354,6 +407,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           existingMarker = L.marker([deliveryLat, deliveryLng], { icon: orderIcon }).addTo(map);
           existingMarker.on('click', () => {
             setSelectedOrderState(order);
+            setSelectedShop(null); // close shop modal if open
             onSelectOrder(order);
           });
           markersRef.current.set(order.id, existingMarker);
@@ -447,34 +501,207 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     }
   };
 
+  // Filtered and Sorted Shops
+  const filteredShops = shops.filter((s) => {
+    const term = shopSearch.toLowerCase();
+    return (
+      s.name.toLowerCase().includes(term) ||
+      s.type.toLowerCase().includes(term) ||
+      (s.location?.address || '').toLowerCase().includes(term)
+    );
+  });
+
+  const sortedShops = [...filteredShops].sort((a, b) => {
+    if (shopSort === 'name-asc') {
+      return a.name.localeCompare(b.name);
+    }
+    if (shopSort === 'name-desc') {
+      return b.name.localeCompare(a.name);
+    }
+    if (shopSort === 'type') {
+      return a.type.localeCompare(b.type);
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+
+  const SHOPS_PER_PAGE = 5;
+  const totalShopPages = Math.max(1, Math.ceil(sortedShops.length / SHOPS_PER_PAGE));
+  const paginatedShops = sortedShops.slice(
+    (shopPage - 1) * SHOPS_PER_PAGE,
+    shopPage * SHOPS_PER_PAGE
+  );
+
+  if (mapLoadError) {
+    return (
+      <div className="w-full bg-slate-50 border border-slate-200 rounded-3xl p-5 shadow-lg space-y-4">
+        {/* Map Area Placeholder showing it didn't load */}
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-center space-y-2 animate-in fade-in duration-350">
+          <Globe className="w-10 h-10 text-red-500 mx-auto animate-pulse" />
+          <h4 className="font-extrabold text-sm text-red-900">ম্যাপ লোড করা যায়নি (Map failed to load)</h4>
+          <p className="text-xs text-red-700">জিপিএস ও ইন্টারনেট সংযোগ সক্রিয় আছে কিনা যাচাই করুন। নিচে নিবন্ধিত দোকানগুলোর তালিকা দেওয়া হলো।</p>
+        </div>
+
+        {/* Shop List Section */}
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+            <h3 className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
+              <Store className="w-4 h-4 text-emerald-600" />
+              <span>নিবন্ধিত দোকানসমূহ ({filteredShops.length})</span>
+            </h3>
+            
+            {/* Filter and Sort Options */}
+            <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+              <input
+                type="text"
+                placeholder="খুঁজুন (Search name, type, address)..."
+                value={shopSearch}
+                onChange={(e) => {
+                  setShopSearch(e.target.value);
+                  setShopPage(1);
+                }}
+                className="flex-1 min-w-[150px] px-3 py-1.5 rounded-xl border border-gray-200 text-xs focus:ring-2 focus:ring-emerald-500/20 focus:outline-none transition-all"
+              />
+              <select
+                value={shopSort}
+                onChange={(e) => {
+                  setShopSort(e.target.value as any);
+                  setShopPage(1);
+                }}
+                className="px-3 py-1.5 rounded-xl border border-gray-200 text-xs focus:ring-2 focus:ring-emerald-500/20 focus:outline-none bg-white font-semibold text-gray-700 cursor-pointer"
+              >
+                <option value="newest">সর্বশেষ যুক্ত</option>
+                <option value="name-asc">নাম (A-Z)</option>
+                <option value="name-desc">নাম (Z-A)</option>
+                <option value="type">ক্যাটাগরি</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Shop List Cards */}
+          {paginatedShops.length === 0 ? (
+            <div className="py-8 text-center text-gray-400 text-xs">
+              কোনো দোকান পাওয়া যায়নি।
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {paginatedShops.map((shop) => (
+                <div key={shop.id} className="p-3.5 rounded-2xl border border-gray-100 bg-gray-50/50 hover:bg-gray-50 transition-all flex flex-col gap-2.5">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <h4 className="font-extrabold text-sm text-gray-900 leading-tight">{shop.name}</h4>
+                      <span className="inline-block mt-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold border border-emerald-100">
+                        {shop.type}
+                      </span>
+                    </div>
+                    {shop.location.lat && shop.location.lng && (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${shop.location.lat},${shop.location.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        <Navigation className="w-3.5 h-3.5" />
+                        <span>ম্যাপে দেখুন</span>
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-gray-600 space-y-1">
+                    <p className="flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                      <span className="font-semibold text-gray-500">যোগাযোগ:</span>
+                      <span className="font-bold">{shop.contactPerson}</span>
+                    </p>
+                    <p className="flex items-start gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{shop.location.address}</span>
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 pt-1.5 border-t border-gray-100">
+                    <a
+                      href={`tel:${shop.whatsapp}`}
+                      className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs text-center shadow-xs flex items-center justify-center gap-1 transition-all"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                      <span>কল করুন</span>
+                    </a>
+                    <a
+                      href={`https://wa.me/${shop.whatsapp.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 py-2 bg-green-500 hover:bg-green-600 text-white font-extrabold text-xs text-center rounded-xl shadow-xs flex items-center justify-center gap-1 transition-all"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Pagination Controls */}
+          {totalShopPages > 1 && (
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-xs font-bold text-gray-700 font-sans">
+              <button
+                type="button"
+                onClick={() => setShopPage((p) => Math.max(1, p - 1))}
+                disabled={shopPage === 1}
+                className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 transition-all"
+              >
+                পূর্ববর্তী
+              </button>
+              <span>পৃষ্ঠা {shopPage} / {totalShopPages}</span>
+              <button
+                type="button"
+                onClick={() => setShopPage((p) => Math.min(totalShopPages, p + 1))}
+                disabled={shopPage === totalShopPages}
+                className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 transition-all"
+              >
+                পরবর্তী
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${
         isFullscreen
-          ? 'fixed inset-0 z-[9999] h-screen w-screen rounded-none border-none shadow-none'
+          ? 'z-[99999]'
           : 'h-[650px] rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden'
       }`}
+      style={
+        isFullscreen
+          ? { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100dvh' }
+          : undefined
+      }
     >
-      {/* Top Right Control: Fullscreen Toggle */}
-      <div className="absolute top-4 right-4 z-20 pointer-events-auto flex items-center gap-2">
+      {/* Top Right Controls */}
+      <div className="absolute top-4 right-4 z-[10001] pointer-events-auto flex items-center gap-2">
+        {/* Fullscreen / Close Button */}
         <button
           type="button"
-          onClick={toggleFullscreen}
+          onClick={() => setIsFullscreen((prev) => !prev)}
           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-extrabold shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer ${
             isFullscreen
-              ? 'bg-red-600 hover:bg-red-700 text-white border border-red-400 z-[10000]'
+              ? 'bg-red-600 hover:bg-red-700 text-white border border-red-400'
               : 'bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md text-white border border-slate-700/80'
           }`}
-          title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen Map'}
+          title={isFullscreen ? 'ম্যাপ বন্ধ করুন' : 'Full Screen Map'}
         >
           {isFullscreen ? (
             <>
               <X className="w-4 h-4 text-white" />
-              <span>ফুল স্ক্রিন বন্ধ করুন</span>
+              <span>ম্যাপ বন্ধ করুন</span>
             </>
           ) : (
             <>
-              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
+              <Globe className="w-3.5 h-3.5 text-cyan-400" />
               <span>ফুল স্ক্রিন</span>
             </>
           )}
@@ -484,9 +711,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
       {/* Leaflet Map Canvas */}
       <div ref={mapContainerRef} className="w-full h-full z-10" />
 
-      {/* Bottom Left Controls: "কেন্দ্রবিন্দু" Button & Live Route Map Label */}
+      {/* Bottom Left Controls: Re-center Button & Live Route Map Label */}
       <div
-        className={`absolute z-20 pointer-events-auto flex flex-col items-start gap-2 transition-all duration-300 ${
+        className={`absolute z-[10001] pointer-events-auto flex flex-col items-start gap-2 transition-all duration-300 ${
           selectedOrder ? 'bottom-[205px] left-4' : 'bottom-4 left-4'
         }`}
       >
@@ -500,7 +727,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           <span>কেন্দ্রবিন্দু</span>
         </button>
 
-        {!selectedOrder && (
+        {!selectedOrder && !selectedShop && (
           <div className="flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-slate-700/80 shadow-xl">
             <Globe className="w-4 h-4 text-cyan-400 animate-pulse" />
             <span className="text-xs font-extrabold text-white">
@@ -510,9 +737,91 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         )}
       </div>
 
+      {/* ── Store Details Modal (shown when a shop marker is clicked) ── */}
+      {selectedShop && (
+        <div className="absolute inset-0 z-[10002] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+        <div className="w-full max-w-sm bg-white rounded-3xl border border-purple-200 shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-purple-700 to-violet-800 text-white">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-white/20 rounded-xl">
+                <Store className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <div className="font-extrabold text-sm leading-tight">{selectedShop.name}</div>
+                <div className="text-[10px] text-purple-200 font-semibold">{selectedShop.type}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedShop(null)}
+              className="p-1.5 bg-white/20 hover:bg-white/30 rounded-xl transition-colors"
+            >
+              <X className="w-4 h-4 text-white" />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="px-4 py-3 space-y-2.5">
+            {/* Contact Person */}
+            <div className="flex items-center gap-2 text-xs text-gray-700">
+              <User className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+              <span className="font-semibold text-gray-500">Contact:</span>
+              <span className="font-bold">{selectedShop.contactPerson}</span>
+            </div>
+
+            {/* Address */}
+            <div className="flex items-start gap-2 text-xs text-gray-700">
+              <MapPin className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
+              <span className="font-medium leading-snug">{selectedShop.location.address}</span>
+            </div>
+
+            {/* Added By */}
+            {selectedShop.addedByHelperName && (
+              <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                <span>Added by:</span>
+                <span className="font-semibold text-gray-500">{selectedShop.addedByHelperName}</span>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex gap-2 pt-1">
+              <a
+                href={`tel:${selectedShop.whatsapp}`}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>কল করুন</span>
+              </a>
+              <a
+                href={`https://wa.me/${selectedShop.whatsapp.replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>WhatsApp</span>
+              </a>
+              {selectedShop.location.lat && selectedShop.location.lng && (
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${selectedShop.location.lat},${selectedShop.location.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>Directions</span>
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+        </div>
+      )}
+
       {/* Floating Selected Order Drawer / Popover */}
-      {selectedOrder && (
-        <div className="absolute bottom-4 left-4 right-4 z-20 bg-slate-900/95 backdrop-blur-md p-4 rounded-2xl border border-slate-700 shadow-2xl animate-slideUp text-white">
+      {selectedOrder && !selectedShop && (
+        <div className="absolute bottom-4 left-4 right-4 z-[10001] bg-slate-900/95 backdrop-blur-md p-4 rounded-2xl border border-slate-700 shadow-2xl animate-slideUp text-white">
           <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800">
             <div className="flex items-center gap-1.5 text-xs font-extrabold text-cyan-400">
               <Globe className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
@@ -543,9 +852,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
                   {selectedOrder.status}
                 </span>
               </div>
-              <p className="text-xs text-slate-300 mt-0.5 font-medium">
-                অর্ডার ID: #{selectedOrder.id}
-              </p>
+              <span className="inline-block mt-1 bg-slate-800 text-cyan-300 font-black font-mono text-[10px] px-2 py-0.5 rounded-md border border-slate-700">
+                #{selectedOrder.id}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 text-sm font-extrabold text-red-500 bg-red-950/60 px-3 py-1.5 rounded-xl border border-red-500/40 shrink-0 shadow-sm">
               <Clock className="w-4 h-4 text-red-500 animate-pulse" />
@@ -597,4 +906,3 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     </div>
   );
 };
-

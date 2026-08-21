@@ -8,18 +8,84 @@ import { CustomerHome } from '@/components/CustomerHome';
 import { HelperDashboard } from '@/components/HelperDashboard';
 import { AdminDashboard } from '@/components/AdminDashboard';
 import { HelperWallet } from '@/components/HelperWallet';
+import { ExploreHelperView } from '@/components/ExploreHelperView';
 import { NotificationDrawer } from '@/components/NotificationDrawer';
 import { requestBrowserNotificationPermission, fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
 
+import { Order } from '@/types';
+import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
+import { CustomModalInjector } from '@/components/CustomModalInjector';
+
+import { HelperCenterPage } from '@/components/HelperCenterPage';
+
 export default function PageClient() {
-  const { user, loading, activeMode } = useAuth();
+  const { user, loading, activeMode, setActiveMode } = useAuth();
   const { showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel'>('request');
+  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
+  const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
+
+  const handleSelectOrder = (orderId: string) => {
+    setInitialSelectedOrderId(orderId);
+    
+    // Switch view modes/tabs based on order and user profile
+    const order = fallbackStore.orders.get(orderId);
+    if (user) {
+      if (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel') {
+        setActiveTab('admin_panel');
+        setActiveMode('admin');
+      } else if (order) {
+        if (order.helperId === user.uid) {
+          // Switch to helper view
+          setActiveTab('helper_tasks');
+          setActiveMode('helper');
+        } else if (order.customerId === user.uid) {
+          // Switch to customer view
+          setActiveTab('request');
+          setActiveMode('customer');
+        } else if (!order.helperId && user.isHelper) {
+          // Pending order, user is a helper, open in helper tasks to let them accept it
+          setActiveTab('helper_tasks');
+          setActiveMode('helper');
+        }
+      }
+    }
+  };
 
   // iOS "Add to Home Screen" install banner
   const [showIosInstallBanner, setShowIosInstallBanner] = useState(false);
+
+  // Check for completed customer orders needing feedback (Only for customer mode)
+  useEffect(() => {
+    if (!user || (activeMode as string) !== 'customer') {
+      setFeedbackOrder(null);
+      return;
+    }
+
+    const checkUnratedDeliveredOrder = () => {
+      const userOrders = Array.from(fallbackStore.orders.values()).filter(
+        (o) => o.customerId === user.uid && o.status === 'DELIVERED'
+      );
+
+      const unrated = userOrders.find((o) => {
+        if (o.feedback) return false;
+        const dismissed = typeof sessionStorage !== 'undefined' && sessionStorage.getItem(`feedback_dismissed_${o.id}`);
+        return !dismissed;
+      });
+
+      if (unrated) {
+        setFeedbackOrder(unrated);
+      } else {
+        setFeedbackOrder(null);
+      }
+    };
+
+    checkUnratedDeliveredOrder();
+    const unsub = fallbackStore.subscribe(checkUnratedDeliveredOrder);
+    return () => unsub();
+  }, [user, activeMode]);
 
   // Detect iOS Safari standalone check (only show if not already installed as PWA)
   useEffect(() => {
@@ -64,6 +130,13 @@ export default function PageClient() {
     }
   }, [user]);
 
+  // Reset activeTab when activeMode changes
+  useEffect(() => {
+    if (activeMode === 'customer') {
+      setActiveTab('request');
+    }
+  }, [activeMode]);
+
   // Strict role view guarding
   const renderCurrentView = () => {
     // If not logged in, user can only see CustomerHome (Request form + How it works)
@@ -71,23 +144,44 @@ export default function PageClient() {
       return <CustomerHome />;
     }
 
+    // Help Center view
+    if (activeTab === 'helper_center') {
+      return <HelperCenterPage onBack={() => setActiveTab('request')} />;
+    }
+
     // Admin view check: by default, logged-in admin users see Admin Dashboard
     if (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel') {
-      return <AdminDashboard />;
+      return (
+        <AdminDashboard
+          initialSelectedOrderId={initialSelectedOrderId}
+          onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+        />
+      );
     }
 
     // Helper views check
-    if (user.isHelper) {
+    if (user.isHelper && activeMode === 'helper') {
       if (activeTab === 'wallet') {
         return <HelperWallet />;
       }
-      if (activeMode === 'helper' || activeTab === 'helper_tasks') {
-        return <HelperDashboard />;
+      if (activeTab === 'explore') {
+        return <ExploreHelperView />;
       }
+      return (
+        <HelperDashboard
+          initialSelectedOrderId={initialSelectedOrderId}
+          onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+        />
+      );
     }
 
     // Default Customer view
-    return <CustomerHome />;
+    return (
+      <CustomerHome
+        initialSelectedOrderId={initialSelectedOrderId}
+        onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+      />
+    );
   };
 
   const isAdminView = Boolean(
@@ -163,7 +257,10 @@ export default function PageClient() {
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
       {/* Header */}
-      <AppHeader onOpenNotifications={() => setShowNotifications(true)} />
+      <AppHeader
+        onOpenNotifications={() => setShowNotifications(true)}
+        onNavigate={(tab) => setActiveTab(tab as any)}
+      />
 
       {/* iOS "Add to Home Screen" install banner */}
       {showIosInstallBanner && (
@@ -263,8 +360,26 @@ export default function PageClient() {
       {showNotifications && (
         <NotificationDrawer
           onClose={() => setShowNotifications(false)}
+          onSelectOrder={handleSelectOrder}
         />
       )}
+
+      {/* Customer Order Delivery Feedback Modal */}
+      {feedbackOrder && (
+        <OrderFeedbackModal
+          order={feedbackOrder}
+          onClose={() => {
+            if (feedbackOrder && typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
+            }
+            setFeedbackOrder(null);
+          }}
+          onSubmitted={() => setFeedbackOrder(null)}
+        />
+      )}
+
+      {/* Dynamic Admin Custom Modal Injector */}
+      <CustomModalInjector currentEvent="FIRST_VISIT" />
     </div>
   );
 }

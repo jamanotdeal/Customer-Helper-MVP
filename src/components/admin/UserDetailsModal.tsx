@@ -546,6 +546,14 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                             const newType = e.target.value as 'commuter' | 'dedicated';
                             const updated = { ...user, helperType: newType, isHelper: true };
                             await fallbackStore.saveUser(updated);
+
+                            if (newType === 'dedicated' && helperApp) {
+                              await fallbackStore.updateHelperApp(helperApp.id, {
+                                applicationType: 'dedicated',
+                                status: 'APPROVED',
+                              });
+                            }
+
                             showAlert('স্ট্যাটাস আপডেট', `হেলপার স্ট্যাটাস ${newType === 'dedicated' ? 'Dedicated Helper' : 'Commuter Helper'} হিসেবে পরিবর্তন করা হয়েছে।`, 'success');
                             if (onUserUpdated) onUserUpdated();
                           }}
@@ -571,6 +579,49 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                     ) : (
                       <p className="text-gray-500 italic py-1">কোনো হেলপার রেজিস্ট্রেশন আবেদন জমা দেওয়া হয়নি।</p>
                     )}
+
+                    {/* Customer Feedback & Rider Rating Summary */}
+                    {(() => {
+                      const hFeedbacks = Array.from(fallbackStore.orderFeedbacks.values()).filter(
+                        (fb) => fb.helperId === userId
+                      );
+                      if (hFeedbacks.length === 0) return null;
+                      const avgRider = (hFeedbacks.reduce((s, f) => s + f.riderRating, 0) / hFeedbacks.length).toFixed(1);
+                      const avgService = (hFeedbacks.reduce((s, f) => s + f.serviceRating, 0) / hFeedbacks.length).toFixed(1);
+                      const comments = hFeedbacks.filter((f) => f.improvementComment && f.improvementComment.trim().length > 0);
+
+                      return (
+                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
+                          <h5 className="font-extrabold text-xs text-amber-900 uppercase tracking-wider flex items-center space-x-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Rider Performance Ratings & Feedback ({hFeedbacks.length})</span>
+                          </h5>
+                          <div className="grid grid-cols-2 gap-2 text-center text-xs">
+                            <div className="p-2 bg-amber-50 rounded-xl border border-amber-200">
+                              <span className="text-[10px] font-bold text-amber-800 block uppercase">Behavior Rating</span>
+                              <span className="text-sm font-black text-amber-900">⭐ {avgRider} / 5</span>
+                            </div>
+                            <div className="p-2 bg-emerald-50 rounded-xl border border-emerald-200">
+                              <span className="text-[10px] font-bold text-emerald-800 block uppercase">Service Quality</span>
+                              <span className="text-sm font-black text-emerald-900">⭐ {avgService} / 5</span>
+                            </div>
+                          </div>
+                          {comments.length > 0 && (
+                            <div className="space-y-1.5 pt-1">
+                              <span className="text-[10px] font-bold text-gray-500 block uppercase">Recent Customer Comments:</span>
+                              <div className="space-y-1 max-h-24 overflow-y-auto">
+                                {comments.map((c) => (
+                                  <div key={c.id} className="p-2 bg-gray-50 border border-gray-200 rounded-xl text-[11px]">
+                                    <span className="font-bold text-gray-900">{c.customerName || 'Customer'}:</span>{' '}
+                                    <span className="text-gray-700">&ldquo;{c.improvementComment}&rdquo;</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 

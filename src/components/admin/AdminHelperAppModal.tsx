@@ -96,6 +96,7 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
         hasSmartphone,
         hasCycle,
         hasBike,
+        applicationType: 'dedicated',
         status,
         createdAt: new Date().toISOString(),
       };

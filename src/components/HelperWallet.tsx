@@ -26,14 +26,37 @@ export const HelperWallet: React.FC = () => {
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('100');
-  const [paymentMethod, setPaymentMethod] = useState<'bKash' | 'Nagad' | 'Rocket'>('bKash');
+  const [paymentMethod, setPaymentMethod] = useState<'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Cash'>('bKash');
   const [accountNumber, setAccountNumber] = useState('01812345678');
   const [submitting, setSubmitting] = useState(false);
+
+  // Pagination for Wallet Ledger
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const ledgerPageSize = 10;
+
+  const getPaymentInstructions = () => {
+    const settings = fallbackStore.pricingSettings;
+    switch (paymentMethod) {
+      case 'bKash':
+        return settings.bkashInstructions || 'bKash Personal: Send Money to 018XXXXXXXX and provide transaction ID.';
+      case 'Nagad':
+        return settings.nagadInstructions || 'Nagad Personal: Send Money to 018XXXXXXXX and provide transaction ID.';
+      case 'Rocket':
+        return settings.rocketInstructions || 'Rocket Personal: Send Money to 018XXXXXXXX and provide transaction ID.';
+      case 'Bank':
+        return settings.bankInstructions || 'Bank Account: Transfer due commission to Bank Name, Account: XXXX-XXXX-XXXX, Branch: XXX, and write Reference.';
+      case 'Cash':
+        return settings.cashInstructions || 'Cash Payment: Pay directly at the Jamanot office desk and get a receipt.';
+      default:
+        return '';
+    }
+  };
 
   // Date Range Filtering State (Default: ALL_TIME)
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
+  const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
 
   const minWithdrawal = fallbackStore.pricingSettings.minWithdrawalAmount || 100;
 
@@ -57,8 +80,13 @@ export const HelperWallet: React.FC = () => {
     return getLocalYYYYMMDD(d);
   };
 
-  const handlePresetSelect = (preset: 'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH') => {
+  const handlePresetSelect = (preset: 'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM') => {
     setActivePreset(preset);
+    if (preset === 'CUSTOM') {
+      setShowCustomPicker((prev) => !prev);
+      return;
+    }
+    setShowCustomPicker(false);
     if (preset === 'ALL_TIME') {
       setStartDate('');
       setEndDate('');
@@ -125,6 +153,16 @@ export const HelperWallet: React.FC = () => {
     });
   }, [transactions, startDate, endDate]);
 
+  const totalLedgerPages = Math.ceil(filteredTransactions.length / ledgerPageSize) || 1;
+  const paginatedTransactions = useMemo(() => {
+    return filteredTransactions.slice((ledgerPage - 1) * ledgerPageSize, ledgerPage * ledgerPageSize);
+  }, [filteredTransactions, ledgerPage]);
+
+  // Reset ledger page on transactions change
+  useEffect(() => {
+    setLedgerPage(1);
+  }, [filteredTransactions]);
+
   const filteredWithdrawals = useMemo(() => {
     return withdrawals.filter((w) => {
       const t = new Date(w.createdAt).getTime();
@@ -168,10 +206,22 @@ export const HelperWallet: React.FC = () => {
     return { earned, commissionDue, paidCommission };
   }, [filteredOrders, filteredWithdrawals]);
 
-  const canPayback = (wallet?.balance || 0) > 0;
+  const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
+  const hasPendingPayback = !!pendingPayback;
+  const canPayback = (wallet?.balance || 0) > 0 && !hasPendingPayback;
 
   const handlePaybackSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (hasPendingPayback) {
+      await showAlert(
+        'অনুরোধ ইতিমধ্যে প্রক্রিয়াধীন',
+        `আপনার একটি কমিশন পরিশোধের অনুরোধ (৳${pendingPayback?.amount}) ইতিমধ্যে প্রক্রিয়াধীন আছে। অ্যাডমিন অনুমোদন/বাতিল না করা পর্যন্ত নতুন অনুরোধ করা যাবে না।`,
+        'warning'
+      );
+      setShowWithdrawModal(false);
+      return;
+    }
+
     const amt = parseFloat(withdrawAmount);
     if (!user || isNaN(amt) || amt <= 0 || amt > (wallet?.balance || 0)) {
       await showAlert(
@@ -209,8 +259,24 @@ export const HelperWallet: React.FC = () => {
           </h2>
         </div>
 
+        {hasPendingPayback && (
+          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-semibold">
+            ⏳ আপনার ৳{pendingPayback.amount} commission payback অনুরোধ অ্যাডমিনের পর্যালোচনায় আছে।
+          </div>
+        )}
+
         <button
-          onClick={() => setShowWithdrawModal(true)}
+          onClick={() => {
+            if (hasPendingPayback) {
+              showAlert(
+                'অনুরোধ ইতিমধ্যে প্রক্রিয়াধীন',
+                `আপনার একটি কমিশন পরিশোধের অনুরোধ (৳${pendingPayback.amount}) ইতিমধ্যে প্রক্রিয়াধীন আছে। অ্যাডমিন অনুমোদন/বাতিল না করা পর্যন্ত নতুন অনুরোধ করা যাবে না।`,
+                'warning'
+              );
+              return;
+            }
+            setShowWithdrawModal(true);
+          }}
           disabled={!canPayback}
           className={`w-full py-3.5 rounded-2xl font-extrabold text-sm shadow-md transition-all ${
             canPayback
@@ -218,7 +284,11 @@ export const HelperWallet: React.FC = () => {
               : 'bg-white/20 text-white/60 cursor-not-allowed'
           }`}
         >
-          {canPayback ? 'Pay Commission to Platform' : 'No Due Commission'}
+          {hasPendingPayback
+            ? 'Payback Pending Admin Approval'
+            : canPayback
+            ? 'Pay Commission to Platform'
+            : 'No Due Commission'}
         </button>
       </div>
 
@@ -278,35 +348,47 @@ export const HelperWallet: React.FC = () => {
           >
             This Month
           </button>
+          <button
+            onClick={() => handlePresetSelect('CUSTOM')}
+            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
+              activePreset === 'CUSTOM' || showCustomPicker
+                ? 'bg-emerald-700 text-white shadow-xs'
+                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Custom
+          </button>
         </div>
 
-        {/* Custom Date Pickers */}
-        <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1">
-          <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-            <span className="text-gray-400 text-[9px] uppercase font-extrabold">From:</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => {
-                setStartDate(e.target.value);
-                setActivePreset('CUSTOM');
-              }}
-              className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-            />
+        {/* Custom Date Pickers - Only shown when Custom button is clicked */}
+        {(showCustomPicker || activePreset === 'CUSTOM') && (
+          <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1 animate-in fade-in duration-200">
+            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
+              <span className="text-gray-400 text-[9px] uppercase font-extrabold">From:</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
+              />
+            </div>
+            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
+              <span className="text-gray-400 text-[9px] uppercase font-extrabold">To:</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
+              />
+            </div>
           </div>
-          <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-            <span className="text-gray-400 text-[9px] uppercase font-extrabold">To:</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => {
-                setEndDate(e.target.value);
-                setActivePreset('CUSTOM');
-              }}
-              className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-            />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Stats Summary */}
@@ -392,34 +474,59 @@ export const HelperWallet: React.FC = () => {
         {filteredTransactions.length === 0 ? (
           <p className="text-xs text-gray-400 text-center py-4">কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</p>
         ) : (
-          <div className="space-y-2.5">
-            {filteredTransactions.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50/70 border border-gray-100 text-xs">
-                <div className="flex items-center space-x-3">
-                  <div
-                    className={`p-2 rounded-xl ${
-                      tx.amount > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+          <>
+            <div className="space-y-2.5">
+              {paginatedTransactions.map((tx) => (
+                <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50/70 border border-gray-100 text-xs">
+                  <div className="flex items-center space-x-3">
+                    <div
+                      className={`p-2 rounded-xl ${
+                        tx.amount > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      {tx.amount > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
+                    </div>
+                    <div>
+                      <span className="font-bold text-gray-900 block">{tx.description}</span>
+                      <span className="text-[10px] font-semibold text-gray-500 block">
+                        {formatExactDateTime(tx.createdAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <span
+                    className={`font-black text-sm ${
+                      tx.amount > 0 ? 'text-emerald-700' : 'text-red-600'
                     }`}
                   >
-                    {tx.amount > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
-                  </div>
-                  <div>
-                    <span className="font-bold text-gray-900 block">{tx.description}</span>
-                    <span className="text-[10px] font-semibold text-gray-500 block">
-                      {formatExactDateTime(tx.createdAt)}
-                    </span>
-                  </div>
+                    {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
+                  </span>
                 </div>
-                <span
-                  className={`font-black text-sm ${
-                    tx.amount > 0 ? 'text-emerald-700' : 'text-red-600'
-                  }`}
+              ))}
+            </div>
+            {filteredTransactions.length > ledgerPageSize && (
+              <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setLedgerPage((p) => Math.max(p - 1, 1))}
+                  disabled={ledgerPage === 1}
+                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
                 >
-                  {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
+                  Prev
+                </button>
+                <span className="text-xs font-black text-slate-800">
+                  Page {ledgerPage} of {totalLedgerPages}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setLedgerPage((p) => Math.min(p + 1, totalLedgerPages))}
+                  disabled={ledgerPage === totalLedgerPages}
+                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
+                >
+                  Next
+                </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
 
@@ -445,23 +552,29 @@ export const HelperWallet: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Payment Method</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['bKash', 'Nagad', 'Rocket'] as const).map((method) => (
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">Payment Method</label>
+                <div className="flex flex-wrap gap-2">
+                  {(['bKash', 'Nagad', 'Rocket', 'Bank', 'Cash'] as const).map((method) => (
                     <button
                       type="button"
                       key={method}
                       onClick={() => setPaymentMethod(method)}
-                      className={`py-2.5 rounded-2xl font-bold text-xs border transition-all ${
+                      className={`px-3.5 py-2 rounded-2xl font-bold text-xs border transition-all ${
                         paymentMethod === method
-                          ? 'border-emerald-500 bg-emerald-50 text-emerald-900'
-                          : 'border-gray-200 text-gray-600'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-950 shadow-xs'
+                          : 'border-gray-200 text-gray-600 bg-gray-50'
                       }`}
                     >
                       {method}
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Payment Method Specific Instructions */}
+              <div className="p-3.5 bg-indigo-50 border border-indigo-100 rounded-2xl text-[11px] font-semibold text-indigo-950 leading-relaxed">
+                <span className="font-bold text-indigo-900 block mb-1">Instructions (নির্দেশাবলী):</span>
+                {getPaymentInstructions()}
               </div>
 
               <div>

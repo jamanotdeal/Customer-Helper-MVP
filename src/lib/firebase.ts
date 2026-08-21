@@ -28,6 +28,9 @@ import {
   PricingSettings,
   AppNotification,
   UserProfile,
+  Shop,
+  OrderFeedback,
+  AdminCustomModalConfig,
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
 
@@ -247,6 +250,9 @@ class FallbackStore {
   public walletTransactions: Map<string, WalletTransaction[]> = new Map();
   public withdrawals: Map<string, WithdrawalRequest> = new Map();
   public notifications: Map<string, AppNotification[]> = new Map();
+  public shops: Map<string, Shop> = new Map();
+  public orderFeedbacks: Map<string, OrderFeedback> = new Map();
+  public customModals: Map<string, AdminCustomModalConfig> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
 
   // Set by AuthContext when a user logs in/out so the Firestore
@@ -345,6 +351,24 @@ class FallbackStore {
         parsed.forEach(([id, list]) => this.notifications.set(id, list));
       }
 
+      const savedShops = localStorage.getItem('jamanot_shops_store');
+      if (savedShops) {
+        const parsed: [string, Shop][] = JSON.parse(savedShops);
+        parsed.forEach(([id, s]) => this.shops.set(id, s));
+      }
+
+      const savedFeedbacks = localStorage.getItem('jamanot_feedbacks_store');
+      if (savedFeedbacks) {
+        const parsed: [string, OrderFeedback][] = JSON.parse(savedFeedbacks);
+        parsed.forEach(([id, fb]) => this.orderFeedbacks.set(id, fb));
+      }
+
+      const savedModals = localStorage.getItem('jamanot_modals_store');
+      if (savedModals) {
+        const parsed: [string, AdminCustomModalConfig][] = JSON.parse(savedModals);
+        parsed.forEach(([id, m]) => this.customModals.set(id, m));
+      }
+
       const savedPricing = localStorage.getItem('jamanot_pricing_store');
       if (savedPricing) {
         this.pricingSettings = JSON.parse(savedPricing);
@@ -364,6 +388,9 @@ class FallbackStore {
       localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(Array.from(this.walletTransactions.entries())));
       localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
       localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
+      localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+      localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
       localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
       console.warn('Local storage persist error:', e);
@@ -483,12 +510,6 @@ class FallbackStore {
       onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.users.keys())) {
-            if (!currentIds.has(key)) {
-              this.users.delete(key);
-            }
-          }
           snapshot.docs.forEach((docSnap) => {
             const userProfile = docSnap.data() as UserProfile;
             this.users.set(userProfile.uid, userProfile);
@@ -548,6 +569,61 @@ class FallbackStore {
           }
         },
         (err) => console.warn('[Firestore] PricingSettings sync note:', err)
+      );
+
+      // 9. Shops Listener
+      onSnapshot(
+        collection(db, 'shops'),
+        (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of Array.from(this.shops.keys())) {
+            if (!currentIds.has(key)) this.shops.delete(key);
+          }
+          snapshot.docs.forEach((docSnap) => {
+            this.shops.set(docSnap.id, docSnap.data() as Shop);
+          });
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] Shops sync note:', err)
+      );
+
+      // 10. Order Feedbacks Listener
+      onSnapshot(
+        collection(db, 'orderFeedbacks'),
+        (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of Array.from(this.orderFeedbacks.keys())) {
+            if (!currentIds.has(key)) this.orderFeedbacks.delete(key);
+          }
+          snapshot.docs.forEach((docSnap) => {
+            const fb = docSnap.data() as OrderFeedback;
+            this.orderFeedbacks.set(fb.id, fb);
+            // Link feedback to corresponding order if loaded
+            const ord = this.orders.get(fb.orderId);
+            if (ord && !ord.feedback) {
+              ord.feedback = fb;
+              this.orders.set(ord.id, ord);
+            }
+          });
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] OrderFeedbacks sync note:', err)
+      );
+
+      // 11. Custom Modals Listener
+      onSnapshot(
+        collection(db, 'customModals'),
+        (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of Array.from(this.customModals.keys())) {
+            if (!currentIds.has(key)) this.customModals.delete(key);
+          }
+          snapshot.docs.forEach((docSnap) => {
+            this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
+          });
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] CustomModals sync note:', err)
       );
     } catch (e) {
       console.error('[Firestore] Realtime init failed:', e);
@@ -717,6 +793,71 @@ class FallbackStore {
           createdAt: new Date().toISOString(),
         });
       }
+
+      // If order canceled, also notify assigned helper or all helpers
+      if (updated.status === 'CANCELED') {
+        const helperTarget = updated.helperId || existing.helperId || 'all-helpers';
+        this.addNotification({
+          id: `notif-cancel-hlp-${Date.now()}`,
+          userId: helperTarget,
+          title: 'অর্ডার বাতিল করা হয়েছে',
+          body: `অর্ডার #${updated.id} বাতিল করা হয়েছে।`,
+          orderId: updated.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Product cost addition / update notification to customer
+    if (
+      updated.productCost !== undefined &&
+      existing.productCost !== updated.productCost &&
+      updated.customerId
+    ) {
+      this.addNotification({
+        id: `notif-${Date.now()}-cost`,
+        userId: updated.customerId,
+        title: 'পণ্যের খরচ যোগ/আপডেট করা হয়েছে',
+        body: `আপনার অর্ডার #${updated.id} এর পণ্যের মোট খরচ ৳${updated.productCost} টাকা ধরা হয়েছে।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // Delivery fee update notification to customer
+    if (
+      existing.deliveryFee !== undefined &&
+      existing.deliveryFee !== updated.deliveryFee &&
+      updated.customerId
+    ) {
+      this.addNotification({
+        id: `notif-${Date.now()}-fee-change`,
+        userId: updated.customerId,
+        title: 'ডেলিভারি ফি আপডেট করা হয়েছে',
+        body: `আপনার অর্ডার #${updated.id} এর ডেলিভারি চার্জ ৳${updated.deliveryFee} টাকা করা হয়েছে।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // Customer edit notification to helper
+    if (
+      updated.lastEditedBy === 'customer' &&
+      existing.lastEditedAt !== updated.lastEditedAt
+    ) {
+      const helperTarget = updated.helperId || 'all-helpers';
+      this.addNotification({
+        id: `notif-${Date.now()}-cust-edit`,
+        userId: helperTarget,
+        title: 'অর্ডার পরিবর্তন (Order Updated)',
+        body: `গ্রাহক অর্ডার #${updated.id} এর তথ্য/বিবরণ আপডেট করেছেন।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
     }
 
     // Fee adjustment notification to customer
@@ -947,6 +1088,89 @@ class FallbackStore {
     }
   }
 
+  public migrateUserUid(oldUid: string, newUid: string) {
+    if (!oldUid || !newUid || oldUid === newUid) return;
+
+    // 1. Migrate user profile key if exists under oldUid
+    const oldUser = this.users.get(oldUid);
+    if (oldUser) {
+      this.users.delete(oldUid);
+      const updatedUser = { ...oldUser, uid: newUid };
+      this.users.set(newUid, updatedUser);
+      this.saveUser(updatedUser);
+    }
+
+    // 2. Orders
+    this.orders.forEach((o) => {
+      let changed = false;
+      if (o.customerId === oldUid) { o.customerId = newUid; changed = true; }
+      if (o.helperId === oldUid) { o.helperId = newUid; changed = true; }
+      if (changed) {
+        this.orders.set(o.id, o);
+        try { setDoc(doc(db, 'orders', o.id), cleanForFirestore(o), { merge: true }); } catch (_) {}
+      }
+    });
+
+    // 3. Helper Applications
+    this.helperApplications.forEach((app) => {
+      if (app.userId === oldUid) {
+        app.userId = newUid;
+        this.helperApplications.set(app.id, app);
+        try { setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) {}
+      }
+    });
+
+    // 4. Wallets
+    const oldWallet = this.wallets.get(oldUid);
+    if (oldWallet) {
+      this.wallets.delete(oldUid);
+      const updatedWallet = { ...oldWallet, userId: newUid };
+      this.wallets.set(newUid, updatedWallet);
+      try { setDoc(doc(db, 'wallets', newUid), cleanForFirestore(updatedWallet)); } catch (_) {}
+    }
+
+    // 5. Wallet Transactions
+    const oldTxs = this.walletTransactions.get(oldUid);
+    if (oldTxs) {
+      this.walletTransactions.delete(oldUid);
+      const updatedTxs = oldTxs.map((tx) => ({ ...tx, userId: newUid }));
+      this.walletTransactions.set(newUid, updatedTxs);
+      updatedTxs.forEach((tx) => {
+        try { setDoc(doc(db, 'walletTransactions', tx.id), cleanForFirestore(tx), { merge: true }); } catch (_) {}
+      });
+    }
+
+    // 6. Withdrawals
+    this.withdrawals.forEach((w) => {
+      if (w.helperId === oldUid) {
+        w.helperId = newUid;
+        this.withdrawals.set(w.id, w);
+        try { setDoc(doc(db, 'withdrawals', w.id), cleanForFirestore(w), { merge: true }); } catch (_) {}
+      }
+    });
+
+    // 7. Notifications
+    const oldNotifs = this.notifications.get(oldUid);
+    if (oldNotifs) {
+      this.notifications.delete(oldUid);
+      const updatedNotifs = oldNotifs.map((n) => ({ ...n, userId: newUid }));
+      this.notifications.set(newUid, updatedNotifs);
+    }
+
+    // 8. Order Feedbacks
+    this.orderFeedbacks.forEach((fb) => {
+      let changed = false;
+      if (fb.customerId === oldUid) { fb.customerId = newUid; changed = true; }
+      if (fb.helperId === oldUid) { fb.helperId = newUid; changed = true; }
+      if (changed) {
+        this.orderFeedbacks.set(fb.id, fb);
+        try { setDoc(doc(db, 'orderFeedbacks', fb.id), cleanForFirestore(fb), { merge: true }); } catch (_) {}
+      }
+    });
+
+    this.notify();
+  }
+
   public async approveHelperApp(appId: string) {
     const app = this.helperApplications.get(appId);
     if (!app) return;
@@ -955,7 +1179,7 @@ class FallbackStore {
 
     const user = this.users.get(app.userId);
     if (user) {
-      const isDedicated = app.applicationType === 'dedicated';
+      const isDedicated = app.applicationType === 'dedicated' || !app.applicationType;
       const updatedUser: UserProfile = {
         ...user,
         isHelper: true,
@@ -1168,7 +1392,7 @@ class FallbackStore {
     if (app.status === 'APPROVED') {
       const user = this.users.get(app.userId);
       if (user) {
-        const isDedicated = app.applicationType === 'dedicated';
+        const isDedicated = app.applicationType === 'dedicated' || !app.applicationType;
         const updatedUser: UserProfile = {
           ...user,
           isHelper: true,
@@ -1196,7 +1420,7 @@ class FallbackStore {
     if (updated.status === 'APPROVED' && existing.status !== 'APPROVED') {
       const user = this.users.get(updated.userId);
       if (user) {
-        const isDedicated = updated.applicationType === 'dedicated';
+        const isDedicated = updated.applicationType === 'dedicated' || !updated.applicationType;
         const updatedUser: UserProfile = {
           ...user,
           isHelper: true,
@@ -1245,6 +1469,82 @@ class FallbackStore {
       await deleteDoc(doc(db, 'helperApplications', appId));
     } catch (e: any) {
       console.warn('[Firestore] deleteHelperApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async cancelHelperApp(appId: string) {
+    const existing = this.helperApplications.get(appId);
+    if (!existing) return;
+    const updated: HelperApplication = {
+      ...existing,
+      status: 'CANCELED',
+    };
+    this.helperApplications.set(appId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'helperApplications', appId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] cancelHelperApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async saveShop(shop: Shop) {
+    this.shops.set(shop.id, shop);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shop.id), cleanForFirestore(shop), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveShop note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteShop(shopId: string) {
+    this.shops.delete(shopId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'shops', shopId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteShop note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async submitOrderFeedback(feedback: OrderFeedback) {
+    this.orderFeedbacks.set(feedback.id, feedback);
+    const ord = this.orders.get(feedback.orderId);
+    if (ord) {
+      ord.feedback = feedback;
+      this.orders.set(ord.id, ord);
+      try {
+        await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    this.notify();
+    try {
+      await setDoc(doc(db, 'orderFeedbacks', feedback.id), cleanForFirestore(feedback));
+    } catch (e: any) {
+      console.warn('[Firestore] submitOrderFeedback note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async saveCustomModal(config: AdminCustomModalConfig) {
+    this.customModals.set(config.id, config);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'customModals', config.id), cleanForFirestore(config), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveCustomModal note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteCustomModal(modalId: string) {
+    this.customModals.delete(modalId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'customModals', modalId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteCustomModal note (saved locally):', e?.message || e);
     }
   }
 }

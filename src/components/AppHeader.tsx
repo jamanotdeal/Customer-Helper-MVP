@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, X } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, X, HeartHandshake } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { fallbackStore } from '@/lib/firebase';
 
@@ -12,9 +12,10 @@ import { useModal } from './CustomModal';
 
 interface AppHeaderProps {
   onOpenNotifications: () => void;
+  onNavigate?: (tab: string) => void;
 }
 
-export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => {
+export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNavigate }) => {
   const { user, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
   const { showAlert, showPermissionModal } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -184,7 +185,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
       {/* Profile & Role Drawer / Modal */}
       {showProfileMenu && user && (
         <div
-          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end"
+          className="fixed inset-0 z-[10010] bg-black/40 backdrop-blur-xs flex justify-end"
           onClick={() => setShowProfileMenu(false)}
         >
           <div
@@ -221,6 +222,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                     )}
                   </div>
                   <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                  {user.isHelper && (
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <span
+                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                          user.helperType === 'dedicated'
+                            ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        }`}
+                      >
+                        {user.helperType === 'dedicated' ? '⚡ Dedicated Rider' : '🚲 Commuter Helper'}
+                      </span>
+                      <span className="text-[10px] text-gray-500 font-extrabold">
+                        (Max {fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5} active)
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -314,6 +331,27 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications }) => 
                 </div>
               </div>
             </div>
+
+            {/* Helper Center Sidebar Option (Helpers only) */}
+            {user.isHelper && activeMode === 'helper' && (
+              <div className="px-5 mb-4">
+                <button
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    onNavigate?.('helper_center');
+                  }}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl border border-gray-100 hover:bg-emerald-50/50 text-gray-700 transition-all text-left"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    <HeartHandshake className="w-5 h-5 text-emerald-600" />
+                    <div>
+                      <div className="text-sm font-semibold">Helper Center</div>
+                      <div className="text-[11px] text-gray-500 font-normal">অফিস ও যোগাযোগের তথ্য</div>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            )}
 
             {/* Logout Footer */}
             <div className="pt-4 border-t border-gray-100">

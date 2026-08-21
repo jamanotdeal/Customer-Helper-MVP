@@ -3,7 +3,7 @@ import { Order, OrderStatus } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
-import { formatCreatedAt, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { formatCreatedAt, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
 import {
   X,
   User,
@@ -390,6 +390,12 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                         Accepted At: {new Date(order.acceptedAt).toLocaleString()}
                       </p>
                     )}
+                    {getOrderAcceptanceDurationText(order) && (
+                      <div className="mt-2 text-[11px] font-extrabold text-indigo-900 bg-indigo-100/80 px-3 py-1.5 rounded-xl border border-indigo-200 flex items-center space-x-1.5">
+                        <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Order Accepted in: <strong className="text-indigo-950 font-black">{getOrderAcceptanceDurationText(order)}</strong> after creation</span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="py-2 text-center text-amber-700 bg-amber-50 rounded-xl border border-amber-200">
@@ -398,6 +404,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <span>No Helper Assigned Yet</span>
                     </div>
                     <p className="text-[11px]">Click "Assign Helper" above to assign an active helper anytime.</p>
+                    <p className="text-[10px] text-amber-800 font-bold mt-1">Elapsed: {getElapsedTime(order.createdAt)}</p>
                   </div>
                 )}
               </div>
@@ -455,6 +462,16 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-medium">
                   <span className="font-black text-amber-900 block mb-0.5">Customer Additional Note:</span>
                   <p>{order.additionalNote}</p>
+                </div>
+              )}
+
+              {order.helperNote && (
+                <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 text-purple-950 font-medium">
+                  <span className="font-black text-purple-900 block mb-0.5 flex items-center space-x-1">
+                    <FileText className="w-3.5 h-3.5 text-purple-700" />
+                    <span>Helper Private Note (🔒 Customer hidden):</span>
+                  </span>
+                  <p className="text-xs text-purple-950 font-semibold">{order.helperNote}</p>
                 </div>
               )}
             </div>
@@ -577,6 +594,46 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 ))}
               </div>
             </div>
+
+            {/* 5b. Customer & Order Edit History Diffs */}
+            {order.editHistory && order.editHistory.length > 0 && (
+              <div className="bg-amber-50/70 rounded-2xl border border-amber-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-extrabold text-xs text-amber-950 uppercase tracking-wider flex items-center space-x-1.5">
+                    <Edit2 className="w-4 h-4 text-amber-700" />
+                    <span>Customer Edit History &amp; Change Logs (পরিবর্তনের ইতিহাস)</span>
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 font-extrabold text-[10px]">
+                    {order.editHistory.length} Edit{order.editHistory.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {order.editHistory.map((item, idx) => (
+                    <div key={item.id || idx} className="bg-white rounded-xl p-3 border border-amber-200/80 shadow-xs space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-extrabold text-amber-900">
+                          Edited by {item.editedByName || item.editedBy} ({item.editedBy.toUpperCase()})
+                        </span>
+                        <span className="text-gray-400 font-medium">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="space-y-1 pt-1 border-t border-gray-100">
+                        {item.changes.map((change, cIdx) => (
+                          <div key={cIdx} className="text-xs flex flex-wrap items-baseline justify-between gap-2 p-1.5 rounded-lg bg-gray-50">
+                            <span className="font-bold text-gray-700">{change.field}:</span>
+                            <span className="font-medium text-right">
+                              <span className="line-through text-red-600 mr-1.5">{change.oldValue}</span>
+                              <span className="text-emerald-700 font-bold">→ {change.newValue}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 6. Admin Force Action Buttons */}
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">

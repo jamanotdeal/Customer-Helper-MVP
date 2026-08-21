@@ -6,7 +6,7 @@ import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
-import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation } from '@/lib/storage';
+import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock, Map } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { MapPickerModal } from './MapPickerModal';
@@ -50,6 +50,36 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const [services, setServices] = useState<string[]>(
     fallbackStore.pricingSettings.services || DEFAULT_SERVICES
   );
+
+  // Check whether a service is in the no-save list
+  const isNoSavePickupService = (svc: string): boolean => {
+    const noSaveList = fallbackStore.pricingSettings.noSavePickupLocationServices || [];
+    const lowerSvc = svc.trim().toLowerCase();
+    return noSaveList.some((n) => n.trim().toLowerCase() === lowerSvc);
+  };
+
+  // When service changes, pre-fill pickup from saved location (if allowed)
+  const handleServiceChange = (newService: string) => {
+    setService(newService);
+    if (!isNoSavePickupService(newService)) {
+      const saved = getServicePickupLocation(newService);
+      if (saved?.address) {
+        setPickupNote(saved.address);
+        if (saved.lat) setPickupLat(saved.lat);
+        if (saved.lng) setPickupLng(saved.lng);
+      } else {
+        // No saved address for this service — clear pickup
+        setPickupNote('');
+        setPickupLat(undefined);
+        setPickupLng(undefined);
+      }
+    } else {
+      // No-save service — always clear pickup
+      setPickupNote('');
+      setPickupLat(undefined);
+      setPickupLng(undefined);
+    }
+  };
 
   // Cycling placeholders synced from admin panel
   const [placeholders, setPlaceholders] = useState<string[]>(
@@ -264,7 +294,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
-      {!timingStatus.isOpen ? (
+      {user && !timingStatus.isOpen ? (
         <div className="text-center py-6 px-4 space-y-4 animate-in fade-in duration-300">
           <div className="inline-flex p-4 rounded-3xl bg-amber-50 border border-amber-200 text-amber-800 shadow-xs">
             <Clock className="w-8 h-8 animate-pulse text-amber-700" />
@@ -307,7 +337,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                 <div className="relative">
                   <select
                     value={service}
-                    onChange={(e) => setService(e.target.value)}
+                    onChange={(e) => handleServiceChange(e.target.value)}
                     className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
                     required
                   >
@@ -336,7 +366,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
                 {/* Pickup / Source Location (optional) */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">পছন্দের কেনাকাটার স্থান / পিকআপ লোকেশন</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">কোথা থেকে আনতে হবে বা করতে হবে?</label>
                   <div className="relative group">
                     <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
                     <input
@@ -450,18 +480,23 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         isOpen={showPickupMapPicker}
         onClose={() => setShowPickupMapPicker(false)}
         title="কোথা থেকে আনতে হবে বা করতে হবে?"
+        modalType="pickup"
         initialLocation={{
           address: pickupNote,
           lat: pickupLat,
           lng: pickupLng,
         }}
-        addressLabel="Name of Store, Market or Area"
-        addressPlaceholder="Name of Store, Market or Area"
+        addressLabel="এখানে দোকানের, মার্কেটের বা এলাকার নাম লিখুন।"
+        addressPlaceholder="Arif store, Ashulia bazar."
         onMapError={() => setMapHasError(true)}
         onSelectLocation={(loc) => {
           setPickupNote(loc.address);
           if (loc.lat) setPickupLat(loc.lat);
           if (loc.lng) setPickupLng(loc.lng);
+          // Save per-category if service is not in no-save list
+          if (service && !isNoSavePickupService(service)) {
+            saveServicePickupLocation(service, loc);
+          }
         }}
       />
 
@@ -469,13 +504,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         isOpen={showDeliveryMapPicker}
         onClose={() => setShowDeliveryMapPicker(false)}
         title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
+        modalType="delivery"
         initialLocation={{
           address: deliveryAddress,
           lat: deliveryLat,
           lng: deliveryLng,
         }}
-        addressLabel="Your Building name & flat no"
-        addressPlaceholder="Your Building name & flat no"
+        addressLabel="আপনার বাসার নাম বা ঠিকানা লিখুন"
+        addressPlaceholder="4A, Rahman vila, Model town."
         onMapError={() => setMapHasError(true)}
         onSelectLocation={(loc) => {
           setDeliveryAddress(loc.address);

@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, HelperApplication, WithdrawalRequest, PricingSettings, UserProfile } from '@/types';
+import { Order, HelperApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
+import { getOrderAcceptanceDurationText, getElapsedTime } from '@/lib/timeUtils';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -41,6 +42,9 @@ import {
   Calendar,
   Globe,
   Download,
+  Store,
+  Star,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -55,21 +59,42 @@ import { AdminHelperAppModal } from './admin/AdminHelperAppModal';
 import { TimePickerInput } from './admin/TimePickerInput';
 import { AdminHelperMapView } from './admin/AdminHelperMapView';
 import { DraggableTabsContainer } from './admin/DraggableTabsContainer';
+import { AddShopModal } from './AddShopModal';
+import { UserActionDropdown } from './admin/UserActionDropdown';
+import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 
-export const AdminDashboard: React.FC = () => {
+interface AdminDashboardProps {
+  initialSelectedOrderId?: string | null;
+  onClearInitialOrder?: () => void;
+}
+
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({
+  initialSelectedOrderId,
+  onClearInitialOrder,
+}) => {
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
-    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'CUSTOMERS' | 'HELPERS' | 'APPLICATIONS' | 'WITHDRAWALS' | 'PRICING'
+    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'PRICING'
   >('EXCEPTIONS');
-  const [helperViewMode, setHelperViewMode] = useState<'MAP' | 'TABLE'>('MAP');
+  const [helperSubView, setHelperSubView] = useState<'MAP' | 'APPLICATIONS' | 'TABLE'>('MAP');
 
   // Realtime Data state
   const [orders, setOrders] = useState<Order[]>([]);
   const [applications, setApplications] = useState<HelperApplication[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [feedbacks, setFeedbacks] = useState<OrderFeedback[]>([]);
+  const [customModals, setCustomModals] = useState<AdminCustomModalConfig[]>([]);
   const [pricing, setPricing] = useState<PricingSettings>(fallbackStore.pricingSettings);
+
+  const [showAddShopModal, setShowAddShopModal] = useState<boolean>(false);
+  const [editingShop, setEditingShop] = useState<Shop | null>(null);
+
+  const [showCustomModalForm, setShowCustomModalForm] = useState<boolean>(false);
+  const [editingCustomModal, setEditingCustomModal] = useState<AdminCustomModalConfig | null>(null);
+
   const [placeholdersText, setPlaceholdersText] = useState<string>('');
   const [confirmationMsg, setConfirmationMsg] = useState<string>('');
   const [servicesText, setServicesText] = useState<string>('');
@@ -84,6 +109,14 @@ export const AdminDashboard: React.FC = () => {
 
   // PWA Install Prompt Admin Controls
   const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
+
+  // Payback instructions & Store types
+  const [bkashInstructions, setBkashInstructions] = useState<string>('');
+  const [nagadInstructions, setNagadInstructions] = useState<string>('');
+  const [rocketInstructions, setRocketInstructions] = useState<string>('');
+  const [bankInstructions, setBankInstructions] = useState<string>('');
+  const [cashInstructions, setCashInstructions] = useState<string>('');
+  const [storeTypesText, setStoreTypesText] = useState<string>('');
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -94,6 +127,24 @@ export const AdminDashboard: React.FC = () => {
   const [notifPermModalTitle, setNotifPermModalTitle] = useState<string>('নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)');
   const [notifPermModalBody, setNotifPermModalBody] = useState<string>('জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।');
 
+  // Map Picker Guide Overlay Admin Controls
+  const [mapPickerGuideText, setMapPickerGuideText] = useState<string>('যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।');
+  const [mapPickerGuideOkText, setMapPickerGuideOkText] = useState<string>('ঠিক আছে');
+  const [mapPickerGuideShowCount, setMapPickerGuideShowCount] = useState<number>(5);
+  const [noSavePickupServicesText, setNoSavePickupServicesText] = useState<string>('মিক্স কিছু কাজ করে দিন\nনা, অন্য একটা কাজ করে দিন\nআমার একটা জিনিস দিয়ে আসুন');
+
+  // Helper Center contact info
+  const [helperCenterEnabled, setHelperCenterEnabled] = useState<boolean>(true);
+  const [helperCenterOfficeAddress, setHelperCenterOfficeAddress] = useState<string>('');
+  const [helperCenterPhone1, setHelperCenterPhone1] = useState<string>('');
+  const [helperCenterPhone2, setHelperCenterPhone2] = useState<string>('');
+  const [helperCenterEmail, setHelperCenterEmail] = useState<string>('');
+  const [helperCenterFacebook, setHelperCenterFacebook] = useState<string>('');
+  const [helperCenterLinkedin, setHelperCenterLinkedin] = useState<string>('');
+  const [helperCenterInstagram, setHelperCenterInstagram] = useState<string>('');
+  const [helperCenterMapEmbedUrl, setHelperCenterMapEmbedUrl] = useState<string>('');
+  const [helperCenterNote, setHelperCenterNote] = useState<string>('');
+
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -101,6 +152,16 @@ export const AdminDashboard: React.FC = () => {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      setActiveTab('ORDERS');
+      setSelectedOrderId(initialSelectedOrderId);
+      if (onClearInitialOrder) {
+        onClearInitialOrder();
+      }
+    }
+  }, [initialSelectedOrderId, onClearInitialOrder]);
 
   // CRUD Helper Application states
   const [showAddAppModal, setShowAddAppModal] = useState<boolean>(false);
@@ -188,6 +249,36 @@ export const AdminDashboard: React.FC = () => {
           .map(([k, v]) => `${k} = ${v}`)
           .join('\n')
       );
+
+      // Payback & Store types sync
+      setBkashInstructions(settings.bkashInstructions || '');
+      setNagadInstructions(settings.nagadInstructions || '');
+      setRocketInstructions(settings.rocketInstructions || '');
+      setBankInstructions(settings.bankInstructions || '');
+      setCashInstructions(settings.cashInstructions || '');
+      setStoreTypesText((settings.storeTypes || []).join('\n'));
+
+      // Map picker guide overlay sync
+      setMapPickerGuideText(settings.mapPickerGuideText || 'যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।');
+      setMapPickerGuideOkText(settings.mapPickerGuideOkText || 'ঠিক আছে');
+      setMapPickerGuideShowCount(settings.mapPickerGuideShowCount ?? 5);
+      setNoSavePickupServicesText((settings.noSavePickupLocationServices || [
+        'মিক্স কিছু কাজ করে দিন',
+        'না, অন্য একটা কাজ করে দিন',
+        'আমার একটা জিনিস দিয়ে আসুন',
+      ]).join('\n'));
+
+      // Helper Center state sync
+      setHelperCenterEnabled(settings.helperCenterEnabled !== false);
+      setHelperCenterOfficeAddress(settings.helperCenterOfficeAddress || '');
+      setHelperCenterPhone1(settings.helperCenterPhone1 || '');
+      setHelperCenterPhone2(settings.helperCenterPhone2 || '');
+      setHelperCenterEmail(settings.helperCenterEmail || '');
+      setHelperCenterFacebook(settings.helperCenterFacebook || '');
+      setHelperCenterLinkedin(settings.helperCenterLinkedin || '');
+      setHelperCenterInstagram(settings.helperCenterInstagram || '');
+      setHelperCenterMapEmbedUrl(settings.helperCenterMapEmbedUrl || '');
+      setHelperCenterNote(settings.helperCenterNote || '');
     };
 
     syncAdminData();
@@ -392,10 +483,34 @@ export const AdminDashboard: React.FC = () => {
       locationPermissionModalBody: locPermModalBody.trim() || undefined,
       notificationPermissionModalTitle: notifPermModalTitle.trim() || undefined,
       notificationPermissionModalBody: notifPermModalBody.trim() || undefined,
+      bkashInstructions: bkashInstructions.trim() || undefined,
+      nagadInstructions: nagadInstructions.trim() || undefined,
+      rocketInstructions: rocketInstructions.trim() || undefined,
+      bankInstructions: bankInstructions.trim() || undefined,
+      cashInstructions: cashInstructions.trim() || undefined,
+      storeTypes: storeTypesText.split('\n').map(s => s.trim()).filter(Boolean).length > 0
+        ? storeTypesText.split('\n').map(s => s.trim()).filter(Boolean)
+        : undefined,
+      // Map picker guide overlay
+      mapPickerGuideText: mapPickerGuideText.trim() || undefined,
+      mapPickerGuideOkText: mapPickerGuideOkText.trim() || undefined,
+      mapPickerGuideShowCount: Number(mapPickerGuideShowCount) || 5,
+      noSavePickupLocationServices: noSavePickupServicesText.split('\n').map(s => s.trim()).filter(Boolean),
+      // Helper center settings
+      helperCenterEnabled: helperCenterEnabled,
+      helperCenterOfficeAddress: helperCenterOfficeAddress.trim() || undefined,
+      helperCenterPhone1: helperCenterPhone1.trim() || undefined,
+      helperCenterPhone2: helperCenterPhone2.trim() || undefined,
+      helperCenterEmail: helperCenterEmail.trim() || undefined,
+      helperCenterFacebook: helperCenterFacebook.trim() || undefined,
+      helperCenterLinkedin: helperCenterLinkedin.trim() || undefined,
+      helperCenterInstagram: helperCenterInstagram.trim() || undefined,
+      helperCenterMapEmbedUrl: helperCenterMapEmbedUrl.trim() || undefined,
+      helperCenterNote: helperCenterNote.trim() || undefined,
     };
 
     await fallbackStore.savePricingSettings(updatedPricing);
-    await showAlert('সেটিংস আপডেট', 'পিকআপ/ডেলিভারি, কমিশন, এডুকেশন ডোমেইন, ম্যাপ এরিয়া ফিল্টার এবং হেলপার নোটিফিকেশন সময়সীমা সেটিংস সফলভাবে আপডেট হয়েছে।', 'success');
+    await showAlert('সেটিংস আপডেট', 'পিকআপ/ডেলিভারি, কমিশন, এডুকেশন ডোমেইন, ম্যাপ এরিয়া ফিল্টার, হেলপার নোটিফিকেশন সময়সীমা এবং হেল্প সেন্টার সেটিংস সফলভাবে আপডেট হয়েছে।', 'success');
   };
 
   /**
@@ -853,7 +968,10 @@ export const AdminDashboard: React.FC = () => {
 
         {/* Active Helpers Metric */}
         <div
-          onClick={() => setActiveTab('APPLICATIONS')}
+          onClick={() => {
+            setActiveTab('HELPERS');
+            setHelperSubView('APPLICATIONS');
+          }}
           className="p-5 rounded-3xl bg-white border border-gray-100 hover:border-indigo-300 shadow-soft transition-all cursor-pointer"
         >
           <div className="flex items-center justify-between mb-2">
@@ -927,7 +1045,51 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <Bike className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>Helpers Fleet ({approvedHelpersCount || getProcessedHelpers().length})</span>
+          <span>Helpers ({approvedHelpersCount || getProcessedHelpers().length})</span>
+          {pendingApps.length > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] shrink-0 font-bold">
+              {pendingApps.length} app
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('SHOPS')}
+          data-active={activeTab === 'SHOPS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'SHOPS'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <Store className="w-4 h-4 text-purple-600 shrink-0" />
+          <span>Shops ({shops.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('FEEDBACK')}
+          data-active={activeTab === 'FEEDBACK'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'FEEDBACK'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <Star className="w-4 h-4 text-amber-500 shrink-0" />
+          <span>Order Feedback ({feedbacks.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('CUSTOM_MODALS')}
+          data-active={activeTab === 'CUSTOM_MODALS'}
+          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
+            activeTab === 'CUSTOM_MODALS'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+          <span>Custom Modals ({customModals.length})</span>
         </button>
 
         <button
@@ -954,19 +1116,6 @@ export const AdminDashboard: React.FC = () => {
         >
           <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>Revenue Analytics</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('APPLICATIONS')}
-          data-active={activeTab === 'APPLICATIONS'}
-          className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${
-            activeTab === 'APPLICATIONS'
-              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-              : 'text-gray-600 hover:text-gray-900 font-semibold'
-          }`}
-        >
-          <Users className="w-4 h-4 text-indigo-600 shrink-0" />
-          <span>Applications ({pendingApps.length})</span>
         </button>
 
         <button
@@ -1515,12 +1664,22 @@ export const AdminDashboard: React.FC = () => {
                       </td>
                       <td className="py-4 px-5">
                         {ord.helperName ? (
-                          <div className="font-bold text-purple-900 flex items-center space-x-1">
-                            <Bike className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{ord.helperName}</span>
+                          <div>
+                            <div className="font-bold text-purple-900 flex items-center space-x-1">
+                              <Bike className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>{ord.helperName}</span>
+                            </div>
+                            {getOrderAcceptanceDurationText(ord) && (
+                              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 mt-0.5 inline-block">
+                                Accepted in: {getOrderAcceptanceDurationText(ord)}
+                              </span>
+                            )}
                           </div>
                         ) : (
-                          <span className="text-amber-600 font-bold text-[11px]">Unassigned</span>
+                          <div>
+                            <span className="text-amber-600 font-bold text-[11px] block">Unassigned</span>
+                            <span className="text-[10px] text-amber-700 font-semibold">Pending {getElapsedTime(ord.createdAt)}</span>
+                          </div>
                         )}
                       </td>
                       <td className="py-4 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
@@ -1723,56 +1882,40 @@ export const AdminDashboard: React.FC = () => {
                         </td>
 
                         <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex justify-end items-center space-x-2">
-                            {currentUser?.isSuperAdmin && u.uid !== currentUser.uid && !u.isSuperAdmin && (
-                              u.isAdmin ? (
-                                <button
-                                  onClick={() => handleToggleAdminRole(u, false)}
-                                  className="py-1.5 px-3 rounded-xl bg-red-100 hover:bg-red-200 text-red-800 font-extrabold text-xs transition-all flex items-center space-x-1"
-                                  title="Remove Admin privileges"
-                                >
-                                  <ShieldAlert className="w-3.5 h-3.5" />
-                                  <span>Remove Admin</span>
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleToggleAdminRole(u, true)}
-                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                                  title="Promote to Admin"
-                                >
-                                  <ShieldCheck className="w-3.5 h-3.5" />
-                                  <span>Make Admin</span>
-                                </button>
-                              )
-                            )}
-                            <button
-                              onClick={() => setSelectedUserId(u.uid)}
-                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                            >
-                              View History & Actions
-                            </button>
-                            {u.uid !== currentUser?.uid && !u.isSuperAdmin && (
-                              <button
-                                onClick={async () => {
-                                  const confirmed = await showConfirm(
-                                    'একাউন্ট ডিলিট স্থায়ী সতর্কতা',
-                                    `আপনি কি নিশ্চিত যে ${u.displayName}-এর প্রোফাইল স্থায়ীভাবে ডিলিট করতে চান? এই প্রক্রিয়া ফিরিয়ে আনা সম্ভব নয়।`,
-                                    'হ্যাঁ, ডিলিট করুন',
-                                    'বাতিল'
-                                  );
-                                  if (!confirmed) return;
-                                  await fallbackStore.deleteUser(u.uid);
-                                  setUsers(Array.from(fallbackStore.users.values()));
-                                  showAlert('ডিলিট সম্পন্ন', 'ব্যবহারকারী প্রোফাইল সিস্টেম থেকে মুছে ফেলা হয়েছে।', 'success');
-                                }}
-                                className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-750 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                                title="Delete user account"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>Delete</span>
-                              </button>
-                            )}
-                          </div>
+                          <UserActionDropdown
+                            user={u}
+                            currentUser={currentUser}
+                            onViewProfile={(uid) => setSelectedUserId(uid)}
+                            onToggleAdmin={(targetUser, makeAdmin) => handleToggleAdminRole(targetUser, makeAdmin)}
+                            onToggleBlock={async (targetUser) => {
+                              if (targetUser.isBlocked) {
+                                const confirmed = await showConfirm(
+                                  'আনব্লক নিশ্চিতকরণ',
+                                  `আপনি কি ${targetUser.displayName}-কে আনব্লক করতে চান?`,
+                                  'হ্যাঁ, আনব্লক করুন',
+                                  'বাতিল'
+                                );
+                                if (!confirmed) return;
+                                await fallbackStore.blockUser(targetUser.uid, false);
+                                setUsers(Array.from(fallbackStore.users.values()));
+                                showAlert('আনব্লক সম্পন্ন', 'ব্যবহারকারী একাউন্ট পুনরায় সক্রিয় করা হয়েছে।', 'success');
+                              } else {
+                                setSelectedUserId(targetUser.uid);
+                              }
+                            }}
+                            onDeleteUser={async (targetUser) => {
+                              const confirmed = await showConfirm(
+                                'একাউন্ট ডিলিট স্থায়ী সতর্কতা',
+                                `আপনি কি নিশ্চিত যে ${targetUser.displayName}-এর প্রোফাইল স্থায়ীভাবে ডিলিট করতে চান? এই প্রক্রিয়া ফিরিয়ে আনা সম্ভব নয়।`,
+                                'হ্যাঁ, ডিলিট করুন',
+                                'বাতিল'
+                              );
+                              if (!confirmed) return;
+                              await fallbackStore.deleteUser(targetUser.uid);
+                              setUsers(Array.from(fallbackStore.users.values()));
+                              showAlert('ডিলিট সম্পন্ন', 'ব্যবহারকারী প্রোফাইল সিস্টেম থেকে মুছে ফেলা হয়েছে।', 'success');
+                            }}
+                          />
                         </td>
                       </tr>
                     );
@@ -1902,12 +2045,12 @@ export const AdminDashboard: React.FC = () => {
                 </p>
               </div>
 
-              <div className="flex items-center gap-1.5 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 text-xs font-extrabold shrink-0">
+              <div className="flex items-center gap-1.5 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 text-xs font-extrabold shrink-0 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => setHelperViewMode('MAP')}
-                  className={`px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 ${
-                    helperViewMode === 'MAP'
+                  onClick={() => setHelperSubView('MAP')}
+                  className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                    helperSubView === 'MAP'
                       ? 'bg-purple-950 text-white shadow-md'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -1918,21 +2061,34 @@ export const AdminDashboard: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => setHelperViewMode('TABLE')}
-                  className={`px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 ${
-                    helperViewMode === 'TABLE'
+                  onClick={() => setHelperSubView('APPLICATIONS')}
+                  className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                    helperSubView === 'APPLICATIONS'
+                      ? 'bg-purple-950 text-white shadow-md'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Users className="w-4 h-4 text-amber-400" />
+                  <span>📄 Applications ({pendingApps.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHelperSubView('TABLE')}
+                  className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                    helperSubView === 'TABLE'
                       ? 'bg-purple-950 text-white shadow-md'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
                   <Users className="w-4 h-4 text-indigo-400" />
-                  <span>📋 Table List</span>
+                  <span>📋 Registered Fleet</span>
                 </button>
               </div>
             </div>
 
             {/* Live Earth Satellite Map View Component */}
-            {helperViewMode === 'MAP' && (
+            {helperSubView === 'MAP' && (
               <AdminHelperMapView
                 users={users}
                 orders={orders}
@@ -1943,297 +2099,246 @@ export const AdminDashboard: React.FC = () => {
               />
             )}
 
-            {/* Helper Performance Table View Component */}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                  {totalItems} helpers recorded
-                </span>
-              </div>
+            {/* Helper Applications Sub-View */}
+            {helperSubView === 'APPLICATIONS' && (() => {
+              let filtered = [...applications];
+              if (appsStartDate) {
+                const startMs = new Date(`${appsStartDate}T00:00:00`).getTime();
+                filtered = filtered.filter((a) => new Date(a.createdAt).getTime() >= startMs);
+              }
+              if (appsEndDate) {
+                const endMs = new Date(`${appsEndDate}T23:59:59.999`).getTime();
+                filtered = filtered.filter((a) => new Date(a.createdAt).getTime() <= endMs);
+              }
+              if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase().trim();
+                filtered = filtered.filter(
+                  (a) =>
+                    a.legalName.toLowerCase().includes(q) ||
+                    a.userName.toLowerCase().includes(q) ||
+                    a.nid.includes(q) ||
+                    a.email.toLowerCase().includes(q)
+                );
+              }
+              filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+              const { totalPages, paginatedItems, totalItems } = paginateList(filtered);
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
-                  <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                    <tr>
-                      <th className="py-3.5 px-5">Helper Name</th>
-                      <th className="py-3.5 px-5">Helper Type / Status</th>
-                      <th className="py-3.5 px-5">NID #</th>
-                      <th className="py-3.5 px-5">Completed Jobs</th>
-                      <th className="py-3.5 px-5">Active Assigned Jobs</th>
-                      <th className="py-3.5 px-5">Total Earned</th>
-                      <th className="py-3.5 px-5">Wallet Balance</th>
-                      <th className="py-3.5 px-5 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 font-medium">
-                    {paginatedItems.map((h) => {
-                      const helperUser = fallbackStore.users.get(h.id);
-                      const helperType = helperUser?.helperType || 'commuter';
-                      const isEdu = helperUser?.isEduVerified;
+              return (
+                <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                  <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                      <h3 className="font-extrabold text-base text-gray-900">Helper Registrations & Applications</h3>
+                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                        {totalItems} total registered
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setShowAddAppModal(true)}
+                      className="py-2 px-4 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Application</span>
+                    </button>
+                  </div>
 
-                      return (
-                        <tr
-                          key={h.id}
-                          className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                          onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
-                        >
-                          <td className="py-4 px-5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-extrabold text-gray-900">{h.name}</span>
-                              {isEdu && (
-                                <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
-                                  <Check className="w-2.5 h-2.5 text-blue-600" />
-                                  <span>Edu</span>
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
-                            <select
-                              value={helperType}
-                              onChange={async (e) => {
-                                const newType = e.target.value as 'commuter' | 'dedicated';
-                                if (helperUser) {
-                                  const updated = { ...helperUser, helperType: newType, isHelper: true };
-                                  await fallbackStore.saveUser(updated);
-                                  setUsers(Array.from(fallbackStore.users.values()));
-                                  showAlert('স্ট্যাটাস পরিবর্তিত', `${h.name}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`, 'success');
-                                }
-                              }}
-                              className="px-2 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                            >
-                              <option value="commuter">🚲 Commuter Helper</option>
-                              <option value="dedicated">⚡ Dedicated Rider</option>
-                            </select>
-                          </td>
-                          <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
-                          <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
-                          <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
-                          <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
-                          <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
-                          <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => setSelectedUserId(h.id)}
-                              className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
-                            >
-                              Profile
-                            </button>
-                            <button
-                              onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
-                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                            >
-                              History
-                            </button>
-                          </td>
+                  {/* Desktop Table View */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
+                      <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                        <tr>
+                          <th className="py-3.5 px-5">Legal Name</th>
+                          <th className="py-3.5 px-5">NID #</th>
+                          <th className="py-3.5 px-5">Contact Email</th>
+                          <th className="py-3.5 px-5">Vehicles / Assets</th>
+                          <th className="py-3.5 px-5">Status</th>
+                          <th className="py-3.5 px-5 text-right">Action</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 font-medium">
+                        {paginatedItems.map((app) => (
+                          <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                            <td className="py-4 px-5">
+                              <div className="font-extrabold text-gray-900">{app.legalName}</div>
+                              <div className="text-[11px] text-gray-400">{app.userName}</div>
+                              {app.whatsapp && (
+                                <div className="text-[11px] text-emerald-700 font-bold">WA: {app.whatsapp}</div>
+                              )}
+                            </td>
+                            <td className="py-4 px-5 font-bold text-gray-900">{app.nid}</td>
+                            <td className="py-4 px-5">{app.email}</td>
+                            <td className="py-4 px-5">
+                              <div className="flex flex-wrap gap-1">
+                                {app.hasSmartphone && <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 text-[10px] font-bold">Smartphone</span>}
+                                {app.hasCycle && <span className="px-2 py-0.5 rounded bg-green-50 text-green-800 text-[10px] font-bold">Cycle</span>}
+                                {app.hasBike && <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 text-[10px] font-bold">Bike</span>}
+                              </div>
+                            </td>
+                            <td className="py-4 px-5">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
+                                  app.status === 'APPROVED'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : app.status === 'REJECTED' || app.status === 'CANCELED'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {app.status}
+                              </span>
+                            </td>
+                            <td className="py-4 px-5 text-right space-x-1.5">
+                              {app.status === 'PENDING' && (
+                                <button
+                                  onClick={() => handleApproveApp(app.id)}
+                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                >
+                                  Approve
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setEditingApp(app)}
+                                className="py-1.5 px-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteApp(app.id)}
+                                className="py-1.5 px-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
 
-              {/* Pagination Controls */}
-              <PaginationControl
-                currentPage={currentPage}
-                totalPages={totalPages}
-                totalItems={totalItems}
-                pageSize={pageSize}
-                onPageChange={(p) => setCurrentPage(p)}
-                onPageSizeChange={(s) => {
-                  setPageSize(s);
-                  setCurrentPage(1);
-                }}
-              />
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* --- TAB 5: HELPER APPLICATIONS TAB --- */}
-      {activeTab === 'APPLICATIONS' && (() => {
-        let filtered = [...applications];
-        if (appsStartDate) {
-          const startMs = new Date(`${appsStartDate}T00:00:00`).getTime();
-          filtered = filtered.filter((a) => new Date(a.createdAt).getTime() >= startMs);
-        }
-        if (appsEndDate) {
-          const endMs = new Date(`${appsEndDate}T23:59:59.999`).getTime();
-          filtered = filtered.filter((a) => new Date(a.createdAt).getTime() <= endMs);
-        }
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
-          filtered = filtered.filter(
-            (a) =>
-              a.legalName.toLowerCase().includes(q) ||
-              a.userName.toLowerCase().includes(q) ||
-              a.nid.includes(q) ||
-              a.email.toLowerCase().includes(q)
-          );
-        }
-        filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const { totalPages, paginatedItems, totalItems } = paginateList(filtered);
-
-        return (
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <div>
-                <h3 className="font-extrabold text-base text-gray-900">Helper Registrations & Applications</h3>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                  {totalItems} total registered
-                </span>
-              </div>
-              <button
-                onClick={() => setShowAddAppModal(true)}
-                className="py-2 px-4 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Application</span>
-              </button>
-            </div>
-
-            {/* Date Range Filter Bar */}
-            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center space-x-2">
-                <Calendar className="w-4 h-4 text-purple-700" />
-                <span className="font-extrabold text-gray-900">Filter by Application Date Range</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
-                  <input
-                    type="date"
-                    value={appsStartDate}
-                    onChange={(e) => setAppsStartDate(e.target.value)}
-                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
-                  />
-                </div>
-                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
-                  <input
-                    type="date"
-                    value={appsEndDate}
-                    onChange={(e) => setAppsEndDate(e.target.value)}
-                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
-                  />
-                </div>
-                {(appsStartDate || appsEndDate) && (
-                  <button
-                    onClick={() => {
-                      setAppsStartDate('');
-                      setAppsEndDate('');
+                  <PaginationControl
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={totalItems}
+                    pageSize={pageSize}
+                    onPageChange={(p) => setCurrentPage(p)}
+                    onPageSizeChange={(s) => {
+                      setPageSize(s);
+                      setCurrentPage(1);
                     }}
-                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
-                  >
-                    Clear
-                  </button>
-                )}
+                  />
+                </div>
+              );
+            })()}
+
+            {/* Helper Performance Table View Component */}
+            {helperSubView === 'TABLE' && (
+              <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                  <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                    {totalItems} helpers recorded
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
+                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                      <tr>
+                        <th className="py-3.5 px-5">Helper Name</th>
+                        <th className="py-3.5 px-5">Helper Type / Status</th>
+                        <th className="py-3.5 px-5">NID #</th>
+                        <th className="py-3.5 px-5">Completed Jobs</th>
+                        <th className="py-3.5 px-5">Active Assigned Jobs</th>
+                        <th className="py-3.5 px-5">Total Earned</th>
+                        <th className="py-3.5 px-5">Wallet Balance</th>
+                        <th className="py-3.5 px-5 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-medium">
+                      {paginatedItems.map((h) => {
+                        const helperUser = fallbackStore.users.get(h.id);
+                        const helperType = helperUser?.helperType || 'commuter';
+                        const isEdu = helperUser?.isEduVerified;
+
+                        return (
+                          <tr
+                            key={h.id}
+                            className="hover:bg-gray-50/80 transition-colors cursor-pointer"
+                            onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                          >
+                            <td className="py-4 px-5">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-gray-900">{h.name}</span>
+                                {isEdu && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
+                                    <Check className="w-2.5 h-2.5 text-blue-600" />
+                                    <span>Edu</span>
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={helperType}
+                                onChange={async (e) => {
+                                  const newType = e.target.value as 'commuter' | 'dedicated';
+                                  if (helperUser) {
+                                    const updated = { ...helperUser, helperType: newType, isHelper: true };
+                                    await fallbackStore.saveUser(updated);
+                                    setUsers(Array.from(fallbackStore.users.values()));
+                                    showAlert('স্ট্যাটাস পরিবর্তিত', `${h.name}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`, 'success');
+                                  }
+                                }}
+                                className="px-2 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              >
+                                <option value="commuter">🚲 Commuter Helper</option>
+                                <option value="dedicated">⚡ Dedicated Rider</option>
+                              </select>
+                            </td>
+                            <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
+                            <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
+                            <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
+                            <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
+                            <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
+                            <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => setSelectedUserId(h.id)}
+                                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
+                              >
+                                Profile
+                              </button>
+                              <button
+                                onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                                className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                              >
+                                History
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Controls */}
+                <PaginationControl
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={totalItems}
+                  pageSize={pageSize}
+                  onPageChange={(p) => setCurrentPage(p)}
+                  onPageSizeChange={(s) => {
+                    setPageSize(s);
+                    setCurrentPage(1);
+                  }}
+                />
               </div>
-            </div>
-
-            {/* Desktop Table View */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
-                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                  <tr>
-                    <th className="py-3.5 px-5">Legal Name</th>
-                    <th className="py-3.5 px-5">NID #</th>
-                    <th className="py-3.5 px-5">Contact Email</th>
-                    <th className="py-3.5 px-5">Vehicles / Assets</th>
-                    <th className="py-3.5 px-5">Status</th>
-                    <th className="py-3.5 px-5 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedItems.map((app) => (
-                    <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="py-4 px-5">
-                        <div className="font-extrabold text-gray-900">{app.legalName}</div>
-                        <div className="text-[11px] text-gray-400">{app.userName}</div>
-                        {app.whatsapp && (
-                          <div className="text-[11px] text-emerald-700 font-bold">WA: {app.whatsapp}</div>
-                        )}
-                        {app.fbProfile && (
-                          <a
-                            href={app.fbProfile.startsWith('http') ? app.fbProfile : `https://${app.fbProfile}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[11px] text-blue-600 underline font-semibold block truncate max-w-[140px]"
-                          >
-                            FB Profile
-                          </a>
-                        )}
-                      </td>
-                      <td className="py-4 px-5 font-bold text-gray-900">{app.nid}</td>
-                      <td className="py-4 px-5">{app.email}</td>
-                      <td className="py-4 px-5">
-                        <div className="flex gap-1 text-[10px] font-bold">
-                          {app.hasSmartphone && <span className="px-2 py-0.5 rounded bg-gray-100">Phone</span>}
-                          {app.hasCycle && <span className="px-2 py-0.5 rounded bg-gray-100">Cycle</span>}
-                          {app.hasBike && <span className="px-2 py-0.5 rounded bg-gray-100">Bike</span>}
-                        </div>
-                      </td>
-                      <td className="py-4 px-5">
-                        <span
-                          className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${
-                            app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {app.status}
-                        </span>
-                      </td>
-                      <td className="py-4 px-5 text-right">
-                        <div className="flex justify-end items-center space-x-2">
-                          {app.status === 'PENDING' ? (
-                            <button
-                              onClick={() => handleApproveApp(app.id)}
-                              className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
-                            >
-                              Approve Helper
-                            </button>
-                          ) : (
-                            <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1 bg-emerald-50 px-2 py-1 rounded-lg">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Approved</span>
-                            </span>
-                          )}
-                          <button
-                            onClick={() => setEditingApp(app)}
-                            className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all"
-                            title="Edit Application"
-                          >
-                            <Edit className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteApp(app.id)}
-                            className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 transition-all"
-                            title="Delete Application"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination Controls */}
-            <PaginationControl
-              currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              pageSize={pageSize}
-              onPageChange={(p) => setCurrentPage(p)}
-              onPageSizeChange={(s) => {
-                setPageSize(s);
-                setCurrentPage(1);
-              }}
-            />
+            )}
           </div>
         );
       })()}
+
+
 
       {/* --- TAB 6: WITHDRAWALS TAB --- */}
       {activeTab === 'WITHDRAWALS' && (() => {
@@ -2807,7 +2912,7 @@ export const AdminDashboard: React.FC = () => {
 
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              অর্ডার সাবমিটের পর কনফার্মেশন বার্তা (Thank You message):
+            অর্ডার সাবমিটের পর কনফার্মেশন বার্তা (Thank You message):
             </label>
             <input
               type="text"
@@ -2821,7 +2926,295 @@ export const AdminDashboard: React.FC = () => {
             </p>
           </div>
 
-          <button
+          {/* Commission Payback Instructions */}
+          <div className="p-5 rounded-3xl bg-slate-50/80 border border-slate-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider flex items-center space-x-2">
+              <DollarSign className="w-5 h-5 text-indigo-700" />
+              <span>Commission Payback Instructions (কমিশন পরিশোধের নির্দেশাবলী)</span>
+            </h4>
+            <p className="text-[11px] text-gray-500 font-medium">
+              হেলপার যখন পেব্যাক (Payback) মোডাল খুলবে, তখন মেথড অনুযায়ী এই তথ্যসমূহ দেখানো হবে।
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-750 block mb-1">bKash Payback Info</label>
+                <input
+                  type="text"
+                  value={bkashInstructions}
+                  onChange={(e) => setBkashInstructions(e.target.value)}
+                  placeholder="e.g. bKash Personal: 018XXXXXXXX..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-semibold outline-none focus:border-purple-600"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-750 block mb-1">Nagad Payback Info</label>
+                <input
+                  type="text"
+                  value={nagadInstructions}
+                  onChange={(e) => setNagadInstructions(e.target.value)}
+                  placeholder="e.g. Nagad Personal: 018XXXXXXXX..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-semibold outline-none focus:border-purple-600"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Rocket Payback Info</label>
+                <input
+                  type="text"
+                  value={rocketInstructions}
+                  onChange={(e) => setRocketInstructions(e.target.value)}
+                  placeholder="e.g. Rocket Personal: 018XXXXXXXX..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-semibold outline-none focus:border-purple-600"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Bank Account Payback Info</label>
+                <input
+                  type="text"
+                  value={bankInstructions}
+                  onChange={(e) => setBankInstructions(e.target.value)}
+                  placeholder="e.g. Bank Account: Bank Name, A/C..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-semibold outline-none focus:border-purple-600"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-755 block mb-1">Cash Payback Info</label>
+              <input
+                type="text"
+                value={cashInstructions}
+                onChange={(e) => setCashInstructions(e.target.value)}
+                placeholder="e.g. Pay Cash directly at Jamanot office desk..."
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-semibold outline-none focus:border-purple-600"
+              />
+            </div>
+          </div>
+
+          {/* Dynamic Store / Shop Types */}
+          <div>
+            <label className="text-xs font-bold text-gray-700 block mb-1.5">
+              দোকানের ধরন সমূহের তালিকা (Store Types dropdown - প্রতি লাইনে ১টি):
+            </label>
+            <textarea
+              value={storeTypesText}
+              onChange={(e) => setStoreTypesText(e.target.value)}
+              placeholder="Grocery & Supermarket&#10;Pharmacy & Medicine&#10;Restaurant & Fast Food"
+              rows={6}
+              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+            />
+            <p className="text-[11px] text-gray-500 mt-1.5">
+              হেলপার যখন নতুন দোকান যোগ করবে তখন ড্রপডাউনে এই অপশনগুলো আসবে।
+            </p>
+          </div>
+
+
+          {/* ── Map Picker Guide Overlay Settings ── */}
+          <div className="border border-purple-100 rounded-2xl p-4 bg-purple-50/30 space-y-3">
+            <h4 className="font-extrabold text-sm text-purple-900 flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-purple-700" />
+              ম্যাপ গাইড ওভারলে সেটিংস (Map Guide Overlay)
+            </h4>
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                গাইড টেক্সট (Bangla guide text shown on map open):
+              </label>
+              <textarea
+                value={mapPickerGuideText}
+                onChange={(e) => setMapPickerGuideText(e.target.value)}
+                placeholder="যে location select করতে চান, সেখান পিন টি নিয়ে বসান..."
+                rows={4}
+                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                এই টেক্সটটি customer যখন map modal খুলবে তখন overlay-এ দেখা যাবে।
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  OK বাটনের লেবেল:
+                </label>
+                <input
+                  type="text"
+                  value={mapPickerGuideOkText}
+                  onChange={(e) => setMapPickerGuideOkText(e.target.value)}
+                  placeholder="ঠিক আছে"
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  কতবার দেখাবে (প্রতি user):
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={mapPickerGuideShowCount}
+                  onChange={(e) => setMapPickerGuideShowCount(Number(e.target.value))}
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">Default: 5 বার</p>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                যে service-এর pickup location সংরক্ষণ হবে না (প্রতি লাইনে ১টি service নাম):
+              </label>
+              <textarea
+                value={noSavePickupServicesText}
+                onChange={(e) => setNoSavePickupServicesText(e.target.value)}
+                placeholder="মিক্স কিছু কাজ করে দিন&#10;না, অন্য একটা কাজ করে দিন&#10;আমার একটা জিনিস দিয়ে আসুন"
+                rows={5}
+                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                এই service-গুলো select করলে pickup location পরবর্তীতে আর auto-fill হবে না।
+              </p>
+            </div>
+          </div>
+
+          {/* ── Helper Center Settings ── */}
+          <div className="border border-purple-105 rounded-2xl p-4 bg-purple-50/20 space-y-4">
+            <h4 className="font-extrabold text-sm text-purple-900 flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-purple-700"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+              Helper Center Contact Settings (হেল্প সেন্টার ও যোগাযোগের তথ্য)
+            </h4>
+            
+            <div className="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                id="helperCenterEnabled"
+                checked={helperCenterEnabled}
+                onChange={(e) => setHelperCenterEnabled(e.target.checked)}
+                className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+              />
+              <label htmlFor="helperCenterEnabled" className="text-xs font-bold text-gray-700 cursor-pointer">
+                Enable Helper Center Page (গ্রাহকদের জন্য পেজটি সচল রাখুন)
+              </label>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                Office Address (অফিস ঠিকানা):
+              </label>
+              <textarea
+                value={helperCenterOfficeAddress}
+                onChange={(e) => setHelperCenterOfficeAddress(e.target.value)}
+                placeholder="যেমন: লেভেল ৪, রহমান টাওয়ার, আশুলিয়া বাজার, ঢাকা..."
+                rows={2}
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Contact Number 1 (মোবাইল ১ - হোয়াটসঅ্যাপ সহ):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterPhone1}
+                  onChange={(e) => setHelperCenterPhone1(e.target.value)}
+                  placeholder="01XXXXXXXXX"
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Contact Number 2 (মোবাইল ২):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterPhone2}
+                  onChange={(e) => setHelperCenterPhone2(e.target.value)}
+                  placeholder="01XXXXXXXXX"
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Official Email Address (ইমেইল):
+                </label>
+                <input
+                  type="email"
+                  value={helperCenterEmail}
+                  onChange={(e) => setHelperCenterEmail(e.target.value)}
+                  placeholder="support@jamanot.com"
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Map View URL (ম্যাপ বা লোকেশন লিংক):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterMapEmbedUrl}
+                  onChange={(e) => setHelperCenterMapEmbedUrl(e.target.value)}
+                  placeholder="https://maps.google.com/..."
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Facebook Page Link (ফেসবুক লিংক):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterFacebook}
+                  onChange={(e) => setHelperCenterFacebook(e.target.value)}
+                  placeholder="https://facebook.com/jamanot..."
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  LinkedIn Page Link (লিংকডইন):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterLinkedin}
+                  onChange={(e) => setHelperCenterLinkedin(e.target.value)}
+                  placeholder="https://linkedin.com/company/jamanot..."
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Instagram Link (ইনস্টাগ্রাম):
+                </label>
+                <input
+                  type="text"
+                  value={helperCenterInstagram}
+                  onChange={(e) => setHelperCenterInstagram(e.target.value)}
+                  placeholder="https://instagram.com/jamanot..."
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                Help Center Description Note (বিশেষ কোনো নির্দেশনা):
+              </label>
+              <input
+                type="text"
+                value={helperCenterNote}
+                onChange={(e) => setHelperCenterNote(e.target.value)}
+                placeholder="যেমন: যেকোনো প্রয়োজনে আমাদের অফিসে সরাসরি যোগাযোগ করতে পারেন।"
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+              />
+            </div>
+          </div>
+
+                    <button
             type="submit"
             className="w-full py-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-sm shadow-md transition-all"
           >
@@ -2829,6 +3222,412 @@ export const AdminDashboard: React.FC = () => {
           </button>
         </form>
       )}
+
+      {/* --- TAB 8: SHOPS TAB --- */}
+      {activeTab === 'SHOPS' && (() => {
+        let filteredShops = [...shops];
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          filteredShops = filteredShops.filter(
+            (s) =>
+              s.name.toLowerCase().includes(q) ||
+              s.type.toLowerCase().includes(q) ||
+              s.contactPerson.toLowerCase().includes(q) ||
+              s.whatsapp.includes(q) ||
+              s.location.address.toLowerCase().includes(q)
+          );
+        }
+        filteredShops.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops);
+
+        return (
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-extrabold text-base text-gray-900">Registered Store / Shop List</h3>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
+                  {totalItems} total stores registered
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingShop(null);
+                  setShowAddShopModal(true);
+                }}
+                className="py-2.5 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add New Shop</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                  <tr>
+                    <th className="py-3.5 px-5">Store Name</th>
+                    <th className="py-3.5 px-5">Store Type</th>
+                    <th className="py-3.5 px-5">Contact Person & WhatsApp</th>
+                    <th className="py-3.5 px-5">Location Address</th>
+                    <th className="py-3.5 px-5">Added By</th>
+                    <th className="py-3.5 px-5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 font-medium">
+                  {paginatedItems.map((s) => (
+                    <tr key={s.id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-4 px-5">
+                        <div className="font-extrabold text-gray-900 flex items-center space-x-2">
+                          <Store className="w-4 h-4 text-purple-600 shrink-0" />
+                          <span>{s.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-5">
+                        <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
+                          {s.type}
+                        </span>
+                      </td>
+                      <td className="py-4 px-5">
+                        <div className="font-bold text-gray-800">{s.contactPerson}</div>
+                        <div className="text-[11px] text-emerald-700 font-extrabold">WA: {s.whatsapp}</div>
+                      </td>
+                      <td className="py-4 px-5">
+                        <div className="text-gray-800 font-semibold max-w-xs">{s.location.address}</div>
+                        {typeof s.location.lat === 'number' && typeof s.location.lng === 'number' && (
+                          <div className="text-[10px] text-gray-400 font-mono">
+                            {s.location.lat.toFixed(4)}, {s.location.lng.toFixed(4)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-4 px-5 text-gray-500 font-medium">
+                        {s.addedByHelperName || 'Admin'}
+                      </td>
+                      <td className="py-4 px-5 text-right">
+                        <div className="flex items-center justify-end space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingShop(s);
+                              setShowAddShopModal(true);
+                            }}
+                            className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const confirmed = await showConfirm(
+                                'দোকান ডিলিট নিশ্চিতকরণ',
+                                `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
+                                'হ্যাঁ, ডিলিট করুন',
+                                'বাতিল'
+                              );
+                              if (!confirmed) return;
+                              await fallbackStore.deleteShop(s.id);
+                              setShops(Array.from(fallbackStore.shops.values()));
+                              showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
+                            }}
+                            className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <PaginationControl
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={(p) => setCurrentPage(p)}
+              onPageSizeChange={(s) => {
+                setPageSize(s);
+                setCurrentPage(1);
+              }}
+            />
+          </div>
+        );
+      })()}
+
+      {/* --- TAB 9: ORDER FEEDBACK TAB --- */}
+      {activeTab === 'FEEDBACK' && (() => {
+        const totalFeedbacks = feedbacks.length;
+        const avgRider = totalFeedbacks > 0
+          ? (feedbacks.reduce((sum, f) => sum + f.riderRating, 0) / totalFeedbacks).toFixed(1)
+          : '0.0';
+        const avgService = totalFeedbacks > 0
+          ? (feedbacks.reduce((sum, f) => sum + f.serviceRating, 0) / totalFeedbacks).toFixed(1)
+          : '0.0';
+        const avgShop = totalFeedbacks > 0
+          ? (feedbacks.reduce((sum, f) => sum + f.shopRating, 0) / totalFeedbacks).toFixed(1)
+          : '0.0';
+
+        let filteredFeedbacks = [...feedbacks];
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          filteredFeedbacks = filteredFeedbacks.filter(
+            (f) =>
+              f.orderId.toLowerCase().includes(q) ||
+              (f.customerName && f.customerName.toLowerCase().includes(q)) ||
+              (f.helperName && f.helperName.toLowerCase().includes(q)) ||
+              (f.improvementComment && f.improvementComment.toLowerCase().includes(q))
+          );
+        }
+        filteredFeedbacks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks);
+
+        return (
+          <div className="space-y-6">
+            {/* Feedback Analysis Stats Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
+              <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200">
+                <span className="text-xs font-extrabold text-amber-800 uppercase block">Rider Behavior Avg</span>
+                <span className="text-3xl font-black text-amber-900 mt-1 block">⭐ {avgRider}</span>
+                <span className="text-[10px] text-amber-700 font-bold block mt-1">based on {totalFeedbacks} ratings</span>
+              </div>
+              <div className="p-5 rounded-3xl bg-emerald-50 border border-emerald-200">
+                <span className="text-xs font-extrabold text-emerald-800 uppercase block">Service Quality Avg</span>
+                <span className="text-3xl font-black text-emerald-900 mt-1 block">⭐ {avgService}</span>
+                <span className="text-[10px] text-emerald-700 font-bold block mt-1">overall delivery quality</span>
+              </div>
+              <div className="p-5 rounded-3xl bg-purple-50 border border-purple-200">
+                <span className="text-xs font-extrabold text-purple-800 uppercase block">Shop Product Quality</span>
+                <span className="text-3xl font-black text-purple-900 mt-1 block">⭐ {avgShop}</span>
+                <span className="text-[10px] text-purple-700 font-bold block mt-1">store product satisfaction</span>
+              </div>
+              <div className="p-5 rounded-3xl bg-indigo-50 border border-indigo-200">
+                <span className="text-xs font-extrabold text-indigo-800 uppercase block">Total Reviews</span>
+                <span className="text-3xl font-black text-indigo-900 mt-1 block">{totalFeedbacks}</span>
+                <span className="text-[10px] text-indigo-700 font-bold block mt-1">customer responses</span>
+              </div>
+            </div>
+
+            {/* Feedback List Table */}
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                <h3 className="font-extrabold text-base text-gray-900">Customer Order Feedback Entries</h3>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-800">
+                  {totalItems} total feedbacks
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
+                  <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                    <tr>
+                      <th className="py-3.5 px-5">Order ID & Customer</th>
+                      <th className="py-3.5 px-5">Rider / Helper</th>
+                      <th className="py-3.5 px-5">Rider Rating</th>
+                      <th className="py-3.5 px-5">Service Rating</th>
+                      <th className="py-3.5 px-5">Shop Rating</th>
+                      <th className="py-3.5 px-5">Customer Comment</th>
+                      <th className="py-3.5 px-5">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 font-medium">
+                    {paginatedItems.map((fb) => (
+                      <tr key={fb.id} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="py-4 px-5">
+                          <div className="font-extrabold text-gray-900">#{fb.orderId}</div>
+                          <div className="text-[11px] text-gray-500">{fb.customerName}</div>
+                        </td>
+                        <td className="py-4 px-5 font-bold text-gray-800">
+                          {fb.helperName || 'Unassigned'}
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-amber-600">
+                          ⭐ {fb.riderRating} / 5
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-emerald-600">
+                          ⭐ {fb.serviceRating} / 5
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-purple-600">
+                          ⭐ {fb.shopRating} / 5
+                        </td>
+                        <td className="py-4 px-5">
+                          {fb.improvementComment ? (
+                            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-semibold max-w-xs text-[11px]">
+                              &ldquo;{fb.improvementComment}&rdquo;
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic">No comment provided</span>
+                          )}
+                        </td>
+                        <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">
+                          {new Date(fb.createdAt).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <PaginationControl
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                pageSize={pageSize}
+                onPageChange={(p) => setCurrentPage(p)}
+                onPageSizeChange={(s) => {
+                  setPageSize(s);
+                  setCurrentPage(1);
+                }}
+              />
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* --- TAB 10: CUSTOM DYNAMIC MODALS TAB --- */}
+      {activeTab === 'CUSTOM_MODALS' && (() => {
+        return (
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-soft flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="font-extrabold text-base sm:text-lg text-gray-900 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-purple-600" />
+                  <span>Custom Dynamic Modal Creator & Injector</span>
+                </h3>
+                <p className="text-xs text-gray-500 font-medium mt-0.5">
+                  Create custom popup banners targeting specific users, triggers & frequency.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingCustomModal(null);
+                  setShowCustomModalForm(true);
+                }}
+                className="py-2.5 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5 shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create New Custom Modal</span>
+              </button>
+            </div>
+
+            {customModals.length === 0 ? (
+              <div className="p-12 bg-white rounded-3xl border border-gray-100 text-center text-gray-400 space-y-2">
+                <Sparkles className="w-10 h-10 mx-auto text-purple-300" />
+                <p className="font-bold text-gray-700">কোনো ডায়নামিক কাস্টম পপআপ মোডাল যোগ করা হয়নি।</p>
+                <p className="text-xs text-gray-500">
+                  অ্যাডমিন নতুন পপআপ ব্যানার তৈরি করে নির্দিষ্ট ইউজার গ্রুপ ও ইভেন্টে প্রদর্শন করাতে পারেন।
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {customModals.map((modal) => (
+                  <div
+                    key={modal.id}
+                    className={`p-5 rounded-3xl bg-white border transition-all shadow-soft flex flex-col justify-between ${
+                      modal.isEnabled ? 'border-purple-200' : 'border-gray-200 opacity-75'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      {modal.imageUrl && (
+                        <div className="w-full h-32 rounded-2xl overflow-hidden bg-slate-900">
+                          <img src={modal.imageUrl} alt={modal.title} className="w-full h-full object-cover" />
+                        </div>
+                      )}
+
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
+                            <span>{modal.title}</span>
+                            {modal.isEnabled ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">
+                                Active
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
+                                Disabled
+                              </span>
+                            )}
+                          </h4>
+                          {modal.subtitle && (
+                            <p className="text-xs text-purple-700 font-bold mt-0.5">{modal.subtitle}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-gray-600 line-clamp-3 font-medium">
+                        {modal.description}
+                      </p>
+
+                      <div className="flex flex-wrap gap-1.5 text-[10px] font-extrabold">
+                        <span className="px-2.5 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200">
+                          Target: {modal.targetAudience}
+                        </span>
+                        <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200">
+                          Trigger: {modal.triggerEvent}
+                        </span>
+                        <span className="px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-900 border border-indigo-200">
+                          Freq: {modal.displayFrequency}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-4 mt-4 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const updated = { ...modal, isEnabled: !modal.isEnabled };
+                          await fallbackStore.saveCustomModal(updated);
+                          setCustomModals(Array.from(fallbackStore.customModals.values()));
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
+                          modal.isEnabled
+                            ? 'bg-amber-100 hover:bg-amber-200 text-amber-900'
+                            : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900'
+                        }`}
+                      >
+                        {modal.isEnabled ? 'Deactivate' : 'Activate'}
+                      </button>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCustomModal(modal);
+                            setShowCustomModalForm(true);
+                          }}
+                          className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const confirmed = await showConfirm(
+                              'পপআপ মোডাল ডিলিট নিশ্চিতকরণ',
+                              `আপনি কি নিশ্চিতভাবে "${modal.title}" মোডালটি ডিলিট করতে চান?`,
+                              'হ্যাঁ, ডিলিট করুন',
+                              'বাতিল'
+                            );
+                            if (!confirmed) return;
+                            await fallbackStore.deleteCustomModal(modal.id);
+                            setCustomModals(Array.from(fallbackStore.customModals.values()));
+                            showAlert('সফল', 'পপআপ মোডাল ডিলিট করা হয়েছে।', 'success');
+                          }}
+                          className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* --- ALL MODALS OVERLAYS --- */}
 
@@ -2899,6 +3698,35 @@ export const AdminDashboard: React.FC = () => {
           }}
         />
       )}
+
+      {/* 8. Add/Edit Shop Modal Overlay */}
+      {showAddShopModal && (
+        <AddShopModal
+          shopToEdit={editingShop}
+          onClose={() => {
+            setShowAddShopModal(false);
+            setEditingShop(null);
+          }}
+          onSaved={() => {
+            setShops(Array.from(fallbackStore.shops.values()));
+          }}
+        />
+      )}
+
+      {/* 9. Add/Edit Dynamic Custom Modal Overlay */}
+      {showCustomModalForm && (
+        <AdminCustomModalFormModal
+          modalToEdit={editingCustomModal}
+          onClose={() => {
+            setShowCustomModalForm(false);
+            setEditingCustomModal(null);
+          }}
+          onSaved={() => {
+            setCustomModals(Array.from(fallbackStore.customModals.values()));
+          }}
+        />
+      )}
     </div>
   );
 };
+

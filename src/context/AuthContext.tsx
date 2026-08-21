@@ -20,6 +20,8 @@ interface AuthContextType {
   loginWithGoogle: (roleOverride?: 'customer' | 'helper' | 'admin') => Promise<void>;
   logout: () => Promise<void>;
   submitHelperApplication: (appData: Omit<HelperApplication, 'id' | 'userId' | 'userName' | 'status' | 'createdAt'>) => Promise<void>;
+  updateHelperApplication: (appId: string, updatedFields: Partial<HelperApplication>) => Promise<void>;
+  cancelHelperApplication: (appId: string) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
   updateHelperLocation: (loc: { lat: number; lng: number; address?: string }) => void;
 }
@@ -74,6 +76,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const isEduVerified = checkEduVerified(fbUser.email);
     let profile = fallbackStore.users.get(fbUser.uid);
 
+    // If not found by UID, search by email to prevent creating duplicate users on re-login
+    if (!profile && fbUser.email) {
+      const targetEmail = fbUser.email.trim().toLowerCase();
+      const existingByEmail = Array.from(fallbackStore.users.values()).find(
+        (u) => u.email && u.email.trim().toLowerCase() === targetEmail
+      );
+
+      if (existingByEmail) {
+        const oldUid = existingByEmail.uid;
+        profile = {
+          ...existingByEmail,
+          uid: fbUser.uid,
+          displayName: fbUser.displayName || existingByEmail.displayName,
+          photoURL: fbUser.photoURL || existingByEmail.photoURL,
+        };
+        // Migrate all associated orders, wallets, apps, and feedbacks from oldUid to new UID
+        fallbackStore.migrateUserUid(oldUid, fbUser.uid);
+        fallbackStore.saveUser(profile);
+      }
+    }
+
     if (!profile) {
       profile = {
         uid: fbUser.uid,
@@ -86,7 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isEduVerified: isEduVerified,
         isAdmin: isAdmin,
         isSuperAdmin: isSuperAdmin,
-        lastActiveMode: isAdmin ? 'admin' : savedMode,
+        lastActiveMode: isAdmin ? 'admin' : (savedMode || 'customer'),
         createdAt: new Date().toISOString(),
       };
       fallbackStore.saveUser(profile);
@@ -417,6 +440,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await fallbackStore.submitHelperApp(newApp);
   };
 
+  const updateHelperApplication = async (appId: string, updatedFields: Partial<HelperApplication>) => {
+    await fallbackStore.updateHelperApp(appId, updatedFields);
+  };
+
+  const cancelHelperApplication = async (appId: string) => {
+    await fallbackStore.cancelHelperApp(appId);
+  };
+
   const updateCustomerPreferences = (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => {
     if (!user) return;
     const updated = {
@@ -455,6 +486,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginWithGoogle,
         logout,
         submitHelperApplication,
+        updateHelperApplication,
+        cancelHelperApplication,
         updateCustomerPreferences,
         updateHelperLocation,
       }}

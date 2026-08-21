@@ -1,17 +1,20 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, OrderStatus } from '@/types';
+import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
+  Star, Sparkles, FileText,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
 import { MapPickerModal } from './MapPickerModal';
+import { OrderFeedbackModal } from './OrderFeedbackModal';
 
 interface OrderDetailsViewProps {
   orderId: string;
@@ -19,7 +22,9 @@ interface OrderDetailsViewProps {
 }
 
 export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onBack }) => {
+  const { user } = useAuth();
   const [order, setOrder] = useState<Order | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
@@ -176,6 +181,38 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       return;
     }
 
+    // Compute diffs
+    const diffs: OrderEditChange[] = [];
+    const oldService = order.service || order.title || '';
+    if (oldService !== editService.trim()) {
+      diffs.push({ field: 'Service', oldValue: oldService, newValue: editService.trim() });
+    }
+    const oldDesc = order.items[0]?.name || '';
+    if (oldDesc !== editDescription.trim()) {
+      diffs.push({ field: 'Details / Items', oldValue: oldDesc, newValue: editDescription.trim() });
+    }
+    const oldPickup = order.pickupLocation?.address || '';
+    if (oldPickup !== editPickup.trim()) {
+      diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: editPickup.trim() || 'None' });
+    }
+    const oldDelivery = order.deliveryLocation.address;
+    if (oldDelivery !== editAddress.trim()) {
+      diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: editAddress.trim() });
+    }
+    const oldPhone = order.alternativePhone || order.customerPhone || '';
+    if (oldPhone !== editPhone.trim()) {
+      diffs.push({ field: 'Contact Phone', oldValue: oldPhone, newValue: editPhone.trim() });
+    }
+
+    const nowIso = new Date().toISOString();
+    const editItem: OrderEditHistoryItem = {
+      id: `ed-${Date.now()}`,
+      timestamp: nowIso,
+      editedBy: 'customer',
+      editedByName: order.customerName || 'Customer',
+      changes: diffs.length > 0 ? diffs : [{ field: 'Details', oldValue: 'Previous Details', newValue: 'Updated Details' }],
+    };
+
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       service: editService.trim(),
@@ -192,15 +229,19 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       },
       alternativePhone: editPhone.trim(),
       customerPhone: editPhone.trim(),
-      updatedAt: new Date().toISOString(),
+      updatedByCustomer: true,
+      lastEditedAt: nowIso,
+      lastEditedBy: 'customer',
+      editHistory: [...(o.editHistory || []), editItem],
+      updatedAt: nowIso,
       statusHistory: [
         ...o.statusHistory,
         {
           id: `sh-${Date.now()}`,
           status: o.status,
-          timestamp: new Date().toISOString(),
+          timestamp: nowIso,
           actor: 'Customer',
-          note: 'Order details updated by customer',
+          note: `Order details updated by customer (${diffs.map((d) => d.field).join(', ') || 'Updated'})`,
         },
       ],
     }));
@@ -226,7 +267,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           <span className="text-xs font-bold">Back</span>
         </button>
         <span className="font-extrabold text-sm text-gray-800">Order-#{order.id}</span>
-        <div className="w-16" />
+        {canEdit ? (
+          <button
+            onClick={openEditModal}
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1.5 shadow-sm transition-all active:scale-95"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+            <span>Edit Order</span>
+          </button>
+        ) : (
+          <div className="w-12" />
+        )}
       </div>
 
       <div className="max-w-md mx-auto px-4 pt-5 space-y-4">
@@ -434,6 +485,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <span className="font-semibold">Contact: <span className="font-bold text-gray-900">{order.alternativePhone || order.customerPhone}</span></span>
             </div>
           )}
+          {order.helperNote && (user?.role === 'helper' || user?.role === 'admin' || user?.lastActiveMode === 'helper' || user?.lastActiveMode === 'admin' || user?.isAdmin) && (
+            <div className="mt-3 p-3 rounded-2xl bg-purple-50 border border-purple-200 text-xs text-purple-950 space-y-1">
+              <span className="font-extrabold flex items-center space-x-1.5 text-purple-900">
+                <FileText className="w-3.5 h-3.5 text-purple-700" />
+                <span>Helper Private Note (🔒 Hidden from customer):</span>
+              </span>
+              <p className="font-semibold text-purple-950 leading-relaxed">{order.helperNote}</p>
+            </div>
+          )}
         </div>
 
         {/* ── FEE UPDATED NOTICE ── */}
@@ -449,6 +509,68 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 <p className="text-[11px] italic mt-1 text-amber-700">"{order.feeAdjustment.reason}"</p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── CUSTOMER FEEDBACK SECTION (ONLY FOR DELIVERED ORDERS) ── */}
+        {isDelivered && (
+          <div className="bg-white rounded-3xl border border-amber-200 p-4 shadow-soft space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-5 h-5 text-amber-500" />
+                <h3 className="font-extrabold text-sm text-gray-900">Customer Feedback</h3>
+              </div>
+              {order.feedback ? (
+                <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                  ✓ Submitted
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
+                  Pending Feedback
+                </span>
+              )}
+            </div>
+
+            {order.feedback ? (
+              <div className="bg-amber-50/60 p-3 rounded-2xl border border-amber-100/80 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600 font-semibold">Helper Rating:</span>
+                  <div className="flex items-center space-x-1 font-bold text-amber-700">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                    <span>{order.feedback.riderRating} / 5</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600 font-semibold">Overall Service:</span>
+                  <div className="flex items-center space-x-1 font-bold text-amber-700">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                    <span>{order.feedback.serviceRating} / 5</span>
+                  </div>
+                </div>
+                {order.feedback.improvementComment && (
+                  <div className="pt-1.5 border-t border-amber-200/60">
+                    <p className="text-[11px] text-amber-900 font-medium italic">
+                      "{order.feedback.improvementComment}"
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <p className="text-xs text-gray-600 font-medium mb-3">
+                  অর্ডারটি সফলভাবে ডেলিভারি হয়েছে! আমাদের সার্ভিস মান উন্নত করতে আপনার মতামত অত্যন্ত মূল্যবান।
+                </p>
+                {user?.uid === order.customerId && (
+                  <button
+                    onClick={() => setShowFeedbackModal(true)}
+                    className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-1.5 active:scale-95"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>মতামত দিন (Give Feedback)</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -739,6 +861,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           if (loc.lng) setEditDeliveryLng(loc.lng);
         }}
       />
+
+      {showFeedbackModal && (
+        <OrderFeedbackModal
+          order={order}
+          onClose={() => setShowFeedbackModal(false)}
+          onSubmitted={() => setShowFeedbackModal(false)}
+        />
+      )}
     </div>
   );
 };
