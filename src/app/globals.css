@@ -69,7 +69,8 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
 
 /* Mobile viewport container constraint for desktop viewing */
 .mobile-container {
-  max-width: 480px;
+  width: 100%;
+  max-width: 720px;
   margin-left: auto;
   margin-right: auto;
   min-height: 100vh;
@@ -77,9 +78,7 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
   min-height: 100dvh;
   background-color: #ffffff;
   box-shadow: 0 0 50px rgba(0, 0, 0, 0.05);
-  /* GPU-accelerate the container for smooth transitions */
-  transform: translateZ(0);
-  will-change: transform;
+  position: relative;
 }
 
 /* Safe area padding utilities — used for iPhone notch and home indicator */

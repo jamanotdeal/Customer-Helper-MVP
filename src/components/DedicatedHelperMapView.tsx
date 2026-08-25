@@ -277,7 +277,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
       const shopIds = new Set(registeredShops.map((s) => `shop-${s.id}`));
       markersRef.current.forEach((_, key) => {
         if (key.startsWith('shop-') && !shopIds.has(key)) {
-          try { markersRef.current.get(key)?.remove(); } catch (e) {}
+          try { markersRef.current.get(key)?.remove(); } catch (e) { }
           markersRef.current.delete(key);
         }
       });
@@ -335,7 +335,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
       if (routesChanged) {
         routePolylinesRef.current.forEach((poly) => {
-          try { poly.remove(); } catch (e) {}
+          try { poly.remove(); } catch (e) { }
         });
         routePolylinesRef.current = [];
       }
@@ -345,7 +345,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
       currentOrderIds.add('helper');
       markersRef.current.forEach((marker, id) => {
         if (!id.startsWith('shop-') && !currentOrderIds.has(id)) {
-          try { marker.remove(); } catch (e) {}
+          try { marker.remove(); } catch (e) { }
           markersRef.current.delete(id);
         }
       });
@@ -548,7 +548,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
               <Store className="w-4 h-4 text-emerald-600" />
               <span>নিবন্ধিত দোকানসমূহ ({filteredShops.length})</span>
             </h3>
-            
+
             {/* Filter and Sort Options */}
             <div className="flex gap-2 flex-wrap sm:flex-nowrap">
               <input
@@ -670,11 +670,10 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
   return (
     <div
-      className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${
-        isFullscreen
+      className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${isFullscreen
           ? 'z-[99999]'
           : 'h-[650px] rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden'
-      }`}
+        }`}
       style={
         isFullscreen
           ? { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100dvh' }
@@ -687,11 +686,10 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         <button
           type="button"
           onClick={() => setIsFullscreen((prev) => !prev)}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-extrabold shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-            isFullscreen
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-extrabold shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer ${isFullscreen
               ? 'bg-red-600 hover:bg-red-700 text-white border border-red-400'
               : 'bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md text-white border border-slate-700/80'
-          }`}
+            }`}
           title={isFullscreen ? 'ম্যাপ বন্ধ করুন' : 'Full Screen Map'}
         >
           {isFullscreen ? (
@@ -713,9 +711,8 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
       {/* Bottom Left Controls: Re-center Button & Live Route Map Label */}
       <div
-        className={`absolute z-[10001] pointer-events-auto flex flex-col items-start gap-2 transition-all duration-300 ${
-          selectedOrder ? 'bottom-[205px] left-4' : 'bottom-4 left-4'
-        }`}
+        className={`absolute z-[10001] pointer-events-auto flex flex-col items-start gap-2 transition-all duration-300 ${selectedOrder ? 'bottom-[205px] left-4' : 'bottom-4 left-4'
+          }`}
       >
         <button
           type="button"
@@ -740,82 +737,82 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
       {/* ── Store Details Modal (shown when a shop marker is clicked) ── */}
       {selectedShop && (
         <div className="absolute inset-0 z-[10002] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-        <div className="w-full max-w-sm bg-white rounded-3xl border border-purple-200 shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-purple-700 to-violet-800 text-white">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 bg-white/20 rounded-xl">
-                <Store className="w-4 h-4 text-white" />
+          <div className="w-full max-w-sm bg-white rounded-3xl border border-purple-200 shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-purple-700 to-violet-800 text-white">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-white/20 rounded-xl">
+                  <Store className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <div className="font-extrabold text-sm leading-tight">{selectedShop.name}</div>
+                  <div className="text-[10px] text-purple-200 font-semibold">{selectedShop.type}</div>
+                </div>
               </div>
-              <div>
-                <div className="font-extrabold text-sm leading-tight">{selectedShop.name}</div>
-                <div className="text-[10px] text-purple-200 font-semibold">{selectedShop.type}</div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSelectedShop(null)}
-              className="p-1.5 bg-white/20 hover:bg-white/30 rounded-xl transition-colors"
-            >
-              <X className="w-4 h-4 text-white" />
-            </button>
-          </div>
-
-          {/* Body */}
-          <div className="px-4 py-3 space-y-2.5">
-            {/* Contact Person */}
-            <div className="flex items-center gap-2 text-xs text-gray-700">
-              <User className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-              <span className="font-semibold text-gray-500">Contact:</span>
-              <span className="font-bold">{selectedShop.contactPerson}</span>
-            </div>
-
-            {/* Address */}
-            <div className="flex items-start gap-2 text-xs text-gray-700">
-              <MapPin className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
-              <span className="font-medium leading-snug">{selectedShop.location.address}</span>
-            </div>
-
-            {/* Added By */}
-            {selectedShop.addedByHelperName && (
-              <div className="flex items-center gap-2 text-[10px] text-gray-400">
-                <span>Added by:</span>
-                <span className="font-semibold text-gray-500">{selectedShop.addedByHelperName}</span>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="flex gap-2 pt-1">
-              <a
-                href={`tel:${selectedShop.whatsapp}`}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+              <button
+                type="button"
+                onClick={() => setSelectedShop(null)}
+                className="p-1.5 bg-white/20 hover:bg-white/30 rounded-xl transition-colors"
               >
-                <Phone className="w-3.5 h-3.5" />
-                <span>কল করুন</span>
-              </a>
-              <a
-                href={`https://wa.me/${selectedShop.whatsapp.replace(/\D/g, '')}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>WhatsApp</span>
-              </a>
-              {selectedShop.location.lat && selectedShop.location.lng && (
+                <X className="w-4 h-4 text-white" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="px-4 py-3 space-y-2.5">
+              {/* Contact Person */}
+              <div className="flex items-center gap-2 text-xs text-gray-700">
+                <User className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                <span className="font-semibold text-gray-500">Contact:</span>
+                <span className="font-bold">{selectedShop.contactPerson}</span>
+              </div>
+
+              {/* Address */}
+              <div className="flex items-start gap-2 text-xs text-gray-700">
+                <MapPin className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
+                <span className="font-medium leading-snug">{selectedShop.location.address}</span>
+              </div>
+
+              {/* Added By */}
+              {selectedShop.addedByHelperName && (
+                <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                  <span>Added by:</span>
+                  <span className="font-semibold text-gray-500">{selectedShop.addedByHelperName}</span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-1">
                 <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${selectedShop.location.lat},${selectedShop.location.lng}`}
+                  href={`tel:${selectedShop.whatsapp}`}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>কল করুন</span>
+                </a>
+                <a
+                  href={`https://wa.me/${selectedShop.whatsapp.replace(/\D/g, '')}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
                 >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Directions</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
                 </a>
-              )}
+                {selectedShop.location.lat && selectedShop.location.lng && (
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${selectedShop.location.lat},${selectedShop.location.lng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all active:scale-95"
+                  >
+                    <Navigation className="w-3.5 h-3.5" />
+                    <span>Directions</span>
+                  </a>
+                )}
+              </div>
             </div>
           </div>
-        </div>
         </div>
       )}
 
@@ -843,11 +840,10 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
                   {selectedOrder.service || selectedOrder.title || 'অর্ডার'}
                 </span>
                 <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                    selectedOrder.status === 'PENDING'
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${selectedOrder.status === 'PENDING'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                       : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                  }`}
+                    }`}
                 >
                   {selectedOrder.status}
                 </span>

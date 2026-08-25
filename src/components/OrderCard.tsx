@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit } from 'lucide-react';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 
 interface OrderCardProps {
@@ -170,9 +170,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         <div className="p-4 space-y-3">
           {/* Top metadata row: Order ID badge (top-left) & Timer/Status (top-right) */}
           <div className="flex items-center justify-between gap-2">
-            <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
-              #{order.id}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
+                #{order.id}
+              </span>
+              {order.needDeliveryBack && (
+                <span className="flex items-center justify-center bg-indigo-600 text-white p-1 rounded-md shadow-sm" title="Two-Way Delivery">
+                  <RotateCcw className="w-3.5 h-3.5 font-black" strokeWidth={3} />
+                </span>
+              )}
+            </div>
             <div className="flex items-center space-x-1.5 shrink-0">
               {/* Updated Badge */}
               {order.updatedByCustomer && (

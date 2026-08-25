@@ -114,19 +114,94 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   storeTypes: DEFAULT_STORE_TYPES,
   // Map picker guide overlay
   mapPickerGuideText: 'যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।',
+  mapPickerPickupGuideText: 'যে দোকান বা স্থান থেকে আনতে বা কাজ করতে হবে, সেই স্থানে ম্যাপের পিন সরিয়ে নিয়ে যান অথবা ক্লিক করুন। দোকানের নাম বা বিস্তারিত ঠিকানা নিচের input box-এ লিখুন।',
+  mapPickerDeliveryGuideText: 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন। ডেলিভারি ঠিকানা নির্ভুল হলে হেল্পার ঠিক সময়ে পৌঁছাতে পারবেন। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।',
   mapPickerGuideOkText: 'ঠিক আছে',
   mapPickerGuideShowCount: 5,
-  // Services whose pickup location should NOT be saved per-category
-  noSavePickupLocationServices: [
-    'মিক্স কিছু কাজ করে দিন',
-    'না, অন্য একটা কাজ করে দিন',
-    'আমার একটা জিনিস দিয়ে আসুন',
-    'mix',
-    'onno kicu',
-    'মিক্স / একাধিক কাজ',
-    'অন্য কিছু',
-  ],
+  // Fee Details Estimation Calculator & Company Description Defaults
+  feeCalculatorBasePrice: 20,
+  feeCalculatorPerKmRate: 10,
+  feeCalculatorPerKgRate: 5,
+  feeCalculatorReturnFee: 15,
+  feeCalculatorReturnPercent: 20,
+  feeCalculatorProcessingFee: 5,
+  feeCalculatorProcessingFeeType: 'flat',
+  feeCalculatorMinFee: 25,
+  feeCalculatorMaxLimit: 70,
+  feeCalculatorMaxLimitMessage: 'অনুরোধকৃত সার্ভিসের ডেলিভারি ফি ৳৭০-এর উপরে নির্ধারিত হয়েছে। সঠিক ফি নিশ্চিত করতে জামানতের হটলাইনে বা কাস্টমার কেয়ারে যোগাযোগ করার অনুরোধ করা হচ্ছে।',
+  feeCalculatorCompanyDetails: `জামানত (Jamanot)-এর প্রতিটি সার্ভিস চার্জ সম্পূর্ণ স্বচ্ছ এবং সাশ্রয়ী। নিচে আমাদের ফি নির্ধারণের বিস্তারিত দেওয়া হলো:
+
+1. **বেস প্রাইস (Base Price):** মাত্র ৳২০ থেকে যেকোনো লোকাল সার্ভিসের পিকআপ ও কাজ শুরু হয়।
+2. **দূরত্ব ফি (Distance Rate):** প্রতি কিমি (km) দূরত্বের জন্য মাত্র ৳১০ চার্জ প্রযোজ্য।
+3. **ওজন ফি (Product Weight Rate):** ১ কেজির বেশি অতিরিক্ত পণ্যের জন্য প্রতি কেজিতে ৳৫ ফি যোগ করা হয়।
+4. **পণ্য রিটার্ন সেবা (Return Service):** ডেলিভারি ফি-এর নির্ধারিত % সার্ভিস চার্জ হিসেবে যোগ হয়।
+5. **প্রসেসিং ফি (Processing Fee):** পণ্যের খরচের উপর ভিত্তি করে প্রসেসিং সার্ভিস চার্জ যোগ হয়।
+
+আপনার যেকোনো মতামত বা সার্ভিস ফি সংক্রান্ত পরামর্শ নিচে লিখে আমাদের জানাতে পারেন।`,
+  allowedAdminTabs: [],
 };
+
+/**
+ * Calculates estimated delivery fee based on distance, product weight, return option, product price, base price, and discount.
+ */
+export function calculateEstimatedFee(
+  params: {
+    distanceKm: number;
+    weightKg: number;
+    isReturnRequested: boolean;
+    productPrice?: number;
+    discountAmount?: number;
+  },
+  settings: PricingSettings = DEFAULT_PRICING_SETTINGS
+) {
+  const basePrice = settings.feeCalculatorBasePrice ?? 20;
+  const perKmRate = settings.feeCalculatorPerKmRate ?? 10;
+  const perKgRate = settings.feeCalculatorPerKgRate ?? 5;
+  const returnPercent = settings.feeCalculatorReturnPercent ?? 20;
+  const minFee = settings.feeCalculatorMinFee ?? 25;
+
+  const distanceKm = Math.max(0, Number(params.distanceKm) || 0);
+  const weightKg = Math.max(0, Number(params.weightKg) || 0);
+  const productPrice = Math.max(0, Number(params.productPrice) || 0);
+
+  const distanceFee = Math.round(distanceKm * perKmRate);
+  const weightFee = Math.round(weightKg * perKgRate);
+
+  const deliverySubtotal = basePrice + distanceFee + weightFee;
+  const returnFee = params.isReturnRequested ? Math.round((deliverySubtotal * returnPercent) / 100) : 0;
+
+  let processingFee = 0;
+  const procConfig = settings.feeCalculatorProcessingFee;
+  if (procConfig && procConfig > 0 && productPrice > 0) {
+    if (settings.feeCalculatorProcessingFeeType === 'percent') {
+      processingFee = Math.round((productPrice * procConfig) / 100);
+    } else {
+      processingFee = procConfig;
+    }
+  }
+
+  const discount = Math.max(0, Number(params.discountAmount) || 0);
+
+  const rawTotal = deliverySubtotal + returnFee + processingFee - discount;
+  const totalFee = Math.max(minFee, Math.round(rawTotal));
+
+  return {
+    basePrice,
+    distanceFee,
+    weightFee,
+    deliverySubtotal,
+    returnFee,
+    returnPercent,
+    processingFee,
+    productPrice,
+    discount,
+    totalFee,
+    perKmRate,
+    perKgRate,
+    minFee,
+  };
+}
+
 
 /**
  * Calculates distance in kilometers between two lat/lng points using Haversine formula.

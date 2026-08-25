@@ -31,6 +31,7 @@ import {
   Shop,
   OrderFeedback,
   AdminCustomModalConfig,
+  FeeSuggestion,
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
 
@@ -146,7 +147,8 @@ export async function sendFcmPushToTokens(
   title: string,
   body: string,
   tag?: string,
-  url?: string
+  url?: string,
+  imageUrl?: string
 ): Promise<void> {
   const serverKey = process.env.NEXT_PUBLIC_FCM_SERVER_KEY;
   if (!serverKey || tokens.length === 0) {
@@ -157,8 +159,8 @@ export async function sendFcmPushToTokens(
   try {
     const payload = {
       registration_ids: tokens.slice(0, 1000), // FCM max per request
-      notification: { title, body, icon: '/Jamanot-Logo.png' },
-      data: { title, body, tag: tag || 'jamanot', url: url || '/' },
+      notification: { title, body, icon: '/Jamanot-Logo.png', image: imageUrl || undefined },
+      data: { title, body, tag: tag || 'jamanot', url: url || '/', image: imageUrl || undefined },
     };
     await fetch('https://fcm.googleapis.com/fcm/send', {
       method: 'POST',
@@ -184,7 +186,7 @@ function cleanForFirestore<T>(data: T): T {
 // Fires a native browser popup on the CURRENT device for the given notification.
 // Each device calls this for itself via the Firestore onSnapshot listener.
 // -------------------------------------------------------------
-export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string }) {
+export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string; imageUrl?: string }) {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   try {
@@ -196,6 +198,7 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
               body: notif.body || '',
               icon: '/Jamanot-Logo.png',
               badge: '/Jamanot-Logo.png',
+              image: notif.imageUrl || undefined,
               tag: notif.id,
               vibrate: [200, 100, 200, 100, 200],
               renotify: true,
@@ -206,8 +209,9 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
               new Notification(notif.title, {
                 body: notif.body || '',
                 icon: '/Jamanot-Logo.png',
+                image: notif.imageUrl || undefined,
                 tag: notif.id,
-              });
+              } as any);
             });
         })
         .catch(() => {
@@ -215,15 +219,17 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
           new Notification(notif.title, {
             body: notif.body || '',
             icon: '/Jamanot-Logo.png',
+            image: notif.imageUrl || undefined,
             tag: notif.id,
-          });
+          } as any);
         });
     } else {
       new Notification(notif.title, {
         body: notif.body || '',
         icon: '/Jamanot-Logo.png',
+        image: notif.imageUrl || undefined,
         tag: notif.id,
-      });
+      } as any);
     }
     // Also play sound on the receiving device
     playNotificationSound();
@@ -253,6 +259,8 @@ class FallbackStore {
   public shops: Map<string, Shop> = new Map();
   public orderFeedbacks: Map<string, OrderFeedback> = new Map();
   public customModals: Map<string, AdminCustomModalConfig> = new Map();
+  public feeSuggestions: Map<string, FeeSuggestion> = new Map();
+  public scheduledNotifications: Map<string, AppNotification> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
 
   // Set by AuthContext when a user logs in/out so the Firestore
@@ -269,6 +277,7 @@ class FallbackStore {
     this.loadFromLocalStorage();
     this.initFirestoreListeners();
     this.startRoutingTimer();
+    this.startScheduledNotificationTimer();
   }
 
   private startRoutingTimer() {
@@ -276,6 +285,52 @@ class FallbackStore {
     setInterval(() => {
       this.checkDedicatedRouting();
     }, 15000);
+  }
+
+  private startScheduledNotificationTimer() {
+    if (typeof window === 'undefined') return;
+    setInterval(() => {
+      this.checkScheduledNotifications();
+    }, 10000);
+  }
+
+  private async checkScheduledNotifications() {
+    const now = Date.now();
+    const toProcess: AppNotification[] = [];
+    this.scheduledNotifications.forEach((notif) => {
+      if (notif.scheduledAt) {
+        const scheduledTime = new Date(notif.scheduledAt).getTime();
+        if (now >= scheduledTime) {
+          toProcess.push(notif);
+        }
+      }
+    });
+
+    for (const notif of toProcess) {
+      // Dispatch notification
+      const dispatchNotif: AppNotification = {
+        ...notif,
+        id: `notif-disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        createdAt: new Date().toISOString(),
+        isScheduled: false,
+      };
+      await this.addNotification(dispatchNotif);
+
+      // Handle recurrence
+      if (notif.repeatFrequency === 'DAILY') {
+        const nextDate = new Date(now + 24 * 3600 * 1000);
+        notif.scheduledAt = nextDate.toISOString();
+        this.scheduledNotifications.set(notif.id, notif);
+      } else if (notif.repeatFrequency === 'WEEKLY') {
+        const nextDate = new Date(now + 7 * 24 * 3600 * 1000);
+        notif.scheduledAt = nextDate.toISOString();
+        this.scheduledNotifications.set(notif.id, notif);
+      } else {
+        this.scheduledNotifications.delete(notif.id);
+      }
+      this.notify();
+      this.saveLocalStore();
+    }
   }
 
   private async checkDedicatedRouting() {
@@ -306,72 +361,100 @@ class FallbackStore {
     });
   }
 
+  private safeParse<T>(key: string): T | null {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw || raw.trim().startsWith('<')) return null;
+      return JSON.parse(raw) as T;
+    } catch (e) {
+      console.warn(`[FallbackStore] Error parsing localStorage item "${key}":`, e);
+      return null;
+    }
+  }
+
   private loadFromLocalStorage() {
     if (typeof window === 'undefined') return;
     try {
-      const savedOrders = localStorage.getItem('jamanot_orders_store');
-      if (savedOrders) {
-        const parsed: [string, Order][] = JSON.parse(savedOrders);
-        parsed.forEach(([id, order]) => this.orders.set(id, order));
+      const parsedOrders = this.safeParse<[string, Order][]>('jamanot_orders_store');
+      if (parsedOrders && Array.isArray(parsedOrders)) {
+        parsedOrders.forEach(([id, order]) => {
+          if (id && order) this.orders.set(id, order);
+        });
       }
 
-      const savedUsers = localStorage.getItem('jamanot_users_store');
-      if (savedUsers) {
-        const parsed: [string, UserProfile][] = JSON.parse(savedUsers);
-        parsed.forEach(([id, u]) => this.users.set(id, u));
+      const parsedUsers = this.safeParse<[string, UserProfile][]>('jamanot_users_store');
+      if (parsedUsers && Array.isArray(parsedUsers)) {
+        parsedUsers.forEach(([id, u]) => {
+          if (id && u) this.users.set(id, u);
+        });
       }
 
-      const savedHelperApps = localStorage.getItem('jamanot_helper_apps_store');
-      if (savedHelperApps) {
-        const parsed: [string, HelperApplication][] = JSON.parse(savedHelperApps);
-        parsed.forEach(([id, app]) => this.helperApplications.set(id, app));
+      const parsedApps = this.safeParse<[string, HelperApplication][]>('jamanot_helper_apps_store');
+      if (parsedApps && Array.isArray(parsedApps)) {
+        parsedApps.forEach(([id, app]) => {
+          if (id && app) this.helperApplications.set(id, app);
+        });
       }
 
-      const savedWallets = localStorage.getItem('jamanot_wallets_store');
-      if (savedWallets) {
-        const parsed: [string, Wallet][] = JSON.parse(savedWallets);
-        parsed.forEach(([id, w]) => this.wallets.set(id, w));
+      const parsedWallets = this.safeParse<[string, Wallet][]>('jamanot_wallets_store');
+      if (parsedWallets && Array.isArray(parsedWallets)) {
+        parsedWallets.forEach(([id, w]) => {
+          if (id && w) this.wallets.set(id, w);
+        });
       }
 
-      const savedTxs = localStorage.getItem('jamanot_wallet_txs_store');
-      if (savedTxs) {
-        const parsed: [string, WalletTransaction[]][] = JSON.parse(savedTxs);
-        parsed.forEach(([id, list]) => this.walletTransactions.set(id, list));
+      const parsedTxs = this.safeParse<[string, WalletTransaction[]][]>('jamanot_wallet_txs_store');
+      if (parsedTxs && Array.isArray(parsedTxs)) {
+        parsedTxs.forEach(([id, list]) => {
+          if (id && Array.isArray(list)) this.walletTransactions.set(id, list);
+        });
       }
 
-      const savedWithdrawals = localStorage.getItem('jamanot_withdrawals_store');
-      if (savedWithdrawals) {
-        const parsed: [string, WithdrawalRequest][] = JSON.parse(savedWithdrawals);
-        parsed.forEach(([id, wd]) => this.withdrawals.set(id, wd));
+      const parsedWds = this.safeParse<[string, WithdrawalRequest][]>('jamanot_withdrawals_store');
+      if (parsedWds && Array.isArray(parsedWds)) {
+        parsedWds.forEach(([id, wd]) => {
+          if (id && wd) this.withdrawals.set(id, wd);
+        });
       }
 
-      const savedNotifs = localStorage.getItem('jamanot_notifications_store');
-      if (savedNotifs) {
-        const parsed: [string, AppNotification[]][] = JSON.parse(savedNotifs);
-        parsed.forEach(([id, list]) => this.notifications.set(id, list));
+      const parsedNotifs = this.safeParse<[string, AppNotification[]][]>('jamanot_notifications_store');
+      if (parsedNotifs && Array.isArray(parsedNotifs)) {
+        parsedNotifs.forEach(([id, list]) => {
+          if (id && Array.isArray(list)) this.notifications.set(id, list);
+        });
       }
 
-      const savedShops = localStorage.getItem('jamanot_shops_store');
-      if (savedShops) {
-        const parsed: [string, Shop][] = JSON.parse(savedShops);
-        parsed.forEach(([id, s]) => this.shops.set(id, s));
+      const parsedShops = this.safeParse<[string, Shop][]>('jamanot_shops_store');
+      if (parsedShops && Array.isArray(parsedShops)) {
+        parsedShops.forEach(([id, s]) => {
+          if (id && s) this.shops.set(id, s);
+        });
       }
 
-      const savedFeedbacks = localStorage.getItem('jamanot_feedbacks_store');
-      if (savedFeedbacks) {
-        const parsed: [string, OrderFeedback][] = JSON.parse(savedFeedbacks);
-        parsed.forEach(([id, fb]) => this.orderFeedbacks.set(id, fb));
+      const parsedFbs = this.safeParse<[string, OrderFeedback][]>('jamanot_feedbacks_store');
+      if (parsedFbs && Array.isArray(parsedFbs)) {
+        parsedFbs.forEach(([id, fb]) => {
+          if (id && fb) this.orderFeedbacks.set(id, fb);
+        });
       }
 
-      const savedModals = localStorage.getItem('jamanot_modals_store');
-      if (savedModals) {
-        const parsed: [string, AdminCustomModalConfig][] = JSON.parse(savedModals);
-        parsed.forEach(([id, m]) => this.customModals.set(id, m));
+      const parsedModals = this.safeParse<[string, AdminCustomModalConfig][]>('jamanot_modals_store');
+      if (parsedModals && Array.isArray(parsedModals)) {
+        parsedModals.forEach(([id, m]) => {
+          if (id && m) this.customModals.set(id, m);
+        });
       }
 
-      const savedPricing = localStorage.getItem('jamanot_pricing_store');
-      if (savedPricing) {
-        this.pricingSettings = JSON.parse(savedPricing);
+      const parsedSuggestions = this.safeParse<[string, FeeSuggestion][]>('jamanot_fee_suggestions_store');
+      if (parsedSuggestions && Array.isArray(parsedSuggestions)) {
+        parsedSuggestions.forEach(([id, s]) => {
+          if (id && s) this.feeSuggestions.set(id, s);
+        });
+      }
+
+      const savedPricing = this.safeParse<PricingSettings>('jamanot_pricing_store');
+      if (savedPricing && typeof savedPricing === 'object') {
+        this.pricingSettings = savedPricing;
       }
     } catch (e) {
       console.warn('Local storage hydration error:', e);
@@ -391,6 +474,7 @@ class FallbackStore {
       localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
       localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
       localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
+      localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
       localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
       console.warn('Local storage persist error:', e);
@@ -443,6 +527,10 @@ class FallbackStore {
           if (this.currentUserId) {
             const uid = this.currentUserId;
             const currentUser = this.users.get(uid);
+            const isInitial = this._knownNotifIds.size === 0;
+            let unreadCount = 0;
+            const toTrigger: AppNotification[] = [];
+
             snapshot.docs.forEach((docSnap) => {
               const notif = docSnap.data() as AppNotification;
               // Skip if we already processed this notification on this device
@@ -457,9 +545,31 @@ class FallbackStore {
                 (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
 
               if (targets && !notif.read) {
-                triggerBrowserNotification(notif);
+                if (isInitial) {
+                  unreadCount++;
+                  toTrigger.push(notif);
+                } else {
+                  triggerBrowserNotification(notif);
+                }
               }
             });
+
+            // Smart flood control on initial load
+            if (isInitial && unreadCount > 0) {
+              if (unreadCount > 2) {
+                // Show a single consolidated notification
+                triggerBrowserNotification({
+                  id: `consolidated-init-${Date.now()}`,
+                  title: 'নতুন নোটিফিকেশন (New Notifications)',
+                  body: `আপনার ${unreadCount}টি নতুন নোটিফিকেশন আছে। দেখতে নোটিফিকেশন বেল ট্যাপ করুন।`,
+                });
+              } else {
+                // Show individually if only 1 or 2
+                toTrigger.forEach((notif) => {
+                  triggerBrowserNotification(notif);
+                });
+              }
+            }
           }
           // ──────────────────────────────────────────────────────────
 
@@ -624,6 +734,22 @@ class FallbackStore {
           this.notify();
         },
         (err) => console.warn('[Firestore] CustomModals sync note:', err)
+      );
+
+      // 12. Fee Suggestions Listener
+      onSnapshot(
+        collection(db, 'feeSuggestions'),
+        (snapshot) => {
+          const currentIds = new Set(snapshot.docs.map((d) => d.id));
+          for (const key of Array.from(this.feeSuggestions.keys())) {
+            if (!currentIds.has(key)) this.feeSuggestions.delete(key);
+          }
+          snapshot.docs.forEach((docSnap) => {
+            this.feeSuggestions.set(docSnap.id, docSnap.data() as FeeSuggestion);
+          });
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] FeeSuggestions sync note:', err)
       );
     } catch (e) {
       console.error('[Firestore] Realtime init failed:', e);
@@ -854,6 +980,35 @@ class FallbackStore {
         userId: helperTarget,
         title: 'অর্ডার পরিবর্তন (Order Updated)',
         body: `গ্রাহক অর্ডার #${updated.id} এর তথ্য/বিবরণ আপডেট করেছেন।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // Helper/Admin address edit notification to customer
+    if (
+      (updated.lastEditedBy === 'helper' || updated.lastEditedBy === 'admin') &&
+      (existing.deliveryLocation.address !== updated.deliveryLocation.address ||
+       existing.pickupLocation?.address !== updated.pickupLocation?.address)
+    ) {
+      const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
+      const isDeliveryChanged = existing.deliveryLocation.address !== updated.deliveryLocation.address;
+      const isPickupChanged = existing.pickupLocation?.address !== updated.pickupLocation?.address;
+      let changeText = '';
+      if (isDeliveryChanged && isPickupChanged) {
+        changeText = 'পিকআপ ও ডেলিভারি ঠিকানা';
+      } else if (isDeliveryChanged) {
+        changeText = 'ডেলিভারি ঠিকানা';
+      } else {
+        changeText = 'পিকআপ ঠিকানা';
+      }
+
+      this.addNotification({
+        id: `notif-${Date.now()}-addr-edit`,
+        userId: updated.customerId,
+        title: 'ঠিকানা পরিবর্তন করা হয়েছে (Address Updated)',
+        body: `${editorName} অর্ডার #${updated.id} এর ${changeText} আপডেট করেছেন।`,
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
@@ -1228,6 +1383,36 @@ class FallbackStore {
     }
   }
 
+  public doesUserMatchSegment(u: UserProfile, segName: string): boolean {
+    const userOrders = Array.from(this.orders.values()).filter((o) => o.customerId === u.uid);
+    const orderCount = userOrders.length;
+    const lastOrder = orderCount > 0 
+      ? [...userOrders].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] 
+      : null;
+    const daysSinceLastOrder = lastOrder 
+      ? Math.floor((Date.now() - new Date(lastOrder.createdAt).getTime()) / (24 * 3600 * 1000)) 
+      : null;
+
+    const userCreatedTime = u.createdAt ? new Date(u.createdAt).getTime() : (orderCount > 0 ? new Date(userOrders[orderCount - 1].createdAt).getTime() : Date.now());
+    const weeksElapsed = Math.max(1, (Date.now() - userCreatedTime) / (7 * 24 * 3600 * 1000));
+    const weeklyOrderRate = orderCount / weeksElapsed;
+    const monthlyOrderRate = orderCount / (weeksElapsed / 4.33);
+
+    if (segName === 'MULTIPLE_ORDERS') return orderCount >= 2;
+    if (segName === 'WEEKLY_2_ORDERS') return weeklyOrderRate >= 2;
+    if (segName === 'WEEKLY_1_ORDERS') return weeklyOrderRate >= 1;
+    if (segName === 'RARE_ORDERS_WEEK') return orderCount > 0 && weeklyOrderRate < 1;
+    if (segName === 'RARE_ORDERS_MONTH') return orderCount > 0 && monthlyOrderRate < 1;
+    if (segName === 'INACTIVE_1_WEEK') return orderCount > 0 && daysSinceLastOrder !== null && daysSinceLastOrder >= 7;
+    if (segName === 'INACTIVE_2_WEEKS') return orderCount > 0 && daysSinceLastOrder !== null && daysSinceLastOrder >= 14;
+    if (segName === 'NEVER_ORDERED') return orderCount === 0;
+    if (segName === 'NEW_REGISTERED') {
+      const registeredDaysAgo = Math.floor((Date.now() - userCreatedTime) / (24 * 3600 * 1000));
+      return registeredDaysAgo <= 7;
+    }
+    return false;
+  }
+
   public async addNotification(notif: AppNotification) {
     const target = notif.userId;
     const radiusKm = this.pricingSettings.helperRadiusKm || 3.5;
@@ -1269,6 +1454,15 @@ class FallbackStore {
     } else if (target === 'all-customers') {
       this.users.forEach((u) => {
         if (!u.isHelper || u.role === 'customer') {
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
+      });
+    } else if (target.startsWith('segment:')) {
+      const segName = target.replace('segment:', '');
+      this.users.forEach((u) => {
+        if (this.doesUserMatchSegment(u, segName)) {
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -1321,6 +1515,13 @@ class FallbackStore {
         allUsers.forEach((u) => { if (!u.isHelper && u.role !== 'admin' && u.fcmToken) targetTokens.push(u.fcmToken); });
       } else if (t === 'all') {
         allUsers.forEach((u) => { if (u.fcmToken) targetTokens.push(u.fcmToken); });
+      } else if (t.startsWith('segment:')) {
+        const segName = t.replace('segment:', '');
+        allUsers.forEach((u) => {
+          if (u.fcmToken && this.doesUserMatchSegment(u, segName)) {
+            targetTokens.push(u.fcmToken);
+          }
+        });
       } else {
         const targetUser = this.users.get(t);
         if (targetUser?.fcmToken) targetTokens.push(targetUser.fcmToken);
@@ -1329,7 +1530,7 @@ class FallbackStore {
       if (targetTokens.length > 0) {
         // sendFcmPushToTokens is a no-op unless NEXT_PUBLIC_FCM_SERVER_KEY is set.
         // FCM background messages still work via SW onBackgroundMessage without it.
-        sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id);
+        sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id, '/', notif.imageUrl);
       }
     } catch (e: any) {
       console.warn('[FCM] Push fan-out note:', e?.message || e);
@@ -1340,12 +1541,18 @@ class FallbackStore {
     targetAudience: 'helpers' | 'customers' | 'all' | string,
     title: string,
     body: string,
-    orderId?: string
+    orderId?: string,
+    imageUrl?: string,
+    scheduledAt?: string,
+    repeatFrequency?: 'NONE' | 'DAILY' | 'WEEKLY',
+    repeatTime?: string
   ) {
     const notifId = `admin-notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     let mappedAudience = targetAudience;
     if (targetAudience === 'helpers') mappedAudience = 'all-helpers';
     if (targetAudience === 'customers') mappedAudience = 'all-customers';
+
+    const isFutureScheduled = scheduledAt ? new Date(scheduledAt).getTime() > Date.now() : false;
 
     const notif: AppNotification = {
       id: notifId,
@@ -1355,9 +1562,25 @@ class FallbackStore {
       orderId: orderId,
       read: false,
       createdAt: new Date().toISOString(),
+      imageUrl: imageUrl,
+      scheduledAt: scheduledAt,
+      isScheduled: isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE'),
+      repeatFrequency: repeatFrequency || 'NONE',
+      repeatTime: repeatTime,
     };
 
-    await this.addNotification(notif);
+    if (isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE')) {
+      this.scheduledNotifications.set(notif.id, notif);
+      this.notify();
+      this.saveLocalStore();
+      try {
+        await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif));
+      } catch (e) {
+        console.warn('[Firestore] saveScheduledNotification note:', e);
+      }
+    } else {
+      await this.addNotification(notif);
+    }
     return notif;
   }
 
@@ -1545,6 +1768,26 @@ class FallbackStore {
       await deleteDoc(doc(db, 'customModals', modalId));
     } catch (e: any) {
       console.warn('[Firestore] deleteCustomModal note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async addFeeSuggestion(suggestion: FeeSuggestion) {
+    this.feeSuggestions.set(suggestion.id, suggestion);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'feeSuggestions', suggestion.id), cleanForFirestore(suggestion));
+    } catch (e: any) {
+      console.warn('[Firestore] addFeeSuggestion note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteFeeSuggestion(id: string) {
+    this.feeSuggestions.delete(id);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'feeSuggestions', id));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteFeeSuggestion note (saved locally):', e?.message || e);
     }
   }
 }

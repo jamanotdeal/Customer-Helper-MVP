@@ -36,6 +36,11 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
   const [location, setLocation] = useState<LocationData>(
     shopToEdit?.location || { address: '', lat: 23.8103, lng: 90.4125 }
   );
+  const [photoUrl, setPhotoUrl] = useState(shopToEdit?.photoUrl || '');
+  const [commissionPercent, setCommissionPercent] = useState(
+    shopToEdit?.commissionPercent !== undefined ? String(shopToEdit.commissionPercent) : ''
+  );
+  const [commissionNote, setCommissionNote] = useState(shopToEdit?.commissionNote || '');
 
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -66,6 +71,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         addedByHelperName: shopToEdit?.addedByHelperName || user?.displayName,
         createdAt: shopToEdit?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        photoUrl: photoUrl.trim() || undefined,
+        commissionPercent: commissionPercent !== '' ? parseFloat(commissionPercent) : undefined,
+        commissionNote: commissionNote.trim() || undefined,
       };
 
       await fallbackStore.saveShop(shopData);
@@ -209,6 +217,60 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                   Coordinates: {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
                 </p>
               )}
+            </div>
+
+            {/* Retailer Photo URL */}
+            <div className="space-y-1 pt-2 border-t border-gray-100">
+              <label className="text-xs font-bold text-gray-700 block">
+                Retailer Photo URL <span className="text-gray-400 font-medium">(optional)</span>
+              </label>
+              <input
+                type="url"
+                value={photoUrl}
+                onChange={(e) => setPhotoUrl(e.target.value)}
+                placeholder="https://example.com/shop-photo.jpg"
+                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold"
+              />
+              {photoUrl && (
+                <div className="mt-2 rounded-2xl overflow-hidden border border-gray-200 h-28 bg-gray-50">
+                  <img
+                    src={photoUrl}
+                    alt="Shop preview"
+                    className="w-full h-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Commission Settings */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <label className="text-xs font-bold text-purple-700 block">
+                Retailer Commission <span className="text-gray-400 font-medium">(optional)</span>
+              </label>
+              <p className="text-[10px] text-gray-500 font-medium">The % of product cost this retailer gives back as commission to the company.</p>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={commissionPercent}
+                    onChange={(e) => setCommissionPercent(e.target.value)}
+                    placeholder="e.g. 5"
+                    className="w-full p-3 pr-8 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-semibold"
+                  />
+                  <span className="absolute right-3 top-3.5 text-sm font-black text-gray-400">%</span>
+                </div>
+              </div>
+              <input
+                type="text"
+                value={commissionNote}
+                onChange={(e) => setCommissionNote(e.target.value)}
+                placeholder="Commission note (e.g. 5% on grocery orders)"
+                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold"
+              />
             </div>
 
             <div className="flex space-x-2 pt-3">

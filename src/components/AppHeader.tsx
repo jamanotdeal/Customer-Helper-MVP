@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, X, HeartHandshake } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { fallbackStore } from '@/lib/firebase';
 
@@ -20,7 +20,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const { showAlert, showPermissionModal } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
-  const [showLoginModal, setShowLoginModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
@@ -106,7 +105,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </>
             ) : (
               <button
-                onClick={() => setShowLoginModal(true)}
+                onClick={() => loginWithGoogle()}
                 className="flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs px-3 py-2 rounded-xl border border-gray-300 shadow-sm transition-all active:scale-95"
               >
                 {/* Official Google multicolour G logo */}
@@ -123,71 +122,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
         </div>
       </header>
 
-      {/* Login Options Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200 relative">
-            <button
-              onClick={() => setShowLoginModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="text-center pt-2">
-              <div className="relative w-12 h-12 rounded-none overflow-hidden shadow-sm border border-emerald-200 mx-auto mb-2 bg-emerald-50">
-                <Image
-                  src="/Jamanot-Logo.png"
-                  alt="Jamanot Logo"
-                  fill
-                  className="object-cover"
-                  priority
-                />
-              </div>
-              <h3 className="font-extrabold text-lg text-gray-900">Jamanot Sign In</h3>
-              <p className="text-xs text-gray-500">Ask. Relax. Done.</p>
-            </div>
-
-            <div className="space-y-2.5 pt-2">
-              <button
-                onClick={() => {
-                  setShowLoginModal(false);
-                  loginWithGoogle();
-                }}
-                className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md flex items-center justify-center space-x-2 transition-all"
-              >
-                <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                </svg>
-                <span>Continue with Google</span>
-              </button>
-
-              <p className="text-[11px] text-gray-500 text-center pt-2 leading-relaxed">
-                By continuing, you agree to Jamanot&apos;s{' '}
-                <Link
-                  href="/terms"
-                  onClick={() => setShowLoginModal(false)}
-                  className="text-emerald-600 font-bold underline hover:text-emerald-700"
-                >
-                  Terms of Service
-                </Link>{' '}
-                and{' '}
-                <Link
-                  href="/privacy"
-                  onClick={() => setShowLoginModal(false)}
-                  className="text-emerald-600 font-bold underline hover:text-emerald-700"
-                >
-                  Privacy Policy
-                </Link>.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Profile & Role Drawer / Modal */}
       {showProfileMenu && user && (
         <div
@@ -195,7 +129,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           onClick={() => setShowProfileMenu(false)}
         >
           <div
-            className="w-full max-w-xs bg-white h-full shadow-2xl p-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
+            className="w-full max-w-xs bg-white h-screen h-[100dvh] max-h-screen max-h-[100dvh] shadow-2xl p-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             <div>
@@ -248,82 +182,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </div>
 
               {/* Mode Switcher */}
+              {/* Mode Switcher */}
               <div className="mt-5">
                 <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-2">
-                  Select Mode
+                  {user.isAdmin ? 'Current Mode' : 'Select Mode'}
                 </label>
                 <div className="space-y-2">
-                  <button
-                    onClick={() => {
-                      setActiveMode('customer');
-                      setShowProfileMenu(false);
-                    }}
-                    className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                      activeMode === 'customer'
-                        ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                        : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <ShoppingBag className="w-5 h-5 text-emerald-600" />
-                      <div>
-                        <div className="text-sm font-semibold">Customer Mode</div>
-                        <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
-                      </div>
-                    </div>
-                    {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                  </button>
-
-                  <button
-                    onClick={async () => {
-                      setShowProfileMenu(false);
-                      if (user.isHelper) {
-                        setActiveMode('helper');
-                      } else {
-                        const activated = await enableCommuterHelperWithLocation();
-                        if (!activated) {
-                          const p = fallbackStore.pricingSettings;
-                          await showPermissionModal({
-                            permissionType: 'location',
-                            title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)',
-                            message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক।',
-                            onAllow: () => enableCommuterHelperWithLocation(),
-                            allowText: 'Allow Location',
-                          });
-                        }
-                      }
-                    }}
-                    className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                      activeMode === 'helper'
-                        ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                        : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <Bike className="w-5 h-5 text-emerald-600" />
-                      <div>
-                        <div className="text-sm font-semibold">Commuter Helper Mode</div>
-                        <div className="text-[11px] text-gray-500 font-normal">
-                          {user.isHelper ? 'Accept requests & earn' : 'Switch directly & allow location'}
-                        </div>
-                      </div>
-                    </div>
-                    {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                  </button>
-
-                  {/* Admin Switcher ONLY if authorized */}
-                  {user.isAdmin && (
-                    <button
-                      onClick={() => {
-                        setActiveMode('admin');
-                        setShowProfileMenu(false);
-                      }}
-                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                        activeMode === 'admin'
-                          ? 'border-purple-500 bg-purple-50/70 text-purple-900 font-bold shadow-sm'
-                          : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
+                  {user.isAdmin ? (
+                    <div className="w-full flex items-center justify-between p-3 rounded-2xl border border-purple-500 bg-purple-50/70 text-purple-900 font-bold shadow-sm text-left">
                       <div className="flex items-center space-x-2.5">
                         <ShieldCheck className="w-5 h-5 text-purple-600" />
                         <div>
@@ -331,8 +197,96 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                           <div className="text-[11px] text-gray-500 font-normal">Exceptions & Operations</div>
                         </div>
                       </div>
-                      {activeMode === 'admin' && <CheckCircle2 className="w-5 h-5 text-purple-600" />}
-                    </button>
+                      <CheckCircle2 className="w-5 h-5 text-purple-600" />
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => {
+                          setActiveMode('customer');
+                          setShowProfileMenu(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                          activeMode === 'customer'
+                            ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                            : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <ShoppingBag className="w-5 h-5 text-emerald-600" />
+                          <div>
+                            <div className="text-sm font-semibold">Customer Mode</div>
+                            <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
+                          </div>
+                        </div>
+                        {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                      </button>
+
+                      {((user.isHelper && user.helperType === 'dedicated') || !(fallbackStore.pricingSettings.allowedHelperTypes === 'dedicated_only')) && (
+                        <button
+                          onClick={async () => {
+                            setShowProfileMenu(false);
+                            if (user.isHelper) {
+                              setActiveMode('helper');
+                            } else {
+                              const activated = await enableCommuterHelperWithLocation();
+                              if (!activated) {
+                                const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('location_permission_prompted') === 'true';
+                                if (!alreadyAsked) {
+                                  const p = fallbackStore.pricingSettings;
+                                  await showPermissionModal({
+                                    permissionType: 'location',
+                                    title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)',
+                                    message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক।',
+                                    onAllow: async () => {
+                                      const res = await enableCommuterHelperWithLocation();
+                                      if (typeof localStorage !== 'undefined') {
+                                        localStorage.setItem('location_permission_prompted', 'true');
+                                      }
+                                      return res;
+                                    },
+                                    allowText: 'Allow Location',
+                                  });
+                                  if (typeof localStorage !== 'undefined') {
+                                    localStorage.setItem('location_permission_prompted', 'true');
+                                  }
+                                } else {
+                                  // Force activeMode switch since they already chose
+                                  const updatedUser = {
+                                    ...user,
+                                    isHelper: true,
+                                    helperType: user.helperType || 'commuter',
+                                    lastActiveMode: 'helper' as const,
+                                  };
+                                  fallbackStore.saveUser(updatedUser);
+                                  setActiveMode('helper');
+                                }
+                              }
+                            }
+                          }}
+                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                            activeMode === 'helper'
+                              ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                              : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2.5">
+                            <Bike className="w-5 h-5 text-emerald-600" />
+                            <div>
+                              <div className="text-sm font-semibold">
+                                {user.helperType === 'dedicated' ? 'Dedicated Rider Mode' : 'Commuter Helper Mode'}
+                              </div>
+                              <div className="text-[11px] text-gray-500 font-normal">
+                                {user.helperType === 'dedicated'
+                                  ? 'Accept requests & deliver'
+                                  : (user.isHelper ? 'Accept requests & earn' : 'Switch directly & allow location')}
+                              </div>
+                            </div>
+                          </div>
+                          {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

@@ -12,7 +12,7 @@ import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store } from 'lucide-react';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw } from 'lucide-react';
 
 interface HelperDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -25,7 +25,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 }) => {
   const { user, updateHelperLocation } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'COMPLETED'>('NEW');
+  const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'SCHEDULED' | 'COMPLETED'>('NEW');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACCEPTED' | 'PURCHASED_EXECUTED' | 'ON_THE_WAY' | 'ARRIVED'>('ALL');
+  const [twoWayOnly, setTwoWayOnly] = useState(false);
   const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('LIST');
   const [showDedicatedAppModal, setShowDedicatedAppModal] = useState(false);
   const [showAddShopModal, setShowAddShopModal] = useState(false);
@@ -224,6 +226,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         // Available (New tab): status PENDING, no helper assigned, matching helper type rule & within location radius
         const avail = all.filter((o) => {
           if (o.status !== 'PENDING' || o.helperId) return false;
+
+          const allowedTypes = fallbackStore.pricingSettings.allowedHelperTypes || 'both';
+          if (allowedTypes === 'dedicated_only' && !isDedicatedHelper) return false;
+          if (allowedTypes === 'commuters_only' && isDedicatedHelper) return false;
 
           // 1. Commuter vs Dedicated Receiver Rule Filter
           if (receiverRule === 'commuter_first') {
@@ -425,7 +431,22 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   };
 
   const visibleAvailable = availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id));
-  const filteredActiveOrders = activeOrders;
+  
+  // Filter active orders by statusFilter
+  const filteredActiveOrders = statusFilter === 'ALL'
+    ? activeOrders
+    : activeOrders.filter(o => o.status === statusFilter);
+
+  // Filter scheduled orders (active orders where needDeliveryBack and deliveryBackTime is set)
+  const scheduledOrders = activeOrders.filter(o => o.needDeliveryBack && o.deliveryBackTime);
+  const filteredScheduledOrders = statusFilter === 'ALL'
+    ? scheduledOrders
+    : scheduledOrders.filter(o => o.status === statusFilter);
+  const displayedScheduledOrders = filteredScheduledOrders;
+
+  const displayedActiveOrders = twoWayOnly
+    ? filteredActiveOrders.filter(o => !!o.needDeliveryBack)
+    : filteredActiveOrders;
   const filteredCompletedOrders = filterByDate(completedOrders);
 
   // Unviewed active orders = active orders whose IDs are NOT in viewedActiveOrderIds
@@ -434,6 +455,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   // Infinite Scroll Observer Refs
   const newLoaderRef = useRef<HTMLDivElement | null>(null);
   const activeLoaderRef = useRef<HTMLDivElement | null>(null);
+  const scheduledLoaderRef = useRef<HTMLDivElement | null>(null);
   const completedLoaderRef = useRef<HTMLDivElement | null>(null);
 
   const hasMoreNew = newVisibleCount < visibleAvailable.length;
@@ -480,6 +502,22 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     if (completedLoaderRef.current) observer.observe(completedLoaderRef.current);
     return () => observer.disconnect();
   }, [activeTab, hasMoreCompleted, completedVisibleCount, filteredCompletedOrders.length]);
+
+  const [scheduledVisibleCount, setScheduledVisibleCount] = useState(PAGE_SIZE);
+  const hasMoreScheduled = scheduledVisibleCount < filteredScheduledOrders.length;
+  useEffect(() => {
+    if (activeTab !== 'SCHEDULED' || !hasMoreScheduled) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setScheduledVisibleCount((prev) => prev + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.1, rootMargin: '100px' }
+    );
+    if (scheduledLoaderRef.current) observer.observe(scheduledLoaderRef.current);
+    return () => observer.disconnect();
+  }, [activeTab, hasMoreScheduled, scheduledVisibleCount, filteredScheduledOrders.length]);
 
   if (selectedOrderId) {
     const targetOrder = fallbackStore.orders.get(selectedOrderId);
@@ -628,6 +666,17 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         </button>
 
         <button
+          onClick={() => { setActiveTab('SCHEDULED'); setScheduledVisibleCount(PAGE_SIZE); }}
+          className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all relative flex items-center justify-center space-x-1.5 ${
+            activeTab === 'SCHEDULED'
+              ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <span>Scheduled ({filteredScheduledOrders.length})</span>
+        </button>
+
+        <button
           onClick={() => { setActiveTab('COMPLETED'); setCompletedVisibleCount(PAGE_SIZE); }}
           className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
             activeTab === 'COMPLETED'
@@ -699,6 +748,30 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       {/* ACTIVE TAB */}
       {activeTab === 'ACTIVE' && (
         <div className="space-y-3">
+          {/* Status Filter Bar */}
+          <div className="flex items-center space-x-2 overflow-x-auto pb-2.5 pt-1 scrollbar-none">
+            {[
+              { value: 'ALL', label: 'All' },
+              { value: 'ACCEPTED', label: 'Accepted' },
+              { value: 'PURCHASED_EXECUTED', label: 'Processing' },
+              { value: 'ON_THE_WAY', label: 'On Way' },
+              { value: 'ARRIVED', label: 'Arrived' }
+            ].map((pill) => (
+              <button
+                key={pill.value}
+                type="button"
+                onClick={() => setStatusFilter(pill.value as any)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
+                  statusFilter === pill.value
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+
           {isDedicatedHelper && (
             <div className="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-gray-100 shadow-xs">
               <span className="text-xs font-extrabold text-gray-700 flex items-center gap-1.5">
@@ -734,6 +807,29 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             </div>
           )}
 
+          {/* Two-Way Orders compact toggle */}
+          {filteredActiveOrders.some(o => o.needDeliveryBack) && (
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setTwoWayOnly((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-extrabold border transition-all ${
+                  twoWayOnly
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200'
+                    : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                }`}
+              >
+                <RotateCcw className={`w-3 h-3 ${twoWayOnly ? 'text-white' : 'text-indigo-500'}`} />
+                <span>Two-Way Orders</span>
+                {twoWayOnly && (
+                  <span className="ml-0.5 bg-white/20 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                    {filteredActiveOrders.filter(o => o.needDeliveryBack).length}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
+
           {unviewedActiveCount > 0 && (
             <div className="flex items-center space-x-2 p-3 rounded-2xl bg-blue-50 border border-blue-200 shadow-sm animate-in fade-in duration-300">
               <div className="p-1.5 rounded-xl bg-blue-100 text-blue-600 shrink-0">
@@ -746,11 +842,11 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             </div>
           )}
 
-          {filteredActiveOrders.length === 0 ? (
+          {displayedActiveOrders.length === 0 ? (
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <CheckCircle2 className="w-10 h-10 text-gray-300 mx-auto mb-2" />
               <h4 className="font-bold text-gray-900 text-sm">
-                কোনো রানিং অর্ডার নেই
+                {twoWayOnly ? 'কোনো Two-Way অর্ডার নেই' : 'কোনো রানিং অর্ডার নেই'}
               </h4>
             </div>
           ) : isDedicatedHelper && viewMode === 'MAP' ? (
@@ -763,7 +859,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             />
           ) : (
             <div className="space-y-3">
-              {filteredActiveOrders.slice(0, activeVisibleCount).map((ord) => (
+              {displayedActiveOrders.slice(0, activeVisibleCount).map((ord) => (
                 <OrderCard
                   key={ord.id}
                   order={ord}
@@ -773,10 +869,67 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   helperActiveView={true}
                 />
               ))}
-              {hasMoreActive && (
+              {activeVisibleCount < displayedActiveOrders.length && (
                 <div ref={activeLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
                   <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-                  <span>Loading more orders... ({filteredActiveOrders.length - activeVisibleCount} remaining)</span>
+                  <span>Loading more orders... ({displayedActiveOrders.length - activeVisibleCount} remaining)</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SCHEDULED TAB */}
+      {activeTab === 'SCHEDULED' && (
+        <div className="space-y-3">
+          {/* Status Filter Bar */}
+          <div className="flex items-center space-x-2 overflow-x-auto pb-2.5 pt-1 scrollbar-none">
+            {[
+              { value: 'ALL', label: 'All' },
+              { value: 'ACCEPTED', label: 'Accepted' },
+              { value: 'PURCHASED_EXECUTED', label: 'Processing' },
+              { value: 'ON_THE_WAY', label: 'On Way' },
+              { value: 'ARRIVED', label: 'Arrived' }
+            ].map((pill) => (
+              <button
+                key={pill.value}
+                type="button"
+                onClick={() => setStatusFilter(pill.value as any)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
+                  statusFilter === pill.value
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+
+          {displayedScheduledOrders.length === 0 ? (
+            <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
+              <Calendar className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+              <h4 className="font-bold text-gray-900 text-sm">
+                কোনো সিডিউলড অর্ডার নেই
+              </h4>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {displayedScheduledOrders.slice(0, scheduledVisibleCount).map((ord) => (
+                <OrderCard
+                  key={ord.id}
+                  order={ord}
+                  onClick={() => handleActiveOrderClick(ord.id)}
+                  showDuration={true}
+                  isNew={!viewedActiveOrderIds.has(ord.id)}
+                  helperActiveView={true}
+                />
+              ))}
+              {scheduledVisibleCount < displayedScheduledOrders.length && (
+                <div ref={scheduledLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-indigo-700 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                  <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading more orders... ({displayedScheduledOrders.length - scheduledVisibleCount} remaining)</span>
                 </div>
               )}
             </div>

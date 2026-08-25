@@ -142,7 +142,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         createdAt: new Date().toISOString(),
       },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: 'CANCELED',
@@ -195,7 +195,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     if (oldPickup !== editPickup.trim()) {
       diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: editPickup.trim() || 'None' });
     }
-    const oldDelivery = order.deliveryLocation.address;
+    const oldDelivery = order.deliveryLocation?.address || '';
     if (oldDelivery !== editAddress.trim()) {
       diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: editAddress.trim() });
     }
@@ -235,7 +235,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       editHistory: [...(o.editHistory || []), editItem],
       updatedAt: nowIso,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -280,7 +280,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         )}
       </div>
 
-      <div className="max-w-md mx-auto px-4 pt-5 space-y-4">
+      <div className="w-full mx-auto px-4 pt-5 space-y-4">
 
         {/* ── HERO STATUS CARD ── */}
         <div className={`rounded-3xl p-5 text-white shadow-lg ${
@@ -446,7 +446,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-3">Delivery Address</h3>
           <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
             <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <p className="text-sm font-bold text-gray-900">{order.deliveryLocation.address}</p>
+            <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
           </div>
         </div>
 
@@ -454,7 +454,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-              Items Ordered ({order.items.length})
+              Items Ordered ({(order.items || []).length})
             </h3>
             {canEdit && (
               <button
@@ -467,7 +467,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             )}
           </div>
           <div className="space-y-2">
-            {order.items.map((it) => (
+            {(order.items || []).map((it) => (
               <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
                 <span className="font-semibold text-gray-800">{it.name}</span>
               </div>

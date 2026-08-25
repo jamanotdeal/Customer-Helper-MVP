@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Order, OrderStatus } from '@/types';
+import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { MapPickerModal } from '../MapPickerModal';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
 import { formatCreatedAt, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
@@ -44,6 +45,50 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const [adminFeeReason, setAdminFeeReason] = useState('');
   const [showAdminCostModal, setShowAdminCostModal] = useState(false);
   const [adminCostInput, setAdminCostInput] = useState('');
+  
+  const [activeMapPicker, setActiveMapPicker] = useState<'pickup' | 'delivery' | null>(null);
+
+  const handleAdminSaveAddress = (type: 'pickup' | 'delivery', loc: LocationData) => {
+    fallbackStore.updateOrder(orderId, (o) => {
+      const changes = [];
+      const oldVal = type === 'pickup' ? (o.pickupLocation?.address || 'N/A') : (o.deliveryLocation?.address || 'N/A');
+      changes.push({
+        field: type === 'pickup' ? 'Pickup Address' : 'Delivery Address',
+        oldValue: oldVal,
+        newValue: loc.address,
+      });
+
+      const updatedOrder = {
+        ...o,
+        pickupLocation: type === 'pickup' ? loc : o.pickupLocation,
+        deliveryLocation: type === 'delivery' ? loc : o.deliveryLocation,
+        lastEditedBy: 'admin' as const,
+        lastEditedAt: new Date().toISOString(),
+        editHistory: [
+          ...(o.editHistory || []),
+          {
+            id: `eh-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            editedBy: 'admin' as const,
+            editedByName: 'Admin',
+            changes,
+          },
+        ],
+        statusHistory: [
+          ...(o.statusHistory || []),
+          {
+            id: `sh-${Date.now()}`,
+            status: o.status,
+            timestamp: new Date().toISOString(),
+            actor: 'Admin',
+            note: `${type === 'pickup' ? 'Pickup' : 'Delivery'} address updated to: ${loc.address}`,
+          },
+        ],
+      };
+      return updatedOrder;
+    });
+    showAlert('ঠিকানা আপডেট করা হয়েছে', 'ঠিকানা সফলভাবে পরিবর্তন করা হয়েছে এবং কাস্টমারকে জানানো হয়েছে।', 'success');
+  };
 
   const order = fallbackStore.orders.get(orderId);
   if (!order) {
@@ -107,7 +152,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         ? { ...o.cancellationRequest, status: 'APPROVED' }
         : undefined,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: 'CANCELED',
@@ -127,7 +172,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         ? { ...o.cancellationRequest, status: 'REJECTED' }
         : undefined,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -147,7 +192,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       deliveryFee: o.feeAdjustment!.amount,
       feeAdjustment: { ...o.feeAdjustment!, status: 'APPROVED' },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -166,7 +211,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       ...o,
       feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -195,7 +240,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       deliveredAt: targetStatus === 'DELIVERED' ? new Date().toISOString() : o.deliveredAt,
       cancelledAt: targetStatus === 'CANCELED' ? new Date().toISOString() : o.cancelledAt,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: targetStatus,
@@ -224,7 +269,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         ? { ...o.cancellationRequest, status: 'APPROVED' }
         : { requestedBy: 'helper', reason: 'Cancelled by Admin', status: 'APPROVED', createdAt: new Date().toISOString() },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: 'CANCELED' as OrderStatus,
@@ -251,7 +296,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         requestedAt: new Date().toISOString(),
       },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -275,7 +320,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       ...o,
       productCost: val,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,
@@ -314,6 +359,11 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   >
                     {order.status}
                   </span>
+                  {order.needDeliveryBack && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-400 text-indigo-950 text-[10px] font-extrabold uppercase flex items-center gap-1">
+                      🔁 Return
+                    </span>
+                  )}
                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white text-[10px] font-bold flex items-center space-x-1">
                     <Clock className="w-3 h-3 text-purple-300" />
                     <span>{isDone ? `Delivered in: ${durationText}` : `Elapsed: ${durationText}`}</span>
@@ -348,7 +398,18 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </span>
                 </div>
                 <div className="space-y-1 text-slate-700 font-medium">
-                  <p className="text-sm font-black text-slate-900">{order.customerName}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-sm font-black text-slate-900">{order.customerName}</span>
+                    {(() => {
+                      const custUser = fallbackStore.users.get(order.customerId);
+                      if (!custUser?.labels || custUser.labels.length === 0) return null;
+                      return custUser.labels.map((lbl) => (
+                        <span key={lbl} className="px-2 py-0.5 rounded-md bg-amber-100 text-purple-950 font-extrabold text-[10px] border border-amber-200">
+                          🏷️ {lbl}
+                        </span>
+                      ));
+                    })()}
+                  </div>
                   <p className="flex items-center space-x-1">
                     <Phone className="w-3.5 h-3.5 text-slate-400" />
                     <span>Primary Phone: <strong className="text-slate-900">{order.customerPhone || 'N/A'}</strong></span>
@@ -379,7 +440,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 </div>
                 {order.helperId ? (
                   <div className="space-y-1 text-slate-700 font-medium">
-                    <p className="text-sm font-black text-slate-900">{order.helperName || 'Helper'}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-black text-slate-900">{order.helperName || 'Helper'}</span>
+                      {helperInfo?.labels && helperInfo.labels.length > 0 && helperInfo.labels.map((lbl) => (
+                        <span key={lbl} className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-950 font-extrabold text-[10px] border border-indigo-200">
+                          🏷️ {lbl}
+                        </span>
+                      ))}
+                    </div>
                     <p className="flex items-center space-x-1">
                       <Phone className="w-3.5 h-3.5 text-slate-400" />
                       <span>Contact: <strong>{helperInfo?.alternativePhone || 'N/A'}</strong></span>
@@ -421,7 +489,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <div className="space-y-1.5">
                 <span className="text-gray-500 font-bold block text-[11px]">Requested Items List:</span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {order.items.map((it) => (
+                  {(order.items || []).map((it) => (
                     <div key={it.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 border border-gray-100 font-medium">
                       <span className="text-gray-800 font-bold">{it.name}</span>
                     </div>
@@ -442,19 +510,41 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
                 {order.pickupLocation && (
                   <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 space-y-1">
-                    <span className="font-extrabold text-[11px] text-gray-700 flex items-center space-x-1">
-                      <MapPin className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Pickup Location:</span>
-                    </span>
-                    <p className="text-gray-900 font-medium">{order.pickupLocation.address}</p>
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] text-gray-700 flex items-center space-x-1">
+                        <MapPin className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Pickup Location:</span>
+                      </span>
+                      {!isDone && (
+                        <button
+                          onClick={() => setActiveMapPicker('pickup')}
+                          className="p-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors shrink-0"
+                          title="Edit Pickup Location"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-gray-900 font-medium leading-relaxed">{order.pickupLocation.address}</p>
                   </div>
                 )}
                 <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100 space-y-1">
-                  <span className="font-extrabold text-[11px] text-emerald-900 flex items-center space-x-1">
-                    <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Delivery Location:</span>
-                  </span>
-                  <p className="text-gray-900 font-medium">{order.deliveryLocation.address}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-[11px] text-emerald-900 flex items-center space-x-1">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Delivery Location:</span>
+                    </span>
+                    {!isDone && (
+                      <button
+                        onClick={() => setActiveMapPicker('delivery')}
+                        className="p-1 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-800 transition-colors shrink-0"
+                        title="Edit Delivery Location"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-gray-900 font-medium leading-relaxed">{order.deliveryLocation?.address || 'N/A'}</p>
                 </div>
               </div>
 
@@ -472,6 +562,31 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <span>Helper Private Note (🔒 Customer hidden):</span>
                   </span>
                   <p className="text-xs text-purple-950 font-semibold">{order.helperNote}</p>
+                </div>
+              )}
+
+              {order.needDeliveryBack && (
+                <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-300 text-indigo-950 font-medium space-y-1.5">
+                  <span className="font-black text-indigo-900 block flex items-center space-x-1.5">
+                    <span className="text-base">🔁</span>
+                    <span>Need Delivery Back (Return Required)</span>
+                  </span>
+                  {order.deliveryBackTime ? (
+                    <p className="text-xs font-bold text-indigo-800">
+                      Scheduled Return by:{' '}
+                      <strong className="text-indigo-950">
+                        {new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' })}
+                      </strong>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-indigo-700">Return time not yet set.</p>
+                  )}
+                  <p className="text-[11px] text-indigo-700 font-medium">
+                    Delivery fee doubled: <strong className="text-indigo-950">৳{order.deliveryFee}</strong>
+                    {order.originalDeliveryFee && order.originalDeliveryFee !== order.deliveryFee && (
+                      <span className="ml-1 text-indigo-500">(original: ৳{order.originalDeliveryFee})</span>
+                    )}
+                  </p>
                 </div>
               )}
             </div>
@@ -578,7 +693,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               </h4>
 
               <div className="space-y-2 relative pl-4 border-l-2 border-purple-100">
-                {order.statusHistory.map((h, i) => (
+                {(order.statusHistory || []).map((h, i) => (
                   <div key={h.id || i} className="relative space-y-0.5">
                     <div className="w-2.5 h-2.5 rounded-full bg-purple-600 absolute -left-[21px] top-1 border-2 border-white" />
                     <div className="flex items-center justify-between">
@@ -619,7 +734,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                         </span>
                       </div>
                       <div className="space-y-1 pt-1 border-t border-gray-100">
-                        {item.changes.map((change, cIdx) => (
+                        {(item.changes || []).map((change, cIdx) => (
                           <div key={cIdx} className="text-xs flex flex-wrap items-baseline justify-between gap-2 p-1.5 rounded-lg bg-gray-50">
                             <span className="font-bold text-gray-700">{change.field}:</span>
                             <span className="font-medium text-right">
@@ -838,6 +953,17 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {/* Admin: Address Edit Map Picker Modal */}
+      {activeMapPicker && (
+        <MapPickerModal
+          isOpen={activeMapPicker !== null}
+          onClose={() => setActiveMapPicker(null)}
+          title={activeMapPicker === 'pickup' ? 'Edit Pickup Location' : 'Edit Delivery Location'}
+          initialLocation={activeMapPicker === 'pickup' ? order.pickupLocation : order.deliveryLocation}
+          modalType={activeMapPicker}
+          onSelectLocation={(loc) => handleAdminSaveAddress(activeMapPicker, loc)}
+        />
       )}
     </>
   );

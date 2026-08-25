@@ -276,53 +276,7 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
       });
       routePolylinesRef.current = [];
 
-      // Render Registered Shop Markers
-      const registeredShops = Array.from(fallbackStore.shops.values());
-      for (const shop of registeredShops) {
-        if (!shop.location?.lat || !shop.location?.lng) continue;
-        const shopMarkerKey = `admin-shop-${shop.id}`;
-        const shortType = shop.type.length > 18 ? shop.type.slice(0, 16) + '…' : shop.type;
-        const shopIconHtml = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 70px; height: 68px;">
-            <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #9333ea, #6b21a8); border: 2.5px solid white; box-shadow: 0 4px 14px rgba(147,51,234,0.7); display: flex; align-items: center; justify-content: center; color: white;">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                <polyline points="9 22 9 12 15 12 15 22"></polyline>
-              </svg>
-            </div>
-            <div style="margin-top: 2px; background: rgba(15, 23, 42, 0.92); color: #e9d5ff; font-size: 9.5px; font-weight: 800; padding: 2px 5px; border-radius: 6px; border: 1px solid #c084fc; max-width: 90px; text-align: center; line-height: 1.25;">
-              🏪 ${shop.name}
-            </div>
-            <div style="background: rgba(109,40,217,0.15); color: #a78bfa; font-size: 8.5px; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid #7c3aed30; max-width: 90px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px;">
-              ${shortType}
-            </div>
-          </div>
-        `;
-        const shopIcon = L.divIcon({
-          className: `admin-shop-marker-${shop.id}`,
-          html: shopIconHtml,
-          iconSize: [70, 68],
-          iconAnchor: [35, 68],
-          popupAnchor: [0, -68],
-        });
-        let sMarker = markersRef.current.get(shopMarkerKey);
-        if (sMarker) {
-          sMarker.setLatLng([shop.location.lat, shop.location.lng]);
-          sMarker.setIcon(shopIcon);
-        } else {
-          sMarker = L.marker([shop.location.lat, shop.location.lng], { icon: shopIcon })
-            .addTo(map)
-            .bindPopup(`
-              <div style="padding: 4px; font-family: sans-serif;">
-                <div style="font-weight: 900; font-size: 13px; color: #581c87;">🏪 ${shop.name}</div>
-                <div style="font-size: 11px; color: #7c3aed; margin-top: 2px; font-weight: 700;">${shop.type}</div>
-                <div style="font-size: 11px; color: #374151; margin-top: 2px;"><b>Contact:</b> ${shop.contactPerson} (${shop.whatsapp})</div>
-                <div style="font-size: 11px; color: #4b5563; margin-top: 2px;"><b>Location:</b> ${shop.location.address}</div>
-              </div>
-            `);
-          markersRef.current.set(shopMarkerKey, sMarker);
-        }
-      }
+
 
 
       for (const helper of filteredHelpers) {

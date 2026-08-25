@@ -155,14 +155,25 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     // Prompt location permission when customer starts creating order
     if (typeof navigator !== 'undefined' && navigator.geolocation && !deliveryLat) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setDeliveryLat(pos.coords.latitude);
-          setDeliveryLng(pos.coords.longitude);
-        },
-        (err) => console.warn('[RequestComposer] Customer location permission note:', err?.message),
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
+      const alreadyAskedLoc = typeof localStorage !== 'undefined' && localStorage.getItem('location_permission_prompted') === 'true';
+      if (!alreadyAskedLoc) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setDeliveryLat(pos.coords.latitude);
+            setDeliveryLng(pos.coords.longitude);
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('location_permission_prompted', 'true');
+            }
+          },
+          (err) => {
+            console.warn('[RequestComposer] Customer location permission note:', err?.message);
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('location_permission_prompted', 'true');
+            }
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      }
     }
   };
 

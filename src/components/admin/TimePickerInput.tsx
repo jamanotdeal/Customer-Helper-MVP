@@ -10,16 +10,27 @@ interface TimePickerInputProps {
   placeholder?: string;
 }
 
-// Utility: Convert "HH:mm" (24h) to { hour12: 1-12, minute: 0-59, ampm: 'AM'|'PM' }
+// Utility: Convert "HH:mm" (24h) or "hh:mm AM/PM" to { hour12: 1-12, minute: 0-59, ampm: 'AM'|'PM' }
 export function parse24HourTime(timeStr: string) {
-  if (!timeStr || !timeStr.includes(':')) {
+  if (!timeStr || typeof timeStr !== 'string' || !timeStr.includes(':')) {
     return { hour12: 8, minute: 0, ampm: 'AM' as const };
   }
-  const [hStr, mStr] = timeStr.split(':');
+  const upper = timeStr.trim().toUpperCase();
+  const isPM = upper.includes('PM');
+  const isAM = upper.includes('AM');
+
+  const cleanTimeStr = upper.replace(/[A-Z]/g, '').trim();
+  const [hStr, mStr] = cleanTimeStr.split(':');
   let h = parseInt(hStr, 10);
   let m = parseInt(mStr, 10);
-  if (isNaN(h) || h < 0 || h > 23) h = 8;
+  if (isNaN(h)) h = 8;
   if (isNaN(m) || m < 0 || m > 59) m = 0;
+
+  if (isPM || isAM) {
+    let hour12 = h % 12;
+    if (hour12 === 0) hour12 = 12;
+    return { hour12, minute: m, ampm: isPM ? ('PM' as const) : ('AM' as const) };
+  }
 
   const ampm: 'AM' | 'PM' = h >= 12 ? 'PM' : 'AM';
   let hour12 = h % 12;
@@ -43,6 +54,7 @@ export function format24HourTime(hour12: number, minute: number, ampm: 'AM' | 'P
 
 // Utility: Format for display e.g. "08:00 AM"
 export function formatDisplayTime(timeStr: string): string {
+  if (!timeStr) return '';
   const { hour12, minute, ampm } = parse24HourTime(timeStr);
   const hStr = String(hour12).padStart(2, '0');
   const mStr = String(minute).padStart(2, '0');

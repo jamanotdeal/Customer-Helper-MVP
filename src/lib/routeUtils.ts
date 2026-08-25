@@ -50,16 +50,19 @@ export async function fetchRoadRoute(waypoints: LatLngPoint[]): Promise<[number,
       throw new Error(`OSRM API error: status ${response.status}`);
     }
 
-    const data = await response.json();
+    const text = await response.text();
+    if (text && !text.trim().startsWith('<')) {
+      const data = JSON.parse(text);
 
-    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-      const coordinates: [number, number][] = data.routes[0].geometry.coordinates.map(
-        (coord: [number, number]) => [coord[1], coord[0]] // OSRM gives [lng, lat], convert to Leaflet [lat, lng]
-      );
+      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+        const coordinates: [number, number][] = data.routes[0].geometry.coordinates.map(
+          (coord: [number, number]) => [coord[1], coord[0]] // OSRM gives [lng, lat], convert to Leaflet [lat, lng]
+        );
 
-      if (coordinates.length > 0) {
-        routeCache.set(cacheKey, coordinates);
-        return coordinates;
+        if (coordinates.length > 0) {
+          routeCache.set(cacheKey, coordinates);
+          return coordinates;
+        }
       }
     }
   } catch (error) {

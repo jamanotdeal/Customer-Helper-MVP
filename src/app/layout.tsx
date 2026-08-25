@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
 import { ModalProvider } from '@/components/CustomModal';
+import { Suspense } from 'react';
+import AnalyticsTracker from '@/components/AnalyticsTracker';
 
 export const metadata: Metadata = {
   title: 'Jamanot — Ask. Relax. Done.',
@@ -48,6 +50,10 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
       <body className="antialiased bg-gray-100 min-h-screen">
+        <Suspense fallback={null}>
+          <AnalyticsTracker />
+        </Suspense>
+
         <AuthProvider>
           <ModalProvider>
             {children}

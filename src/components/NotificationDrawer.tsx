@@ -45,7 +45,7 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm bg-white h-full shadow-2xl p-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
+        className="w-full max-w-sm bg-white h-screen h-[100dvh] max-h-screen max-h-[100dvh] shadow-2xl p-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         <div>

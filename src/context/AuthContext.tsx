@@ -147,7 +147,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveModeState('admin');
       saveActiveMode('admin');
     } else {
-      const targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
+      let targetMode: ActiveMode;
+      if (profile.isHelper && profile.helperType === 'dedicated') {
+        const storedMode = typeof window !== 'undefined' ? localStorage.getItem('jamanot_last_active_mode') : null;
+        if (storedMode === 'customer') {
+          targetMode = 'customer';
+        } else if (storedMode === 'helper') {
+          targetMode = 'helper';
+        } else {
+          targetMode = 'helper';
+        }
+      } else {
+        targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
+      }
       setActiveModeState(targetMode);
       saveActiveMode(targetMode);
     }
@@ -255,6 +267,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const setActiveMode = (mode: ActiveMode) => {
+    if (user && user.isAdmin) {
+      setActiveModeState('admin');
+      saveActiveMode('admin');
+      return;
+    }
     if (mode === 'helper' && user && !user.isHelper) {
       enableCommuterHelperWithLocation();
       return;

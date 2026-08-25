@@ -69,11 +69,13 @@ try {
     const icon  = payload.notification?.icon  || '/Jamanot-Logo.png';
     const tag   = payload.data?.tag           || `fcm-${Date.now()}`;
     const url   = payload.data?.url           || '/';
+    const image = payload.notification?.image || payload.data?.image || undefined;
 
     self.registration.showNotification(title, {
       body,
       icon,
       badge: '/Jamanot-Logo.png',
+      image,
       tag,
       renotify: true,
       vibrate: [200, 100, 200, 100, 200],
@@ -94,7 +96,7 @@ try {
 // Also used as a safety fallback if FCM importScripts above fails.
 self.addEventListener('push', (event) => {
   // If FCM is active it handles its own push events; this covers the rest.
-  let data = { title: 'Jamanot Update', body: 'You have a new update.', url: '/', tag: 'jamanot' };
+  let data = { title: 'Jamanot Update', body: 'You have a new update.', url: '/', tag: 'jamanot', image: undefined };
   if (event.data) {
     try {
       data = { ...data, ...event.data.json() };
@@ -108,6 +110,7 @@ self.addEventListener('push', (event) => {
       body: data.body,
       icon: '/Jamanot-Logo.png',
       badge: '/Jamanot-Logo.png',
+      image: data.image || undefined,
       tag: data.tag || 'jamanot-notification',
       renotify: true,
       vibrate: [200, 100, 200, 100, 200],
@@ -122,12 +125,13 @@ self.addEventListener('push', (event) => {
 // (e.g. as a fallback when Notification API is restricted).
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
-    const { title, body, tag, url, icon } = event.data;
+    const { title, body, tag, url, icon, image } = event.data;
     event.waitUntil(
       self.registration.showNotification(title || 'Jamanot', {
         body: body || '',
         icon: icon || '/Jamanot-Logo.png',
         badge: '/Jamanot-Logo.png',
+        image: image || undefined,
         tag: tag || `notif-${Date.now()}`,
         renotify: true,
         vibrate: [200, 100, 200, 100, 200],

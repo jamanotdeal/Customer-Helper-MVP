@@ -3,6 +3,7 @@ import { Order } from '@/types';
 import { Clock, Sparkles, MapPin, Edit2 } from 'lucide-react';
 import { getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { getOrderMinDistanceKm } from '@/lib/pricing';
+import { fallbackStore } from '@/lib/firebase';
 
 interface HelperRequestCardProps {
   order: Order;
@@ -89,10 +90,12 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
               🥇 1st Order
             </span>
           )}
-          <span className="text-xs font-black text-red-800 bg-red-50 px-2.5 py-1 rounded-lg inline-flex items-center space-x-1 shrink-0 border border-red-100">
-            <Clock className="w-4 h-4 text-red-600 animate-spin-slow" />
-            <span className="font-mono">{elapsed}</span>
-          </span>
+          {fallbackStore.pricingSettings.allowedHelperTypes !== 'dedicated_only' && (
+            <span className="text-xs font-black text-red-800 bg-red-50 px-2.5 py-1 rounded-lg inline-flex items-center space-x-1 shrink-0 border border-red-100">
+              <Clock className="w-4 h-4 text-red-600 animate-spin-slow" />
+              <span className="font-mono">{elapsed}</span>
+            </span>
+          )}
         </div>
       </div>
 

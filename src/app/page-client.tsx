@@ -12,12 +12,10 @@ import { ExploreHelperView } from '@/components/ExploreHelperView';
 import { NotificationDrawer } from '@/components/NotificationDrawer';
 import {
   requestNativePushPermission,
-  registerNativePush,
   setupAppListeners,
   setNativeStatusBar,
-  isNativeApp,
 } from '@/lib/native';
-import { saveFcmToken, fallbackStore } from '@/lib/firebase';
+import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
 
 import { Order } from '@/types';
@@ -25,11 +23,12 @@ import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
 import { CustomModalInjector } from '@/components/CustomModalInjector';
 
 import { HelperCenterPage } from '@/components/HelperCenterPage';
+import { FeeDetailsPage } from '@/components/FeeDetailsPage';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
   const { showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center'>('request');
+  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
@@ -97,7 +96,7 @@ export default function PageClient() {
   // Detect iOS Safari standalone check (only show in browser PWA mode)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (isNativeApp()) return; // Already running as native app — no need for install prompt
+    // Already in standalone PWA mode — no need for install prompt
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const isInStandaloneMode =
       ('standalone' in window.navigator && (window.navigator as any).standalone === true) ||
@@ -128,8 +127,7 @@ export default function PageClient() {
 
   // Auto-register service worker & request push notification permission
   useEffect(() => {
-    // Register SW only in browser/PWA mode (SW doesn't run in Capacitor WebView)
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && !isNativeApp()) {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
@@ -140,49 +138,63 @@ export default function PageClient() {
     }
 
     if (user) {
-      // Request push permission via native API (OS-level) or browser fallback
-      requestNativePushPermission().then((granted) => {
-        if (granted && isNativeApp()) {
-          // Native app: register FCM push token via Capacitor plugin
-          registerNativePush(
-            (token) => {
-              // Save the native device token to Firestore so server can push to this device
-              saveFcmToken(user.uid, token).catch(() => {});
+      const alreadyGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
+      const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
+
+      if (!alreadyGranted && !alreadyAsked) {
+        requestNativePushPermission().then((granted) => {
+          if (!granted) {
+            const p = fallbackStore.pricingSettings;
+            showPermissionModal({
+              permissionType: 'notification',
+              title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+              message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+              onAllow: async () => { 
+                const res = await requestNativePushPermission(); 
+                if (typeof localStorage !== 'undefined') {
+                  localStorage.setItem('notification_permission_prompted', 'true');
+                }
+                return res; 
+              },
+              allowText: 'Allow Notification',
+            }).then(() => {
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('notification_permission_prompted', 'true');
+              }
+            });
+          } else {
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('notification_permission_prompted', 'true');
             }
-          );
-        } else if (!granted && !isNativeApp()) {
-          // Browser fallback: show custom permission modal if OS permission not granted
-          const p = fallbackStore.pricingSettings;
-          showPermissionModal({
-            permissionType: 'notification',
-            title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
-            message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
-            onAllow: async () => { await requestNativePushPermission(); return true; },
-            allowText: 'Allow Notification',
-          });
-        }
-      });
+          }
+        });
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Reset activeTab when activeMode changes
   useEffect(() => {
-    if (activeMode === 'customer') {
+    if (activeMode === 'customer' && activeTab !== 'fee_details' && activeTab !== 'helper_center') {
       setActiveTab('request');
     }
   }, [activeMode]);
 
   // Strict role view guarding
   const renderCurrentView = () => {
-    // If not logged in, user can only see CustomerHome (Request form + How it works)
-    if (!user) {
-      return <CustomerHome />;
+    // Fee Details view (available to guests and logged in users)
+    if (activeTab === 'fee_details') {
+      return <FeeDetailsPage onBack={() => setActiveTab('request')} />;
     }
 
     // Help Center view
     if (activeTab === 'helper_center') {
       return <HelperCenterPage onBack={() => setActiveTab('request')} />;
+    }
+
+    // If not logged in, user can only see CustomerHome (Request form + How it works)
+    if (!user) {
+      return <CustomerHome />;
     }
 
     // Admin view check: by default, logged-in admin users see Admin Dashboard
@@ -239,7 +251,7 @@ export default function PageClient() {
         </div>
 
         {/* Main Content Skeleton */}
-        <main className="flex-1 w-full p-4 pb-20 space-y-4">
+        <main className="flex-1 w-full p-4 pb-24 space-y-4">
           {/* Form Card Skeleton */}
           <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
             <div className="space-y-2 text-center">
@@ -276,9 +288,9 @@ export default function PageClient() {
         </main>
 
         {/* Bottom Nav Skeleton */}
-        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-50"
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[720px] bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-50"
           style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
-          {[1, 2].map((i) => (
+          {[1, 2, 3].map((i) => (
             <div key={i} className="flex flex-col items-center space-y-1">
               <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
               <div className="w-10 h-2.5 rounded bg-gray-100 animate-pulse" />
@@ -307,7 +319,7 @@ export default function PageClient() {
             transform: 'translateX(-50%)',
             zIndex: 9999,
             width: 'calc(100% - 32px)',
-            maxWidth: '420px',
+            maxWidth: '680px',
             background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
             borderRadius: '20px',
             padding: '16px',

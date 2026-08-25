@@ -58,7 +58,14 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
                 <User className="w-6 h-6 text-purple-200" />
               </div>
               <div>
-                <h3 className="font-extrabold text-lg">{customerName}</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-extrabold text-lg">{customerName}</h3>
+                  {userProfile?.labels && userProfile.labels.length > 0 && userProfile.labels.map((lbl) => (
+                    <span key={lbl} className="px-2 py-0.5 rounded-md bg-amber-300 text-purple-950 font-black text-[10px]">
+                      🏷️ {lbl}
+                    </span>
+                  ))}
+                </div>
                 <p className="text-xs text-purple-200">
                   Phone: {customerPhone || 'N/A'} • ID: {customerId}
                 </p>
