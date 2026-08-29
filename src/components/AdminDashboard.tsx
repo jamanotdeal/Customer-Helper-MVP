@@ -226,6 +226,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Needs Attention — per-section pagination
+  const [excCancelPage, setExcCancelPage] = useState(1);
+  const [excCancelPageSize, setExcCancelPageSize] = useState(10);
+  const [excFeeAdjPage, setExcFeeAdjPage] = useState(1);
+  const [excFeeAdjPageSize, setExcFeeAdjPageSize] = useState(10);
+  const [excNotAcceptedPage, setExcNotAcceptedPage] = useState(1);
+  const [excNotAcceptedPageSize, setExcNotAcceptedPageSize] = useState(10);
+  const [excDelayedPage, setExcDelayedPage] = useState(1);
+  const [excDelayedPageSize, setExcDelayedPageSize] = useState(10);
+  const [excHelperAppPage, setExcHelperAppPage] = useState(1);
+  const [excHelperAppPageSize, setExcHelperAppPageSize] = useState(10);
+  const [excStoreAppPage, setExcStoreAppPage] = useState(1);
+  const [excStoreAppPageSize, setExcStoreAppPageSize] = useState(10);
+  const [excPendingWdPage, setExcPendingWdPage] = useState(1);
+  const [excPendingWdPageSize, setExcPendingWdPageSize] = useState(10);
+
   // Tab-specific Date Filters
   const [ordersStartDate, setOrdersStartDate] = useState('');
   const [ordersEndDate, setOrdersEndDate] = useState('');
@@ -262,7 +278,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     const syncAdminData = () => {
-      setOrders(Array.from(fallbackStore.orders.values()));
+      const freshOrders = Array.from(fallbackStore.orders.values());
+      setOrders(freshOrders);
+      // Also merge into allOrders so Mutually Discussed changes are reflected immediately
+      setAllOrders((prev) => {
+        const copy = [...prev];
+        freshOrders.forEach((o) => {
+          const idx = copy.findIndex((item) => item.id === o.id);
+          if (idx > -1) {
+            copy[idx] = o;
+          } else {
+            copy.unshift(o);
+          }
+        });
+        const seen = new Set<string>();
+        return copy.filter((o) => {
+          if (seen.has(o.id)) return false;
+          seen.add(o.id);
+          return true;
+        });
+      });
       setApplications(Array.from(fallbackStore.helperApplications.values()));
       setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
       setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
@@ -1640,6 +1675,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const feeAdjustments = getProcessedOrders(feeAdjustmentsPending);
         const firstOrderIds = getFirstOrderIds(orders);
 
+        // Per-section pagination helpers
+        const paginate = <T,>(list: T[], page: number, size: number) => ({
+          items: list.slice((page - 1) * size, page * size),
+          totalPages: Math.max(1, Math.ceil(list.length / size)),
+        });
+        const pc = paginate(cancelling, excCancelPage, excCancelPageSize);
+        const pfa = paginate(feeAdjustments, excFeeAdjPage, excFeeAdjPageSize);
+        const pna = paginate(notAccepted, excNotAcceptedPage, excNotAcceptedPageSize);
+        const pdl = paginate(delayedOrders, excDelayedPage, excDelayedPageSize);
+        const pha = paginate(pendingApps, excHelperAppPage, excHelperAppPageSize);
+        const psa = paginate(pendingStoreApps, excStoreAppPage, excStoreAppPageSize);
+        const pwd = paginate(pendingWds, excPendingWdPage, excPendingWdPageSize);
+
         const hasExceptions =
           cancelling.length > 0 ||
           notAccepted.length > 0 ||
@@ -1683,7 +1731,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {cancelling.map((ord) => (
+                          {pc.items.map((ord) => (
                             <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5 font-bold text-gray-900">
                                 <button
@@ -1730,6 +1778,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excCancelPage, pc.totalPages)}
+                      totalPages={pc.totalPages}
+                      totalItems={cancelling.length}
+                      pageSize={excCancelPageSize}
+                      onPageChange={(p) => setExcCancelPage(p)}
+                      onPageSizeChange={(s) => { setExcCancelPageSize(s); setExcCancelPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -1754,7 +1811,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {feeAdjustments.map((ord) => (
+                          {pfa.items.map((ord) => (
                             <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5 font-bold text-gray-900">#{ord.id}</td>
                               <td className="py-3.5 px-5">
@@ -1787,6 +1844,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excFeeAdjPage, pfa.totalPages)}
+                      totalPages={pfa.totalPages}
+                      totalItems={feeAdjustments.length}
+                      pageSize={excFeeAdjPageSize}
+                      onPageChange={(p) => setExcFeeAdjPage(p)}
+                      onPageSizeChange={(s) => { setExcFeeAdjPageSize(s); setExcFeeAdjPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -1811,7 +1877,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {notAccepted.map((ord) => {
+                          {pna.items.map((ord) => {
                             const isFirst = firstOrderIds.has(ord.id);
                             return (
                               <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
@@ -1863,6 +1929,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excNotAcceptedPage, pna.totalPages)}
+                      totalPages={pna.totalPages}
+                      totalItems={notAccepted.length}
+                      pageSize={excNotAcceptedPageSize}
+                      onPageChange={(p) => setExcNotAcceptedPage(p)}
+                      onPageSizeChange={(s) => { setExcNotAcceptedPageSize(s); setExcNotAcceptedPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -1887,7 +1962,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {delayedOrders.map((ord) => {
+                          {pdl.items.map((ord) => {
                             const elapsedMins = Math.round((new Date().getTime() - new Date(ord.createdAt).getTime()) / (1000 * 60));
                             const hrs = Math.floor(elapsedMins / 60);
                             const mins = elapsedMins % 60;
@@ -1953,6 +2028,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excDelayedPage, pdl.totalPages)}
+                      totalPages={pdl.totalPages}
+                      totalItems={delayedOrders.length}
+                      pageSize={excDelayedPageSize}
+                      onPageChange={(p) => setExcDelayedPage(p)}
+                      onPageSizeChange={(s) => { setExcDelayedPageSize(s); setExcDelayedPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -1977,7 +2061,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {pendingApps.map((app) => (
+                          {pha.items.map((app) => (
                             <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5 font-bold text-gray-900">{app.legalName}</td>
                               <td className="py-3.5 px-5 font-mono">{app.nid}</td>
@@ -2002,6 +2086,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excHelperAppPage, pha.totalPages)}
+                      totalPages={pha.totalPages}
+                      totalItems={pendingApps.length}
+                      pageSize={excHelperAppPageSize}
+                      onPageChange={(p) => setExcHelperAppPage(p)}
+                      onPageSizeChange={(s) => { setExcHelperAppPageSize(s); setExcHelperAppPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -2032,7 +2125,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {pendingStoreApps.map((app) => (
+                          {psa.items.map((app) => (
                             <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5">
                                 <div className="font-extrabold text-gray-900">{app.storeName}</div>
@@ -2091,6 +2184,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excStoreAppPage, psa.totalPages)}
+                      totalPages={psa.totalPages}
+                      totalItems={pendingStoreApps.length}
+                      pageSize={excStoreAppPageSize}
+                      onPageChange={(p) => setExcStoreAppPage(p)}
+                      onPageSizeChange={(s) => { setExcStoreAppPageSize(s); setExcStoreAppPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
 
@@ -2115,7 +2217,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {pendingWds.map((w) => (
+                          {pwd.items.map((w) => (
                             <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-3.5 px-5 font-bold text-gray-900">{w.helperName}</td>
                               <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
@@ -2142,6 +2244,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </tbody>
                       </table>
                     </div>
+                    <PaginationControl
+                      currentPage={Math.min(excPendingWdPage, pwd.totalPages)}
+                      totalPages={pwd.totalPages}
+                      totalItems={pendingWds.length}
+                      pageSize={excPendingWdPageSize}
+                      onPageChange={(p) => setExcPendingWdPage(p)}
+                      onPageSizeChange={(s) => { setExcPendingWdPageSize(s); setExcPendingWdPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
                   </div>
                 )}
               </div>
@@ -2581,7 +2692,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 4: REVENUE ANALYTICS TAB --- */}
       {activeTab === 'REVENUE' && isTabAllowed('REVENUE') && (
-        <RevenueAnalytics orders={allOrders} pricing={pricing} />
+        <RevenueAnalytics orders={allOrders} pricing={pricing} shops={shops} />
       )}
 
       {/* --- TAB 3: CUSTOMERS STATS TAB --- */}

@@ -1941,6 +1941,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           shops={Array.from(fallbackStore.shops.values())}
           shopOrders={shopOrders}
           onSelectShop={(shop) => {
+            if (isDone) {
+              alert('এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।');
+              return;
+            }
             setShowMapModal(false);
             setPlaceOrderShop(shop);
             setOrderText('');
@@ -1970,11 +1974,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
             </div>
 
-            {placeOrderShop.description && (
-              <p className="text-xs text-gray-600 bg-gray-50 p-2.5 rounded-xl border border-gray-100 leading-relaxed font-medium">
-                {placeOrderShop.description}
+            <div className="bg-purple-50/70 p-3 rounded-2xl border border-purple-100 space-y-1">
+              <span className="text-[10px] font-black text-purple-900 uppercase tracking-wider block">
+                দোকানে কী কী পণ্য/সেবা পাওয়া যায়?
+              </span>
+              <p className="text-xs text-purple-950 leading-relaxed font-semibold">
+                {placeOrderShop.description || 'পণ্য/সেবার কোনো অতিরিক্ত বিবরণ যুক্ত করা হয়নি।'}
               </p>
-            )}
+            </div>
 
             <div className="space-y-3 bg-gray-50 p-3 rounded-2xl border border-gray-100 text-xs">
               {/* Owner Row */}

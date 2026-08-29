@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { MapPickerModal } from '../MapPickerModal';
-import { calculateHelperCommission } from '@/lib/pricing';
+import { calculateHelperCommission, calculateEstimatedFee } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
+import { useAuth } from '@/context/AuthContext';
 import { formatCreatedAt, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
 import {
   X,
@@ -24,6 +25,8 @@ import {
   PackageCheck,
   Truck,
   Ban,
+  Trash2,
+  Calculator,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 
@@ -37,6 +40,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   onClose,
 }) => {
   const { showAlert, showConfirm } = useModal();
+  const { user: currentUser } = useAuth();
+  const isSuperAdmin = currentUser?.isSuperAdmin ?? false;
   const [showAssignModal, setShowAssignModal] = useState(false);
 
   // Admin edit modals
@@ -589,36 +594,176 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </p>
                 </div>
               )}
+            {/* 2b. Helper Shop Orders (Store Requests) */}
+            {(() => {
+              const shopOrders = fallbackStore.getShopOrdersForOrder(order.id);
+              if (shopOrders.length === 0) return null;
+              return (
+                <div className="bg-purple-50/60 rounded-2xl border border-purple-200 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-extrabold text-xs text-purple-950 uppercase tracking-wider flex items-center space-x-1.5">
+                      <ShoppingBag className="w-4 h-4 text-purple-700" />
+                      <span>Helper Store Requests (নিবন্ধিত দোকানে হেলপারের পাঠানো অর্ডার)</span>
+                    </h4>
+                    <span className="px-2.5 py-0.5 rounded-full bg-purple-200 text-purple-900 font-extrabold text-[10px]">
+                      {shopOrders.length} Shop Order{shopOrders.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {shopOrders.map((so) => {
+                      const shop = fallbackStore.shops.get(so.shopId);
+                      return (
+                        <div key={so.id} className="bg-white rounded-xl p-3 border border-purple-100 shadow-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <span className="font-black text-gray-900 text-xs">{so.shopName}</span>
+                              {shop?.type && (
+                                <span className="text-[9px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase">
+                                  {shop.type}
+                                </span>
+                              )}
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                              so.status === 'HANDOVER' || so.status === 'READY'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : so.status === 'CANCELED'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {so.status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-700 font-semibold bg-gray-50 p-2 rounded-lg border border-gray-100">
+                            {so.requestText}
+                          </p>
+                          <div className="flex items-center justify-between text-[11px] pt-0.5 text-gray-600">
+                            <span>Set Price: <strong className="text-purple-900">{so.price !== undefined ? `৳${so.price}` : 'Not set'}</strong></span>
+                            {shop?.whatsapp && <span>Shop Phone: <strong className="text-gray-900">{shop.whatsapp}</strong></span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
             </div>
 
-            {/* 3. Pricing, Fees & Revenue Breakdown */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
-              <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
-                <DollarSign className="w-4 h-4 text-emerald-600" />
-                <span>Financial & Revenue Breakdown</span>
-              </h4>
+            {/* 3. Pricing Calculation Summary */}
+            {(() => {
+              // Calculate breakdown using the fee calculator settings
+              // Raw distance (for display)
+              const rawDistanceKm = (() => {
+                const p = order.pickupLocation;
+                const d = order.deliveryLocation;
+                if (p?.lat && p?.lng && d?.lat && d?.lng) {
+                  const R = 6371;
+                  const dLat = ((d.lat - p.lat) * Math.PI) / 180;
+                  const dLon = ((d.lng - p.lng) * Math.PI) / 180;
+                  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(p.lat*Math.PI/180)*Math.cos(d.lat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+                  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)) * 10) / 10;
+                }
+                return 0;
+              })();
+              // Ceil to nearest whole number for pricing (1.2km → 2km, 1.6kg → 2kg)
+              const distanceKm = rawDistanceKm > 0 ? Math.ceil(rawDistanceKm) : 0;
+              const rawWeightKg = order.weightKg ?? 0;
+              const weightKg = rawWeightKg > 0 ? Math.ceil(rawWeightKg) : 0;
+              const productCost = order.productCost ?? 0;
+              const isReturn = order.needDeliveryBack ?? false;
+              const est = calculateEstimatedFee(
+                { distanceKm, weightKg, isReturnRequested: isReturn, productPrice: productCost },
+                pricingSettings
+              );
+              const shopPrices = fallbackStore.getShopOrdersForOrder(order.id);
+              const shopTotal = shopPrices.reduce((sum, so) => sum + (so.price ?? 0), 0);
+              const processingFeeValue = est.processingFee;
+              const platformRevenueTotal = platformRevenue + processingFeeValue;
+              const totalCollectable = order.deliveryFee + productCost + processingFeeValue;
+              const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
+                { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
+                ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
+                { label: `Distance Fee (${rawDistanceKm} km → ${distanceKm} km × ৳${est.perKmRate}/km)`, value: distanceKm > 0 ? `৳${est.distanceFee}` : 'No GPS data', sub: 'Rounded up to nearest whole km for pricing', color: 'text-blue-700' },
+                { label: `Weight Fee (${rawWeightKg} kg → ${weightKg} kg × ৳${est.perKgRate}/kg)`, value: weightKg > 0 ? `৳${est.weightFee}` : '৳0 (no weight set)', sub: 'Rounded up to nearest whole kg for pricing', color: 'text-teal-700' },
+                { label: `Delivery Sub-total (min ৳${est.minFee})`, value: `৳${est.deliverySubtotal}`, sub: 'Distance + weight; min fee applied', color: 'text-slate-700' },
+                ...(isReturn ? [{ label: `Return/Two-Way Fee (+${est.returnPercent}%)`, value: `৳${est.returnFee}`, sub: 'Return delivery surcharge', color: 'text-indigo-700' }] : []),
+                ...(est.processingFee > 0 ? [{ label: `Processing Fee (${pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? pricingSettings.feeCalculatorProcessingFee + '%' : '৳' + pricingSettings.feeCalculatorProcessingFee})`, value: `৳${est.processingFee}`, sub: 'Applied when product cost is set', color: 'text-orange-700' }] : []),
+              ];
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Product Cost</span>
-                  <span className="text-base font-black text-gray-900">
-                    {order.productCost !== undefined ? `৳${order.productCost}` : 'Pending'}
-                  </span>
+              return (
+                <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4">
+                  <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
+                    <Calculator className="w-4 h-4 text-emerald-600" />
+                    <span>Pricing Calculation Summary</span>
+                  </h4>
+
+                  {/* Charge Breakdown Table */}
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-2">Charge Breakdown</p>
+                    <div className="divide-y divide-gray-100 rounded-xl border border-gray-100 overflow-hidden">
+                      {feeRows.map((row, idx) => (
+                        <div key={idx} className="flex items-center justify-between px-3 py-2 bg-white hover:bg-gray-50/80 transition-colors">
+                          <div>
+                            <span className="text-xs font-semibold text-gray-700">{row.label}</span>
+                            {row.sub && <p className="text-[10px] text-gray-400">{row.sub}</p>}
+                          </div>
+                          <span className={`text-xs font-black ${row.color || 'text-gray-900'}`}>{row.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Final Summary Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-center">
+                      <span className="text-[10px] font-bold text-emerald-700 uppercase block">Delivery Fee</span>
+                      <span className="text-sm font-black text-emerald-900">৳{order.deliveryFee}</span>
+                      <p className="text-[9px] text-emerald-600 mt-0.5">Charged to customer</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-center">
+                      <span className="text-[10px] font-bold text-gray-500 uppercase block">Product Cost</span>
+                      <span className="text-sm font-black text-gray-900">{productCost > 0 ? `৳${productCost}` : '—'}</span>
+                      <p className="text-[9px] text-gray-400 mt-0.5">Collected from customer</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-center">
+                      <span className="text-[10px] font-bold text-indigo-700 uppercase block">Helper Payout ({pricingSettings.helperCommissionPercent}%)</span>
+                      <span className="text-sm font-black text-indigo-900">৳{helperCommissionAmount}</span>
+                      <p className="text-[9px] text-indigo-600 mt-0.5">of delivery fee</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 text-center">
+                      <span className="text-[10px] font-bold text-purple-700 uppercase block">Platform Revenue</span>
+                      <span className="text-sm font-black text-purple-950">৳{platformRevenueTotal}</span>
+                      <p className="text-[9px] text-purple-600 mt-0.5">
+                        {100 - pricingSettings.helperCommissionPercent}% fee{processingFeeValue > 0 ? ` + ৳${processingFeeValue} processing` : ''}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Total Collectable */}
+                  <div className="rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 p-4 text-white">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-emerald-100 uppercase tracking-wide">Total Collected / Collectable</p>
+                        <p className="text-[10px] text-emerald-200 mt-0.5">
+                          Delivery Fee + Product Cost{processingFeeValue > 0 ? ' + Processing Fee' : ''}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-2xl font-black">৳{totalCollectable}</span>
+                        <p className="text-[10px] text-emerald-200">
+                          ({order.deliveryFee} fee + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''})
+                        </p>
+                      </div>
+                    </div>
+                    {order.status !== 'DELIVERED' && (
+                      <p className="text-[10px] text-emerald-200 mt-2 italic">
+                        ⚠ Order not yet delivered — amount is collectable but not yet confirmed
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Total Delivery Fee</span>
-                  <span className="text-base font-black text-emerald-700">৳{order.deliveryFee}</span>
-                </div>
-                <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-100">
-                  <span className="text-[10px] font-bold text-indigo-700 uppercase block">Helper Payout ({pricingSettings.helperCommissionPercent}%)</span>
-                  <span className="text-base font-black text-indigo-900">৳{helperCommissionAmount}</span>
-                </div>
-                <div className="p-3 rounded-xl bg-purple-50 border border-purple-100">
-                  <span className="text-[10px] font-bold text-purple-700 uppercase block">Platform Revenue ({100 - pricingSettings.helperCommissionPercent}%)</span>
-                  <span className="text-base font-black text-purple-950">৳{platformRevenue}</span>
-                </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* 4. Cancellation / Fee Adjustment Alert Banners */}
             {order.cancellationRequest && (
@@ -756,8 +901,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 Admin Override & Edit Actions:
               </span>
 
-              {/* Status Progression Buttons */}
-              {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+              {/* Status Progression Buttons — always visible so admin can revert any status */}
+              {order.status !== 'CANCELED' && (
                 <div>
                   <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Force Status Change:</p>
                   <div className="flex flex-wrap gap-2">
@@ -768,6 +913,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <UserCheck className="w-3.5 h-3.5" />
                       <span>Assign / Reassign Helper</span>
                     </button>
+                    {order.status !== 'PENDING' && (
+                      <button
+                        onClick={() => handleForceStatusChange('PENDING')}
+                        className="py-2 px-3 rounded-xl bg-gray-500 hover:bg-gray-600 text-white font-extrabold text-xs shadow-sm transition-all"
+                      >
+                        ← PENDING
+                      </button>
+                    )}
                     {order.status !== 'ACCEPTED' && (
                       <button
                         onClick={() => handleForceStatusChange('ACCEPTED')}
@@ -803,13 +956,15 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                         <span>→ ARRIVED</span>
                       </button>
                     )}
-                    <button
-                      onClick={() => handleForceStatusChange('DELIVERED')}
-                      className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>→ DELIVERED</span>
-                    </button>
+                    {order.status !== 'DELIVERED' && (
+                      <button
+                        onClick={() => handleForceStatusChange('DELIVERED')}
+                        className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>→ DELIVERED</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -835,8 +990,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 </div>
               </div>
 
-              {/* Direct Cancel (always visible unless already done) */}
-              {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+              {/* Direct Cancel (always visible unless already canceled) */}
+              {order.status !== 'CANCELED' && (
                 <div>
                   <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Danger Zone:</p>
                   <button
@@ -846,6 +1001,35 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <Ban className="w-3.5 h-3.5" />
                     <span>Cancel This Order Immediately</span>
                   </button>
+                </div>
+              )}
+
+              {/* Super Admin Only: Delete Order Permanently */}
+              {isSuperAdmin && (
+                <div className="pt-2 border-t border-red-100">
+                  <p className="text-[10px] text-red-700 font-extrabold uppercase mb-1.5 flex items-center space-x-1">
+                    <ShieldAlert className="w-3 h-3" />
+                    <span>Super Admin Only — Permanent Delete:</span>
+                  </p>
+                  <button
+                    onClick={async () => {
+                      const confirmed = await showConfirm(
+                        '⚠️ Permanently Delete Order',
+                        `Are you sure you want to PERMANENTLY DELETE Order #${order.id}? This cannot be undone. This is intended only for removing test/dummy orders.`,
+                        'Yes, Delete Permanently',
+                        'Cancel'
+                      );
+                      if (!confirmed) return;
+                      await fallbackStore.deleteOrder(order.id);
+                      showAlert('অর্ডার মুছে ফেলা হয়েছে', `Order #${order.id} permanently deleted.`, 'info');
+                      onClose();
+                    }}
+                    className="py-2 px-4 rounded-xl bg-red-950 hover:bg-black text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 border border-red-800"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>🗑 Permanently Delete This Order</span>
+                  </button>
+                  <p className="text-[10px] text-red-600 mt-1">Only use this to remove test orders. Actual order history should not be deleted.</p>
                 </div>
               )}
             </div>

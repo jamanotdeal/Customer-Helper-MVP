@@ -256,7 +256,7 @@ export default function PageClient() {
 
     // Store mode: approved stores always see StoreDashboard
     if (user.isStoreApproved || activeMode === 'store') {
-      return <StoreDashboard activeTab={activeTab} setActiveTab={setActiveTab} />;
+      return <StoreDashboard activeTab={activeTab} setActiveTab={(tab) => setActiveTab(tab as any)} />;
     }
 
     // Default Customer view

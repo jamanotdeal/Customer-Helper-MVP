@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Order, PricingSettings } from '@/types';
+import { Order, PricingSettings, Shop } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
 import { PaginationControl } from './PaginationControl';
@@ -17,14 +17,17 @@ import {
   Filter,
   ArrowUpRight,
   Sparkles,
+  Store,
+  ArrowUpDown,
 } from 'lucide-react';
 
 interface RevenueAnalyticsProps {
   orders: Order[];
   pricing: PricingSettings;
+  shops?: Shop[];
 }
 
-export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pricing }) => {
+export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pricing, shops = [] }) => {
   // Local Date Helper (YYYY-MM-DD in user's local timezone)
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {
     const year = d.getFullYear();
@@ -84,11 +87,17 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+  
+  // Store Commission Pagination State
+  const [storePage, setStorePage] = useState<number>(1);
+  const [storePageSize, setStorePageSize] = useState<number>(10);
+
   const [showOutstandingModal, setShowOutstandingModal] = useState<boolean>(false);
 
-  // Reset page to 1 when date filter changes
+  // Reset pages to 1 when date filter changes
   useEffect(() => {
     setCurrentPage(1);
+    setStorePage(1);
   }, [startDate, endDate]);
 
   // Quick Preset Handlers
@@ -311,6 +320,73 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       ? Math.round(totalOutstandingLiability / helpersWithBalanceCount)
       : 0;
 
+    // Store Commission Data (from delivered orders in range with selectedShopIds)
+    const shopMap = new Map<string, Shop>(shops.map(s => [s.id, s]));
+    
+    // Check wallet transactions for store paybacks if any linked by ownerUserId
+    const allWalletTxs = Array.from(fallbackStore.walletTransactions.values()).flat();
+
+    const storeCommissionMap = new Map<string, {
+      storeId: string;
+      storeName: string;
+      ownerName: string;
+      contactPhone: string;
+      commissionPercent: number;
+      ordersCount: number;
+      totalProductCost: number;
+      grossCommission: number;
+      totalPaid: number;
+      netDue: number; // Positive = Store Owes Us, Negative = We Owe Store
+    }>();
+
+    deliveredInRange.forEach((o) => {
+      if (!o.selectedShopIds || o.selectedShopIds.length === 0) return;
+      const productCost = o.productCost || 0;
+      // Distribute product cost equally among selected shops (if multiple)
+      const costPerShop = productCost / o.selectedShopIds.length;
+      o.selectedShopIds.forEach((shopId) => {
+        const shop = shopMap.get(shopId);
+        if (!shop) return;
+        const commPct = shop.commissionPercent || 0;
+        const existing = storeCommissionMap.get(shopId) || {
+          storeId: shopId,
+          storeName: shop.name,
+          ownerName: shop.contactPerson || 'Store Owner',
+          contactPhone: shop.whatsapp || '—',
+          commissionPercent: commPct,
+          ordersCount: 0,
+          totalProductCost: 0,
+          grossCommission: 0,
+          totalPaid: 0,
+          netDue: 0,
+        };
+
+        const commAmount = Math.round(costPerShop * commPct / 100);
+        existing.ordersCount += 1;
+        existing.totalProductCost += costPerShop;
+        existing.grossCommission += commAmount;
+
+        // Calculate paid payback by store owner if ownerUserId is present
+        if (shop.ownerUserId) {
+          const paidSum = allWalletTxs
+            .filter((tx) => tx.userId === shop.ownerUserId && tx.type === 'PAYBACK')
+            .reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+          existing.totalPaid = paidSum;
+        }
+
+        existing.netDue = existing.grossCommission - existing.totalPaid;
+        storeCommissionMap.set(shopId, existing);
+      });
+    });
+
+    const storeCommissionData = Array.from(storeCommissionMap.values()).sort(
+      (a, b) => b.grossCommission - a.grossCommission
+    );
+    const totalStoreGrossCommission = storeCommissionData.reduce((s, d) => s + d.grossCommission, 0);
+    const totalStorePaidCommission = storeCommissionData.reduce((s, d) => s + d.totalPaid, 0);
+    const totalStoreNetDue = storeCommissionData.reduce((s, d) => s + d.netDue, 0);
+    const totalStoreCommissionOrders = storeCommissionData.reduce((s, d) => s + d.ordersCount, 0);
+
     return {
       completedCount: deliveredInRange.length,
       canceledCount: canceledInRange.length,
@@ -359,8 +435,23 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       platformCommissionPaidBackInRange,
       platformCommissionOutstandingDueInRange,
       dailyBreakdown,
+
+      // Store commission
+      storeCommissionData,
+      totalStoreGrossCommission,
+      totalStorePaidCommission,
+      totalStoreNetDue,
+      totalStoreCommissionOrders,
     };
-  }, [orders, pricing, startDate, endDate]);
+  }, [orders, pricing, shops, startDate, endDate]);
+
+  const storeTotalPages = Math.ceil(analyticsData.storeCommissionData.length / storePageSize) || 1;
+  const safeStorePage = Math.min(storePage, storeTotalPages);
+
+  const paginatedStoreCommissionData = useMemo(() => {
+    const start = (safeStorePage - 1) * storePageSize;
+    return analyticsData.storeCommissionData.slice(start, start + storePageSize);
+  }, [analyticsData.storeCommissionData, safeStorePage, storePageSize]);
 
   const totalPages = Math.ceil(analyticsData.dailyBreakdown.length / pageSize) || 1;
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -731,6 +822,151 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
             <p className="text-[9px] text-slate-400 mt-1">Range Outstanding: ৳{analyticsData.platformCommissionOutstandingDueInRange}</p>
           </div>
         </div>
+      </div>
+
+      {/* Store Commission Breakdown */}
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+        <div className="p-5 border-b border-gray-100 bg-orange-50/30 flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h3 className="font-extrabold text-base text-gray-900 flex items-center space-x-2">
+              <Store className="w-5 h-5 text-orange-600" />
+              <span>Store Commission Ledger & Settlement Summary</span>
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              কোন দোকান থেকে প্লাটফর্ম কত পাবে (Store Owes Us) এবং কাকে পরিশোধ করেছে/পাবে তার স্পষ্ট হিসেব।
+            </p>
+          </div>
+          
+          <div className="flex items-center gap-6 flex-wrap">
+            <div className="text-right">
+              <div className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider">Gross Commission Earned</div>
+              <div className="text-xl font-black text-gray-900">৳{analyticsData.totalStoreGrossCommission}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] font-extrabold text-emerald-600 uppercase tracking-wider">Total Commission Paid</div>
+              <div className="text-xl font-black text-emerald-600">৳{analyticsData.totalStorePaidCommission}</div>
+            </div>
+            <div className="text-right pl-4 border-l border-gray-200">
+              <div className="text-[10px] font-extrabold text-orange-600 uppercase tracking-wider">Net Outstanding Due</div>
+              <div className="text-2xl font-black text-orange-700">৳{analyticsData.totalStoreNetDue}</div>
+              <div className="text-[10px] text-gray-400 font-medium">
+                {analyticsData.totalStoreCommissionOrders} store orders • {analyticsData.storeCommissionData.length} active stores
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {analyticsData.storeCommissionData.length === 0 ? (
+          <div className="py-12 text-center text-gray-400 space-y-2">
+            <Store className="w-10 h-10 mx-auto opacity-30" />
+            <p className="font-bold text-sm">নির্বাচিত সময়সীমায় কোনো স্টোর কমিশন ডেটা নেই।</p>
+            <p className="text-xs">কমিশন সেট করা দোকান থেকে ডেলিভারড অর্ডার থাকলে এখানে দেখা যাবে।</p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                  <tr>
+                    <th className="py-3.5 px-5">#</th>
+                    <th className="py-3.5 px-5">Store & Contact</th>
+                    <th className="py-3.5 px-5">Commission Rate</th>
+                    <th className="py-3.5 px-5">Completed Orders</th>
+                    <th className="py-3.5 px-5">Total Goods Value (৳)</th>
+                    <th className="py-3.5 px-5">Gross Commission (৳)</th>
+                    <th className="py-3.5 px-5">Paid Back (৳)</th>
+                    <th className="py-3.5 px-5 text-right">Net Settlement Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 font-medium">
+                  {paginatedStoreCommissionData.map((row, idx) => {
+                    const globalIdx = (safeStorePage - 1) * storePageSize + idx + 1;
+                    return (
+                      <tr key={row.storeId} className="hover:bg-orange-50/30 transition-colors">
+                        <td className="py-4 px-5 text-gray-400 font-bold">{globalIdx}</td>
+                        <td className="py-4 px-5">
+                          <div className="font-extrabold text-gray-900">{row.storeName}</div>
+                          <div className="text-[11px] text-gray-500 font-medium">{row.ownerName} • <span className="text-emerald-700 font-bold">{row.contactPhone}</span></div>
+                        </td>
+                        <td className="py-4 px-5">
+                          <span className="px-2.5 py-1 rounded-full bg-orange-100 text-orange-800 font-extrabold text-[11px]">
+                            {row.commissionPercent}%
+                          </span>
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-emerald-700">
+                          {row.ordersCount} orders
+                        </td>
+                        <td className="py-4 px-5 font-bold text-gray-700">
+                          ৳{Math.round(row.totalProductCost)}
+                        </td>
+                        <td className="py-4 px-5 font-black text-purple-900">
+                          ৳{row.grossCommission}
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-emerald-600">
+                          ৳{row.totalPaid}
+                        </td>
+                        <td className="py-4 px-5 text-right">
+                          {row.netDue > 0 ? (
+                            <div>
+                              <span className="px-2.5 py-1 rounded-full bg-red-100 text-red-800 font-black text-xs inline-block">
+                                Store Owes Us: ৳{row.netDue}
+                              </span>
+                              <p className="text-[9px] text-gray-400 mt-0.5 font-bold">দোকানের কাছে প্লাটফর্মের পাওনা</p>
+                            </div>
+                          ) : row.netDue < 0 ? (
+                            <div>
+                              <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 font-black text-xs inline-block">
+                                We Owe Store: ৳{Math.abs(row.netDue)}
+                              </span>
+                              <p className="text-[9px] text-gray-400 mt-0.5 font-bold">দোকানকে পরিশোধ করতে হবে</p>
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-xs inline-block">
+                                Fully Settled (৳0)
+                              </span>
+                              <p className="text-[9px] text-gray-400 mt-0.5 font-bold">কোন বাকি নেই</p>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-orange-50/50 border-t-2 border-orange-100">
+                  <tr>
+                    <td colSpan={4} className="py-3.5 px-5 font-extrabold text-gray-700 text-xs uppercase tracking-wider">Page Total</td>
+                    <td className="py-3.5 px-5 font-extrabold text-gray-900">
+                      ৳{Math.round(paginatedStoreCommissionData.reduce((s, d) => s + d.totalProductCost, 0))}
+                    </td>
+                    <td className="py-3.5 px-5 font-black text-purple-900">
+                      ৳{paginatedStoreCommissionData.reduce((s, d) => s + d.grossCommission, 0)}
+                    </td>
+                    <td className="py-3.5 px-5 font-black text-emerald-600">
+                      ৳{paginatedStoreCommissionData.reduce((s, d) => s + d.totalPaid, 0)}
+                    </td>
+                    <td className="py-3.5 px-5 text-right font-black text-orange-700 text-sm">
+                      Net Due: ৳{paginatedStoreCommissionData.reduce((s, d) => s + d.netDue, 0)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <PaginationControl
+              currentPage={safeStorePage}
+              totalPages={storeTotalPages}
+              totalItems={analyticsData.storeCommissionData.length}
+              pageSize={storePageSize}
+              onPageChange={(page) => setStorePage(page)}
+              onPageSizeChange={(newSize) => {
+                setStorePageSize(newSize);
+                setStorePage(1);
+              }}
+              pageSizeOptions={[5, 10, 25, 50]}
+            />
+          </>
+        )}
       </div>
 
       {/* Date-by-Date Financial Breakdown Table */}

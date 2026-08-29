@@ -206,12 +206,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = fbUser.uid;
         // Initialize role-scoped Firestore listeners (replaces the old 12-blanket-listeners approach)
-        const listenerRole: 'customer' | 'helper' | 'admin' = isUserAdminEmail(fbUser.email)
+        const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = isUserAdminEmail(fbUser.email)
           ? 'admin'
+          : (profile.isStoreApproved || profile.lastActiveMode === 'store' || savedMode === 'store')
+          ? 'store'
           : (profile.isHelper && (profile.lastActiveMode === 'helper' || savedMode === 'helper'))
           ? 'helper'
           : 'customer';
-        fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType);
+        fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
         // On customer login: load saved delivery addresses from Firestore if not already in localStorage
         if (listenerRole === 'customer') {
           const localAddresses = getSavedDeliveryAddresses(fbUser.uid);
@@ -315,9 +317,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(updated);
       fallbackStore.saveUser(updated);
 
-      // Switch Firestore listeners to match the new active mode (customer ⇔ helper)
-      if (mode === 'customer' || mode === 'helper') {
-        fallbackStore.initListenersForRole(mode, user.uid, user.helperType);
+      // Switch Firestore listeners to match the new active mode (customer ⇔ helper ⇔ store)
+      if (mode === 'customer' || mode === 'helper' || mode === 'store') {
+        fallbackStore.initListenersForRole(mode, user.uid, user.helperType, user.storeId);
       }
 
       // When switching to helper mode, get native GPS location for maximum accuracy

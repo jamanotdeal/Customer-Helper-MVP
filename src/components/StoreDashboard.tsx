@@ -268,12 +268,20 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
 
 
+  // Pricing Alert Modal State
+  const [showPriceAlertModal, setShowPriceAlertModal] = useState(false);
+
   // Handle operations
   const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
+    // Automatically save price & note when status moves
+    const currentPrice = costInput ? parseFloat(costInput) : undefined;
+    const currentNote = noteInput.trim() || undefined;
+
     await fallbackStore.updateShopOrder(soId, (prev) => ({
       ...prev,
       status: newStatus,
-      note: actorNote || prev.note,
+      price: currentPrice !== undefined ? currentPrice : prev.price,
+      note: actorNote !== undefined ? actorNote : (currentNote || prev.note),
       statusHistory: [
         ...prev.statusHistory,
         {
@@ -407,6 +415,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       key={step.status} 
                       onClick={() => {
                         if (canChangeStatus) {
+                          if (step.status === 'PREPARING' && (!costInput || parseFloat(costInput) <= 0)) {
+                            setShowPriceAlertModal(true);
+                            return;
+                          }
                           handleUpdateStatus(currentShopOrder.id, step.status);
                         }
                       }}
@@ -458,7 +470,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     </div>
                   ) : currentShopOrder.status === 'ACCEPTED' ? (
                     <button
-                      onClick={() => handleUpdateStatus(currentShopOrder.id, 'PREPARING')}
+                      onClick={() => {
+                        if (!costInput || parseFloat(costInput) <= 0) {
+                          setShowPriceAlertModal(true);
+                          return;
+                        }
+                        handleUpdateStatus(currentShopOrder.id, 'PREPARING');
+                      }}
                       className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
                     >
                       অর্ডার রেডি করছেন...
@@ -496,46 +514,60 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 : ''}
             </div>
 
-            {/* Product Cost Forms inside Request Details block */}
-            {!isCanceled && !isDelivered && (
-              <div className="space-y-4 border-t border-gray-100 pt-3">
-                {/* Price input line */}
-                <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Product Price</label>
-                  <div className="relative">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 text-base font-bold">৳</span>
-                    <input
-                      type="number"
-                      placeholder="দামের পরিমাণ..."
-                      value={costInput}
-                      onChange={(e) => setCostInput(e.target.value)}
-                      className="w-full pl-7 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-lg font-black outline-none focus:border-emerald-500"
-                    />
-                  </div>
+            {/* Product Cost Forms & Store Private Note inside Request Details block */}
+            <div className="space-y-4 border-t border-gray-100 pt-3">
+              {/* Price input line */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Product Price (৳)</label>
+                  {isDelivered && (
+                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                      Completed Order Pricing
+                    </span>
+                  )}
                 </div>
-
-                {/* Note textarea */}
-                <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Note / Description</label>
-                  <textarea
-                    placeholder="নোট (ঐচ্ছিক)"
-                    value={noteInput}
-                    onChange={(e) => setNoteInput(e.target.value)}
-                    rows={3}
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:border-emerald-500 font-semibold resize-none"
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 text-base font-bold">৳</span>
+                  <input
+                    type="number"
+                    placeholder="দামের পরিমাণ..."
+                    value={costInput}
+                    disabled={isCanceled}
+                    onChange={(e) => setCostInput(e.target.value)}
+                    className="w-full pl-7 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-lg font-black outline-none focus:border-emerald-500 disabled:opacity-70"
                   />
                 </div>
+              </div>
 
-                {/* Single update button */}
+              {/* Private Store Note Box */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
+                    <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
+                  </label>
+                  <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
+                </div>
+                <textarea
+                  placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
+                  value={noteInput}
+                  disabled={isCanceled}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
+                />
+              </div>
+
+              {/* Single update button */}
+              {!isCanceled && (
                 <button
                   onClick={() => handleUpdateCostAndNote(currentShopOrder.id)}
                   disabled={updatingCost}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm"
                 >
                   {updatingCost ? 'Saving...' : 'Update Note & Price'}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Helper Contact Details (right after Request Details block) */}
@@ -602,6 +634,93 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             )}
           </div>
         </div>
+
+        {/* ── Store Cancel/Rejection Custom Confirmation Modal ── */}
+        {showStoreCancelModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-red-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 flex flex-col">
+              <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
+                <div>
+                  <h3 className="font-black text-base text-gray-900 font-sans">অর্ডার বাতিল / প্রত্যাখ্যান করুন</h3>
+                  <p className="text-[11px] text-gray-500 font-semibold mt-0.5">অর্ডারটি বাতিলের সঠিক কারণ উল্লেখ করুন</p>
+                </div>
+                <button
+                  onClick={() => setShowStoreCancelModal(false)}
+                  className="p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="px-5 py-4 space-y-4">
+                <div className="p-3.5 rounded-2xl bg-red-50 border border-red-100 flex items-start space-x-2.5">
+                  <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-800 font-semibold leading-relaxed">
+                    এই দোকান অর্ডারটি বাতিল করলে সংশ্লিষ্ট হেলপারকে তাৎক্ষণিকভাবে নোটিফিকেশন পাঠানো হবে।
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">বাতিলের কারণ *</label>
+                  <textarea
+                    value={storeCancelReason}
+                    onChange={(e) => {
+                      setStoreCancelReason(e.target.value);
+                      if (e.target.value.trim()) setStoreCancelError('');
+                    }}
+                    placeholder="যেমন: পণ্য স্টকে নেই, দোকান সাময়িকভাবে বন্ধ, ভুল অর্ডার এসেছে ইত্যাদি..."
+                    className="w-full px-3.5 py-3.5 rounded-2xl border border-gray-200 text-xs font-semibold text-gray-900 outline-none focus:border-red-400 focus:ring-4 focus:ring-red-500/10 resize-none h-28"
+                    required
+                  />
+                </div>
+                {storeCancelError && (
+                  <p className="text-[11px] text-red-600 font-bold bg-red-50 px-3 py-2 rounded-xl border border-red-100">
+                    {storeCancelError}
+                  </p>
+                )}
+              </div>
+              <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowStoreCancelModal(false)}
+                  className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                >
+                  ফিরে যান
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmStoreCancel}
+                  className="flex-1 py-3.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md shadow-red-600/25 transition-all"
+                >
+                  নিশ্চিত করুন
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Custom Pricing Required Theme Modal ── */}
+        {showPriceAlertModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-amber-100 animate-in zoom-in-95 duration-200 overflow-hidden">
+              <div className="p-6 text-center space-y-4">
+                <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shadow-inner">
+                  <AlertTriangle className="w-7 h-7 animate-bounce" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="text-base font-black text-gray-900">পণ্যের দাম আবশ্যক</h3>
+                  <p className="text-xs text-gray-600 font-semibold leading-relaxed">
+                    দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Preparing স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowPriceAlertModal(false)}
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black shadow-md shadow-emerald-600/20 active:scale-95 transition-all"
+                >
+                  ঠিক আছে, বুঝতে পেরেছি
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1042,6 +1161,31 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 className="flex-1 py-3.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md shadow-red-600/25 transition-all"
               >
                 নিশ্চিত করুন
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Custom Pricing Required Theme Modal ── */}
+      {showPriceAlertModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-amber-100 animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="p-6 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shadow-inner">
+                <AlertTriangle className="w-7 h-7 animate-bounce" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-base font-black text-gray-900">পণ্যের দাম আবশ্যক</h3>
+                <p className="text-xs text-gray-600 font-semibold leading-relaxed">
+                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Preparing স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPriceAlertModal(false)}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black shadow-md shadow-emerald-600/20 active:scale-95 transition-all"
+              >
+                ঠিক আছে, বুঝতে পেরেছি
               </button>
             </div>
           </div>

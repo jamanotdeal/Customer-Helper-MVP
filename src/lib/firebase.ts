@@ -15,6 +15,7 @@ import {
   getDocs,
   limit,
   arrayUnion,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   getMessaging,
@@ -747,13 +748,15 @@ class FallbackStore {
   // OPTIMIZATION SUMMARY vs old 12-listener approach:
   //   Customer: own orders + own notifs + pricing + cached shops/modals
   //   Helper:   active orders + own orders + own notifs + own wallet + pricing + cached shops/modals
+  //   Store:    incoming shopOrders + store orders + own customer orders + notifs + wallet + cached shops/modals
   //   Admin:    full visibility with sensible limits (200 orders, 300 users, 500 txns)
   //
   // Estimated reads/day: ~1,400 (vs ~50,000 previously) for 500 orders/day
   public initListenersForRole(
-    role: 'customer' | 'helper' | 'admin',
+    role: 'customer' | 'helper' | 'admin' | 'store',
     userId: string,
-    helperType?: string
+    helperType?: string,
+    storeId?: string
   ) {
     if (typeof window === 'undefined') return;
 
@@ -780,8 +783,97 @@ class FallbackStore {
       )
     );
 
+    // ── STORE role ────────────────────────────────────────────────────────────
+    if (role === 'store') {
+      const effectiveStoreId = storeId || `store-${userId}`;
+
+      // Shop orders submitted to this store (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'shopOrders'), where('shopId', '==', effectiveStoreId), limit(100)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.shopOrders.delete(change.doc.id);
+              } else {
+                this.shopOrders.set(change.doc.id, change.doc.data() as ShopOrder);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Store shopOrders sync note:', err)
+        )
+      );
+
+      // Parent orders selected for this store (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), where('selectedShopIds', 'array-contains', effectiveStoreId), limit(60)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Store orders sync note:', err)
+        )
+      );
+
+      // Store owner's own customer orders (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), where('customerId', '==', userId), limit(30)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Store customer orders sync note:', err)
+        )
+      );
+
+      // Notifications for store owner + all-stores (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'notifications'),
+            where('userId', 'in', [userId, 'all', 'all-stores']),
+            limit(50)
+          ),
+          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+          (err) => console.warn('[Firestore] Store notifications sync note:', err)
+        )
+      );
+
+      // Store owner's wallet document (realtime)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'wallets', userId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              this.wallets.set(userId, docSnap.data() as Wallet);
+              this.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Store wallet sync note:', err)
+        )
+      );
+
+      // Shops & modals: one-time reads with 30-min cache
+      this._loadShopsCached();
+      this._loadModalsCached();
+
     // ── CUSTOMER role ─────────────────────────────────────────────────────────
-    if (role === 'customer') {
+    } else if (role === 'customer') {
       // Only this customer's orders (realtime)
       unsubs.push(
         onSnapshot(
@@ -1278,6 +1370,16 @@ class FallbackStore {
     }
   }
 
+  public async deleteOrder(orderId: string) {
+    this.orders.delete(orderId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'orders', orderId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteOrder note:', e?.message || e);
+    }
+  }
+
   public async updateOrder(orderId: string, updater: (order: Order) => Order) {
     const existing = this.orders.get(orderId);
     if (!existing) return;
@@ -1697,12 +1799,15 @@ class FallbackStore {
     const shopDoc = this.shops.get(storeId);
     const commissionRate = shopDoc?.commissionPercent ?? 0;
 
-    const allOrders = Array.from(this.orders.values());
-    const storeOrders = allOrders.filter(
-      (o) => o.selectedShopIds?.includes(storeId) && o.status === 'DELIVERED'
-    );
+    // Filter shop orders belonging to this store where parent order is delivered and shop order is not canceled
+    const storeShopOrders = Array.from(this.shopOrders.values()).filter((so) => {
+      if (so.shopId !== storeId || so.status === 'CANCELED') return false;
+      const parentOrder = this.orders.get(so.parentOrderId);
+      return parentOrder?.status === 'DELIVERED';
+    });
 
-    const totalSales = storeOrders.reduce((sum, o) => sum + (o.productCost ?? 0), 0);
+    // Only sum the price set for items ordered from this store
+    const totalSales = storeShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0);
     const totalCommissionDue = Math.round(totalSales * (commissionRate / 100));
 
     const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
@@ -2238,10 +2343,12 @@ class FallbackStore {
     this.notify();
 
     try {
-      // Write only the ones that changed (unread → read), not the entire list
+      // Write only the ones that changed (unread → read) using writeBatch to save write requests
+      const batch = writeBatch(db);
       for (const n of unread) {
-        await setDoc(doc(db, 'notifications', n.id), { read: true }, { merge: true });
+        batch.set(doc(db, 'notifications', n.id), { read: true }, { merge: true });
       }
+      await batch.commit();
     } catch (e: any) {
       console.warn('[Firestore] markNotificationsRead note (saved locally):', e?.message || e);
     }

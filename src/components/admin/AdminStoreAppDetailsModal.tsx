@@ -43,6 +43,23 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
   const { showAlert, showConfirm } = useModal();
   const [mode, setMode] = useState<ViewMode>('VIEW');
 
+  // Admin-configurable store types (same source as the store application form)
+  const STORE_TYPES_DEFAULT = [
+    'মুদিখানা ও সুপারশপ',
+    'ফার্মেসি ও ওষুধ',
+    'রেস্টুরেন্ট ও ফাস্টফুড',
+    'মাংস ও মাছ বাজার',
+    'ফল ও সবজির দোকান',
+    'ইলেকট্রনিক্স ও গ্যাজেট',
+    'স্টেশনারি ও বই',
+    'পোশাক ও ফ্যাশন',
+    'লন্ড্রি ও ড্রাই ক্লিনিং',
+    'অন্যান্য',
+  ];
+  const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
+    ? fallbackStore.pricingSettings.storeTypes
+    : STORE_TYPES_DEFAULT;
+
   // Edit form fields
   const [storeName, setStoreName] = useState(application.storeName);
   const [storeType, setStoreType] = useState(application.storeType);
@@ -55,6 +72,8 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
   const [reviewNote, setReviewNote] = useState(application.reviewNote || '');
   const [status, setStatus] = useState<StoreApplication['status']>(application.status);
   const [locationAddress, setLocationAddress] = useState(application.location?.address || '');
+  const [locationLat, setLocationLat] = useState<string>(application.location?.lat?.toString() || '');
+  const [locationLng, setLocationLng] = useState<string>(application.location?.lng?.toString() || '');
 
   const [saving, setSaving] = useState(false);
 
@@ -160,6 +179,8 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
         location: {
           ...application.location,
           address: locationAddress.trim(),
+          lat: locationLat ? parseFloat(locationLat) : application.location?.lat,
+          lng: locationLng ? parseFloat(locationLng) : application.location?.lng,
         },
       });
       showAlert('সফল', 'স্টোর আবেদনের তথ্য আপডেট হয়েছে।', 'success');
@@ -396,76 +417,101 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Store Name *</label>
-                  <input type="text" value={storeName} onChange={(e) => setStoreName(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="Store name" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Store Type</label>
-                  <input type="text" value={storeType} onChange={(e) => setStoreType(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="e.g. Grocery, Pharmacy" />
-                </div>
-              </div>
-
+              {/* Store Name */}
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">Store Description</label>
-                <textarea value={storeDescription} onChange={(e) => setStoreDescription(e.target.value)} rows={2}
-                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 resize-none"
-                  placeholder="What types of items are available?" />
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানের নাম (Store Name) *</label>
+                <input type="text" value={storeName} onChange={(e) => setStoreName(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="যেমন: আলম জেনারেল স্টোর" />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Owner Name *</label>
-                  <input type="text" value={ownerName} onChange={(e) => setOwnerName(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="Owner full name" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Owner WhatsApp *</label>
-                  <input type="tel" value={ownerWhatsapp} onChange={(e) => setOwnerWhatsapp(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="01XXXXXXXXX" />
-                </div>
+              {/* Store Type — same dropdown as the store application form */}
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানের ধরন (Store Type)</label>
+                <select
+                  value={storeType}
+                  onChange={(e) => setStoreType(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold bg-white outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                >
+                  {storeTypes.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                  {/* Keep the current value selectable even if it's not in the list */}
+                  {storeType && !storeTypes.includes(storeType) && (
+                    <option value={storeType}>{storeType} (current)</option>
+                  )}
+                </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Manager Name</label>
-                  <input type="text" value={managerName} onChange={(e) => setManagerName(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="Manager full name" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Manager WhatsApp</label>
-                  <input type="tel" value={managerWhatsapp} onChange={(e) => setManagerWhatsapp(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="01XXXXXXXXX" />
-                </div>
+              {/* Owner Info */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-600 block">মালিকের তথ্য (Owner Info) *</label>
+                <input type="text" value={ownerName} onChange={(e) => setOwnerName(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="মালিকের পুরো নাম" />
+                <input type="tel" value={ownerWhatsapp} onChange={(e) => setOwnerWhatsapp(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="মালিকের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)" />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Commission %</label>
+              {/* Manager Info */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-600 block">ম্যানেজারের তথ্য (Manager Info)</label>
+                <input type="text" value={managerName} onChange={(e) => setManagerName(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="ম্যানেজারের পুরো নাম" />
+                <input type="tel" value={managerWhatsapp} onChange={(e) => setManagerWhatsapp(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="ম্যানেজারের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)" />
+              </div>
+
+              {/* Commission */}
+              <div className="pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">প্রতি অর্ডারে কমিশন % *</label>
+                <div className="relative">
                   <input type="number" value={commissionPercent} onChange={(e) => setCommissionPercent(e.target.value)}
                     min={0} max={100} step={0.5}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="e.g. 5" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">Location Address</label>
-                  <input type="text" value={locationAddress} onChange={(e) => setLocationAddress(e.target.value)}
-                    className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
-                    placeholder="Full store address" />
+                    className="w-full p-3 pr-10 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                    placeholder="যেমন: ৫" />
+                  <span className="absolute right-4 top-3.5 text-sm font-black text-gray-400">%</span>
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">Review Note (internal)</label>
+              {/* Store Description */}
+              <div className="pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানে কী কী পণ্য/সেবা পাওয়া যায়?</label>
+                <textarea value={storeDescription} onChange={(e) => setStoreDescription(e.target.value)} rows={3}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 resize-none"
+                  placeholder="যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান, টুথপেস্ট, বিভিন্ন গৃহস্থালী পণ্য..." />
+              </div>
+
+              {/* Location — address + coordinates */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-600 block">দোকানের অবস্থান (Location)</label>
+                <input type="text" value={locationAddress} onChange={(e) => setLocationAddress(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10"
+                  placeholder="দোকানের সম্পূর্ণ ঠিকানা" />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 block mb-1">Latitude</label>
+                    <input type="number" value={locationLat} onChange={(e) => setLocationLat(e.target.value)}
+                      step="0.00001"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-mono outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/10"
+                      placeholder="e.g. 23.81030" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 block mb-1">Longitude</label>
+                    <input type="number" value={locationLng} onChange={(e) => setLocationLng(e.target.value)}
+                      step="0.00001"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-mono outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/10"
+                      placeholder="e.g. 90.41250" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Review Note — admin only */}
+              <div className="pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">Review Note (Admin Internal)</label>
                 <textarea value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} rows={2}
                   className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 resize-none"
                   placeholder="Internal admin note about this application..." />
