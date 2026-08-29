@@ -95,3 +95,50 @@ export const incrementMapGuideShowCount = (modalType: string): number => {
   return next;
 };
 
+// ── Customer saved delivery addresses ──────────────────────────────────────
+// Stored per-user to avoid mixing data between accounts on shared devices.
+
+const savedAddressesKey = (uid: string) => `jamanot_saved_delivery_addresses_${uid}`;
+const MAX_SAVED_ADDRESSES = 10;
+
+export const getSavedDeliveryAddresses = (uid: string): import('@/types').LocationData[] => {
+  if (typeof window === 'undefined' || !uid) return [];
+  try {
+    const raw = localStorage.getItem(savedAddressesKey(uid));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveSavedDeliveryAddresses = (uid: string, addresses: import('@/types').LocationData[]) => {
+  if (typeof window === 'undefined' || !uid) return;
+  // Cap to max and deduplicate by address string (case-insensitive)
+  const seen = new Set<string>();
+  const deduped = addresses.filter((a) => {
+    const key = a.address.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, MAX_SAVED_ADDRESSES);
+  localStorage.setItem(savedAddressesKey(uid), JSON.stringify(deduped));
+};
+
+/**
+ * Adds a new address to the saved list for a user (prepends, deduplicates, caps).
+ * Returns the updated list.
+ */
+export const addSavedDeliveryAddress = (uid: string, newAddress: import('@/types').LocationData): import('@/types').LocationData[] => {
+  const existing = getSavedDeliveryAddresses(uid);
+  // Remove any entry with the same address string
+  const filtered = existing.filter(
+    (a) => a.address.trim().toLowerCase() !== newAddress.address.trim().toLowerCase()
+  );
+  // Prepend (most recent first)
+  const updated = [newAddress, ...filtered].slice(0, MAX_SAVED_ADDRESSES);
+  saveSavedDeliveryAddresses(uid, updated);
+  return updated;
+};
+

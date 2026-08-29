@@ -24,6 +24,7 @@ import { CustomModalInjector } from '@/components/CustomModalInjector';
 
 import { HelperCenterPage } from '@/components/HelperCenterPage';
 import { FeeDetailsPage } from '@/components/FeeDetailsPage';
+import { StoreDashboard } from '@/components/StoreDashboard';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
@@ -173,6 +174,36 @@ export default function PageClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // Listen for orderId query parameter changes (e.g. from notification clicks) to redirect/open that order (Requirement 1)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const checkQueryParam = () => {
+      const params = new URLSearchParams(window.location.search);
+      const orderId = params.get('orderId');
+      if (orderId) {
+        handleSelectOrder(orderId);
+        // Clean query parameter from address bar cleanly without a full page reload
+        const newUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, document.title, newUrl);
+      }
+    };
+
+    // Run on initial mount and when document registers changes
+    checkQueryParam();
+
+    window.addEventListener('focus', checkQueryParam);
+    window.addEventListener('visibilitychange', checkQueryParam);
+    window.addEventListener('popstate', checkQueryParam);
+
+    return () => {
+      window.removeEventListener('focus', checkQueryParam);
+      window.removeEventListener('visibilitychange', checkQueryParam);
+      window.removeEventListener('popstate', checkQueryParam);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, activeMode, activeTab]);
+
   // Reset activeTab when activeMode changes
   useEffect(() => {
     if (activeMode === 'customer' && activeTab !== 'fee_details' && activeTab !== 'helper_center') {
@@ -223,6 +254,11 @@ export default function PageClient() {
       );
     }
 
+    // Store mode: approved stores always see StoreDashboard
+    if (user.isStoreApproved || activeMode === 'store') {
+      return <StoreDashboard activeTab={activeTab} setActiveTab={setActiveTab} />;
+    }
+
     // Default Customer view
     return (
       <CustomerHome
@@ -251,7 +287,8 @@ export default function PageClient() {
         </div>
 
         {/* Main Content Skeleton */}
-        <main className="flex-1 w-full p-4 pb-24 space-y-4">
+        <main className="flex-1 w-full">
+          <div className="content-container p-4 pb-24 space-y-4">
           {/* Form Card Skeleton */}
           <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
             <div className="space-y-2 text-center">
@@ -285,10 +322,11 @@ export default function PageClient() {
               ))}
             </div>
           </div>
+          </div>
         </main>
 
         {/* Bottom Nav Skeleton */}
-        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[720px] bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-50"
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-40"
           style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex flex-col items-center space-y-1">
@@ -388,8 +426,10 @@ export default function PageClient() {
       )}
 
       {/* Main Content Body */}
-      <main className={isAdminView ? "flex-1 w-full" : "flex-1 w-full p-4 pb-20"}>
-        {renderCurrentView()}
+      <main className={isAdminView ? "flex-1 w-full" : "flex-1 w-full"}>
+        <div className={isAdminView ? "w-full" : "content-container p-4 pb-20"}>
+          {renderCurrentView()}
+        </div>
       </main>
 
       {/* Mobile Bottom Navigation (Only for non-admin modes) */}

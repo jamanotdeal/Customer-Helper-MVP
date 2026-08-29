@@ -1,6 +1,6 @@
-export type UserRole = 'customer' | 'helper' | 'admin';
+export type UserRole = 'customer' | 'helper' | 'admin' | 'store';
 
-export type ActiveMode = 'customer' | 'helper' | 'admin';
+export type ActiveMode = 'customer' | 'helper' | 'admin' | 'store';
 
 export type OrderStatus =
   | 'PENDING'
@@ -117,6 +117,7 @@ export interface Order {
   needReturnItems?: boolean;
   weightKg?: number;
   selectedShopIds?: string[];
+  mutuallyDiscussed?: boolean;
 }
 
 export interface UserProfile {
@@ -134,12 +135,16 @@ export interface UserProfile {
   lastActiveMode: ActiveMode;
   alternativePhone?: string;
   defaultDeliveryLocation?: LocationData;
+  savedDeliveryAddresses?: LocationData[]; // Customer's saved delivery addresses (synced from Firestore on login)
   missingItemPreference?: MissingItemPref;
   createdAt: string;
   isBlocked?: boolean;
   blockedReason?: string;
   labels?: string[];
   fcmToken?: string; // FCM push subscription token for this device
+  isStore?: boolean;         // True if user has an approved store application
+  isStoreApproved?: boolean; // Explicit approval flag for store mode
+  storeId?: string;          // The shop document ID linked to this user's store
 }
 
 export interface HelperApplication {
@@ -159,15 +164,41 @@ export interface HelperApplication {
   createdAt: string;
 }
 
+export interface StoreApplication {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  storeName: string;
+  storeType: string;
+  storeDescription?: string;   // What types of items are available
+  ownerName: string;
+  ownerWhatsapp: string;
+  managerName: string;
+  managerWhatsapp: string;
+  location: LocationData;
+  commissionPercent: number;   // e.g. 5 means 5% per order
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELED';
+  createdAt: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+}
+
 export interface Shop {
   id: string;
   name: string;
   type: string;
+  description?: string;       // What types of items are available (from storeDescription)
   contactPerson: string;
   whatsapp: string;
+  managerName?: string;       // Manager name from store application
+  managerWhatsapp?: string;   // Manager WhatsApp from store application
   location: LocationData;
   addedByHelperId?: string;
   addedByHelperName?: string;
+  ownerUserId?: string;       // Firebase UID of the store owner
+  ownerUserEmail?: string;    // Email of the store owner
+  applicationId?: string;     // Source StoreApplication ID
   createdAt: string;
   updatedAt?: string;
   photoUrl?: string;          // Admin-uploaded photo URL or base64
@@ -346,6 +377,16 @@ export interface PricingSettings {
   bankInstructions?: string;
   cashInstructions?: string;
   storeTypes?: string[];
+  // Store application form placeholder texts (admin configurable)
+  storeFormPlaceholders?: {
+    storeName?: string;        // e.g. "যেমন: আলম জেনারেল স্টোর"
+    storeDescription?: string; // e.g. "যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান..."
+    ownerName?: string;        // e.g. "মালিকের পুরো নাম"
+    ownerPhone?: string;       // e.g. "মালিকের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+    managerName?: string;      // e.g. "ম্যানেজারের পুরো নাম"
+    managerPhone?: string;     // e.g. "ম্যানেজারের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+    commissionPercent?: string; // e.g. "যেমন: ৫"
+  };
   // Map picker guide overlay settings
   mapPickerGuideText?: string;           // Bangla guide text shown as overlay when map opens (fallback for both)
   mapPickerPickupGuideText?: string;     // Guide text specific to pickup/source location modal
@@ -381,6 +422,33 @@ export interface PricingSettings {
   feeCalculatorCompanyDetails?: string;
   retailerCommissionRadius?: number; // km radius for showing nearby retailers in helper map (default: helperRadiusKm)
   allowedAdminTabs?: string[];
+  // Admin Accepted status timer: minutes before showing "Admin Accepted" to customer when no helper assigned
+  adminAcceptedDelayMinutes?: number; // Default: 5
+}
+
+export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'CANCELED';
+
+export interface ShopOrderStatusHistoryItem {
+  status: ShopOrderStatus;
+  timestamp: string;
+  actor: string;
+  note?: string;
+}
+
+export interface ShopOrder {
+  id: string;
+  parentOrderId: string;     // The main delivery order ID
+  shopId: string;
+  shopName: string;
+  helperId: string;
+  helperName: string;        // Store sees this as "customer" name
+  requestText: string;       // Helper's typed order/request
+  status: ShopOrderStatus;
+  price?: number;            // Set by store
+  note?: string;             // Store's note to helper
+  createdAt: string;
+  updatedAt: string;
+  statusHistory: ShopOrderStatusHistoryItem[];
 }
 
 export interface FeeSuggestion {

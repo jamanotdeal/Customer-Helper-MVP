@@ -119,7 +119,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   mapPickerGuideOkText: 'ঠিক আছে',
   mapPickerGuideShowCount: 5,
   // Fee Details Estimation Calculator & Company Description Defaults
-  feeCalculatorBasePrice: 20,
+  feeCalculatorBasePrice: 0,
   feeCalculatorPerKmRate: 10,
   feeCalculatorPerKgRate: 5,
   feeCalculatorReturnFee: 15,
@@ -131,11 +131,10 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   feeCalculatorMaxLimitMessage: 'অনুরোধকৃত সার্ভিসের ডেলিভারি ফি ৳৭০-এর উপরে নির্ধারিত হয়েছে। সঠিক ফি নিশ্চিত করতে জামানতের হটলাইনে বা কাস্টমার কেয়ারে যোগাযোগ করার অনুরোধ করা হচ্ছে।',
   feeCalculatorCompanyDetails: `জামানত (Jamanot)-এর প্রতিটি সার্ভিস চার্জ সম্পূর্ণ স্বচ্ছ এবং সাশ্রয়ী। নিচে আমাদের ফি নির্ধারণের বিস্তারিত দেওয়া হলো:
 
-1. **বেস প্রাইস (Base Price):** মাত্র ৳২০ থেকে যেকোনো লোকাল সার্ভিসের পিকআপ ও কাজ শুরু হয়।
-2. **দূরত্ব ফি (Distance Rate):** প্রতি কিমি (km) দূরত্বের জন্য মাত্র ৳১০ চার্জ প্রযোজ্য।
-3. **ওজন ফি (Product Weight Rate):** ১ কেজির বেশি অতিরিক্ত পণ্যের জন্য প্রতি কেজিতে ৳৫ ফি যোগ করা হয়।
-4. **পণ্য রিটার্ন সেবা (Return Service):** ডেলিভারি ফি-এর নির্ধারিত % সার্ভিস চার্জ হিসেবে যোগ হয়।
-5. **প্রসেসিং ফি (Processing Fee):** পণ্যের খরচের উপর ভিত্তি করে প্রসেসিং সার্ভিস চার্জ যোগ হয়।
+1. **দূরত্ব ফি (Distance Rate):** প্রতি কিমি (km) দূরত্বের জন্য মাত্র ৳১০ চার্জ প্রযোজ্য।
+2. **ওজন ফি (Product Weight Rate):** ১ কেজির বেশি অতিরিক্ত পণ্যের জন্য প্রতি কেজিতে ৳৫ ফি যোগ করা হয়।
+3. **পণ্য রিটার্ন সেবা (Return Service):** ডেলিভারি ফি-এর নির্ধারিত % সার্ভিস চার্জ হিসেবে যোগ হয়।
+4. **প্রসেসিং ফি (Processing Fee):** পণ্যের খরচের উপর ভিত্তি করে প্রসেসিং সার্ভিস চার্জ যোগ হয়।
 
 আপনার যেকোনো মতামত বা সার্ভিস ফি সংক্রান্ত পরামর্শ নিচে লিখে আমাদের জানাতে পারেন।`,
   allowedAdminTabs: [],
@@ -154,7 +153,7 @@ export function calculateEstimatedFee(
   },
   settings: PricingSettings = DEFAULT_PRICING_SETTINGS
 ) {
-  const basePrice = settings.feeCalculatorBasePrice ?? 20;
+  const basePrice = 0;
   const perKmRate = settings.feeCalculatorPerKmRate ?? 10;
   const perKgRate = settings.feeCalculatorPerKgRate ?? 5;
   const returnPercent = settings.feeCalculatorReturnPercent ?? 20;
@@ -167,7 +166,10 @@ export function calculateEstimatedFee(
   const distanceFee = Math.round(distanceKm * perKmRate);
   const weightFee = Math.round(weightKg * perKgRate);
 
-  const deliverySubtotal = basePrice + distanceFee + weightFee;
+  let deliverySubtotal = distanceFee + weightFee;
+  if (deliverySubtotal < minFee) {
+    deliverySubtotal = minFee;
+  }
   const returnFee = params.isReturnRequested ? Math.round((deliverySubtotal * returnPercent) / 100) : 0;
 
   let processingFee = 0;
@@ -183,7 +185,7 @@ export function calculateEstimatedFee(
   const discount = Math.max(0, Number(params.discountAmount) || 0);
 
   const rawTotal = deliverySubtotal + returnFee + processingFee - discount;
-  const totalFee = Math.max(minFee, Math.round(rawTotal));
+  const totalFee = Math.max(0, Math.round(rawTotal));
 
   return {
     basePrice,

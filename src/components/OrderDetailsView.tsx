@@ -1,16 +1,16 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem } from '@/types';
+import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
-  Star, Sparkles, FileText,
+  Star, Sparkles, FileText, ShieldCheck, DollarSign,
 } from 'lucide-react';
-import { DEFAULT_SERVICES, getServiceDescriptionHint } from '@/lib/pricing';
+import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
 import { MapPickerModal } from './MapPickerModal';
@@ -25,6 +25,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const { user } = useAuth();
   const [order, setOrder] = useState<Order | null>(null);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  // Whether to show the "Admin Accepted" reassurance banner (customer-only, PENDING + no helper + N minutes passed)
+  const [showAdminAccepted, setShowAdminAccepted] = useState(false);
+  const calculationSummaryRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollToCalculationSummary = () => {
+    calculationSummaryRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
@@ -74,6 +81,43 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     return () => unsub();
   }, [orderId]);
 
+  const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
+
+  useEffect(() => {
+    setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+    const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+    return fallbackStore.subscribe(sync);
+  }, [orderId]);
+
+  const distanceKm = (order?.pickupLocation?.lat && order?.pickupLocation?.lng && order?.deliveryLocation?.lat && order?.deliveryLocation?.lng)
+    ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
+    : 0;
+
+  const estdPricing = order ? calculateEstimatedFee({
+    distanceKm: Math.ceil(distanceKm),
+    weightKg: Math.ceil(order.weightKg || 0),
+    isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
+    productPrice: order.productCost || 0,
+  }, fallbackStore.pricingSettings) : null;
+
+  // Timer: check every 30s if the customer should see "Admin Accepted" banner
+  useEffect(() => {
+    const checkAdminAccepted = () => {
+      const current = fallbackStore.orders.get(orderId);
+      if (!current || current.helperId || current.status !== 'PENDING') {
+        setShowAdminAccepted(false);
+        return;
+      }
+      const delayMins = fallbackStore.pricingSettings.adminAcceptedDelayMinutes ?? 5;
+      if (delayMins === 0) { setShowAdminAccepted(false); return; }
+      const minutesPending = (Date.now() - new Date(current.createdAt).getTime()) / 60000;
+      setShowAdminAccepted(minutesPending >= delayMins);
+    };
+    checkAdminAccepted(); // run immediately
+    const interval = setInterval(checkAdminAccepted, 30000);
+    return () => clearInterval(interval);
+  }, [orderId]);
+
   if (!order) {
     return (
       <div className="p-8 text-center text-gray-500">
@@ -104,7 +148,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const steps: { status: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
     { status: 'PENDING', label: 'Order Placed', icon: Check, desc: 'Looking for a helper...' },
     { status: 'ACCEPTED', label: 'Helper Assigned', icon: UserCheck, desc: 'Helper is heading to pickup' },
-    { status: 'PURCHASED_EXECUTED', label: 'Items Picked Up', icon: Package, desc: 'Items collected from shop' },
+    { status: 'PURCHASED_EXECUTED', label: 'Proccessing...', icon: Package, desc: 'Items collected from shop' },
     { status: 'ON_THE_WAY', label: 'On The Way', icon: Truck, desc: 'Coming to your location' },
     { status: 'ARRIVED', label: 'Arrived', icon: Navigation, desc: 'Helper is at your door' },
     { status: 'DELIVERED', label: 'Delivered!', icon: CheckCircle2, desc: 'All done. Enjoy!' },
@@ -311,19 +355,28 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           {(order.productCost !== undefined || order.deliveryFee > 0) && (
             <div className="mt-4 flex items-center space-x-3">
               {order.productCost !== undefined && (
-                <div className="bg-white/10 rounded-2xl px-3 py-2 text-center">
+                <div
+                  onClick={scrollToCalculationSummary}
+                  className="bg-white/10 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/20 transition-all"
+                >
                   <p className="text-[10px] text-white/60 font-semibold">Product</p>
                   <p className="text-sm font-black">৳{order.productCost}</p>
                 </div>
               )}
               {order.deliveryFee > 0 && (
-                <div className="bg-white/10 rounded-2xl px-3 py-2 text-center">
+                <div
+                  onClick={scrollToCalculationSummary}
+                  className="bg-white/10 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/20 transition-all"
+                >
                   <p className="text-[10px] text-white/60 font-semibold">Delivery</p>
                   <p className="text-sm font-black">৳{order.deliveryFee}</p>
                 </div>
               )}
               {totalPayable > 0 && (
-                <div className="bg-white/20 border border-white/30 rounded-2xl px-3 py-2 text-center">
+                <div
+                  onClick={scrollToCalculationSummary}
+                  className="bg-white/20 border border-white/30 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/30 transition-all"
+                >
                   <p className="text-[10px] text-white/70 font-semibold">Total</p>
                   <p className="text-sm font-black">৳{totalPayable}</p>
                 </div>
@@ -395,6 +448,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <div>
                 <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">Your Helper</p>
                 <h4 className="font-black text-base text-gray-900 leading-tight">{helperName}</h4>
+                {helperPhone && (
+                  <p className="text-xs font-bold text-gray-500 mt-0.5">{helperPhone}</p>
+                )}
               </div>
               <span className="ml-auto px-2.5 py-1 rounded-full bg-emerald-600 text-white font-extrabold text-[10px] flex items-center space-x-1 shrink-0">
                 <UserCheck className="w-3 h-3" />
@@ -427,28 +483,61 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── WAITING FOR HELPER ── */}
+        {/* ── WAITING FOR HELPER / ADMIN ACCEPTED ── */}
         {!order.helperId && !isCanceled && (
-          <div className="bg-amber-50 rounded-3xl border border-amber-200 p-4 text-center space-y-1 shadow-soft">
-            <Clock className="w-6 h-6 text-amber-500 mx-auto animate-pulse" />
-            <p className="font-extrabold text-sm text-amber-900">Waiting for a Helper</p>
-            <p className="text-[11px] text-amber-700 font-medium mb-2">
-              A nearby helper will accept your order soon. Their contact will appear here once assigned.
-            </p>
-            <p className="text-xs text-emerald-800 font-bold bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100/50">
-              আপনার অর্ডারটি দেখা হচ্ছে। ধৈর্য ধরে অপেক্ষা করার জন্য আপনাকে অনেক অনেক ধন্যবাদ।
-            </p>
+          <div className="space-y-3">
+            {/* Admin Accepted — shown ONLY to customer after delay, hides when helper assigned */}
+            {showAdminAccepted && user?.role !== 'helper' && !user?.isAdmin && (
+              <div className="rounded-3xl border border-emerald-200 overflow-hidden shadow-soft">
+                <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-5 pt-4 pb-3 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-extrabold text-white/70 uppercase tracking-wider">Order Status</p>
+                    <h4 className="font-black text-sm text-white leading-tight">Admin Accepted ✓</h4>
+                  </div>
+                  <span className="ml-auto flex items-center gap-1 bg-white/20 border border-white/30 text-white text-[10px] font-extrabold px-2.5 py-1 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-pulse" />
+                    Processing
+                  </span>
+                </div>
+                <div className="bg-white px-5 py-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-700 leading-relaxed">
+                    আপনার অর্ডারটি <strong className="text-emerald-700">Jamanot Admin</strong> কর্তৃক গ্রহণ করা হয়েছে এবং একজন উপযুক্ত হেলপার নির্ধারণের প্রক্রিয়া চলছে। অনুগ্রহ করে একটু অপেক্ষা করুন।
+                  </p>
+                  {(fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2) && (
+                    <a
+                      href={`https://wa.me/880${(fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || '').replace(/^0/, '').replace(/[^0-9]/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 w-full py-2.5 px-4 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs shadow-sm transition-all active:scale-95"
+                    >
+                      <MessageSquare className="w-4 h-4 shrink-0" />
+                      <span>WhatsApp Support — Jamanot Admin</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Standard waiting block */}
+            {!showAdminAccepted && (
+              <div className="bg-amber-50 rounded-3xl border border-amber-200 p-4 text-center space-y-1 shadow-soft">
+                <Clock className="w-6 h-6 text-amber-500 mx-auto animate-pulse" />
+                <p className="font-extrabold text-sm text-amber-900">Waiting for a Helper</p>
+                <p className="text-[11px] text-amber-700 font-medium mb-2">
+                  A nearby helper will accept your order soon. Their contact will appear here once assigned.
+                </p>
+                <p className="text-xs text-emerald-800 font-bold bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100/50">
+                  আপনার অর্ডারটি দেখা হচ্ছে। ধৈর্য ধরে অপেক্ষা করার জন্য আপনাকে অনেক অনেক ধন্যবাদ।
+                </p>
+              </div>
+            )}
           </div>
         )}
 
-        {/* ── DELIVERY ADDRESS ── */}
-        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
-          <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-3">Delivery Address</h3>
-          <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-            <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
-          </div>
-        </div>
+
 
         {/* ── ORDER ITEMS ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
@@ -495,6 +584,62 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             </div>
           )}
         </div>
+
+        {/* ── CALCULATION SUMMARY ── */}
+        {estdPricing && (
+          <div ref={calculationSummaryRef} className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3 animate-in fade-in duration-200">
+            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
+              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Calculation Summary</span>
+            </h3>
+            <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500 font-bold">Product cost</span>
+                <span className="text-sm font-black text-gray-900">
+                  ৳{shopOrders.reduce((sum, so) => sum + (so.price || 0), 0)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500 font-bold">Distance ({Math.ceil(distanceKm)} km)</span>
+                <span className="font-bold text-gray-900">৳{estdPricing.distanceFee}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500 font-bold">Approximate Weight (kg)</span>
+                <span className="font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
+              </div>
+
+              {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-bold">Processing Fee</span>
+                  <span className="font-bold text-gray-900">৳{estdPricing.processingFee}</span>
+                </div>
+              )}
+
+              {estdPricing.returnFee > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-bold">
+                    {order.needDeliveryBack ? 'Two-Way Fee' : 'Return Fee'} ({estdPricing.returnPercent}%)
+                  </span>
+                  <span className="font-bold text-gray-900">৳{estdPricing.returnFee}</span>
+                </div>
+              )}
+
+              <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
+                <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
+                <span className="text-base font-black text-emerald-850">৳{Math.max(order.deliveryFee, estdPricing.minFee)}</span>
+              </div>
+
+              <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
+                <span className="font-bold text-gray-900 text-sm">Total Payable Amount (মোট বিল)</span>
+                <span className="text-base font-black text-emerald-800">
+                  ৳{shopOrders.reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── FEE UPDATED NOTICE ── */}
         {order.feeAdjustment?.status === 'APPROVED' && (
@@ -573,6 +718,26 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             )}
           </div>
         )}
+
+        {/* ── ADDRESSES AT THE END ── */}
+        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
+          {order.pickupLocation?.address && (
+            <div>
+              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
+              <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
+                <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
+                <p className="text-sm font-bold text-gray-900">{order.pickupLocation.address}</p>
+              </div>
+            </div>
+          )}
+          <div>
+            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
+            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
+              <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
+            </div>
+          </div>
+        </div>
 
         {/* ── DANGER ZONE / CANCEL BUTTON ── */}
         {canCancel && (
@@ -671,12 +836,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                     <MapPin className="w-4 h-4" />
                   </button>
                 </div>
-                {editPickupLat && editPickupLng && (
-                  <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({editPickupLat.toFixed(4)}, {editPickupLng.toFixed(4)})</span>
-                  </div>
-                )}
               </div>
 
               {/* Delivery Address */}
@@ -703,12 +862,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                     <MapPin className="w-4 h-4" />
                   </button>
                 </div>
-                {editDeliveryLat && editDeliveryLng && (
-                  <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({editDeliveryLat.toFixed(4)}, {editDeliveryLng.toFixed(4)})</span>
-                  </div>
-                )}
               </div>
 
               {/* WhatsApp Number */}

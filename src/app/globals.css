@@ -70,15 +70,19 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
 /* Mobile viewport container constraint for desktop viewing */
 .mobile-container {
   width: 100%;
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
   min-height: 100vh;
   /* Use dvh for real viewport height on mobile browsers */
   min-height: 100dvh;
   background-color: #ffffff;
-  box-shadow: 0 0 50px rgba(0, 0, 0, 0.05);
   position: relative;
+}
+
+/* Inner content wrapper — limits text/card content to 480px centered */
+.content-container {
+  width: 100%;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* Safe area padding utilities — used for iPhone notch and home indicator */
@@ -134,4 +138,16 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
 .animate-spin-slow {
   animation: spin-slow 1s linear infinite;
 }
+
+/* Custom smooth blink animation */
+@keyframes blink-slow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.97); }
+}
+
+.animate-blink {
+  animation: blink-slow 1.2s ease-in-out infinite;
+  display: inline-block;
+}
+
 

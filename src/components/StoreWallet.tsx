@@ -2,37 +2,35 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { Wallet, WalletTransaction, WithdrawalRequest, Order } from '@/types';
+import { Wallet, WithdrawalRequest, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
-import { calculateHelperCommission } from '@/lib/pricing';
 import {
   Wallet as WalletIcon,
   ArrowUpRight,
   ArrowDownLeft,
   Calendar,
   Filter,
-  DollarSign,
-  TrendingUp,
 } from 'lucide-react';
 
-export const HelperWallet: React.FC = () => {
+export const StoreWallet: React.FC = () => {
   const { user } = useAuth();
   const { showAlert } = useModal();
   const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
-  const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
+  const [storeOrders, setStoreOrders] = useState<Order[]>([]);
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('100');
   const [paymentMethod, setPaymentMethod] = useState<'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Cash'>('bKash');
-  const [accountNumber, setAccountNumber] = useState('01812345678');
+  const [accountNumber, setAccountNumber] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Pagination for Wallet Ledger
   const [ledgerPage, setLedgerPage] = useState(1);
   const ledgerPageSize = 10;
+
+  const storeId = user?.storeId;
 
   const getPaymentInstructions = () => {
     const settings = fallbackStore.pricingSettings;
@@ -102,7 +100,6 @@ export const HelperWallet: React.FC = () => {
     }
   };
 
-  // Exact Date and Time Formatter (e.g., "08 Aug 2026, 05:47 PM")
   const formatExactDateTime = (dateStr: string | number) => {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -119,19 +116,17 @@ export const HelperWallet: React.FC = () => {
 
   useEffect(() => {
     const syncWallet = () => {
-      if (user) {
-        const w = fallbackStore.getHelperWallet(user.uid);
-        const txs = fallbackStore.walletTransactions.get(user.uid) || [];
+      if (user && storeId) {
+        const w = fallbackStore.getStoreWallet(user.uid, storeId);
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
         const allOrders = Array.from(fallbackStore.orders.values());
-        const helperOrders = allOrders.filter(
-          (o) => o.helperId === user.uid && o.status === 'DELIVERED'
+        const shopOrders = allOrders.filter(
+          (o) => o.selectedShopIds?.includes(storeId) && o.status === 'DELIVERED'
         );
 
         setWallet({ ...w });
-        setTransactions([...txs]);
         setWithdrawals([...wds]);
-        setDeliveredOrders(helperOrders);
+        setStoreOrders(shopOrders);
       }
     };
 
@@ -140,18 +135,54 @@ export const HelperWallet: React.FC = () => {
     return () => {
       unsub();
     };
-  }, [user]);
+  }, [user, storeId]);
 
-  // Filtered Transactions & Withdrawals based on selected Date Range
+  // Construct dynamic transaction ledger entries:
+  // Positive: Store Sales (Earnings) -> showing the commission owed
+  // Negative: Payback (Withdrawal) requests that are approved
+  const ledgerTransactions = useMemo(() => {
+    const shopDoc = storeId ? fallbackStore.shops.get(storeId) : null;
+    const commissionRate = shopDoc?.commissionPercent ?? 0;
+
+    const list: { id: string; type: 'EARNING' | 'PAYBACK'; amount: number; description: string; createdAt: string }[] = [];
+
+    storeOrders.forEach((o) => {
+      const sales = o.productCost ?? 0;
+      const commission = Math.round(sales * (commissionRate / 100));
+      list.push({
+        id: `order-${o.id}`,
+        type: 'EARNING',
+        amount: commission, // Store owes this commission to platform
+        description: `Order #${o.id.slice(-4)} completed (Commission ${commissionRate}%: ৳${commission})`,
+        createdAt: o.deliveredAt || o.createdAt,
+      });
+    });
+
+    withdrawals.forEach((w) => {
+      if (w.status === 'APPROVED') {
+        list.push({
+          id: `wd-${w.id}`,
+          type: 'PAYBACK',
+          amount: -w.amount,
+          description: `Commission payback approved (#${w.id.slice(-4)})`,
+          createdAt: w.processedAt || w.createdAt,
+        });
+      }
+    });
+
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [storeOrders, withdrawals, storeId]);
+
+  // Filtered Ledger based on selected Date Range
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
+    return ledgerTransactions.filter((tx) => {
       const t = new Date(tx.createdAt).getTime();
       if (isNaN(t)) return true;
       if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
       if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
       return true;
     });
-  }, [transactions, startDate, endDate]);
+  }, [ledgerTransactions, startDate, endDate]);
 
   const totalLedgerPages = Math.ceil(filteredTransactions.length / ledgerPageSize) || 1;
   const paginatedTransactions = useMemo(() => {
@@ -175,7 +206,7 @@ export const HelperWallet: React.FC = () => {
 
   // Filtered Delivered Orders based on selected Date Range
   const filteredOrders = useMemo(() => {
-    return deliveredOrders.filter((ord) => {
+    return storeOrders.filter((ord) => {
       const orderDate = ord.deliveredAt || ord.createdAt;
       const t = new Date(orderDate).getTime();
       if (isNaN(t)) return true;
@@ -183,18 +214,21 @@ export const HelperWallet: React.FC = () => {
       if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
       return true;
     });
-  }, [deliveredOrders, startDate, endDate]);
+  }, [storeOrders, startDate, endDate]);
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
-    let earned = 0;
+    const shopDoc = storeId ? fallbackStore.shops.get(storeId) : null;
+    const commissionRate = shopDoc?.commissionPercent ?? 0;
+
+    let totalSales = 0;
     let commissionDue = 0;
     let paidCommission = 0;
 
     filteredOrders.forEach((o) => {
-      const helperShare = calculateHelperCommission(o.deliveryFee, fallbackStore.pricingSettings);
-      earned += helperShare;
-      commissionDue += (o.deliveryFee - helperShare);
+      const sales = o.productCost ?? 0;
+      totalSales += sales;
+      commissionDue += Math.round(sales * (commissionRate / 100));
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -203,8 +237,8 @@ export const HelperWallet: React.FC = () => {
       }
     });
 
-    return { earned, commissionDue, paidCommission };
-  }, [filteredOrders, filteredWithdrawals]);
+    return { totalSales, commissionDue, paidCommission };
+  }, [filteredOrders, filteredWithdrawals, storeId]);
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
@@ -251,47 +285,44 @@ export const HelperWallet: React.FC = () => {
   // Today's Metrics (local timezone date matching)
   const todayMetrics = useMemo(() => {
     const todayStr = getTodayStr(); // Local YYYY-MM-DD
-    let earnedToday = 0;
-    let commissionDueToday = 0;
+    let salesToday = 0;
 
-    deliveredOrders.forEach((o) => {
+    storeOrders.forEach((o) => {
       const orderDate = o.deliveredAt || o.createdAt;
       const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
       if (orderLocalStr === todayStr) {
-        const helperShare = calculateHelperCommission(o.deliveryFee, fallbackStore.pricingSettings);
-        earnedToday += helperShare;
-        commissionDueToday += (o.deliveryFee - helperShare);
+        salesToday += (o.productCost || 0);
       }
     });
 
-    return { earnedToday, commissionDueToday };
-  }, [deliveredOrders]);
+    return { salesToday };
+  }, [storeOrders]);
 
   return (
     <div className="space-y-6 pb-24 animate-in fade-in duration-200">
-      {/* Balance Card */}
-      <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 text-white shadow-floating relative overflow-hidden">
+      {/* Balance Card with Emerald Green styling */}
+      <div className="bg-gradient-to-br from-emerald-900 via-slate-900 to-emerald-950 rounded-3xl p-6 text-white shadow-floating relative overflow-hidden">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-2">
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
-              <WalletIcon className="w-5 h-5 text-indigo-300" />
+              <WalletIcon className="w-5 h-5 text-emerald-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings & Commission Dashboard</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Store Sales & Commission Dashboard</span>
           </div>
         </div>
 
         <div className="mb-5 flex flex-col gap-1">
-          <span className="text-xs text-indigo-200 block">Today's Earnings (আজকের আয়)</span>
+          <span className="text-xs text-emerald-250 block">Today's Sales (আজকের বিক্রি)</span>
           <h2 className="text-4xl font-black text-white tracking-tight">
-            ৳{todayMetrics.earnedToday}
+            ৳{todayMetrics.salesToday}
           </h2>
-          <span className="text-xs text-indigo-300 font-semibold block mt-1">
+          <span className="text-xs text-emerald-300 font-semibold block mt-1">
             Commission to Payback: ৳{wallet?.balance || 0}
           </span>
         </div>
 
         {hasPendingPayback && (
-          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-semibold">
+          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-250 text-xs font-semibold">
             ⏳ আপনার ৳{pendingPayback.amount} commission payback অনুরোধ অ্যাডমিনের পর্যালোচনায় আছে।
           </div>
         )}
@@ -332,7 +363,7 @@ export const HelperWallet: React.FC = () => {
             <span className="text-xs font-extrabold text-gray-900">Filter by Date Range</span>
           </div>
           {activePreset !== 'ALL_TIME' && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-55 text-emerald-800">
               Filtered
             </span>
           )}
@@ -340,59 +371,28 @@ export const HelperWallet: React.FC = () => {
 
         {/* Quick Filter Presets */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-extrabold scrollbar-none">
-          <button
-            onClick={() => handlePresetSelect('ALL_TIME')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'ALL_TIME'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            All Time
-          </button>
-          <button
-            onClick={() => handlePresetSelect('TODAY')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'TODAY'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Today
-          </button>
-          <button
-            onClick={() => handlePresetSelect('LAST_7')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'LAST_7'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Last 7 Days
-          </button>
-          <button
-            onClick={() => handlePresetSelect('THIS_MONTH')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'THIS_MONTH'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            This Month
-          </button>
-          <button
-            onClick={() => handlePresetSelect('CUSTOM')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'CUSTOM' || showCustomPicker
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Custom
-          </button>
+          {([
+            ['ALL_TIME', 'All Time'],
+            ['TODAY', 'Today'],
+            ['LAST_7', 'Last 7 Days'],
+            ['THIS_MONTH', 'This Month'],
+            ['CUSTOM', 'Custom']
+          ] as const).map(([preset, label]) => (
+            <button
+              key={preset}
+              onClick={() => handlePresetSelect(preset)}
+              className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
+                activePreset === preset
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'bg-gray-100 text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {/* Custom Date Pickers - Only shown when Custom button is clicked */}
+        {/* Custom Date Pickers */}
         {(showCustomPicker || activePreset === 'CUSTOM') && (
           <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1 animate-in fade-in duration-200">
             <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
@@ -427,10 +427,10 @@ export const HelperWallet: React.FC = () => {
       <div className="grid grid-cols-3 gap-2">
         <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
           <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned'}
+            {activePreset === 'ALL_TIME' ? 'Total Sales' : 'Sales'}
           </span>
           <span className="text-sm font-black text-gray-900 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.earned}
+            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.totalSales}
           </span>
           {activePreset !== 'ALL_TIME' && (
             <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalEarned || 0}</span>
@@ -449,7 +449,7 @@ export const HelperWallet: React.FC = () => {
         </div>
         <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
           <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Commission' : 'Commission'}
+            {activePreset === 'ALL_TIME' ? 'Total Due Commission' : 'Due Comm.'}
           </span>
           <span className="text-sm font-black text-blue-700 block truncate">
             ৳{activePreset === 'ALL_TIME' 
@@ -462,7 +462,7 @@ export const HelperWallet: React.FC = () => {
         </div>
       </div>
 
-      {/* Withdrawal Requests History */}
+      {/* Payback Requests History */}
       {filteredWithdrawals.length > 0 && (
         <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-3">
           <div className="flex items-center justify-between">
@@ -513,7 +513,7 @@ export const HelperWallet: React.FC = () => {
                   <div className="flex items-center space-x-3">
                     <div
                       className={`p-2 rounded-xl ${
-                        tx.amount > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                        tx.amount > 0 ? 'bg-emerald-105 text-emerald-700' : 'bg-red-105 text-red-700'
                       }`}
                     >
                       {tx.amount > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
@@ -527,7 +527,7 @@ export const HelperWallet: React.FC = () => {
                   </div>
                   <span
                     className={`font-black text-sm ${
-                      tx.amount > 0 ? 'text-emerald-700' : 'text-red-600'
+                      tx.amount > 0 ? 'text-emerald-750' : 'text-red-600'
                     }`}
                   >
                     {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
@@ -635,7 +635,7 @@ export const HelperWallet: React.FC = () => {
                   disabled={submitting}
                   className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700"
                 >
-                  তথ্য জমা দিন
+                  নম্বর / TxID জমা দিন
                 </button>
               </div>
             </form>

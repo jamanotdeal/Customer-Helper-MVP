@@ -4,8 +4,9 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
+import { StoreApplicationModal } from './StoreApplicationModal';
 import { fallbackStore } from '@/lib/firebase';
 
 import { useModal } from './CustomModal';
@@ -20,32 +21,37 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const { showAlert, showPermissionModal } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
+  const [showStoreModal, setShowStoreModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [storeAppStatus, setStoreAppStatus] = useState<string | null>(null);
 
   useEffect(() => {
     const syncNotifs = () => {
       if (user) {
         const notifs = fallbackStore.notifications.get(user.uid) || [];
         setUnreadCount(notifs.filter((n) => !n.read).length);
+        // Check store application status
+        const latestStoreApp = Array.from(fallbackStore.storeApplications.values())
+          .filter((a) => a.userId === user.uid)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        setStoreAppStatus(latestStoreApp?.status || null);
       }
     };
     syncNotifs();
     const unsub = fallbackStore.subscribe(syncNotifs);
-    return () => {
-      unsub();
-    };
+    return () => { unsub(); };
   }, [user]);
 
   return (
     <>
       <header
-        className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-sm px-4 py-3"
+        className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-sm"
         style={{
           // Respect iOS notch / Dynamic Island
           paddingTop: 'max(12px, env(safe-area-inset-top))',
         }}
       >
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="content-container px-4 py-3 flex items-center justify-between">
           {/* Logo & Tagline */}
           <div className="flex items-center space-x-3">
             <div className="relative w-10 h-10 rounded-none overflow-hidden shadow-sm border border-emerald-200 flex-shrink-0 bg-emerald-50">
@@ -222,6 +228,62 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                         {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
                       </button>
 
+                      {/* Store Mode — nested under Customer Mode */}
+                      <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
+                        {user.isStoreApproved ? (
+                          <div className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-900 font-bold shadow-sm">
+                            <div className="flex items-center space-x-2">
+                              <Store className="w-4 h-4 text-orange-600" />
+                              <div>
+                                <div className="text-xs font-semibold">Became a Store</div>
+                                <div className="text-[10px] text-gray-500 font-normal">Approved store mode active</div>
+                              </div>
+                            </div>
+                            <CheckCircle2 className="w-4 h-4 text-orange-600" />
+                          </div>
+                        ) : storeAppStatus === 'PENDING' ? (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+                              <div>
+                                <div className="text-xs font-semibold">Became a Store</div>
+                                <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
+                              </div>
+                            </div>
+                          </button>
+                        ) : storeAppStatus === 'REJECTED' || storeAppStatus === 'CANCELED' ? (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <Store className="w-4 h-4 text-orange-500" />
+                              <div>
+                                <div className="text-xs font-semibold">Became a Store</div>
+                                <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
+                              </div>
+                            </div>
+                            <XCircle className="w-3.5 h-3.5 text-red-400" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <Store className="w-4 h-4 text-orange-500" />
+                              <div>
+                                <div className="text-xs font-semibold">Became a Store</div>
+                                <div className="text-[10px] text-gray-500 font-normal">দোকান নিবন্ধন করে স্টোর মোড পান</div>
+                              </div>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+
                       {((user.isHelper && user.helperType === 'dedicated') || !(fallbackStore.pricingSettings.allowedHelperTypes === 'dedicated_only')) && (
                         <button
                           onClick={async () => {
@@ -292,9 +354,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </div>
             </div>
 
+
+
             {/* Helper Center Sidebar Option (Helpers only) */}
             {user.isHelper && activeMode === 'helper' && (
-              <div className="px-5 mb-4">
+              <div className="mt-3 pt-3 border-t border-gray-100">
                 <button
                   onClick={() => {
                     setShowProfileMenu(false);
@@ -333,6 +397,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       {/* Become a Helper Modal */}
       {showHelperModal && (
         <HelperApplicationModal onClose={() => setShowHelperModal(false)} />
+      )}
+
+      {/* Become a Store Modal */}
+      {showStoreModal && (
+        <StoreApplicationModal onClose={() => setShowStoreModal(false)} />
       )}
     </>
   );

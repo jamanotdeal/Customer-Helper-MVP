@@ -45,6 +45,21 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     (o) => o.status !== 'DELIVERED' && o.status !== 'CANCELED'
   ).length;
 
+  const deliveredOrders = helperOrders.filter((o) => o.status === 'DELIVERED');
+  let totalDurationMs = 0;
+  let countWithDuration = 0;
+  deliveredOrders.forEach((o) => {
+    if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
+      const dur = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+      if (dur > 0) {
+        totalDurationMs += dur;
+        countWithDuration++;
+      }
+    }
+  });
+  const avgDeliveryTimeMins = countWithDuration > 0 ? Math.round(totalDurationMs / (1000 * 60 * countWithDuration)) : 0;
+  const avgDeliveryTimeText = avgDeliveryTimeMins > 0 ? `${avgDeliveryTimeMins} mins` : 'N/A';
+
   // Pagination for Jobs
   const totalPages = Math.ceil(helperOrders.length / pageSize) || 1;
   const paginatedOrders = helperOrders.slice(
@@ -78,7 +93,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
           </div>
 
           {/* Stats Summary Bar */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-gray-50 border-b border-gray-100 text-center text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-4 bg-gray-50 border-b border-gray-100 text-center text-xs">
             <div className="p-3 bg-white rounded-2xl border border-gray-200">
               <span className="text-[10px] font-bold text-gray-400 uppercase block">Completed Jobs</span>
               <span className="text-xl font-black text-emerald-600">{completedJobs}</span>
@@ -86,6 +101,10 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
             <div className="p-3 bg-white rounded-2xl border border-gray-200">
               <span className="text-[10px] font-bold text-gray-400 uppercase block">Active Jobs</span>
               <span className="text-xl font-black text-amber-600">{activeJobs}</span>
+            </div>
+            <div className="p-3 bg-white rounded-2xl border border-gray-200">
+              <span className="text-[10px] font-bold text-gray-400 uppercase block">Avg Delivery</span>
+              <span className="text-xl font-black text-purple-900">{avgDeliveryTimeText}</span>
             </div>
             <div className="p-3 bg-white rounded-2xl border border-gray-200">
               <span className="text-[10px] font-bold text-gray-400 uppercase block">Total Earned</span>

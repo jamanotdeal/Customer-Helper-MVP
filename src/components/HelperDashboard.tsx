@@ -12,7 +12,7 @@ import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw } from 'lucide-react';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter } from 'lucide-react';
 
 interface HelperDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -66,7 +66,11 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [locationPermissionDenied, setLocationPermissionDenied] = useState<boolean>(false);
 
   // ─── Efficient Helper Location Tracking (every 10-15s + site open / mode change) ───
-  const captureHelperLocation = (): Promise<boolean> => {
+  // Fix 5: Separate high-accuracy (on mount / user-triggered) from low-accuracy (periodic)
+  // to drastically reduce battery and CPU drain on mobile devices.
+  // The 50 m accuracy of network-based location is more than sufficient for the
+  // km-scale radius checks used to filter available orders.
+  const captureHelperLocation = (highAccuracy = false): Promise<boolean> => {
     return new Promise((resolve) => {
       if (typeof navigator !== 'undefined' && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
@@ -85,7 +89,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             }
             resolve(false);
           },
-          { enableHighAccuracy: true, timeout: 10000 }
+          // High accuracy only when explicitly requested (first mount & permission button).
+          // Periodic polls use low-accuracy (cell/WiFi) to preserve battery.
+          { enableHighAccuracy: highAccuracy, timeout: highAccuracy ? 10000 : 5000, maximumAge: highAccuracy ? 0 : 20000 }
         );
       } else {
         resolve(false);
@@ -96,11 +102,11 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   useEffect(() => {
     if (!user || !user.isHelper) return;
 
-    // Capture immediately on dashboard mount / mode change
-    captureHelperLocation();
+    // First capture on mount: use high accuracy so the initial position is precise.
+    captureHelperLocation(true);
 
-    // Periodic update every 12 seconds (within 5-15s requirement)
-    const intervalId = setInterval(captureHelperLocation, 12000);
+    // Periodic update every 12 seconds using low-accuracy (battery-friendly).
+    const intervalId = setInterval(() => captureHelperLocation(false), 12000);
     return () => clearInterval(intervalId);
   }, [user?.uid, user?.isHelper]);
 
@@ -557,14 +563,14 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           <button
             type="button"
             onClick={async () => {
-              const success = await captureHelperLocation();
+              const success = await captureHelperLocation(true);
               if (!success) {
                 const p = fallbackStore.pricingSettings;
                 await showPermissionModal({
                   permissionType: 'location',
                   title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন বাধ্যতামূলক (Location Required)',
                   message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোডে থাকতে ডিভাইসের জিপিএস পারমিশন দেওয়া আবশ্যক।',
-                  onAllow: () => captureHelperLocation(),
+                  onAllow: () => captureHelperLocation(true),
                   allowText: 'Allow Location',
                 });
               }
@@ -748,36 +754,23 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       {/* ACTIVE TAB */}
       {activeTab === 'ACTIVE' && (
         <div className="space-y-3">
-          {/* Status Filter Bar */}
-          <div className="flex items-center space-x-2 overflow-x-auto pb-2.5 pt-1 scrollbar-none">
-            {[
-              { value: 'ALL', label: 'All' },
-              { value: 'ACCEPTED', label: 'Accepted' },
-              { value: 'PURCHASED_EXECUTED', label: 'Processing' },
-              { value: 'ON_THE_WAY', label: 'On Way' },
-              { value: 'ARRIVED', label: 'Arrived' }
-            ].map((pill) => (
-              <button
-                key={pill.value}
-                type="button"
-                onClick={() => setStatusFilter(pill.value as any)}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
-                  statusFilter === pill.value
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                }`}
+          {/* Status filter dropdown and view mode row */}
+          <div className="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-gray-100 shadow-xs">
+            <div className="flex items-center space-x-2">
+              <Filter className="w-4 h-4 text-emerald-600" />
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="bg-gray-50 border border-gray-250 rounded-xl text-xs font-black text-gray-700 outline-none cursor-pointer py-1.5 px-3 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-sans"
               >
-                {pill.label}
-              </button>
-            ))}
-          </div>
-
-          {isDedicatedHelper && (
-            <div className="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-gray-100 shadow-xs">
-              <span className="text-xs font-extrabold text-gray-700 flex items-center gap-1.5">
-                <Map className="w-4 h-4 text-emerald-600" />
-                <span>ভিউ নির্বাচন:</span>
-              </span>
+                <option value="ALL">All Statuses</option>
+                <option value="ACCEPTED">Accepted</option>
+                <option value="PURCHASED_EXECUTED">Processing</option>
+                <option value="ON_THE_WAY">On Way</option>
+                <option value="ARRIVED">Arrived</option>
+              </select>
+            </div>
+            {isDedicatedHelper && (
               <div className="flex items-center space-x-1 bg-gray-100 p-1 rounded-xl">
                 <button
                   type="button"
@@ -804,8 +797,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   <span>Map View</span>
                 </button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Two-Way Orders compact toggle */}
           {filteredActiveOrders.some(o => o.needDeliveryBack) && (
@@ -827,18 +820,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   </span>
                 )}
               </button>
-            </div>
-          )}
-
-          {unviewedActiveCount > 0 && (
-            <div className="flex items-center space-x-2 p-3 rounded-2xl bg-blue-50 border border-blue-200 shadow-sm animate-in fade-in duration-300">
-              <div className="p-1.5 rounded-xl bg-blue-100 text-blue-600 shrink-0">
-                <Bell className="w-4 h-4 animate-bounce" />
-              </div>
-              <div className="flex-1">
-                <p className="text-xs font-extrabold text-blue-800">{unviewedActiveCount} order{unviewedActiveCount > 1 ? 's' : ''} not yet viewed</p>
-                <p className="text-[11px] text-blue-600 font-medium">Tap a card to see the details and mark as viewed.</p>
-              </div>
             </div>
           )}
 

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, HelperApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion } from '@/types';
+import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime } from '@/lib/timeUtils';
@@ -64,6 +64,7 @@ import { UserActionDropdown } from './admin/UserActionDropdown';
 import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
 import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
+import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -80,12 +81,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'PRICING' | 'SETTINGS'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'APPLICATIONS' | 'TABLE'>('MAP');
-  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE'>('MAP');
+  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
+  const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
 
   // Realtime Data state
   const [orders, setOrders] = useState<Order[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [showHighDurationModal, setShowHighDurationModal] = useState<boolean>(false);
   const [applications, setApplications] = useState<HelperApplication[]>([]);
+  const [storeApplications, setStoreApplications] = useState<StoreApplication[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [shops, setShops] = useState<Shop[]>([]);
@@ -123,6 +128,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [bankInstructions, setBankInstructions] = useState<string>('');
   const [cashInstructions, setCashInstructions] = useState<string>('');
   const [storeTypesText, setStoreTypesText] = useState<string>('');
+  // Store application form placeholders (admin configurable)
+  const [storeFormPh, setStoreFormPh] = useState<{
+    storeName: string;
+    storeDescription: string;
+    ownerName: string;
+    ownerPhone: string;
+    managerName: string;
+    managerPhone: string;
+    commissionPercent: string;
+  }>({
+    storeName: '',
+    storeDescription: '',
+    ownerName: '',
+    ownerPhone: '',
+    managerName: '',
+    managerPhone: '',
+    commissionPercent: '',
+  });
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -241,6 +264,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const syncAdminData = () => {
       setOrders(Array.from(fallbackStore.orders.values()));
       setApplications(Array.from(fallbackStore.helperApplications.values()));
+      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
       setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
       setUsers(Array.from(fallbackStore.users.values()));
       setShops(Array.from(fallbackStore.shops.values()));
@@ -288,6 +312,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setBankInstructions(settings.bankInstructions || '');
       setCashInstructions(settings.cashInstructions || '');
       setStoreTypesText((settings.storeTypes || []).join('\n'));
+
+      // Store form placeholders sync
+      const sfp = settings.storeFormPlaceholders || {};
+      setStoreFormPh({
+        storeName: sfp.storeName || '',
+        storeDescription: sfp.storeDescription || '',
+        ownerName: sfp.ownerName || '',
+        ownerPhone: sfp.ownerPhone || '',
+        managerName: sfp.managerName || '',
+        managerPhone: sfp.managerPhone || '',
+        commissionPercent: sfp.commissionPercent || '',
+      });
 
       // Map picker guide overlay sync
       setMapPickerGuideText(settings.mapPickerGuideText || 'যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।');
@@ -338,6 +374,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    const fetchAll = async () => {
+      try {
+        const list = await fallbackStore.getAllOrders();
+        setAllOrders(list);
+      } catch (err) {
+        console.warn('Error fetching all orders for overall analysis:', err);
+      }
+    };
+    fetchAll();
+  }, []);
+
+  useEffect(() => {
+    setAllOrders((prev) => {
+      const copy = [...prev];
+      orders.forEach((o) => {
+        const idx = copy.findIndex((item) => item.id === o.id);
+        if (idx > -1) {
+          copy[idx] = o;
+        } else {
+          copy.unshift(o);
+        }
+      });
+      const seen = new Set<string>();
+      return copy.filter((o) => {
+        if (seen.has(o.id)) return false;
+        seen.add(o.id);
+        return true;
+      });
+    });
+  }, [orders]);
+
   // Needs Attention Queue calculations
   const cancellingRequests = orders.filter(
     (o) =>
@@ -351,13 +419,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
   const pendingApps = applications.filter((a) => a.status === 'PENDING');
   const pendingWds = withdrawals.filter((w) => w.status === 'PENDING');
+  const pendingStoreApps = storeApplications.filter((a) => a.status === 'PENDING');
+
+  const delayedOrders = allOrders.filter(
+    (o) =>
+      o.status !== 'DELIVERED' &&
+      o.status !== 'CANCELED' &&
+      !o.mutuallyDiscussed &&
+      (new Date().getTime() - new Date(o.createdAt).getTime() >= 3600000)
+  );
 
   const totalExceptionsCount =
     cancellingRequests.filter(o => o.cancellationRequest?.status === 'PENDING').length +
     notAcceptedRequests.length +
     feeAdjustmentsPending.length +
     pendingApps.length +
-    pendingWds.length;
+    pendingWds.length +
+    pendingStoreApps.length +
+    delayedOrders.length;
+
+  const avgDeliveryTimeMins = React.useMemo(() => {
+    const delivered = allOrders.filter(o => o.status === 'DELIVERED');
+    let totalMs = 0;
+    let count = 0;
+    delivered.forEach(o => {
+      if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
+        const diff = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+        if (diff > 0) {
+          totalMs += diff;
+          count++;
+        }
+      }
+    });
+    return count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0;
+  }, [allOrders]);
 
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
   const approvedHelpersCount = applications.filter((a) => a.status === 'APPROVED').length;
@@ -542,6 +637,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       storeTypes: storeTypesText.split('\n').map(s => s.trim()).filter(Boolean).length > 0
         ? storeTypesText.split('\n').map(s => s.trim()).filter(Boolean)
         : undefined,
+      // Store form placeholders
+      storeFormPlaceholders: {
+        storeName: storeFormPh.storeName.trim() || undefined,
+        storeDescription: storeFormPh.storeDescription.trim() || undefined,
+        ownerName: storeFormPh.ownerName.trim() || undefined,
+        ownerPhone: storeFormPh.ownerPhone.trim() || undefined,
+        managerName: storeFormPh.managerName.trim() || undefined,
+        managerPhone: storeFormPh.managerPhone.trim() || undefined,
+        commissionPercent: storeFormPh.commissionPercent.trim() || undefined,
+      },
       // Map picker guide overlay
       mapPickerGuideText: mapPickerGuideText.trim() || undefined,
       mapPickerPickupGuideText: mapPickerPickupGuideText.trim() || undefined,
@@ -786,6 +891,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         balance: number;
         totalWithdrawn: number;
         createdAt: string;
+        avgDeliveryTimeMins?: number;
       }
     >();
 
@@ -807,8 +913,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     });
 
-    // Aggregate from orders
-    orders.forEach((o) => {
+    const helperDurations = new Map<string, { totalMs: number; count: number }>();
+
+    // Aggregate from orders (using allOrders for complete history)
+    allOrders.forEach((o) => {
       if (!o.helperId) return;
       const w = fallbackStore.getHelperWallet(o.helperId);
       const existing = helperMap.get(o.helperId) || {
@@ -826,11 +934,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       if (o.status === 'DELIVERED') {
         existing.completedJobs += 1;
+        if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
+          const duration = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+          if (duration > 0) {
+            const current = helperDurations.get(o.helperId) || { totalMs: 0, count: 0 };
+            current.totalMs += duration;
+            current.count += 1;
+            helperDurations.set(o.helperId, current);
+          }
+        }
       } else if (o.status !== 'CANCELED') {
         existing.activeOrders += 1;
       }
 
       helperMap.set(o.helperId, existing);
+    });
+
+    // Calculate average delivery time for each helper
+    helperMap.forEach((helper, helperId) => {
+      const stats = helperDurations.get(helperId);
+      if (stats && stats.count > 0) {
+        helper.avgDeliveryTimeMins = Math.round(stats.totalMs / (1000 * 60 * stats.count));
+      }
     });
 
     let list = Array.from(helperMap.values());
@@ -1081,7 +1206,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Metrics Summary Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Needs Attention Metric */}
         <div
           onClick={() => isTabAllowed('EXCEPTIONS') && setActiveTab('EXCEPTIONS')}
@@ -1126,8 +1251,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
           <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-extrabold text-gray-900">{orders.length}</span>
+            <span className="text-3xl font-extrabold text-gray-900">{allOrders.length}</span>
             <span className="text-xs text-gray-500">total in system</span>
+          </div>
+        </div>
+
+        {/* Average Delivery Time Metric */}
+        <div
+          onClick={() => setShowHighDurationModal(true)}
+          className="p-5 rounded-3xl border shadow-soft bg-white border-gray-100 hover:border-purple-400 cursor-pointer transition-all"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Avg Delivery Time
+            </span>
+            <div className="p-2 rounded-2xl bg-purple-100 text-purple-700">
+              <Clock className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-baseline space-x-2">
+            <span className="text-3xl font-extrabold text-gray-900">
+              {avgDeliveryTimeMins > 0 ? `${avgDeliveryTimeMins}m` : 'N/A'}
+            </span>
+            <span className="text-xs text-gray-500">per order</span>
           </div>
         </div>
 
@@ -1499,7 +1645,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           notAccepted.length > 0 ||
           feeAdjustments.length > 0 ||
           pendingApps.length > 0 ||
-          pendingWds.length > 0;
+          pendingWds.length > 0 ||
+          pendingStoreApps.length > 0 ||
+          delayedOrders.length > 0;
 
         return (
           <div className="space-y-6">
@@ -1718,6 +1866,96 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 )}
 
+                {/* 3.5 Delayed Orders (> 1 hour) */}
+                {delayedOrders.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden animate-in fade-in duration-200">
+                    <div className="p-5 border-b border-gray-100 bg-red-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <Clock className="w-4 h-4 text-red-650 animate-pulse" />
+                        <span>Delayed Orders (&gt; 1 hour) ({delayedOrders.length})</span>
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[650px]">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Order ID</th>
+                            <th className="py-3 px-5">Customer & Helper</th>
+                            <th className="py-3 px-5">Status</th>
+                            <th className="py-3 px-5">Elapsed Time</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {delayedOrders.map((ord) => {
+                            const elapsedMins = Math.round((new Date().getTime() - new Date(ord.createdAt).getTime()) / (1000 * 60));
+                            const hrs = Math.floor(elapsedMins / 60);
+                            const mins = elapsedMins % 60;
+                            const elapsedText = `${hrs}h ${mins}m`;
+
+                            return (
+                              <tr key={ord.id} className="hover:bg-gray-50/80 transition-colors">
+                                <td className="py-3.5 px-5 font-bold text-gray-900">
+                                  <button
+                                    onClick={() => setSelectedOrderId(ord.id)}
+                                    className="text-purple-900 hover:text-purple-950 hover:underline font-extrabold"
+                                  >
+                                    #{ord.id}
+                                  </button>
+                                </td>
+                                <td className="py-3.5 px-5">
+                                  <div className="font-extrabold text-gray-900">{ord.customerName}</div>
+                                  <div className="text-[11px] text-purple-950 font-bold">
+                                    Helper: {ord.helperName || 'Not Assigned'}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-5">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800">
+                                    {ord.status}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-5 font-black text-red-650">
+                                  {elapsedText}
+                                </td>
+                                <td className="py-3.5 px-5 text-right">
+                                  <div className="flex justify-end items-center space-x-1.5 flex-wrap gap-1">
+                                    <button
+                                      onClick={() => setSelectedOrderId(ord.id)}
+                                      className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    >
+                                      Details
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        const confirmed = await showConfirm(
+                                          'Mutually Discussed নিশ্চিতকরণ',
+                                          `আপনি কি এই অর্ডারের আলোচনা সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি এই তালিকা থেকে অর্ডারটি সরিয়ে দেবে।`,
+                                          'হ্যাঁ, আলোচনা হয়েছে',
+                                          'বাতিল'
+                                        );
+                                        if (confirmed) {
+                                          await fallbackStore.updateOrder(ord.id, (o) => ({
+                                            ...o,
+                                            mutuallyDiscussed: true,
+                                          }));
+                                          showAlert('সফল', 'অর্ডারটি mutually discussed হিসেবে চিহ্নিত করা হয়েছে।', 'success');
+                                        }
+                                      }}
+                                      className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all animate-pulse"
+                                    >
+                                      Mutually Discussed
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {/* 4. Pending Helper Applications */}
                 {pendingApps.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
@@ -1767,7 +2005,96 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 )}
 
-                {/* 5. Pending Paybacks */}
+                {/* 5. Pending Store Applications */}
+                {pendingStoreApps.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-orange-50/50 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <Store className="w-4 h-4 text-orange-600" />
+                        <span>Pending Store Applications ({pendingStoreApps.length})</span>
+                      </h3>
+                      <button
+                        onClick={() => { setActiveTab('SHOPS'); setShopSubView('APPLICATIONS'); }}
+                        className="text-xs font-extrabold text-orange-700 hover:text-orange-900 underline"
+                      >
+                        View All →
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[600px]">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Store</th>
+                            <th className="py-3 px-5">Owner</th>
+                            <th className="py-3 px-5">Location</th>
+                            <th className="py-3 px-5">Type</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {pendingStoreApps.map((app) => (
+                            <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5">
+                                <div className="font-extrabold text-gray-900">{app.storeName}</div>
+                                <div className="text-[10px] text-gray-400">{new Date(app.createdAt).toLocaleDateString('bn-BD')}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-bold text-gray-900">{app.ownerName}</div>
+                                <div className="text-[11px] text-emerald-700">{app.ownerWhatsapp}</div>
+                              </td>
+                              <td className="py-3.5 px-5 max-w-[150px]">
+                                <div className="text-[11px] text-gray-700 truncate">{app.location?.address || '—'}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <span className="px-2 py-0.5 rounded-full bg-orange-50 text-orange-800 font-bold text-[10px]">{app.storeType}</span>
+                              </td>
+                              <td className="py-3.5 px-5 text-right space-x-1.5">
+                                <button
+                                  onClick={async () => {
+                                    const confirmed = await showConfirm(
+                                      'স্টোর অনুমোদন',
+                                      `"${app.storeName}" দোকানটি অনুমোদন করবেন?`,
+                                      'হ্যাঁ, অনুমোদন করুন', 'বাতিল'
+                                    );
+                                    if (confirmed) {
+                                      await fallbackStore.approveStoreApp(app.id);
+                                      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                      setUsers(Array.from(fallbackStore.users.values()));
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      showAlert('অনুমোদন সম্পন্ন', `"${app.storeName}" অনুমোদিত হয়েছে।`, 'success');
+                                    }
+                                  }}
+                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const reason = await showConfirm(
+                                      'স্টোর প্রত্যাখ্যান',
+                                      `"${app.storeName}" এর আবেদন প্রত্যাখ্যান করবেন?`,
+                                      'হ্যাঁ, প্রত্যাখ্যান করুন', 'বাতিল'
+                                    );
+                                    if (reason) {
+                                      await fallbackStore.rejectStoreApp(app.id);
+                                      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                      showAlert('প্রত্যাখ্যান সম্পন্ন', `"${app.storeName}" প্রত্যাখ্যাত হয়েছে।`, 'info');
+                                    }
+                                  }}
+                                  className="py-1.5 px-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs"
+                                >
+                                  Reject
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. Pending Paybacks */}
                 {pendingWds.length > 0 && (
                   <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                     <div className="p-5 border-b border-gray-100 bg-amber-50/50 flex items-center justify-between">
@@ -2254,7 +2581,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 4: REVENUE ANALYTICS TAB --- */}
       {activeTab === 'REVENUE' && isTabAllowed('REVENUE') && (
-        <RevenueAnalytics orders={orders} pricing={pricing} />
+        <RevenueAnalytics orders={allOrders} pricing={pricing} />
       )}
 
       {/* --- TAB 3: CUSTOMERS STATS TAB --- */}
@@ -2557,6 +2884,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <th className="py-3.5 px-5">NID #</th>
                         <th className="py-3.5 px-5">Completed Jobs</th>
                         <th className="py-3.5 px-5">Active Assigned Jobs</th>
+                        <th className="py-3.5 px-5">Avg Delivery</th>
                         <th className="py-3.5 px-5">Total Earned</th>
                         <th className="py-3.5 px-5">Wallet Balance</th>
                         <th className="py-3.5 px-5 text-right">Actions</th>
@@ -2606,6 +2934,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
                             <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
                             <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
+                            <td className="py-4 px-5 font-black text-blue-700">
+                              {h.avgDeliveryTimeMins != null
+                                ? `${Math.floor(h.avgDeliveryTimeMins / 60) > 0 ? `${Math.floor(h.avgDeliveryTimeMins / 60)}h ` : ''}${h.avgDeliveryTimeMins % 60}m`
+                                : '—'}
+                            </td>
                             <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
                             <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
                             <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
@@ -2921,17 +3254,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               গ্রাহক ও হেলপারদের "Fee Details" পেজের লাইভ ফি গণনা সূত্র এবং কোম্পানি সার্ভিস ফি বিবরণ নিয়ন্ত্রণ করুন।
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Base Price (বেস চার্জ ৳):</label>
-                <input
-                  type="number"
-                  value={feeCalculatorBasePrice}
-                  onChange={(e) => setFeeCalculatorBasePrice(Number(e.target.value))}
-                  className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
-                />
-              </div>
-
+             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">Rate per KM (প্রতি কিমি চার্জ ৳):</label>
                 <input
@@ -3280,6 +3603,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   অর্ডার পিকআপ না হলে কত মিনিট পর ডেডিকেটেড রাইডার নোটিফিকেশন পাবে (ডিফল্ট: 7 মিনিট)।
                 </p>
               </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  "Admin Accepted" Banner Delay (Minutes)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={pricing.adminAcceptedDelayMinutes ?? 5}
+                  onChange={(e) =>
+                    setPricing({ ...pricing, adminAcceptedDelayMinutes: Number(e.target.value) })
+                  }
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  অর্ডার কত মিনিট PENDING থাকলে গ্রাহকের কাছে "Admin Accepted" স্ট্যাটাস দেখানো হবে (ডিফল্ট: 5)। 0 দিলে কখনো দেখাবে না।
+                </p>
+              </div>
+
 
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1.5">
@@ -3646,6 +3989,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </p>
           </div>
 
+          {/* ── Store Application Form Placeholders ── */}
+          <div className="border border-orange-100 rounded-2xl p-4 bg-orange-50/30 space-y-3">
+            <h4 className="font-extrabold text-sm text-orange-900 flex items-center gap-2">
+              <Store className="w-4 h-4 text-orange-700" />
+              স্টোর আবেদন ফর্মের প্লেসহোল্ডার (Store Application Form Placeholders)
+            </h4>
+            <p className="text-[11px] text-orange-800 font-medium">
+              স্টোর আবেদন ফর্মের প্রতিটি ইনপুটে কাস্টম প্লেসহোল্ডার লিখুন। খালি রাখলে ডিফল্ট প্লেসহোল্ডার ব্যবহার হবে।
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">দোকানের নাম (Store Name):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.storeName}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, storeName: e.target.value })}
+                  placeholder="যেমন: আলম জেনারেল স্টোর"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">পণ্য/সেবার বিবরণ (Description):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.storeDescription}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, storeDescription: e.target.value })}
+                  placeholder="যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের নাম (Owner Name):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.ownerName}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerName: e.target.value })}
+                  placeholder="মালিকের পুরো নাম"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের ফোন (Owner Phone):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.ownerPhone}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerPhone: e.target.value })}
+                  placeholder="মালিকের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের নাম (Manager Name):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.managerName}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, managerName: e.target.value })}
+                  placeholder="ম্যানেজারের পুরো নাম"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের ফোন (Manager Phone):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.managerPhone}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, managerPhone: e.target.value })}
+                  placeholder="ম্যানেজারের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">কমিশন শতাংশ (Commission %):</label>
+                <input
+                  type="text"
+                  value={storeFormPh.commissionPercent}
+                  onChange={(e) => setStoreFormPh({ ...storeFormPh, commissionPercent: e.target.value })}
+                  placeholder="যেমন: ৫"
+                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* ── Map Picker Guide Overlay Settings ── */}
           <div className="border border-purple-100 rounded-2xl p-4 bg-purple-50/30 space-y-3">
             <h4 className="font-extrabold text-sm text-purple-900 flex items-center gap-2">
@@ -3961,7 +4387,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Sub-view Toggles & Add Shop Button */}
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 flex-wrap gap-2">
                 <div className="flex bg-gray-100 p-1 rounded-2xl">
                   <button
                     type="button"
@@ -3988,24 +4414,257 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <Layers className="w-3.5 h-3.5" />
                     <span>Table View</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShopSubView('APPLICATIONS')}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
+                      shopSubView === 'APPLICATIONS'
+                        ? 'bg-orange-600 text-white shadow-md'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Applications</span>
+                    {pendingStoreApps.length > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[9px] font-black">
+                        {pendingStoreApps.length}
+                      </span>
+                    )}
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingShop(null);
-                    setShowAddShopModal(true);
-                  }}
-                  className="py-2 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add New Shop</span>
-                </button>
+                {shopSubView !== 'APPLICATIONS' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingShop(null);
+                      setShowAddShopModal(true);
+                    }}
+                    className="py-2 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add New Shop</span>
+                  </button>
+                )}
               </div>
             </div>
 
             {/* Sub-View Content */}
-            {shopSubView === 'MAP' ? (
+            {shopSubView === 'APPLICATIONS' ? (
+              /* ── Store Applications Sub-View ── */
+              (() => {
+                let filteredStoreApps = [...storeApplications];
+                if (searchQuery.trim()) {
+                  const q = searchQuery.toLowerCase().trim();
+                  filteredStoreApps = filteredStoreApps.filter(
+                    (a) =>
+                      (a.storeName || '').toLowerCase().includes(q) ||
+                      (a.ownerName || '').toLowerCase().includes(q) ||
+                      (a.ownerWhatsapp || '').includes(q) ||
+                      (a.userName || '').toLowerCase().includes(q) ||
+                      (a.storeType || '').toLowerCase().includes(q)
+                  );
+                }
+                if (statusFilter !== 'ALL') {
+                  filteredStoreApps = filteredStoreApps.filter((a) => a.status === statusFilter);
+                }
+                filteredStoreApps.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                const { totalPages: appTotalPages, paginatedItems: appPaginatedItems, totalItems: appTotalItems } = paginateList(filteredStoreApps);
+
+                return (
+                  <div className="space-y-3">
+                    <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                      <div className="p-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-extrabold text-base text-gray-900">Store Applications</h3>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-orange-50 text-orange-800">
+                              {appTotalItems} total
+                            </span>
+                            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-50 text-amber-800">
+                              {filteredStoreApps.filter(a => a.status === 'PENDING').length} pending
+                            </span>
+                            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800">
+                              {filteredStoreApps.filter(a => a.status === 'APPROVED').length} approved
+                            </span>
+                          </div>
+                        </div>
+                        <select
+                          value={statusFilter}
+                          onChange={(e) => setStatusFilter(e.target.value)}
+                          className="py-2 px-3 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 bg-white"
+                        >
+                          <option value="ALL">All Status</option>
+                          <option value="PENDING">Pending</option>
+                          <option value="APPROVED">Approved</option>
+                          <option value="REJECTED">Rejected</option>
+                          <option value="CANCELED">Canceled</option>
+                        </select>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-gray-600 min-w-[800px]">
+                          <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                            <tr>
+                              <th className="py-3.5 px-4">Store</th>
+                              <th className="py-3.5 px-4">Owner</th>
+                              <th className="py-3.5 px-4">Manager</th>
+                              <th className="py-3.5 px-4">Location</th>
+                              <th className="py-3.5 px-4">Commission</th>
+                              <th className="py-3.5 px-4">Status</th>
+                              <th className="py-3.5 px-4 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 font-medium">
+                            {appPaginatedItems.map((app) => (
+                              <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                                <td className="py-4 px-4">
+                                  <div className="font-extrabold text-gray-900">{app.storeName}</div>
+                                  <div className="text-[11px] text-orange-700 font-bold">{app.storeType}</div>
+                                  <div className="text-[10px] text-gray-400 mt-0.5">{new Date(app.createdAt).toLocaleDateString('bn-BD')}</div>
+                                </td>
+                                <td className="py-4 px-4">
+                                  <div className="font-bold text-gray-900">{app.ownerName}</div>
+                                  <div className="text-[11px] text-emerald-700">{app.ownerWhatsapp}</div>
+                                  <div className="text-[10px] text-gray-400">{app.userName}</div>
+                                </td>
+                                <td className="py-4 px-4">
+                                  <div className="font-bold text-gray-900">{app.managerName}</div>
+                                  <div className="text-[11px] text-emerald-700">{app.managerWhatsapp}</div>
+                                </td>
+                                <td className="py-4 px-4 max-w-[150px]">
+                                  <div className="text-[11px] text-gray-700 truncate">{app.location?.address || '—'}</div>
+                                  {app.location?.lat && (
+                                    <a
+                                      href={`https://maps.google.com/?q=${app.location.lat},${app.location.lng}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] text-blue-600 font-bold hover:underline"
+                                    >
+                                      View on Map
+                                    </a>
+                                  )}
+                                </td>
+                                <td className="py-4 px-4">
+                                  {app.commissionPercent > 0 ? (
+                                    <span className="font-extrabold text-emerald-700">{app.commissionPercent}%</span>
+                                  ) : <span className="text-gray-400">—</span>}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
+                                    app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
+                                    app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
+                                    'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {app.status}
+                                  </span>
+                                  {app.reviewNote && (
+                                    <div className="text-[10px] text-gray-400 mt-0.5 max-w-[100px] truncate">{app.reviewNote}</div>
+                                  )}
+                                </td>
+                                <td className="py-4 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                    {/* Details button — always visible */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedStoreApp(app)}
+                                      className="py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center gap-1"
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                                      Details
+                                    </button>
+                                    {app.status === 'PENDING' && (
+                                      <>
+                                        <button
+                                          onClick={async () => {
+                                            const confirmed = await showConfirm(
+                                              'স্টোর অনুমোদন',
+                                              `"${app.storeName}" দোকানটি অনুমোদন করবেন?`,
+                                              'হ্যাঁ, অনুমোদন করুন', 'বাতিল'
+                                            );
+                                            if (confirmed) {
+                                              await fallbackStore.approveStoreApp(app.id);
+                                              setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                              setUsers(Array.from(fallbackStore.users.values()));
+                                              setShops(Array.from(fallbackStore.shops.values()));
+                                              showAlert('অনুমোদন সম্পন্ন', `"${app.storeName}" অনুমোদিত হয়েছে।`, 'success');
+                                            }
+                                          }}
+                                          className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                        >
+                                          Approve
+                                        </button>
+                                        <button
+                                          onClick={async () => {
+                                            const confirmed = await showConfirm(
+                                              'স্টোর প্রত্যাখ্যান',
+                                              `"${app.storeName}" এর আবেদন প্রত্যাখ্যান করবেন?`,
+                                              'হ্যাঁ, প্রত্যাখ্যান করুন', 'বাতিল'
+                                            );
+                                            if (confirmed) {
+                                              await fallbackStore.rejectStoreApp(app.id);
+                                              setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                              showAlert('প্রত্যাখ্যান সম্পন্ন', `"${app.storeName}" এর আবেদন প্রত্যাখ্যাত হয়েছে।`, 'info');
+                                            }
+                                          }}
+                                          className="py-1.5 px-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs"
+                                        >
+                                          Reject
+                                        </button>
+                                      </>
+                                    )}
+                                    {app.status !== 'PENDING' && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const confirmed = await showConfirm(
+                                            'আবেদন ডিলিট',
+                                            `"${app.storeName}" এর আবেদনটি মুছে ফেলবেন?`,
+                                            'হ্যাঁ, ডিলিট করুন', 'বাতিল'
+                                          );
+                                          if (confirmed) {
+                                            await fallbackStore.deleteStoreApp(app.id);
+                                            setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                            setUsers(Array.from(fallbackStore.users.values()));
+                                            setShops(Array.from(fallbackStore.shops.values()));
+                                            showAlert('সফল', 'আবেদনটি মুছে ফেলা হয়েছে।', 'success');
+                                          }
+                                        }}
+                                        className="py-1.5 px-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-sm transition-all"
+                                      >
+                                        Delete
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {appPaginatedItems.length === 0 && (
+                              <tr>
+                                <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                                  <Store className="w-8 h-8 mx-auto mb-2 text-gray-200" />
+                                  কোনো স্টোর আবেদন নেই
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <PaginationControl
+                        currentPage={currentPage}
+                        totalPages={appTotalPages}
+                        totalItems={appTotalItems}
+                        pageSize={pageSize}
+                        onPageChange={(p) => setCurrentPage(p)}
+                        onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()
+            ) : shopSubView === 'MAP' ? (
               <AdminShopMapView
                 shops={filteredShops}
                 onSelectShop={(s) => setSelectedShopDetails(s)}
@@ -4120,6 +4779,190 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* STORE APPLICATIONS merged into SHOPS > Applications sub-view */}
+      {false && (() => {
+        let filteredStoreApps = [...storeApplications];
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          filteredStoreApps = filteredStoreApps.filter(
+            (a) =>
+              (a.storeName || '').toLowerCase().includes(q) ||
+              (a.ownerName || '').toLowerCase().includes(q) ||
+              (a.ownerWhatsapp || '').includes(q) ||
+              (a.userName || '').toLowerCase().includes(q) ||
+              (a.storeType || '').toLowerCase().includes(q)
+          );
+        }
+        if (statusFilter !== 'ALL') {
+          filteredStoreApps = filteredStoreApps.filter((a) => a.status === statusFilter);
+        }
+        filteredStoreApps.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const { totalPages, paginatedItems, totalItems } = paginateList(filteredStoreApps);
+
+        return (
+          <div className="space-y-4">
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+              <div className="p-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-extrabold text-base text-gray-900">Store Applications</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-orange-50 text-orange-800">
+                      {totalItems} total
+                    </span>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-50 text-amber-800">
+                      {filteredStoreApps.filter(a => a.status === 'PENDING').length} pending
+                    </span>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800">
+                      {filteredStoreApps.filter(a => a.status === 'APPROVED').length} approved
+                    </span>
+                  </div>
+                </div>
+                {/* Status filter for store apps */}
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="py-2 px-3 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 bg-white"
+                >
+                  <option value="ALL">All Status</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                  <option value="CANCELED">Canceled</option>
+                </select>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-gray-600 min-w-[800px]">
+                  <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                    <tr>
+                      <th className="py-3.5 px-4">Store</th>
+                      <th className="py-3.5 px-4">Owner</th>
+                      <th className="py-3.5 px-4">Manager</th>
+                      <th className="py-3.5 px-4">Location</th>
+                      <th className="py-3.5 px-4">Commission</th>
+                      <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 font-medium">
+                    {paginatedItems.map((app) => (
+                      <tr key={app.id} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="py-4 px-4">
+                          <div className="font-extrabold text-gray-900">{app.storeName}</div>
+                          <div className="text-[11px] text-orange-700 font-bold">{app.storeType}</div>
+                          <div className="text-[10px] text-gray-400 mt-0.5">{new Date(app.createdAt).toLocaleDateString('bn-BD')}</div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="font-bold text-gray-900">{app.ownerName}</div>
+                          <div className="text-[11px] text-emerald-700">{app.ownerWhatsapp}</div>
+                          <div className="text-[10px] text-gray-400">{app.userName}</div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="font-bold text-gray-900">{app.managerName}</div>
+                          <div className="text-[11px] text-emerald-700">{app.managerWhatsapp}</div>
+                        </td>
+                        <td className="py-4 px-4 max-w-[150px]">
+                          <div className="text-[11px] text-gray-700 truncate">{app.location?.address || '—'}</div>
+                          {app.location?.lat && (
+                            <a
+                              href={`https://maps.google.com/?q=${app.location.lat},${app.location.lng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] text-blue-600 font-bold hover:underline"
+                            >
+                              View on Map
+                            </a>
+                          )}
+                        </td>
+                        <td className="py-4 px-4">
+                          {app.commissionPercent > 0 ? (
+                            <span className="font-extrabold text-emerald-700">{app.commissionPercent}%</span>
+                          ) : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
+                            app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
+                            app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
+                            'bg-amber-100 text-amber-800'
+                          }`}>
+                            {app.status}
+                          </span>
+                          {app.reviewNote && (
+                            <div className="text-[10px] text-gray-400 mt-0.5 max-w-[100px] truncate">{app.reviewNote}</div>
+                          )}
+                        </td>
+                        <td className="py-4 px-4 text-right space-x-1.5">
+                          {app.status === 'PENDING' && (
+                            <>
+                              <button
+                                onClick={async () => {
+                                  const confirmed = await showConfirm(
+                                    'স্টোর অনুমোদন',
+                                    `"${app.storeName}" দোকানটি অনুমোদন করবেন? এটি স্বয়ংক্রিয়ভাবে দোকানের তালিকায় যুক্ত হবে।`,
+                                    'হ্যাঁ, অনুমোদন করুন', 'বাতিল'
+                                  );
+                                  if (confirmed) {
+                                    await fallbackStore.approveStoreApp(app.id);
+                                    setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                    setUsers(Array.from(fallbackStore.users.values()));
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    showAlert('অনুমোদন সম্পন্ন', `"${app.storeName}" অনুমোদিত হয়েছে এবং দোকানের তালিকায় যুক্ত হয়েছে।`, 'success');
+                                  }
+                                }}
+                                className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  const reason = await showConfirm(
+                                    'স্টোর প্রত্যাখ্যান',
+                                    `"${app.storeName}" দোকানটির আবেদন প্রত্যাখ্যান করবেন?`,
+                                    'হ্যাঁ, প্রত্যাখ্যান করুন', 'বাতিল'
+                                  );
+                                  if (reason) {
+                                    await fallbackStore.rejectStoreApp(app.id);
+                                    setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+                                    showAlert('প্রত্যাখ্যান সম্পন্ন', `"${app.storeName}" এর আবেদন প্রত্যাখ্যাত হয়েছে।`, 'info');
+                                  }
+                                }}
+                                className="py-1.5 px-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                          {app.status === 'APPROVED' && (
+                            <span className="text-[10px] text-emerald-700 font-bold">✓ Active</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {paginatedItems.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                          <Store className="w-8 h-8 mx-auto mb-2 text-gray-200" />
+                          কোনো স্টোর আবেদন নেই
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <PaginationControl
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                pageSize={pageSize}
+                onPageChange={(p) => setCurrentPage(p)}
+                onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
+              />
+            </div>
           </div>
         );
       })()}
@@ -4437,6 +5280,111 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         />
       )}
 
+      {/* 4.5 High Duration Deliveries Modal */}
+      {showHighDurationModal && (() => {
+        const highDurationOrders = allOrders
+          .filter(o => o.status === 'DELIVERED' && o.deliveredAt && (o.acceptedAt || o.createdAt))
+          .map(o => {
+            const durationMs = new Date(o.deliveredAt!).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+            return { ...o, durationMs };
+          })
+          .filter(o => o.durationMs > 0)
+          .sort((a, b) => b.durationMs - a.durationMs)
+          .slice(0, 20);
+
+        const fmtDuration = (ms: number) => {
+          const totalMins = Math.round(ms / 60000);
+          const h = Math.floor(totalMins / 60);
+          const m = totalMins % 60;
+          return h > 0 ? `${h}h ${m}m` : `${m}m`;
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowHighDurationModal(false)} />
+            <div className="relative w-full sm:max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between shrink-0">
+                <div>
+                  <h2 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-purple-700" />
+                    Top High-Duration Deliveries
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Most recent completed orders with longest delivery times</p>
+                </div>
+                <button
+                  onClick={() => setShowHighDurationModal(false)}
+                  className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Summary stat */}
+              <div className="px-5 py-3 bg-purple-50/60 border-b border-purple-100 shrink-0">
+                <div className="flex items-center gap-6">
+                  <div>
+                    <div className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">Overall Avg</div>
+                    <div className="text-xl font-extrabold text-purple-900">
+                      {avgDeliveryTimeMins > 0
+                        ? `${Math.floor(avgDeliveryTimeMins / 60) > 0 ? `${Math.floor(avgDeliveryTimeMins / 60)}h ` : ''}${avgDeliveryTimeMins % 60}m`
+                        : 'N/A'}
+                    </div>
+                  </div>
+                  <div className="w-px h-8 bg-purple-200" />
+                  <div>
+                    <div className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">Showing</div>
+                    <div className="text-xl font-extrabold text-gray-900">Top {highDurationOrders.length}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-y-auto">
+                {highDurationOrders.length === 0 ? (
+                  <div className="p-10 text-center text-gray-400 text-sm font-medium">No completed orders with delivery time data yet.</div>
+                ) : (
+                  <table className="w-full text-xs text-left text-gray-600">
+                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 sticky top-0">
+                      <tr>
+                        <th className="py-3 px-5">#</th>
+                        <th className="py-3 px-5">Order</th>
+                        <th className="py-3 px-5">Customer / Helper</th>
+                        <th className="py-3 px-5 text-right">Duration</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-medium">
+                      {highDurationOrders.map((o, idx) => (
+                        <tr
+                          key={o.id}
+                          className="hover:bg-purple-50/40 transition-colors cursor-pointer"
+                          onClick={() => { setShowHighDurationModal(false); setSelectedOrderId(o.id); }}
+                        >
+                          <td className="py-3.5 px-5 font-extrabold text-gray-400">{idx + 1}</td>
+                          <td className="py-3.5 px-5">
+                            <div className="font-extrabold text-purple-900">#{o.id}</div>
+                            <div className="text-[10px] text-gray-400">{new Date(o.deliveredAt!).toLocaleDateString()}</div>
+                          </td>
+                          <td className="py-3.5 px-5">
+                            <div className="font-bold text-gray-900">{o.customerName}</div>
+                            <div className="text-[11px] text-blue-700 font-bold">{o.helperName || '—'}</div>
+                          </td>
+                          <td className="py-3.5 px-5 text-right">
+                            <span className={`font-extrabold text-sm ${o.durationMs >= 3600000 ? 'text-red-600' : 'text-amber-600'}`}>
+                              {fmtDuration(o.durationMs)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 5. Comprehensive User Details & History Modal */}
       {selectedUserId && (
         <UserDetailsModal
@@ -4653,6 +5601,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onDeleted={() => {
             setShops(Array.from(fallbackStore.shops.values()));
             setSelectedShopDetails(null);
+          }}
+        />
+      )}
+
+      {selectedStoreApp && (
+        <AdminStoreAppDetailsModal
+          application={selectedStoreApp}
+          onClose={() => setSelectedStoreApp(null)}
+          onSaved={() => {
+            setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+            setUsers(Array.from(fallbackStore.users.values()));
+            setShops(Array.from(fallbackStore.shops.values()));
+            setSelectedStoreApp(null);
           }}
         />
       )}

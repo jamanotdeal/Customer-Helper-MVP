@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Shop } from '@/types';
-import { X, MapPin, Phone, User, Store, CheckCircle2, MessageSquare, Percent } from 'lucide-react';
+import { X, MapPin, Phone, User, Store, CheckCircle2, MessageSquare, Percent, Info } from 'lucide-react';
 
 interface HelperRetailerDetailsModalProps {
   shop: Shop | null;
@@ -137,18 +137,18 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
                 <User className="w-4 h-4 text-gray-500" />
               </div>
               <div>
-                <span className="text-[10px] text-gray-400 font-bold uppercase block">Contact Person</span>
+                <span className="text-[10px] text-gray-400 font-bold uppercase block">Owner / Contact</span>
                 <span className="text-sm font-extrabold text-gray-900">{shop.contactPerson || 'N/A'}</span>
               </div>
             </div>
 
-            {/* WhatsApp */}
+            {/* Owner WhatsApp */}
             <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-50/70 border border-emerald-100">
               <div className="p-1.5 rounded-lg bg-emerald-100">
                 <Phone className="w-4 h-4 text-emerald-600" />
               </div>
               <div className="flex-1">
-                <span className="text-[10px] text-gray-400 font-bold uppercase block">WhatsApp</span>
+                <span className="text-[10px] text-gray-400 font-bold uppercase block">Owner WhatsApp</span>
                 <span className="text-sm font-extrabold text-emerald-800 font-mono">{shop.whatsapp || 'N/A'}</span>
               </div>
               {whatsappUrl && (
@@ -164,6 +164,48 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
               )}
             </div>
 
+            {/* Manager info (if set) */}
+            {(shop.managerName || shop.managerWhatsapp) && (
+              <>
+                {shop.managerName && (
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-50/60 border border-blue-100">
+                    <div className="p-1.5 rounded-lg bg-blue-100">
+                      <User className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-gray-400 font-bold uppercase block">Manager Name</span>
+                      <span className="text-sm font-extrabold text-blue-900">{shop.managerName}</span>
+                    </div>
+                  </div>
+                )}
+                {shop.managerWhatsapp && (() => {
+                  const mgWaUrl = `https://wa.me/${shop.managerWhatsapp.replace(/[^0-9]/g, '').startsWith('88')
+                    ? shop.managerWhatsapp.replace(/[^0-9]/g, '')
+                    : '88' + shop.managerWhatsapp.replace(/[^0-9]/g, '')}`;
+                  return (
+                    <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-50/60 border border-blue-100">
+                      <div className="p-1.5 rounded-lg bg-blue-100">
+                        <Phone className="w-4 h-4 text-blue-600" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="text-[10px] text-gray-400 font-bold uppercase block">Manager WhatsApp</span>
+                        <span className="text-sm font-extrabold text-blue-900 font-mono">{shop.managerWhatsapp}</span>
+                      </div>
+                      <a
+                        href={mgWaUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-[#25D366] text-white font-extrabold text-[10px] flex items-center gap-1 shadow-sm"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        <span>Chat</span>
+                      </a>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+
             {/* Location */}
             <div className="flex items-start gap-3 p-3 rounded-xl bg-gray-50 border border-gray-100">
               <div className="p-1.5 rounded-lg bg-gray-100 mt-0.5 shrink-0">
@@ -176,6 +218,21 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
                 </span>
               </div>
             </div>
+
+            {/* Store Description / What's Available */}
+            {shop.description && (
+              <div className="flex items-start gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
+                <div className="p-1.5 rounded-lg bg-amber-100 mt-0.5 shrink-0">
+                  <Info className="w-4 h-4 text-amber-600" />
+                </div>
+                <div>
+                  <span className="text-[10px] text-amber-600 font-bold uppercase block mb-0.5">কী পাওয়া যায় (What's Available)</span>
+                  <span className="text-xs font-semibold text-amber-900 leading-relaxed block">
+                    {shop.description}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons */}

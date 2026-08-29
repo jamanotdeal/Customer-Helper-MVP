@@ -138,8 +138,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         // Trigger initial reverse geocode for the starting position
         reverseGeocode(initialLat, initialLng);
 
-        // Auto-locate to user's GPS if no initialLocation was provided
-        if (!initialLocation && navigator.geolocation) {
+        // Auto-locate to user's GPS position whenever the map opens — even if an
+        // initialLocation was provided. This ensures the map is always centered on
+        // the customer's actual position. The address text field keeps the prefilled
+        // value so the customer can confirm/keep their saved address if it's nearby.
+        if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const userLat = pos.coords.latitude;
@@ -149,14 +152,20 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
               if (mapInstanceRef.current) {
                 mapInstanceRef.current.setView([userLat, userLng], 17, { animate: true });
                 mapInstanceRef.current.once('moveend', () => {
-                  reverseGeocode(userLat, userLng);
+                  // Only reverse-geocode if no detail address was pre-filled
+                  if (!initialLocation?.address) {
+                    reverseGeocode(userLat, userLng);
+                  }
                 });
               }
             },
-            () => { /* silently fall back to default coords already loaded */ },
+            () => {
+              // GPS denied/unavailable — fall back to initialLocation already loaded above
+            },
             { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
           );
         }
+
       } catch (err) {
         console.warn('[MapPicker] Leaflet initialization error:', err);
         setMapError(true);

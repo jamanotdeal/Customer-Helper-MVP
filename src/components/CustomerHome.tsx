@@ -326,7 +326,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       )}
 
       {/* Customer Bottom Footer Links */}
-      <footer className="pt-6 border-t border-gray-100 text-center text-xs text-gray-400 space-y-2">
+      <footer className="-mx-4 px-4 pt-6 border-t border-gray-100 text-center text-xs text-gray-400 space-y-2">
         <div className="flex items-center justify-center space-x-4 font-semibold text-gray-500">
           <Link href="/terms" className="hover:text-emerald-600 transition-colors">
             Terms of Service

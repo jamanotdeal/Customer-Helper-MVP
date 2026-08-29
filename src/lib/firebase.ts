@@ -4,13 +4,17 @@ import {
   getFirestore,
   collection,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
   query,
+  where,
   orderBy,
+  getDocs,
   limit,
+  arrayUnion,
 } from 'firebase/firestore';
 import {
   getMessaging,
@@ -22,6 +26,7 @@ import {
 import {
   Order,
   HelperApplication,
+  StoreApplication,
   Wallet,
   WalletTransaction,
   WithdrawalRequest,
@@ -32,6 +37,8 @@ import {
   OrderFeedback,
   AdminCustomModalConfig,
   FeeSuggestion,
+  ShopOrder,
+  ShopOrderStatus,
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
 
@@ -132,6 +139,42 @@ export async function saveFcmToken(userId: string, token: string): Promise<void>
 }
 
 /**
+ * One-time read: loads the customer's saved delivery addresses from their Firestore user profile.
+ * Should be called once at login time. Result is cached to localStorage by the caller.
+ */
+export async function loadCustomerSavedAddresses(uid: string): Promise<import('@/types').LocationData[]> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+      const data = snap.data();
+      const addresses = data?.savedDeliveryAddresses;
+      if (Array.isArray(addresses) && addresses.length > 0) {
+        return addresses as import('@/types').LocationData[];
+      }
+    }
+  } catch (e: any) {
+    console.warn('[Firestore] loadCustomerSavedAddresses note:', e?.message || e);
+  }
+  return [];
+}
+
+/**
+ * Appends a new delivery address to the customer's Firestore savedDeliveryAddresses array.
+ * Uses arrayUnion so concurrent writes don't overwrite each other.
+ */
+export async function saveCustomerSavedAddressToFirestore(uid: string, address: import('@/types').LocationData): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, 'users', uid),
+      { savedDeliveryAddresses: arrayUnion(cleanForFirestore(address)) },
+      { merge: true }
+    );
+  } catch (e: any) {
+    console.warn('[Firestore] saveCustomerSavedAddressToFirestore note:', e?.message || e);
+  }
+}
+
+/**
  * Sends a native push notification to all target devices via FCM.
  * Works even when the target device's app is closed or backgrounded.
  *
@@ -190,6 +233,7 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   try {
+    const targetUrl = notif.orderId ? `/?orderId=${notif.orderId}` : '/';
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.ready
         .then((reg) => {
@@ -202,34 +246,46 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
               tag: notif.id,
               vibrate: [200, 100, 200, 100, 200],
               renotify: true,
-              data: { orderId: notif.orderId, url: '/' },
+              data: { orderId: notif.orderId, url: targetUrl },
             } as any)
             .catch(() => {
               // SW showNotification failed — fallback to basic Notification
-              new Notification(notif.title, {
+              const popup = new Notification(notif.title, {
                 body: notif.body || '',
                 icon: '/Jamanot-Logo.png',
                 image: notif.imageUrl || undefined,
                 tag: notif.id,
               } as any);
+              popup.onclick = () => {
+                window.focus();
+                if (notif.orderId) window.location.search = `?orderId=${notif.orderId}`;
+              };
             });
         })
         .catch(() => {
           // SW not ready
-          new Notification(notif.title, {
+          const popup = new Notification(notif.title, {
             body: notif.body || '',
             icon: '/Jamanot-Logo.png',
             image: notif.imageUrl || undefined,
             tag: notif.id,
           } as any);
+          popup.onclick = () => {
+            window.focus();
+            if (notif.orderId) window.location.search = `?orderId=${notif.orderId}`;
+          };
         });
     } else {
-      new Notification(notif.title, {
+      const popup = new Notification(notif.title, {
         body: notif.body || '',
         icon: '/Jamanot-Logo.png',
         image: notif.imageUrl || undefined,
         tag: notif.id,
       } as any);
+      popup.onclick = () => {
+        window.focus();
+        if (notif.orderId) window.location.search = `?orderId=${notif.orderId}`;
+      };
     }
     // Also play sound on the receiving device
     playNotificationSound();
@@ -246,17 +302,40 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
 // -------------------------------------------------------------
 type Listener = () => void;
 
+// ─── Shared AudioContext (Fix 3) ─────────────────────────────────────────────
+// Reuse a single AudioContext instead of creating one per sound.
+// This avoids the 6-context browser limit and eliminates the associated memory leak.
+let _sharedAudioCtx: AudioContext | null = null;
+function getSharedAudioCtx(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return null;
+    if (!_sharedAudioCtx || _sharedAudioCtx.state === 'closed') {
+      _sharedAudioCtx = new AudioContextClass();
+    }
+    if (_sharedAudioCtx.state === 'suspended') {
+      _sharedAudioCtx.resume().catch(() => {});
+    }
+    return _sharedAudioCtx;
+  } catch (_) {
+    return null;
+  }
+}
+
 class FallbackStore {
   private listeners: Set<Listener> = new Set();
 
   public users: Map<string, UserProfile> = new Map();
   public orders: Map<string, Order> = new Map();
   public helperApplications: Map<string, HelperApplication> = new Map();
+  public storeApplications: Map<string, StoreApplication> = new Map();
   public wallets: Map<string, Wallet> = new Map();
   public walletTransactions: Map<string, WalletTransaction[]> = new Map();
   public withdrawals: Map<string, WithdrawalRequest> = new Map();
   public notifications: Map<string, AppNotification[]> = new Map();
   public shops: Map<string, Shop> = new Map();
+  public shopOrders: Map<string, ShopOrder> = new Map();
   public orderFeedbacks: Map<string, OrderFeedback> = new Map();
   public customModals: Map<string, AdminCustomModalConfig> = new Map();
   public feeSuggestions: Map<string, FeeSuggestion> = new Map();
@@ -269,15 +348,54 @@ class FallbackStore {
 
   // Tracks Firestore notification doc IDs that have already been processed
   // on this device, so we don't re-fire a browser popup for old ones.
+  // Fix 2: Pre-populated from sessionStorage so page refreshes don't re-fire old notifications.
   private _knownNotifIds: Set<string> = new Set();
+  private _KNOWN_NOTIF_SS_KEY = 'jamanot_known_notif_ids';
+  private _MAX_KNOWN_NOTIF_IDS = 200;
 
-  private isFirestoreInitialized = false;
+  // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
+  // on every Firestore event. Store is written at most every 2 seconds.
+  private _saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ─── Role-Scoped Listener Management ─────────────────────────────────────
+  // Stores active unsubscribe callbacks; torn down on role/user switch.
+  private _unsubListeners: (() => void)[] = [];
+  private _shopsCachedAt = 0;  // epoch ms when shops were last fetched
+  private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
+  private _listenersRole: string | null = null; // e.g. 'helper:uid123'
 
   constructor() {
     this.loadFromLocalStorage();
-    this.initFirestoreListeners();
+    // Fix 2: Pre-populate known notif IDs from sessionStorage to survive page refreshes.
+    this._hydrateKnownNotifIds();
+    // NOTE: Firestore listeners are NOT started here.
+    // AuthContext calls initListenersForRole() after login so we know the user's role.
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
+  }
+
+  // ─── Fix 2: sessionStorage helpers for _knownNotifIds ────────────────────
+  private _hydrateKnownNotifIds() {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = sessionStorage.getItem(this._KNOWN_NOTIF_SS_KEY);
+      if (raw) {
+        const ids: string[] = JSON.parse(raw);
+        if (Array.isArray(ids)) {
+          ids.forEach((id) => this._knownNotifIds.add(id));
+        }
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  private _persistKnownNotifIds() {
+    if (typeof window === 'undefined') return;
+    try {
+      // Keep only the most recent N IDs to avoid unbounded growth
+      const ids = Array.from(this._knownNotifIds);
+      const toStore = ids.slice(-this._MAX_KNOWN_NOTIF_IDS);
+      sessionStorage.setItem(this._KNOWN_NOTIF_SS_KEY, JSON.stringify(toStore));
+    } catch (_) { /* ignore – sessionStorage full, best-effort */ }
   }
 
   private startRoutingTimer() {
@@ -396,6 +514,13 @@ class FallbackStore {
         });
       }
 
+      const parsedStoreApps = this.safeParse<[string, StoreApplication][]>('jamanot_store_apps_store');
+      if (parsedStoreApps && Array.isArray(parsedStoreApps)) {
+        parsedStoreApps.forEach(([id, app]) => {
+          if (id && app) this.storeApplications.set(id, app);
+        });
+      }
+
       const parsedWallets = this.safeParse<[string, Wallet][]>('jamanot_wallets_store');
       if (parsedWallets && Array.isArray(parsedWallets)) {
         parsedWallets.forEach(([id, w]) => {
@@ -428,6 +553,13 @@ class FallbackStore {
       if (parsedShops && Array.isArray(parsedShops)) {
         parsedShops.forEach(([id, s]) => {
           if (id && s) this.shops.set(id, s);
+        });
+      }
+
+      const parsedShopOrders = this.safeParse<[string, ShopOrder][]>('jamanot_shop_orders_store');
+      if (parsedShopOrders && Array.isArray(parsedShopOrders)) {
+        parsedShopOrders.forEach(([id, so]) => {
+          if (id && so) this.shopOrders.set(id, so);
         });
       }
 
@@ -467,11 +599,13 @@ class FallbackStore {
       localStorage.setItem('jamanot_orders_store', JSON.stringify(Array.from(this.orders.entries())));
       localStorage.setItem('jamanot_users_store', JSON.stringify(Array.from(this.users.entries())));
       localStorage.setItem('jamanot_helper_apps_store', JSON.stringify(Array.from(this.helperApplications.entries())));
+      localStorage.setItem('jamanot_store_apps_store', JSON.stringify(Array.from(this.storeApplications.entries())));
       localStorage.setItem('jamanot_wallets_store', JSON.stringify(Array.from(this.wallets.entries())));
       localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(Array.from(this.walletTransactions.entries())));
       localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
       localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
       localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
+      localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(Array.from(this.shopOrders.entries())));
       localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
       localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
       localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
@@ -481,195 +615,159 @@ class FallbackStore {
     }
   }
 
-  private initFirestoreListeners() {
-    if (typeof window === 'undefined' || this.isFirestoreInitialized) return;
-    this.isFirestoreInitialized = true;
+  // ─── Shared notification snapshot handler ─────────────────────────────────
+  // Processes any notification snapshot (from any role-scoped query) and:
+  //   1. Stores notifications in the local map keyed by the current userId
+  //      (broadcast notifications like 'all-helpers' are keyed under the actual uid)
+  //   2. Fires browser popups only for genuinely NEW, unread, targeted notifications
+  //      Fix 2: _knownNotifIds is now persisted to sessionStorage so page refreshes
+  //             don't re-fire all previously seen notifications.
+  private _handleNotificationSnapshot(snapshot: any, userId: string) {
+    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers']);
+    // Fix 4: Max notifications to store per user in memory.
+    const MAX_NOTIFS_PER_USER = 100;
 
-    try {
-      // 1. Orders Listener
-      onSnapshot(
-        collection(db, 'orders'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.orders.keys())) {
-            if (!currentIds.has(key)) {
-              this.orders.delete(key);
-            }
+    const map = new Map<string, AppNotification[]>();
+    snapshot.docs.forEach((docSnap: any) => {
+      const data = docSnap.data() as AppNotification;
+      // Broadcast notifications are stored under the current user's uid locally
+      const storeKey = BROADCAST_IDS.has(data.userId) ? userId : data.userId;
+      const userList = map.get(storeKey) || [];
+      userList.push(data);
+      map.set(storeKey, userList);
+    });
+    map.forEach((list, key) => {
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      // Fix 4: Cap list length to avoid unbounded memory usage.
+      this.notifications.set(key, list.slice(0, MAX_NOTIFS_PER_USER));
+    });
+
+    // Fire browser popup only for genuinely NEW, unread notifications targeting this device.
+    // Fix 2: Because _knownNotifIds is pre-populated from sessionStorage on refresh,
+    //        previously-seen notifications are already in the set and won't re-fire.
+    if (this.currentUserId) {
+      const uid = this.currentUserId;
+      const currentUser = this.users.get(uid);
+      // isInitial is now only true when the set truly has zero entries
+      // (i.e. first-ever login in this browser session, not a refresh).
+      const isInitial = this._knownNotifIds.size === 0;
+      let newUnreadCount = 0;
+      const toTrigger: AppNotification[] = [];
+      let knownIdsChanged = false;
+
+      snapshot.docs.forEach((docSnap: any) => {
+        const notif = docSnap.data() as AppNotification;
+        if (this._knownNotifIds.has(notif.id)) return; // already seen — skip
+        this._knownNotifIds.add(notif.id);
+        knownIdsChanged = true;
+
+        const targets =
+          notif.userId === uid ||
+          notif.userId === 'all' ||
+          (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
+          (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
+          (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated') ||
+          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
+
+        if (targets && !notif.read) {
+          if (isInitial) {
+            newUnreadCount++;
+            toTrigger.push(notif);
+          } else {
+            triggerBrowserNotification(notif);
           }
-          snapshot.docs.forEach((docSnap) => {
-            this.orders.set(docSnap.id, docSnap.data() as Order);
+        }
+      });
+
+      // Persist updated set to sessionStorage so refresh won't re-fire these.
+      if (knownIdsChanged) {
+        this._persistKnownNotifIds();
+      }
+
+      // Flood control on very first load (no sessionStorage data) — consolidate if many unread.
+      if (isInitial && newUnreadCount > 0) {
+        if (newUnreadCount > 2) {
+          triggerBrowserNotification({
+            id: `consolidated-init-${Date.now()}`,
+            title: 'নতুন নোটিফিকেশন (New Notifications)',
+            body: `আপনার ${newUnreadCount}টি নতুন নোটিফিকেশন আছে। দেখতে নোটিফিকেশন বেল ট্যাপ করুন।`,
           });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Orders sync note: Permission or connection restricted. Store using local persistence.', err)
-      );
+        } else {
+          toTrigger.forEach((n) => triggerBrowserNotification(n));
+        }
+      }
+    }
 
-      // 2. Notifications Listener
-      onSnapshot(
-        collection(db, 'notifications'),
-        (snapshot) => {
-          const map = new Map<string, AppNotification[]>();
-          snapshot.docs.forEach((docSnap) => {
-            const data = docSnap.data() as AppNotification;
-            const userList = map.get(data.userId) || [];
-            userList.push(data);
-            map.set(data.userId, userList);
-          });
-          map.forEach((list, key) => {
-            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-            map.set(key, list);
-          });
-          this.notifications = map;
+    this.notify();
+  }
 
-          // ─── KEY FIX: Fire browser popup on the RECEIVING device ───
-          // Identify notification docs that are truly new (not seen before)
-          // and target the current logged-in user.
-          if (this.currentUserId) {
-            const uid = this.currentUserId;
-            const currentUser = this.users.get(uid);
-            const isInitial = this._knownNotifIds.size === 0;
-            let unreadCount = 0;
-            const toTrigger: AppNotification[] = [];
+  // ─── Shops: one-time read with 30-minute localStorage cache ───────────────
+  private _loadShopsCached() {
+    const CACHE_TTL = 30 * 60 * 1000;
+    if (Date.now() - this._shopsCachedAt < CACHE_TTL && this.shops.size > 0) return;
+    getDocs(collection(db, 'shops'))
+      .then((snapshot) => {
+        this.shops.clear();
+        snapshot.forEach((docSnap) => {
+          this.shops.set(docSnap.id, docSnap.data() as Shop);
+        });
+        this._shopsCachedAt = Date.now();
+        this.notify();
+      })
+      .catch((err) => console.warn('[Firestore] Shops getDocs note:', err));
+  }
 
-            snapshot.docs.forEach((docSnap) => {
-              const notif = docSnap.data() as AppNotification;
-              // Skip if we already processed this notification on this device
-              if (this._knownNotifIds.has(notif.id)) return;
-              this._knownNotifIds.add(notif.id);
+  // ─── Custom modals: one-time read with 30-minute localStorage cache ────────
+  private _loadModalsCached() {
+    const CACHE_TTL = 30 * 60 * 1000;
+    if (Date.now() - this._modalsCachedAt < CACHE_TTL && this.customModals.size > 0) return;
+    getDocs(collection(db, 'customModals'))
+      .then((snapshot) => {
+        this.customModals.clear();
+        snapshot.forEach((docSnap) => {
+          this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
+        });
+        this._modalsCachedAt = Date.now();
+        this.notify();
+      })
+      .catch((err) => console.warn('[Firestore] CustomModals getDocs note:', err));
+  }
 
-              // Determine if this notification targets the current user
-              const targets =
-                notif.userId === uid ||
-                notif.userId === 'all' ||
-                (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
-                (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
+  // ─── Tear down all active Firestore listeners ──────────────────────────────
+  // Called on logout and before switching to a different role/user.
+  public teardownListeners() {
+    this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) {} });
+    this._unsubListeners = [];
+    this._listenersRole = null;
+  }
 
-              if (targets && !notif.read) {
-                if (isInitial) {
-                  unreadCount++;
-                  toTrigger.push(notif);
-                } else {
-                  triggerBrowserNotification(notif);
-                }
-              }
-            });
+  // ─── Role-scoped Firestore listener initialization ────────────────────────
+  // Call this from AuthContext after login and whenever active mode changes.
+  //
+  // OPTIMIZATION SUMMARY vs old 12-listener approach:
+  //   Customer: own orders + own notifs + pricing + cached shops/modals
+  //   Helper:   active orders + own orders + own notifs + own wallet + pricing + cached shops/modals
+  //   Admin:    full visibility with sensible limits (200 orders, 300 users, 500 txns)
+  //
+  // Estimated reads/day: ~1,400 (vs ~50,000 previously) for 500 orders/day
+  public initListenersForRole(
+    role: 'customer' | 'helper' | 'admin',
+    userId: string,
+    helperType?: string
+  ) {
+    if (typeof window === 'undefined') return;
 
-            // Smart flood control on initial load
-            if (isInitial && unreadCount > 0) {
-              if (unreadCount > 2) {
-                // Show a single consolidated notification
-                triggerBrowserNotification({
-                  id: `consolidated-init-${Date.now()}`,
-                  title: 'নতুন নোটিফিকেশন (New Notifications)',
-                  body: `আপনার ${unreadCount}টি নতুন নোটিফিকেশন আছে। দেখতে নোটিফিকেশন বেল ট্যাপ করুন।`,
-                });
-              } else {
-                // Show individually if only 1 or 2
-                toTrigger.forEach((notif) => {
-                  triggerBrowserNotification(notif);
-                });
-              }
-            }
-          }
-          // ──────────────────────────────────────────────────────────
+    const roleKey = `${role}:${userId}`;
+    if (this._listenersRole === roleKey) return; // Already listening — no-op
 
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Notifications sync note:', err)
-      );
+    // Tear down previous set before starting new one
+    this.teardownListeners();
+    this._listenersRole = roleKey;
 
-      // 3. Helper Applications Listener
-      onSnapshot(
-        collection(db, 'helperApplications'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.helperApplications.keys())) {
-            if (!currentIds.has(key)) {
-              this.helperApplications.delete(key);
-            }
-          }
-          snapshot.docs.forEach((docSnap) => {
-            const appData = docSnap.data() as HelperApplication;
-            this.helperApplications.set(appData.id, appData);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] HelperApplications sync note:', err)
-      );
+    const unsubs: (() => void)[] = [];
 
-      // 4. Withdrawals Listener
-      onSnapshot(
-        collection(db, 'withdrawals'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.withdrawals.keys())) {
-            if (!currentIds.has(key)) {
-              this.withdrawals.delete(key);
-            }
-          }
-          snapshot.docs.forEach((docSnap) => {
-            const wd = docSnap.data() as WithdrawalRequest;
-            this.withdrawals.set(wd.id, wd);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Withdrawals sync note:', err)
-      );
-
-      // 5. Users Listener
-      onSnapshot(
-        collection(db, 'users'),
-        (snapshot) => {
-          snapshot.docs.forEach((docSnap) => {
-            const userProfile = docSnap.data() as UserProfile;
-            this.users.set(userProfile.uid, userProfile);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Users sync note:', err)
-      );
-
-      // 6. Wallets Listener
-      onSnapshot(
-        collection(db, 'wallets'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.wallets.keys())) {
-            if (!currentIds.has(key)) {
-              this.wallets.delete(key);
-            }
-          }
-          snapshot.docs.forEach((docSnap) => {
-            const wallet = docSnap.data() as Wallet;
-            this.wallets.set(wallet.userId, wallet);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Wallets sync note:', err)
-      );
-
-      // 7. Wallet Transactions Listener
-      onSnapshot(
-        collection(db, 'walletTransactions'),
-        (snapshot) => {
-          const map = new Map<string, WalletTransaction[]>();
-          snapshot.docs.forEach((docSnap) => {
-            const tx = docSnap.data() as WalletTransaction;
-            const list = map.get(tx.userId) || [];
-            list.push(tx);
-            map.set(tx.userId, list);
-          });
-          map.forEach((list, key) => {
-            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-            map.set(key, list);
-          });
-          this.walletTransactions = map;
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] WalletTransactions sync note:', err)
-      );
-
-      // 8. Pricing & Settings Listener
+    // ── Pricing settings: single doc, tiny cost, always needed ────────────────
+    unsubs.push(
       onSnapshot(
         doc(db, 'settings', 'pricing'),
         (docSnap) => {
@@ -679,81 +777,380 @@ class FallbackStore {
           }
         },
         (err) => console.warn('[Firestore] PricingSettings sync note:', err)
+      )
+    );
+
+    // ── CUSTOMER role ─────────────────────────────────────────────────────────
+    if (role === 'customer') {
+      // Only this customer's orders (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), where('customerId', '==', userId), limit(50)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Customer orders sync note:', err)
+        )
       );
 
-      // 9. Shops Listener
-      onSnapshot(
-        collection(db, 'shops'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.shops.keys())) {
-            if (!currentIds.has(key)) this.shops.delete(key);
-          }
-          snapshot.docs.forEach((docSnap) => {
-            this.shops.set(docSnap.id, docSnap.data() as Shop);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] Shops sync note:', err)
+      // Own notifications + broadcast ones (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'notifications'),
+            where('userId', 'in', [userId, 'all', 'all-customers']),
+            limit(50)
+          ),
+          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+          (err) => console.warn('[Firestore] Customer notifications sync note:', err)
+        )
       );
 
-      // 10. Order Feedbacks Listener
-      onSnapshot(
-        collection(db, 'orderFeedbacks'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.orderFeedbacks.keys())) {
-            if (!currentIds.has(key)) this.orderFeedbacks.delete(key);
-          }
-          snapshot.docs.forEach((docSnap) => {
-            const fb = docSnap.data() as OrderFeedback;
-            this.orderFeedbacks.set(fb.id, fb);
-            // Link feedback to corresponding order if loaded
-            const ord = this.orders.get(fb.orderId);
-            if (ord && !ord.feedback) {
-              ord.feedback = fb;
-              this.orders.set(ord.id, ord);
+      // Own withdrawals (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.withdrawals.delete(change.doc.id);
+              } else {
+                this.withdrawals.set(change.doc.id, change.doc.data() as WithdrawalRequest);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Customer withdrawals sync note:', err)
+        )
+      );
+
+      // Shops & modals: one-time reads with 30-min cache (rarely change)
+      this._loadShopsCached();
+      this._loadModalsCached();
+
+    // ── HELPER role ───────────────────────────────────────────────────────────
+    } else if (role === 'helper') {
+      const helperGroup =
+        helperType === 'dedicated' ? 'all-dedicated-helpers' : 'all-commuter-helpers';
+
+      // Active/in-progress orders that any helper can see (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'orders'),
+            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
+            limit(60)
+          ),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper active orders sync note:', err)
+        )
+      );
+
+      // This helper's own orders — all statuses (history, delivered, etc.) (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), where('helperId', '==', userId), limit(30)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper own orders sync note:', err)
+        )
+      );
+
+      // Own withdrawals (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.withdrawals.delete(change.doc.id);
+              } else {
+                this.withdrawals.set(change.doc.id, change.doc.data() as WithdrawalRequest);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper withdrawals sync note:', err)
+        )
+      );
+
+      // Own notifications + all-helpers broadcast + helperType-specific (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'notifications'),
+            where('userId', 'in', [userId, 'all', 'all-helpers', helperGroup]),
+            limit(60)
+          ),
+          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+          (err) => console.warn('[Firestore] Helper notifications sync note:', err)
+        )
+      );
+
+      // Helper's own wallet document (realtime, needed for earnings display)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'wallets', userId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              this.wallets.set(userId, docSnap.data() as Wallet);
+              this.notify();
             }
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] OrderFeedbacks sync note:', err)
+          },
+          (err) => console.warn('[Firestore] Helper wallet sync note:', err)
+        )
       );
 
-      // 11. Custom Modals Listener
-      onSnapshot(
-        collection(db, 'customModals'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.customModals.keys())) {
-            if (!currentIds.has(key)) this.customModals.delete(key);
-          }
-          snapshot.docs.forEach((docSnap) => {
-            this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] CustomModals sync note:', err)
+      // Shops & modals: one-time reads with 30-min cache
+      this._loadShopsCached();
+      this._loadModalsCached();
+
+      // Shop orders placed by this helper (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'shopOrders'), where('helperId', '==', userId), limit(100)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.shopOrders.delete(change.doc.id);
+              } else {
+                this.shopOrders.set(change.doc.id, change.doc.data() as ShopOrder);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper shopOrders sync note:', err)
+        )
       );
 
-      // 12. Fee Suggestions Listener
-      onSnapshot(
-        collection(db, 'feeSuggestions'),
-        (snapshot) => {
-          const currentIds = new Set(snapshot.docs.map((d) => d.id));
-          for (const key of Array.from(this.feeSuggestions.keys())) {
-            if (!currentIds.has(key)) this.feeSuggestions.delete(key);
-          }
-          snapshot.docs.forEach((docSnap) => {
-            this.feeSuggestions.set(docSnap.id, docSnap.data() as FeeSuggestion);
-          });
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] FeeSuggestions sync note:', err)
+    // ── ADMIN role ────────────────────────────────────────────────────────────
+    } else if (role === 'admin') {
+      // All orders (most recent 200, realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(200)),
+          (snapshot) => {
+            const currentIds = new Set(snapshot.docs.map((d) => d.id));
+            for (const key of Array.from(this.orders.keys())) {
+              if (!currentIds.has(key)) this.orders.delete(key);
+            }
+            snapshot.docs.forEach((docSnap) => {
+              this.orders.set(docSnap.id, docSnap.data() as Order);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin orders sync note:', err)
+        )
       );
-    } catch (e) {
-      console.error('[Firestore] Realtime init failed:', e);
+
+      // All users (up to 300, realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'users'), limit(300)),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const u = docSnap.data() as UserProfile;
+              this.users.set(u.uid, u);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin users sync note:', err)
+        )
+      );
+
+      // All wallets (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'wallets'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const w = docSnap.data() as Wallet;
+              this.wallets.set(w.userId, w);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin wallets sync note:', err)
+        )
+      );
+
+      // Wallet transactions (up to 500, realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'walletTransactions'), limit(500)),
+          (snapshot) => {
+            const map = new Map<string, WalletTransaction[]>();
+            snapshot.docs.forEach((docSnap) => {
+              const tx = docSnap.data() as WalletTransaction;
+              const list = map.get(tx.userId) || [];
+              list.push(tx);
+              map.set(tx.userId, list);
+            });
+            map.forEach((list, key) => {
+              list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+              this.walletTransactions.set(key, list);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin walletTransactions sync note:', err)
+        )
+      );
+
+      // All withdrawals (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'withdrawals'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const wd = docSnap.data() as WithdrawalRequest;
+              this.withdrawals.set(wd.id, wd);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin withdrawals sync note:', err)
+        )
+      );
+
+      // All helper applications (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'helperApplications'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const a = docSnap.data() as HelperApplication;
+              this.helperApplications.set(a.id, a);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin helperApplications sync note:', err)
+        )
+      );
+
+      // All store applications (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'storeApplications'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const a = docSnap.data() as StoreApplication;
+              this.storeApplications.set(a.id, a);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin storeApplications sync note:', err)
+        )
+      );
+
+      // Notifications (up to 200, realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'notifications'), limit(200)),
+          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+          (err) => console.warn('[Firestore] Admin notifications sync note:', err)
+        )
+      );
+
+      // Order feedbacks (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'orderFeedbacks'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const fb = docSnap.data() as OrderFeedback;
+              this.orderFeedbacks.set(fb.id, fb);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin orderFeedbacks sync note:', err)
+        )
+      );
+
+      // Fee suggestions (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'feeSuggestions'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              this.feeSuggestions.set(docSnap.id, docSnap.data() as FeeSuggestion);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin feeSuggestions sync note:', err)
+        )
+      );
+
+      // Custom modals (realtime for admin, so they see changes immediately)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'customModals'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin customModals sync note:', err)
+        )
+      );
+
+      // Shops (realtime for admin)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'shops'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              this.shops.set(docSnap.id, docSnap.data() as Shop);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin shops sync note:', err)
+        )
+      );
+
+      // All shop orders (realtime for admin)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'shopOrders'), limit(500)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.shopOrders.delete(change.doc.id);
+              } else {
+                this.shopOrders.set(change.doc.id, change.doc.data() as ShopOrder);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin shopOrders sync note:', err)
+        )
+      );
     }
+
+    this._unsubListeners = unsubs;
+    console.info(`[Firestore] Listeners initialized for role=${role}, uid=${userId}, listeners=${unsubs.length}`);
   }
 
   public subscribe(listener: Listener): () => void {
@@ -764,8 +1161,15 @@ class FallbackStore {
   }
 
   public notify() {
-    this.saveLocalStore();
+    // Fix 1: Debounce localStorage saves. Notify all React subscribers immediately
+    // (so the UI stays snappy), but only persist to localStorage at most every 2s.
+    // This prevents blocking the main thread on every Firestore snapshot.
     this.listeners.forEach((l) => l());
+    if (this._saveDebounceTimer) clearTimeout(this._saveDebounceTimer);
+    this._saveDebounceTimer = setTimeout(() => {
+      this.saveLocalStore();
+      this._saveDebounceTimer = null;
+    }, 2000);
   }
 
   // --- Actions with Firebase Persistence & Dynamic Notifications ---
@@ -933,6 +1337,25 @@ class FallbackStore {
           createdAt: new Date().toISOString(),
         });
       }
+
+      // Notify stores/shops involved in this order when completed (Requirement 4)
+      if (updated.status === 'DELIVERED') {
+        const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
+        relatedShopOrders.forEach((so) => {
+          const shop = this.shops.get(so.shopId);
+          if (shop?.ownerUserId) {
+            this.addNotification({
+              id: `notif-store-comp-${Date.now()}-${so.id}`,
+              userId: shop.ownerUserId,
+              title: 'অর্ডার সম্পন্ন হয়েছে!',
+              body: `আপনার স্টোরের অর্ডার #${updated.id.slice(-6).toUpperCase()} সফলভাবে সম্পন্ন এবং ডেলিভারি হয়েছে।`,
+              orderId: updated.id,
+              read: false,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        });
+      }
     }
 
     // Product cost addition / update notification to customer
@@ -1015,6 +1438,54 @@ class FallbackStore {
       });
     }
 
+    // Helper/Admin items or general info edit notification to customer (Requirement 2)
+    if (
+      (updated.lastEditedBy === 'helper' || updated.lastEditedBy === 'admin') &&
+      existing.lastEditedAt !== updated.lastEditedAt &&
+      updated.customerId &&
+      (JSON.stringify(existing.items) !== JSON.stringify(updated.items) ||
+       existing.title !== updated.title ||
+       existing.additionalNote !== updated.additionalNote)
+    ) {
+      const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
+      this.addNotification({
+        id: `notif-${Date.now()}-general-edit`,
+        userId: updated.customerId,
+        title: 'অর্ডার আপডেট করা হয়েছে (Order Updated)',
+        body: `${editorName} আপনার অর্ডার #${updated.id} এর বিবরণ বা পণ্য তালিকা পরিবর্তন করেছেন।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // Admin changes regarding order - notification to helper (Requirement 3)
+    if (
+      updated.lastEditedBy === 'admin' &&
+      existing.lastEditedAt !== updated.lastEditedAt
+    ) {
+      const helperTarget = updated.helperId || existing.helperId;
+      if (helperTarget) {
+        let changes = [];
+        if (existing.status !== updated.status) changes.push(`অবস্থা (স্ট্যাটাস: ${updated.status})`);
+        if (existing.productCost !== updated.productCost) changes.push(`পণ্যের দাম (৳${updated.productCost || 0})`);
+        if (existing.deliveryFee !== updated.deliveryFee) changes.push(`ডেলিভারি ফি (৳${updated.deliveryFee || 0})`);
+        if (JSON.stringify(existing.items) !== JSON.stringify(updated.items)) changes.push('পণ্য তালিকা');
+        if (existing.deliveryLocation.address !== updated.deliveryLocation.address || existing.pickupLocation?.address !== updated.pickupLocation?.address) changes.push('ঠিকানা');
+        
+        const changeDesc = changes.length > 0 ? changes.join(', ') + ' পরিবর্তন করা হয়েছে।' : 'তথ্য পরিবর্তন করা হয়েছে।';
+        this.addNotification({
+          id: `notif-${Date.now()}-admin-change`,
+          userId: helperTarget,
+          title: 'এডমিন অর্ডার পরিবর্তন করেছেন',
+          body: `এডমিন অর্ডার #${updated.id} এর ${changeDesc}`,
+          orderId: updated.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
     // Fee adjustment notification to customer
     if (updated.feeAdjustment && updated.feeAdjustment.status === 'PENDING' && existing.feeAdjustment?.status !== 'PENDING') {
       this.addNotification({
@@ -1056,6 +1527,139 @@ class FallbackStore {
     }
   }
 
+  // ─── Shop Orders (Helper → Store ordering system) ──────────────────────────
+
+  public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
+    this.shopOrders.set(shopOrder.id, shopOrder);
+    this.notify();
+    // Notify the store owner if we know their userId
+    const shop = this.shops.get(shopOrder.shopId);
+    if (shop?.ownerUserId) {
+      this.addNotification({
+        id: `notif-shop-order-${Date.now()}`,
+        userId: shop.ownerUserId,
+        title: `নতুন অর্ডার: ${shopOrder.helperName}`,
+        body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
+        orderId: shopOrder.parentOrderId,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    try {
+      await setDoc(doc(db, 'shopOrders', shopOrder.id), cleanForFirestore(shopOrder));
+    } catch (e: any) {
+      console.warn('[Firestore] addShopOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async updateShopOrder(
+    shopOrderId: string,
+    updater: (so: ShopOrder) => ShopOrder,
+    actorRole?: 'helper' | 'store'
+  ): Promise<void> {
+    const existing = this.shopOrders.get(shopOrderId);
+    if (!existing) return;
+    const updated = updater(existing);
+    updated.updatedAt = new Date().toISOString();
+    this.shopOrders.set(shopOrderId, updated);
+
+    // 1. Notify helper when status changes (triggered by store actions like accept, prepare)
+    if (updated.status !== existing.status && updated.helperId && actorRole === 'store') {
+      const statusLabels: Record<ShopOrderStatus, string> = {
+        PENDING: 'অপেক্ষমাণ',
+        ACCEPTED: 'গ্রহণ করা হয়েছে',
+        PREPARING: 'প্রস্তুত হচ্ছে',
+        READY: 'প্রস্তুত',
+        HANDOVER: 'হস্তান্তর',
+        CANCELED: 'বাতিল',
+      };
+      this.addNotification({
+        id: `notif-shop-status-${Date.now()}`,
+        userId: updated.helperId,
+        title: `${updated.shopName}: অর্ডার ${statusLabels[updated.status]}`,
+        body: updated.note || `আপনার অর্ডারের স্ট্যাটাস আপডেট হয়েছে।`,
+        orderId: updated.parentOrderId,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 2. Notify helper when store sets/updates price
+    if (updated.price !== existing.price && updated.helperId && actorRole === 'store') {
+      this.addNotification({
+        id: `notif-shop-price-${Date.now()}`,
+        userId: updated.helperId,
+        title: `${updated.shopName}: মূল্য নির্ধারণ করা হয়েছে`,
+        body: updated.price !== undefined ? `দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন: ৳${updated.price}` : `দোকানদার মূল্য পরিবর্তন করেছেন।`,
+        orderId: updated.parentOrderId,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 3. Notify store owner when helper edits request text or price
+    if (actorRole === 'helper') {
+      const shop = this.shops.get(updated.shopId);
+      if (shop?.ownerUserId && (updated.requestText !== existing.requestText || updated.price !== existing.price)) {
+        this.addNotification({
+          id: `notif-shop-order-edit-${Date.now()}`,
+          userId: shop.ownerUserId,
+          title: `অর্ডার এডিট করা হয়েছে: ${updated.helperName}`,
+          body: `হেলপার অর্ডার এডিট করেছেন: ${updated.requestText.substring(0, 80)}${updated.price !== existing.price ? ` (নতুন মূল্য: ৳${updated.price || 0})` : ''}`,
+          orderId: updated.parentOrderId,
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shopOrders', shopOrderId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateShopOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteShopOrder(shopOrderId: string): Promise<void> {
+    const existing = this.shopOrders.get(shopOrderId);
+    this.shopOrders.delete(shopOrderId);
+    this.notify();
+
+    if (existing) {
+      const shop = this.shops.get(existing.shopId);
+      if (shop?.ownerUserId) {
+        this.addNotification({
+          id: `notif-shop-order-delete-${Date.now()}`,
+          userId: shop.ownerUserId,
+          title: `অর্ডার মুছে ফেলা হয়েছে: ${existing.helperName}`,
+          body: `হেলপার অর্ডারটি মুছে ফেলেছেন: ${existing.requestText.substring(0, 80)}`,
+          orderId: existing.parentOrderId,
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    try {
+      await deleteDoc(doc(db, 'shopOrders', shopOrderId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteShopOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public getShopOrdersForOrder(parentOrderId: string): ShopOrder[] {
+    return Array.from(this.shopOrders.values()).filter(
+      (so) => so.parentOrderId === parentOrderId
+    );
+  }
+
+  public getShopOrdersForStore(shopId: string): ShopOrder[] {
+    return Array.from(this.shopOrders.values())
+      .filter((so) => so.shopId === shopId && so.status !== 'CANCELED')
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
   public getHelperWallet(helperId: string): Wallet {
     const allOrders = Array.from(this.orders.values());
     const helperOrders = allOrders.filter(
@@ -1088,6 +1692,36 @@ class FallbackStore {
       updatedAt: new Date().toISOString(),
     };
   }
+
+  public getStoreWallet(storeUserId: string, storeId: string): Wallet {
+    const shopDoc = this.shops.get(storeId);
+    const commissionRate = shopDoc?.commissionPercent ?? 0;
+
+    const allOrders = Array.from(this.orders.values());
+    const storeOrders = allOrders.filter(
+      (o) => o.selectedShopIds?.includes(storeId) && o.status === 'DELIVERED'
+    );
+
+    const totalSales = storeOrders.reduce((sum, o) => sum + (o.productCost ?? 0), 0);
+    const totalCommissionDue = Math.round(totalSales * (commissionRate / 100));
+
+    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
+      (w) => w.helperId === storeUserId && w.status === 'APPROVED'
+    );
+
+    const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const balance = Math.max(0, totalCommissionDue - totalPaidCommission);
+
+    return {
+      userId: storeUserId,
+      balance,
+      totalEarned: totalSales,
+      totalWithdrawn: totalPaidCommission,
+      totalPaidCommission,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
 
   public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
     const platformShare = deliveryFee - helperShare;
@@ -1272,6 +1906,15 @@ class FallbackStore {
         app.userId = newUid;
         this.helperApplications.set(app.id, app);
         try { setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) {}
+      }
+    });
+
+    // 3b. Store Applications
+    this.storeApplications.forEach((app) => {
+      if (app.userId === oldUid) {
+        app.userId = newUid;
+        this.storeApplications.set(app.id, app);
+        try { setDoc(doc(db, 'storeApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) {}
       }
     });
 
@@ -1530,7 +2173,8 @@ class FallbackStore {
       if (targetTokens.length > 0) {
         // sendFcmPushToTokens is a no-op unless NEXT_PUBLIC_FCM_SERVER_KEY is set.
         // FCM background messages still work via SW onBackgroundMessage without it.
-        sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id, '/', notif.imageUrl);
+        const targetUrl = notif.orderId ? `/?orderId=${notif.orderId}` : '/';
+        sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id, targetUrl, notif.imageUrl);
       }
     } catch (e: any) {
       console.warn('[FCM] Push fan-out note:', e?.message || e);
@@ -1586,14 +2230,17 @@ class FallbackStore {
 
   public async markNotificationsRead(userId: string) {
     const list = this.notifications.get(userId) || [];
+    // Only process actually unread items to avoid unnecessary Firestore writes
+    const unread = list.filter((n) => !n.read);
+    if (unread.length === 0) return;
     const updated = list.map((n) => ({ ...n, read: true }));
     this.notifications.set(userId, updated);
     this.notify();
 
     try {
-      for (const n of updated) {
-        if (!n.read) continue;
-        await setDoc(doc(db, 'notifications', n.id), cleanForFirestore(n), { merge: true });
+      // Write only the ones that changed (unread → read), not the entire list
+      for (const n of unread) {
+        await setDoc(doc(db, 'notifications', n.id), { read: true }, { merge: true });
       }
     } catch (e: any) {
       console.warn('[Firestore] markNotificationsRead note (saved locally):', e?.message || e);
@@ -1790,16 +2437,210 @@ class FallbackStore {
       console.warn('[Firestore] deleteFeeSuggestion note (saved locally):', e?.message || e);
     }
   }
+  // ─── Store Application CRUD ───────────────────────────────────────────────
+
+  public async submitStoreApp(app: StoreApplication) {
+    this.storeApplications.set(app.id, app);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'storeApplications', app.id), cleanForFirestore(app));
+    } catch (e: any) {
+      console.warn('[Firestore] submitStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async updateStoreApp(appId: string, updatedFields: Partial<StoreApplication>) {
+    const existing = this.storeApplications.get(appId);
+    if (!existing) return;
+    const updated = { ...existing, ...updatedFields };
+    this.storeApplications.set(appId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async cancelStoreApp(appId: string) {
+    const existing = this.storeApplications.get(appId);
+    if (!existing) return;
+    const updated: StoreApplication = { ...existing, status: 'CANCELED' };
+    this.storeApplications.set(appId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] cancelStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async approveStoreApp(appId: string, reviewNote?: string) {
+    const existing = this.storeApplications.get(appId);
+    if (!existing) return;
+    const updated: StoreApplication = {
+      ...existing,
+      status: 'APPROVED',
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reviewNote || '',
+    };
+    this.storeApplications.set(appId, updated);
+
+    // Create / update Shop document so this store appears in the helpers' shop list
+    const shopId = `store-${existing.userId}`;
+    const shop: Shop = {
+      id: shopId,
+      name: existing.storeName,
+      type: existing.storeType,
+      description: existing.storeDescription,
+      contactPerson: existing.ownerName,
+      whatsapp: existing.ownerWhatsapp,
+      managerName: existing.managerName,
+      managerWhatsapp: existing.managerWhatsapp,
+      location: existing.location,
+      addedByHelperId: existing.userId,
+      addedByHelperName: existing.userName,
+      ownerUserId: existing.userId,
+      ownerUserEmail: existing.userEmail,
+      applicationId: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+      commissionPercent: existing.commissionPercent,
+    };
+    this.shops.set(shopId, shop);
+
+    // Update user profile: mark as approved store
+    const user = this.users.get(existing.userId);
+    if (user) {
+      const updatedUser: UserProfile = {
+        ...user,
+        isStore: true,
+        isStoreApproved: true,
+        storeId: shopId,
+        lastActiveMode: 'store',
+      };
+      this.users.set(existing.userId, updatedUser);
+      try { await this.saveUser(updatedUser); } catch (_) {}
+    }
+
+    // Notify store owner that application was approved (Requirement 4)
+    this.addNotification({
+      id: `notif-store-approve-${Date.now()}`,
+      userId: existing.userId,
+      title: 'আপনার স্টোর অ্যাপ্লিকেশন অনুমোদন করা হয়েছে!',
+      body: `অভিনন্দন! আপনার স্টোর "${existing.storeName}" এডমিন দ্বারা অনুমোদিত হয়েছে। এখন আপনি অর্ডার পেতে পারেন।`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(shop), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] approveStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async rejectStoreApp(appId: string, reviewNote?: string) {
+    const existing = this.storeApplications.get(appId);
+    if (!existing) return;
+    const updated: StoreApplication = {
+      ...existing,
+      status: 'REJECTED',
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reviewNote || '',
+    };
+    this.storeApplications.set(appId, updated);
+
+    // Notify store owner that application was rejected (Requirement 4)
+    this.addNotification({
+      id: `notif-store-reject-${Date.now()}`,
+      userId: existing.userId,
+      title: 'আপনার স্টোর অ্যাপ্লিকেশন বাতিল করা হয়েছে',
+      body: `দুঃখিত, আপনার স্টোর "${existing.storeName}" এর অ্যাপ্লিকেশনটি বাতিল করা হয়েছে। ${reviewNote ? 'কারণ: ' + reviewNote : ''}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] rejectStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteStoreApp(appId: string) {
+    const existing = this.storeApplications.get(appId);
+    // If the app was APPROVED, revoke user's store flags and remove the linked shop
+    if (existing && existing.status === 'APPROVED') {
+      const shopId = `store-${existing.userId}`;
+      this.shops.delete(shopId);
+      try { await deleteDoc(doc(db, 'shops', shopId)); } catch (_) {}
+
+      const user = this.users.get(existing.userId);
+      if (user) {
+        const updatedUser: UserProfile = {
+          ...user,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+        };
+        this.users.set(existing.userId, updatedUser);
+        try { await this.saveUser(updatedUser); } catch (_) {}
+      }
+    }
+    this.storeApplications.delete(appId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'storeApplications', appId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteStoreApp note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async blockStoreUser(userId: string, reason: string) {
+    const user = this.users.get(userId);
+    if (!user) return;
+    const updatedUser: UserProfile = {
+      ...user,
+      isBlocked: true,
+      blockedReason: reason,
+      isStore: false,
+      isStoreApproved: false,
+    };
+    this.users.set(userId, updatedUser);
+    this.notify();
+    try { await this.saveUser(updatedUser); } catch (_) {}
+  }
+
+  public async getAllOrders(): Promise<Order[]> {
+    try {
+      const snap = await getDocs(collection(db, 'orders'));
+      const list: Order[] = [];
+      snap.forEach((docSnap) => {
+        list.push(docSnap.data() as Order);
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllOrders error:', e);
+      return Array.from(this.orders.values());
+    }
+  }
 }
 
 export const fallbackStore = new FallbackStore();
 
 export function playNotificationSound() {
   if (typeof window === 'undefined') return;
+  // Fix 3: Use the shared AudioContext instead of creating a new one each time.
+  // Creating a new AudioContext on every sound call exhausts the browser's context
+  // limit (~6) and is a known source of memory leaks on mobile.
   try {
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 

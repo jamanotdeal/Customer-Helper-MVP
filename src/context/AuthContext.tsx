@@ -1,15 +1,15 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { UserProfile, ActiveMode, HelperApplication } from '@/types';
-import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission } from '@/lib/firebase';
+import { UserProfile, ActiveMode, HelperApplication, StoreApplication } from '@/types';
+import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses } from '@/lib/firebase';
 import {
   signInWithPopup,
   signInWithRedirect,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
-import { getSavedActiveMode, saveActiveMode } from '@/lib/storage';
+import { getSavedActiveMode, saveActiveMode, getSavedDeliveryAddresses, saveSavedDeliveryAddresses } from '@/lib/storage';
 import { getNativePosition } from '@/lib/native';
 
 
@@ -24,6 +24,8 @@ interface AuthContextType {
   submitHelperApplication: (appData: Omit<HelperApplication, 'id' | 'userId' | 'userName' | 'status' | 'createdAt'>) => Promise<void>;
   updateHelperApplication: (appId: string, updatedFields: Partial<HelperApplication>) => Promise<void>;
   cancelHelperApplication: (appId: string) => Promise<void>;
+  submitStoreApplication: (appData: Omit<StoreApplication, 'id' | 'userId' | 'userName' | 'userEmail' | 'status' | 'createdAt'>) => Promise<void>;
+  cancelStoreApplication: (appId: string) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
   updateHelperLocation: (loc: { lat: number; lng: number; address?: string }) => void;
 }
@@ -146,6 +148,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (profile.isAdmin) {
       setActiveModeState('admin');
       saveActiveMode('admin');
+    } else if (profile.isStoreApproved) {
+      // Approved stores are always locked into store mode
+      setActiveModeState('store');
+      saveActiveMode('store');
     } else {
       let targetMode: ActiveMode;
       if (profile.isHelper && profile.helperType === 'dedicated') {
@@ -199,6 +205,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         applyProfile(profile, savedMode);
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = fbUser.uid;
+        // Initialize role-scoped Firestore listeners (replaces the old 12-blanket-listeners approach)
+        const listenerRole: 'customer' | 'helper' | 'admin' = isUserAdminEmail(fbUser.email)
+          ? 'admin'
+          : (profile.isHelper && (profile.lastActiveMode === 'helper' || savedMode === 'helper'))
+          ? 'helper'
+          : 'customer';
+        fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType);
+        // On customer login: load saved delivery addresses from Firestore if not already in localStorage
+        if (listenerRole === 'customer') {
+          const localAddresses = getSavedDeliveryAddresses(fbUser.uid);
+          if (localAddresses.length === 0) {
+            // No local cache — fetch from Firestore once and store
+            loadCustomerSavedAddresses(fbUser.uid).then((firestoreAddresses) => {
+              if (firestoreAddresses.length > 0) {
+                saveSavedDeliveryAddresses(fbUser.uid, firestoreAddresses);
+              }
+            }).catch(() => {});
+          }
+        }
         // Initialize FCM push token for this device (async, non-blocking)
         requestBrowserNotificationPermission().then((granted) => {
           if (granted) {
@@ -208,6 +233,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         setUser(null);
         fallbackStore.currentUserId = null;
+        fallbackStore.teardownListeners(); // Clean up all listeners on logout
       }
       authReady = true;
       maybeFinishLoading();
@@ -272,6 +298,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       saveActiveMode('admin');
       return;
     }
+    // Approved stores are locked into store mode
+    if (user && user.isStoreApproved) {
+      setActiveModeState('store');
+      saveActiveMode('store');
+      return;
+    }
     if (mode === 'helper' && user && !user.isHelper) {
       enableCommuterHelperWithLocation();
       return;
@@ -282,6 +314,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updated = { ...user, lastActiveMode: mode, isHelper: mode === 'helper' ? true : user.isHelper };
       setUser(updated);
       fallbackStore.saveUser(updated);
+
+      // Switch Firestore listeners to match the new active mode (customer ⇔ helper)
+      if (mode === 'customer' || mode === 'helper') {
+        fallbackStore.initListenersForRole(mode, user.uid, user.helperType);
+      }
 
       // When switching to helper mode, get native GPS location for maximum accuracy
       if (mode === 'helper') {
@@ -345,6 +382,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(demoProfile);
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = demoProfile.uid;
+        // Initialize role-scoped listeners for demo user
+        const demoRole: 'customer' | 'helper' | 'admin' = demoProfile.isAdmin
+          ? 'admin'
+          : demoProfile.isHelper
+          ? 'helper'
+          : 'customer';
+        fallbackStore.initListenersForRole(demoRole, demoProfile.uid, demoProfile.helperType);
         // Initialize FCM push token for this device & ask permission (async, non-blocking)
         requestBrowserNotificationPermission().then((granted) => {
           if (granted) {
@@ -402,6 +446,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setUser(null);
     fallbackStore.currentUserId = null;
+    fallbackStore.teardownListeners(); // Stop all Firestore listeners on logout
     setActiveModeState('customer');
   };
 
@@ -424,6 +469,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const cancelHelperApplication = async (appId: string) => {
     await fallbackStore.cancelHelperApp(appId);
+  };
+
+  const submitStoreApplication = async (
+    appData: Omit<StoreApplication, 'id' | 'userId' | 'userName' | 'userEmail' | 'status' | 'createdAt'>
+  ) => {
+    if (!user) return;
+    const newApp: StoreApplication = {
+      ...appData,
+      id: `store-app-${Date.now()}`,
+      userId: user.uid,
+      userName: user.displayName,
+      userEmail: user.email || '',
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    };
+    await fallbackStore.submitStoreApp(newApp);
+  };
+
+  const cancelStoreApplication = async (appId: string) => {
+    await fallbackStore.cancelStoreApp(appId);
   };
 
   const updateCustomerPreferences = (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => {
@@ -466,6 +531,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         submitHelperApplication,
         updateHelperApplication,
         cancelHelperApplication,
+        submitStoreApplication,
+        cancelStoreApplication,
         updateCustomerPreferences,
         updateHelperLocation,
       }}

@@ -10,11 +10,9 @@ import {
   MapPin,
   Scale,
   RotateCcw,
-  Tag,
   Info,
   Send,
   CheckCircle2,
-  Sparkles,
   ArrowLeft,
   MessageSquare,
   ShoppingBag,
@@ -37,9 +35,7 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
   const [weightKg, setWeightKg] = useState<string>('0');
   const [productPrice, setProductPrice] = useState<string>('');
   const [isReturnRequested, setIsReturnRequested] = useState<boolean>(false);
-  const [discountCode, setDiscountCode] = useState<string>('');
-  const [appliedDiscountAmount, setAppliedDiscountAmount] = useState<number>(0);
-  const [discountMessage, setDiscountMessage] = useState<string>('');
+
 
   // Map focus & Modal
   const [isDistanceFocused, setIsDistanceFocused] = useState<boolean>(false);
@@ -59,34 +55,17 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
     return () => unsub();
   }, []);
 
-  // Handle promo code apply
-  const handleApplyDiscount = () => {
-    const code = discountCode.trim().toUpperCase();
-    if (!code) {
-      setAppliedDiscountAmount(0);
-      setDiscountMessage('');
-      return;
-    }
-    if (code === 'JAMANOT10' || code === 'FIRST10') {
-      setAppliedDiscountAmount(10);
-      setDiscountMessage('৳১০ ডিসকাউন্ট এপ্লাই করা হয়েছে! 🎉');
-    } else if (code === 'FREE20') {
-      setAppliedDiscountAmount(20);
-      setDiscountMessage('৳২০ ডিসকাউন্ট এপ্লাই করা হয়েছে! 🎉');
-    } else {
-      setAppliedDiscountAmount(0);
-      setDiscountMessage('অকার্যকর ডিসকাউন্ট কোড।');
-    }
-  };
+  // Round up helper: decimals like 1.2 → 2
+  const ceilNum = (val: string) => Math.ceil(parseFloat(val) || 0);
 
   // Perform Fee Calculation
   const calculation = calculateEstimatedFee(
     {
-      distanceKm: parseFloat(distanceKm) || 0,
-      weightKg: parseFloat(weightKg) || 0,
+      distanceKm: ceilNum(distanceKm),
+      weightKg: ceilNum(weightKg),
       isReturnRequested,
       productPrice: parseFloat(productPrice) || 0,
-      discountAmount: appliedDiscountAmount,
+      discountAmount: 0,
     },
     pricingSettings
   );
@@ -151,9 +130,11 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
         </div>
       </div>
 
-      {/* ── MINIMALIST FEE CALCULATOR ── */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 shadow-xs space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {/* ── FEE CALCULATOR – single unified card ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5 shadow-xs space-y-3">
+
+        {/* Row 1: Distance + Weight side by side */}
+        <div className="grid grid-cols-2 gap-3">
           {/* Distance Input */}
           <div className="space-y-1">
             <label className="text-xs font-bold text-gray-700 flex items-center justify-between">
@@ -167,14 +148,19 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
               <div className="relative flex-1">
                 <input
                   type="number"
-                  step="0.1"
+                  step="1"
                   min="0"
                   value={distanceKm}
                   onFocus={() => setIsDistanceFocused(true)}
-                  onBlur={() => setTimeout(() => setIsDistanceFocused(false), 200)}
+                  onBlur={() => {
+                    // round up on blur
+                    const ceiled = Math.ceil(parseFloat(distanceKm) || 0);
+                    setDistanceKm(ceiled.toString());
+                    setTimeout(() => setIsDistanceFocused(false), 200);
+                  }}
                   onChange={(e) => setDistanceKm(e.target.value)}
                   className="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500 focus:bg-white transition-all"
-                  placeholder="0.0"
+                  placeholder="0"
                 />
                 <span className="absolute right-2.5 top-2 text-[11px] font-semibold text-gray-400">km</span>
               </div>
@@ -191,21 +177,26 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
             </div>
           </div>
 
-          {/* Product Weight Input */}
+          {/* Weight Input */}
           <div className="space-y-1">
             <label className="text-xs font-bold text-gray-700 flex items-center justify-between">
               <span className="flex items-center space-x-1">
                 <Scale className="w-3.5 h-3.5 text-emerald-600" />
-                <span>পণ্যের ওজন (KG)</span>
+                <span>ওজন (KG)</span>
               </span>
               <span className="text-[10px] text-gray-400 font-normal">৳{calculation.perKgRate}/kg</span>
             </label>
             <div className="relative">
               <input
                 type="number"
-                step="0.5"
+                step="1"
                 min="0"
                 value={weightKg}
+                onBlur={(e) => {
+                  // round up on blur
+                  const ceiled = Math.ceil(parseFloat(e.target.value) || 0);
+                  setWeightKg(ceiled.toString());
+                }}
                 onChange={(e) => setWeightKg(e.target.value)}
                 className="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500 focus:bg-white transition-all"
                 placeholder="0"
@@ -215,15 +206,15 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* Product Price & Processing Fee Input (Avoided/Hidden if empty or processing fee not set) */}
+        {/* Row 2: Product Price (only if processing fee is configured) */}
         {typeof pricingSettings.feeCalculatorProcessingFee === 'number' && pricingSettings.feeCalculatorProcessingFee > 0 && (
-          <div className="space-y-1.5 p-3 rounded-xl bg-purple-50/50 border border-purple-100">
-            <label className="text-xs font-bold text-purple-900 flex items-center justify-between">
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-gray-700 flex items-center justify-between">
               <span className="flex items-center space-x-1">
                 <ShoppingBag className="w-3.5 h-3.5 text-purple-600" />
                 <span>মোট পণ্যের দাম (৳)</span>
               </span>
-              <span className="text-[10px] text-purple-700 font-medium">
+              <span className="text-[10px] text-purple-600 font-medium">
                 প্রসেসিং ফি: {pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? `${pricingSettings.feeCalculatorProcessingFee}%` : `৳${pricingSettings.feeCalculatorProcessingFee}`}
               </span>
             </label>
@@ -233,27 +224,21 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
                 min="0"
                 value={productPrice}
                 onChange={(e) => setProductPrice(e.target.value)}
-                className="w-full pl-3 pr-8 py-2 bg-white border border-purple-200 rounded-xl text-xs font-bold text-gray-900 focus:outline-none focus:border-purple-500 transition-all"
+                className="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-900 focus:outline-none focus:border-purple-400 focus:bg-white transition-all"
                 placeholder="0 (ঐচ্ছিক)"
               />
               <span className="absolute right-2.5 top-2 text-[11px] font-semibold text-gray-400">৳</span>
             </div>
-            {calculation.processingFee > 0 && (
-              <div className="flex items-center justify-between text-[11px] font-bold text-purple-800 pt-0.5 px-1">
-                <span>যোগকৃত প্রসেসিং ফি:</span>
-                <span>+৳{calculation.processingFee}</span>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Return Product Option (Avoided/Hidden if return fee/percent is configured empty or 0 by admin) */}
+        {/* Row 3: Return / Two-Way option */}
         {((pricingSettings.feeCalculatorReturnPercent ?? 20) > 0 || (pricingSettings.feeCalculatorReturnFee ?? 15) > 0) && (
-          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between text-xs">
-            <div className="flex items-center space-x-2">
+          <label className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100 cursor-pointer hover:bg-emerald-50/60 transition-colors">
+            <div className="flex items-center space-x-2 text-xs">
               <RotateCcw className="w-4 h-4 text-emerald-600 shrink-0" />
               <span className="font-semibold text-gray-800">
-                পণ্য আবার ফেরত/রিটার্ন চার্জ (+{pricingSettings.feeCalculatorReturnPercent ?? 20}%)
+                রিটার্ন / Two-Way (+{pricingSettings.feeCalculatorReturnPercent ?? 20}%)
               </span>
             </div>
             <input
@@ -262,40 +247,17 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
               onChange={(e) => setIsReturnRequested(e.target.checked)}
               className="w-4 h-4 accent-emerald-600 rounded cursor-pointer shrink-0"
             />
-          </div>
+          </label>
         )}
 
-        {/* Promo / Discount Code */}
-        <div className="flex items-center space-x-2">
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={discountCode}
-              onChange={(e) => setDiscountCode(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-900 uppercase focus:outline-none focus:border-emerald-500"
-              placeholder="প্রমো কোড (e.g. JAMANOT10)"
-            />
-            <Tag className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-2" />
-          </div>
-          <button
-            type="button"
-            onClick={handleApplyDiscount}
-            className="px-3 py-1.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-xs font-bold transition-all shrink-0"
-          >
-            এপ্লাই
-          </button>
-        </div>
-        {discountMessage && (
-          <p className={`text-[11px] font-bold ${appliedDiscountAmount > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-            {discountMessage}
-          </p>
-        )}
+        {/* Divider */}
+        <div className="border-t border-dashed border-gray-200" />
 
-        {/* Minimalist Price Summary Box (Only calculation lines and total amount) */}
+        {/* Price Summary Box */}
         <div className="p-4 rounded-2xl bg-emerald-950 text-white space-y-3 shadow-md">
           <div className="space-y-1.5 text-xs text-emerald-100 border-b border-emerald-900/80 pb-2.5">
             <div className="flex items-center justify-between">
-              <span>ডেলিভারি ফি (বেস + দূরত্ব + ওজন):</span>
+              <span>ডেলিভারি ফি (দূরত্ব + ওজন):</span>
               <span className="font-bold">৳{calculation.deliverySubtotal}</span>
             </div>
             {calculation.returnFee > 0 && (
@@ -310,32 +272,26 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
                 <span className="font-bold">+৳{calculation.processingFee}</span>
               </div>
             )}
-            {calculation.discount > 0 && (
-              <div className="flex items-center justify-between text-amber-300">
-                <span>ডিসকাউন্ট:</span>
-                <span className="font-bold">-৳{calculation.discount}</span>
-              </div>
-            )}
           </div>
 
-          <div className="flex items-center justify-between pt-0.5">
-            <div>
-              <span className="text-[11px] text-emerald-300 font-medium block">সর্বমোট চার্জ:</span>
-              <span className="text-[10px] text-emerald-400 font-mono">(সর্বনিম্ন ৳{calculation.minFee})</span>
-            </div>
-            <div className="text-right">
-              <span className="text-2xl font-black text-emerald-400">৳{calculation.totalFee}</span>
-            </div>
-          </div>
-
-          {/* Admin Price Limitation Alert Message */}
-          {calculation.totalFee > (pricingSettings.feeCalculatorMaxLimit ?? 70) && (
-            <div className="mt-2 p-3 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold leading-relaxed flex items-start space-x-2">
+          {calculation.totalFee > (pricingSettings.feeCalculatorMaxLimit ?? 70) ? (
+            /* Admin Price Limitation Alert – replaces the total row */
+            <div className="pt-0.5 p-3 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold leading-relaxed flex items-start space-x-2">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <span>
                 {pricingSettings.feeCalculatorMaxLimitMessage ||
                   `মোট ডেলিভারি ফি ৳${pricingSettings.feeCalculatorMaxLimit ?? 70}-এর বেশি। বিস্তারিত ও নিশ্চিতকরণের জন্য আমাদের সাথে যোগাযোগ করুন।`}
               </span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between pt-0.5">
+              <div>
+                <span className="text-[11px] text-emerald-300 font-medium block">সর্বমোট চার্জ:</span>
+                <span className="text-[10px] text-emerald-400 font-mono">(সর্বনিম্ন ৳{calculation.minFee})</span>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-black text-emerald-400">৳{calculation.totalFee}</span>
+              </div>
             </div>
           )}
         </div>

@@ -4,12 +4,13 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
-import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock, Map } from 'lucide-react';
+import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { MapPickerModal } from './MapPickerModal';
+import { SavedAddressPicker } from './SavedAddressPicker';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -45,6 +46,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
   const [mapHasError, setMapHasError] = useState(false);
 
+  // Saved address picker state
+  const [showSavedAddressPicker, setShowSavedAddressPicker] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState<LocationData[]>([]);
+
+  // Pickup saved-address picker state (service-scoped)
+  const [showPickupAddressPicker, setShowPickupAddressPicker] = useState(false);
+  const [savedPickupAddresses, setSavedPickupAddresses] = useState<LocationData[]>([]);
+
   // Service selection state
   const [service, setService] = useState('');
   const [services, setServices] = useState<string[]>(
@@ -67,17 +76,18 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         setPickupNote(saved.address);
         if (saved.lat) setPickupLat(saved.lat);
         if (saved.lng) setPickupLng(saved.lng);
+        setSavedPickupAddresses([saved]);
       } else {
-        // No saved address for this service — clear pickup
         setPickupNote('');
         setPickupLat(undefined);
         setPickupLng(undefined);
+        setSavedPickupAddresses([]);
       }
     } else {
-      // No-save service — always clear pickup
       setPickupNote('');
       setPickupLat(undefined);
       setPickupLng(undefined);
+      setSavedPickupAddresses([]);
     }
   };
 
@@ -130,7 +140,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       const savedLoc = getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
       if (savedLoc?.address) {
         setDeliveryAddress(savedLoc.address);
+        if (savedLoc.lat) setDeliveryLat(savedLoc.lat);
+        if (savedLoc.lng) setDeliveryLng(savedLoc.lng);
       }
+
+      // Load saved delivery addresses from localStorage (populated from Firestore on login)
+      const addresses = getSavedDeliveryAddresses(user.uid);
+      setSavedAddresses(addresses);
     }
   }, [user]);
 
@@ -303,6 +319,24 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   const timingStatus = isOrderTimingOpen(fallbackStore.pricingSettings);
 
+  const handleDeliveryAddressClick = () => {
+    if (mapHasError) return;
+    if (savedAddresses.length > 0) {
+      setShowSavedAddressPicker(true);
+    } else {
+      setShowDeliveryMapPicker(true);
+    }
+  };
+
+  const handlePickupAddressClick = () => {
+    if (mapHasError) return;
+    if (savedPickupAddresses.length > 0) {
+      setShowPickupAddressPicker(true);
+    } else {
+      setShowPickupMapPicker(true);
+    }
+  };
+
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
       {user && !timingStatus.isOpen ? (
@@ -311,13 +345,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             <Clock className="w-8 h-8 animate-pulse text-amber-700" />
           </div>
           <div className="space-y-2">
-            <h3 className="font-extrabold text-base text-gray-900">অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে</h3>
+            <h3 className="font-extrabold text-base text-gray-900">অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে</h3>
             <p className="text-xs font-semibold text-emerald-800 bg-emerald-50/80 border border-emerald-100 px-4 py-2 rounded-2xl inline-block leading-relaxed">
               {timingStatus.message}
             </p>
           </div>
           <p className="text-[11px] text-gray-400 font-medium">
-            পরবর্তীতে পুনরায় চেষ্টা করার জন্য অনুরোধ করা হলো। ধন্যবাদ!
+            পরবর্তীতে পুনরায় চেষ্টা করার জন্য অনুরোধ করা হলো। ধন্যবাদ!
           </p>
         </div>
       ) : (
@@ -384,30 +418,23 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                       type="text"
                       value={pickupNote}
                       onChange={(e) => setPickupNote(e.target.value)}
-                      onClick={() => {
-                        if (!mapHasError) setShowPickupMapPicker(true);
-                      }}
-                      placeholder="কোথা থেকে নিতে হবে? (ম্যাপ সিলেক্ট করতে ক্লিক করুন)"
-                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors"
+                      onClick={handlePickupAddressClick}
+                      placeholder="কোথা থেকে নিতে হবে? (ক্লিক করে সিলেক্ট করুন)"
+                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
+                      readOnly
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPickupMapPicker(true)}
+                      onClick={handlePickupAddressClick}
                       title="ম্যাপ থেকে স্থান নির্বাচন করুন"
                       className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
                     >
                       <MapPin className="w-4 h-4" />
                     </button>
                   </div>
-                  {pickupLat && pickupLng && (
-                    <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({pickupLat.toFixed(4)}, {pickupLng.toFixed(4)})</span>
-                    </div>
-                  )}
                 </div>
 
-                {/* Delivery Address */}
+                {/* Delivery Address — clicks open saved address picker first, or map if none saved */}
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">ডেলিভারি ঠিকানা *</label>
                   <div className="relative group">
@@ -416,28 +443,22 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                       type="text"
                       value={deliveryAddress}
                       onChange={(e) => setDeliveryAddress(e.target.value)}
-                      onClick={() => {
-                        if (!mapHasError) setShowDeliveryMapPicker(true);
-                      }}
-                      placeholder="ডেলিভারি ঠিকানা (ম্যাপ সিলেক্ট করতে ক্লিক করুন) *"
-                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors"
+                      onClick={handleDeliveryAddressClick}
+                      placeholder="ডেলিভারি ঠিকানা (ক্লিক করে সিলেক্ট করুন) *"
+                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
                       required
+                      readOnly
                     />
                     <button
                       type="button"
-                      onClick={() => setShowDeliveryMapPicker(true)}
-                      title="ম্যাপ থেকে ঠিকানা নির্বাচন করুন"
+                      onClick={handleDeliveryAddressClick}
+                      title="ঠিকানা নির্বাচন করুন"
                       className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
                     >
                       <MapPin className="w-4 h-4" />
                     </button>
                   </div>
-                  {deliveryLat && deliveryLng && (
-                    <div className="mt-1 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      <span>ম্যাপের স্থানাঙ্ক সিলেক্ট করা হয়েছে ({deliveryLat.toFixed(4)}, {deliveryLng.toFixed(4)})</span>
-                    </div>
-                  )}
+
                 </div>
 
                 {/* WhatsApp Number */}
@@ -486,6 +507,35 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         </>
       )}
 
+      {/* Pickup Saved Address Picker — shown first when pickup field clicked and a saved location exists */}
+      <SavedAddressPicker
+        isOpen={showPickupAddressPicker}
+        onClose={() => setShowPickupAddressPicker(false)}
+        savedAddresses={savedPickupAddresses}
+        title="সেভ করা স্থান"
+        subtitle="এই সার্ভিসে আগে ব্যবহার করা স্থান"
+        openMapLabel="অন্য স্থান (ম্যাপ থেকে নিন)"
+        onSelectAddress={(loc) => {
+          setPickupNote(loc.address);
+          if (loc.lat) setPickupLat(loc.lat);
+          if (loc.lng) setPickupLng(loc.lng);
+        }}
+        onOpenMap={() => setShowPickupMapPicker(true)}
+      />
+
+      {/* Saved Address Picker — shown first when delivery address field is clicked */}
+      <SavedAddressPicker
+        isOpen={showSavedAddressPicker}
+        onClose={() => setShowSavedAddressPicker(false)}
+        savedAddresses={savedAddresses}
+        onSelectAddress={(loc) => {
+          setDeliveryAddress(loc.address);
+          if (loc.lat) setDeliveryLat(loc.lat);
+          if (loc.lng) setDeliveryLng(loc.lng);
+        }}
+        onOpenMap={() => setShowDeliveryMapPicker(true)}
+      />
+
       {/* Map Picker Modals */}
       <MapPickerModal
         isOpen={showPickupMapPicker}
@@ -528,6 +578,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           setDeliveryAddress(loc.address);
           if (loc.lat) setDeliveryLat(loc.lat);
           if (loc.lng) setDeliveryLng(loc.lng);
+          // Auto-save new delivery address to localStorage + Firestore
+          if (user && loc.address.trim()) {
+            const updated = addSavedDeliveryAddress(user.uid, loc);
+            setSavedAddresses(updated);
+            // Push to Firestore in background (non-blocking)
+            saveCustomerSavedAddressToFirestore(user.uid, loc).catch(() => {});
+          }
         }}
       />
     </div>
