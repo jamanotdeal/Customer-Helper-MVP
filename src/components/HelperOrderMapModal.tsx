@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Map, X, Navigation } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder } from '@/types';
 import { fetchRoadRoute } from '@/lib/routeUtils';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface HelperOrderMapModalProps {
   isOpen: boolean;
@@ -25,6 +26,9 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   shopOrders,
   onSelectShop,
 }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const layersRef = useRef<any[]>([]);
@@ -93,7 +97,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
           const link = document.createElement('link');
           link.id = 'leaflet-css-picker';
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = '/vendor/leaflet/leaflet.css';
           document.head.appendChild(link);
         }
 

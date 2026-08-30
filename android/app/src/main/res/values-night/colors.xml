@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Forced white in dark mode too. Without this override a dark-themed
+         device paints a black system splash before the white app appears. -->
+    <color name="splash_background">#FFFFFFFF</color>
+</resources>

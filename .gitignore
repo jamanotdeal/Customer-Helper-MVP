@@ -5,3 +5,16 @@ out
 tsconfig.tsbuildinfo
 *.log
 .env.local
+
+# Android / Capacitor
+android/.gradle
+android/build
+android/app/build
+android/app/release
+android/local.properties
+android/keystore.properties
+android/.idea
+*.jks
+*.keystore
+ios/App/Pods
+ios/App/build

@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Shop, LocationData } from '@/types';
 import { X, Navigation, Store } from 'lucide-react';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface HelperRetailerMapModalProps {
   isOpen: boolean;
@@ -34,6 +35,9 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
   radiusKm = 5,
   onShopMarkerClick,
 }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<Map<string, any>>(new Map());
@@ -53,7 +57,7 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
         const link = document.createElement('link');
         link.id = 'leaflet-css-retailer';
         link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        link.href = '/vendor/leaflet/leaflet.css';
         document.head.appendChild(link);
       }
 

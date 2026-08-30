@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash + app ground. Pure white, logo only. -->
+    <color name="splash_background">#FFFFFFFF</color>
+
+    <color name="brand_primary">#FF059669</color>
+    <color name="brand_primary_dark">#FF047857</color>
+    <color name="brand_accent">#FF10B981</color>
+
+    <!-- Capacitor's generated theme references these three names -->
+    <color name="colorPrimary">#FF059669</color>
+    <color name="colorPrimaryDark">#FF047857</color>
+    <color name="colorAccent">#FF10B981</color>
+</resources>

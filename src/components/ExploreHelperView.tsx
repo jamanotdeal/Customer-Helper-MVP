@@ -10,8 +10,12 @@ import { fetchRoadRoute } from '@/lib/routeUtils';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { useModal } from './CustomModal';
 import { Compass, Map as MapIcon, Layers, Clock, MapPin, Bike, Navigation, RefreshCw, AlertTriangle } from 'lucide-react';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 export const ExploreHelperView: React.FC = () => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const { user } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [viewMode, setViewMode] = useState<'LIST' | 'MAP'>('LIST');
@@ -169,7 +173,7 @@ export const ExploreHelperView: React.FC = () => {
         const link = document.createElement('link');
         link.id = 'leaflet-css-picker';
         link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        link.href = '/vendor/leaflet/leaflet.css';
         document.head.appendChild(link);
       }
 

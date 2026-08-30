@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ShopOrder, ShopOrderStatus } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
+import { NativeReadinessCard } from '@/components/NativeReadinessCard';
 
 
 // Timer component to display live elapsed time
@@ -839,6 +840,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
     return (
       <div className="space-y-5 pb-24 animate-in fade-in duration-200">
+        {/* Native permission ladder. Renders nothing on web, and nothing
+            once every permission is granted. */}
+        <NativeReadinessCard />
 
 
         {/* ─── Tab Bar in Emerald Green ──────────────────────────────────────────────────────── */}

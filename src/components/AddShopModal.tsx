@@ -8,6 +8,7 @@ import { MapPickerModal } from './MapPickerModal';
 import {
   X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle,
 } from 'lucide-react';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface AddShopModalProps {
   shopToEdit?: Shop | null;
@@ -29,6 +30,9 @@ const STORE_TYPES_DEFAULT = [
 ];
 
 export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose, onSaved }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const { user } = useAuth();
 
   const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
@@ -101,7 +105,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
           const link = document.createElement('link');
           link.id = 'leaflet-css-addshop';
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = '/vendor/leaflet/leaflet.css';
           document.head.appendChild(link);
         }
         if (!inlineMapRef.current) return;

@@ -1,0 +1,130 @@
+apply plugin: 'com.android.application'
+
+// Release signing. Create android/keystore.properties (gitignored) with:
+//   storeFile=/absolute/path/to/jamanot-release.jks
+//   storePassword=...
+//   keyAlias=jamanot
+//   keyPassword=...
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace = "com.jamanot.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.jamanot.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+
+    // ─── Firebase (native) ────────────────────────────────────────────────────
+    // firestore: the duty service's own snapshot listener, which keeps working
+    //            when the WebView's JavaScript is frozen or killed.
+    // auth:      native session, so the listener still works once the wide-open
+    //            Firestore rules are tightened.
+    // messaging: secondary wake path (Play Services delivers even when OEM
+    //            task-killers have stopped our process).
+    implementation platform('com.google.firebase:firebase-bom:34.1.0')
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-messaging'
+
+    // ─── Native Google sign-in (Credential Manager) ───────────────────────────
+    implementation 'androidx.credentials:credentials:1.5.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+
+    // ─── Duty service support ─────────────────────────────────────────────────
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+    implementation 'androidx.work:work-runtime:2.10.0'          // OEM task-killer watchdog
+    // WorkManager's Worker API exposes Guava's ListenableFuture, but the
+    // transitive listenablefuture artifact resolves to the deliberately-empty
+    // "9999.0-empty-to-avoid-conflict-with-guava" stub. Real guava is already on
+    // the RUNTIME classpath via Firebase/Play Services, so compileOnly gives the
+    // compiler the class it needs and adds nothing to the APK.
+    compileOnly 'com.google.guava:guava:32.1.3-android'
+    implementation 'androidx.lifecycle:lifecycle-process:2.8.7'  // foreground/background detection
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+
+    testImplementation "junit:junit:$junitVersion"
+    testImplementation 'org.json:json:20240303'   // android.jar stubs org.json on the JVM
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+/**
+ * Keeps the geofence golden vectors in one place. The TypeScript copy under
+ * src/lib/__fixtures__/ is the source of truth; this mirrors it onto the unit
+ * test classpath before tests run, so there is never a second file to update.
+ */
+tasks.register('syncGeofenceFixture', Copy) {
+    from rootProject.file('../src/lib/__fixtures__/geofence-cases.json')
+    into "$projectDir/src/test/resources"
+}
+tasks.named('preBuild') { dependsOn 'syncGeofenceFixture' }
+tasks.withType(Test).configureEach { dependsOn 'syncGeofenceFixture' }

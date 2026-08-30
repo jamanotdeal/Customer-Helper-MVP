@@ -6,6 +6,7 @@ import { MapPin, X, Navigation, Check, Search, AlertTriangle, ArrowRight, Refres
 import { calculateDistanceKm } from '@/lib/pricing';
 import { LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface DistanceCalculatorMapModalProps {
   isOpen: boolean;
@@ -18,6 +19,9 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
   onClose,
   onSelectDistance,
 }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const pickupMarkerRef = useRef<any>(null);
@@ -64,7 +68,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
           const link = document.createElement('link');
           link.id = 'leaflet-css-picker';
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = '/vendor/leaflet/leaflet.css';
           document.head.appendChild(link);
         }
 

@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, Navigation, Search, AlertTriangle } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 import { StoreApplication, LocationData } from '@/types';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface StoreApplicationModalProps {
   onClose: () => void;
@@ -24,6 +25,9 @@ const STORE_TYPES_DEFAULT = [
 ];
 
 export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ onClose }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const { user, submitStoreApplication, cancelStoreApplication } = useAuth();
 
   const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
@@ -117,7 +121,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
           const link = document.createElement('link');
           link.id = 'leaflet-css-store';
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = '/vendor/leaflet/leaflet.css';
           document.head.appendChild(link);
         }
         if (!inlineMapRef.current) return;

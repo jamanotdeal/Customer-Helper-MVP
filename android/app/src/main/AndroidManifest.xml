@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:name=".JamanotApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <!--
+            Full-screen new-order alert for Helper / Store.
+            excludeFromRecents + empty taskAffinity keep it out of the app's own
+            back stack, so dismissing it never leaves a stray Recents entry.
+        -->
+        <activity
+            android:name=".ui.OrderAlertActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.OrderAlert" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+
+        <!--
+            The duty foreground service. Declares both types:
+              location  - Helper. No Android 15 runtime cap, and it grants
+                          "while in use" location WITHOUT ACCESS_BACKGROUND_LOCATION.
+              dataSync  - Store. Stationary, so no location need; subject to the
+                          Android 15 6h/24h cap, handled via onTimeout().
+            stopWithTask="false" so swiping the app from Recents does not kill duty.
+        -->
+        <service
+            android:name=".service.DutyForegroundService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="location|dataSync" />
+
+        <!-- Secondary wake path. Play Services delivers this even after an OEM kill. -->
+        <service
+            android:name=".service.JamanotMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_jamanot" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/brand_primary" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="jamanot_general" />
+
+        <!-- MY_PACKAGE_REPLACED matters: an app update silently stops the service. -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Restarts duty after onTaskRemoved / an OEM task-killer, and hosts the
+             "Go off duty" notification action. -->
+        <receiver
+            android:name=".receiver.RestartServiceReceiver"
+            android:exported="false" />
+
+    </application>
+
+    <!-- ─── Network ─────────────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ─── Location ────────────────────────────────────────────────────────── -->
+    <!-- Foreground only. ACCESS_BACKGROUND_LOCATION is deliberately NOT requested:
+         a running location-type foreground service already grants background
+         access, which avoids Play's background-location review entirely. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- ─── Notifications ───────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ─── Foreground service ──────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- ─── Auto-open ───────────────────────────────────────────────────────── -->
+    <!-- Documented exemption to the Android 10+ background-activity-start ban.
+         User-granted, opt-in, and the app degrades to a heads-up notification
+         without it. We never draw a TYPE_APPLICATION_OVERLAY window. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Deliberately NOT requested, each a Play policy-restricted permission the
+         app does not qualify for and does not need:
+           REQUEST_IGNORE_BATTERY_OPTIMIZATIONS - use the settings intent instead
+           SCHEDULE_EXACT_ALARM                 - setAndAllowWhileIdle is enough
+           USE_FULL_SCREEN_INTENT               - restricted to calling/alarm apps
+           CAMERA / READ_MEDIA_IMAGES           - images use <input type="file"> -->
+
+    <!-- androidx.credentials-play-services-auth declares these for its passkey
+         support. We only use the Google ID token flow, so strip them rather than
+         carry two unexplained permissions into the Play listing. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" tools:node="remove" />
+
+    <!-- ─── Hardware (used, but never required to install) ──────────────────── -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.location.network" android:required="false" />
+
+</manifest>

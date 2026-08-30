@@ -8,6 +8,7 @@ import { MapPin, X, Navigation, Check, Search, AlertTriangle } from 'lucide-reac
 
 import { useModal } from '@/components/CustomModal';
 import { getMapGuideShowCount, incrementMapGuideShowCount } from '@/lib/storage';
+import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
 interface MapPickerModalProps {
   isOpen: boolean;
@@ -33,6 +34,9 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   onMapError,
   modalType = 'pickup',
 }) => {
+  // Leaflet consumes the drag itself, so the native pull gesture must be
+  // disarmed while this map is on screen.
+  usePullToRefreshLock();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
 
@@ -87,7 +91,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           const link = document.createElement('link');
           link.id = 'leaflet-css-picker';
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = '/vendor/leaflet/leaflet.css';
           document.head.appendChild(link);
         }
 

@@ -1,9 +1,26 @@
 import type { Metadata, Viewport } from 'next';
+import { Inter, Noto_Sans_Bengali } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
 import { ModalProvider } from '@/components/CustomModal';
 import { Suspense } from 'react';
 import AnalyticsTracker from '@/components/AnalyticsTracker';
+
+// Self-hosted at build time. The APK bundles its own copy, so a cold start with no
+// network still paints immediately instead of blocking on fonts.googleapis.com.
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800', '900'],
+  variable: '--font-inter-src',
+  display: 'swap',
+});
+
+const notoSansBengali = Noto_Sans_Bengali({
+  subsets: ['bengali', 'latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-bengali-src',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Jamanot — Ask. Relax. Done.',
@@ -36,15 +53,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="bn">
+    <html lang="bn" className={`${inter.variable} ${notoSansBengali.variable}`}>
       <head>
         <link rel="icon" href="/pwa-logo.png" />
         <link rel="apple-touch-icon" href="/pwa-logo.png" />
         {/* Preconnect to speed up Firebase & Google Fonts */}
         <link rel="preconnect" href="https://firestore.googleapis.com" />
         <link rel="preconnect" href="https://firebase.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/* Android status bar style */}
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -64,7 +79,18 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `
-              if ('serviceWorker' in navigator) {
+              // Skip the service worker inside the Capacitor shell. The app's
+              // assets are already bundled in the APK, so its network-first
+              // fetch handler would only add latency, and its FCM background
+              // handler would double-fire against the native Java notification.
+              var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+              if (isNative) {
+                if ('serviceWorker' in navigator) {
+                  navigator.serviceWorker.getRegistrations().then(function(rs) {
+                    rs.forEach(function(r) { r.unregister(); });
+                  }).catch(function() {});
+                }
+              } else if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
                   navigator.serviceWorker.register('/sw.js').then(
                     function(registration) {

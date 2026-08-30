@@ -14,6 +14,13 @@ import {
   requestNativePushPermission,
   setupAppListeners,
   setNativeStatusBar,
+  isNativeApp,
+  hideNativeSplash,
+  onOrderAlert,
+  consumePendingOrderAlert,
+  onPullToRefresh,
+  finishRefresh,
+  setPullToRefreshEnabled,
 } from '@/lib/native';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
@@ -122,10 +129,17 @@ export default function PageClient() {
     }
   }, []);
 
-  // Native status bar color (emerald green matching the header)
+  // Status bar: white ground with dark icons, matching AppHeader's bg-white/95.
+  // Also what keeps the white splash from seaming into a coloured bar.
   useEffect(() => {
-    setNativeStatusBar('dark', '#059669');
+    setNativeStatusBar('dark', '#ffffff');
   }, []);
+
+  // Hold the native splash until auth has actually resolved, then fade it out.
+  // Hiding on first paint instead would flash the loading skeleton.
+  useEffect(() => {
+    if (!loading) hideNativeSplash();
+  }, [loading]);
 
   // Setup native app lifecycle listeners (Android back button, foreground/background events)
   useEffect(() => {
@@ -142,7 +156,9 @@ export default function PageClient() {
 
   // Auto-register service worker & request push notification permission
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    // Native builds bundle their assets and use the Java notification path, so
+    // registering the service worker would only add latency and duplicate alerts.
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && !isNativeApp()) {
       navigator.serviceWorker
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
@@ -187,6 +203,61 @@ export default function PageClient() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  // ─── Native order alerts ──────────────────────────────────────────────────
+  // Two delivery routes, covering a real cold-start race: Java can launch the
+  // app from a killed state well before React mounts, so there is no listener
+  // to receive the event. The warm path gets the plugin event; the cold path
+  // drains the id Java parked for us. Both land in handleSelectOrder, which
+  // already does all the role and tab switching.
+  useEffect(() => {
+    if (!isNativeApp()) return;
+
+    const unsubscribe = onOrderAlert(({ orderId }) => {
+      if (orderId) handleSelectOrder(orderId);
+    });
+
+    consumePendingOrderAlert()
+      .then((orderId) => { if (orderId) handleSelectOrder(orderId); })
+      .catch(() => {});
+
+    return unsubscribe;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, activeMode, activeTab]);
+
+  // ─── Native pull-to-refresh ───────────────────────────────────────────────
+  // Prefer a soft refresh: re-attach the Firestore listeners rather than
+  // reloading the WebView, so React state and the open tab survive. Java runs a
+  // 6s watchdog that hard-reloads if this never reports back — which is exactly
+  // the wedged-app case people pull down to fix.
+  useEffect(() => {
+    if (!isNativeApp()) return;
+
+    return onPullToRefresh(() => {
+      try {
+        if (user) {
+          const role: 'customer' | 'helper' | 'admin' | 'store' =
+            user.isAdmin ? 'admin'
+              : (user.isStoreApproved || activeMode === 'store') ? 'store'
+              : (user.isHelper && activeMode === 'helper') ? 'helper'
+              : 'customer';
+          fallbackStore.teardownListeners();
+          fallbackStore.initListenersForRole(role, user.uid, user.helperType, user.storeId);
+        }
+      } finally {
+        finishRefresh();
+      }
+    });
+  }, [user, activeMode]);
+
+  // Disarm the pull gesture while an overlay is open. Necessary because these
+  // consume touch inside the WebView, leaving its own scrollY at 0 — so without
+  // this a downward drag in a drawer or on a Leaflet map reads as a page pull.
+  useEffect(() => {
+    if (!isNativeApp()) return;
+    const blocked = showNotifications || feedbackOrder !== null;
+    setPullToRefreshEnabled(!blocked);
+  }, [showNotifications, feedbackOrder]);
 
   // Listen for orderId query parameter changes (e.g. from notification clicks) to redirect/open that order (Requirement 1)
   useEffect(() => {

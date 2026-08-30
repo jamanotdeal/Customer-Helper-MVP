@@ -176,15 +176,28 @@ export async function saveCustomerSavedAddressToFirestore(uid: string, address: 
 }
 
 /**
- * Sends a native push notification to all target devices via FCM.
- * Works even when the target device's app is closed or backgrounded.
+ * No-op. Kept because callers exist; the send path it used is gone.
  *
- * Note: FCM HTTP v1 API requires a server-side OAuth token. Since this is a
- * client-only app, we use the Firestore-based approach: FCM background messages
- * are delivered to the device's registered service worker automatically when the
- * device is online. For immediate cross-device push, we fan-out to all tokens
- * using FCM's legacy REST API with a server key (set NEXT_PUBLIC_FCM_SERVER_KEY).
- * This is optional — the SW onBackgroundMessage handler covers the delivery.
+ * This used to POST to https://fcm.googleapis.com/fcm/send — Google's legacy FCM
+ * endpoint, decommissioned in June 2024 — authenticated with a server key read
+ * from NEXT_PUBLIC_FCM_SERVER_KEY. Both halves of that are dead ends now:
+ *
+ *   - The endpoint is gone. The replacement, FCM HTTP v1, signs each request
+ *     with a service-account OAuth token.
+ *   - A NEXT_PUBLIC_* value is compiled into the client bundle, and inside the
+ *     Android app it also ships inside the APK, where anyone can extract it.
+ *     An FCM server key is a full-project credential, so shipping one would let
+ *     any user push notifications to every other user.
+ *
+ * Background delivery is instead handled natively: DutyForegroundService holds
+ * its own Firestore listener in Java and fires the alert itself, with no push
+ * round-trip and no server. See android/.../service/DutyForegroundService.java.
+ *
+ * TODO(push): to add a true server-side push channel (needed for iOS, which has
+ * no equivalent to the Android duty service), deploy a Cloud Function on
+ * onDocumentCreated('notifications/{id}') that resolves the pseudo-target to FCM
+ * tokens and calls the HTTP v1 API. JamanotMessagingService.java is already
+ * wired to receive it.
  */
 export async function sendFcmPushToTokens(
   tokens: string[],
@@ -194,28 +207,11 @@ export async function sendFcmPushToTokens(
   url?: string,
   imageUrl?: string
 ): Promise<void> {
-  const serverKey = process.env.NEXT_PUBLIC_FCM_SERVER_KEY;
-  if (!serverKey || tokens.length === 0) {
-    // Without server key, FCM still delivers in background via SW onBackgroundMessage
-    // when the Firestore notification doc is synced. No action needed here.
-    return;
-  }
-  try {
-    const payload = {
-      registration_ids: tokens.slice(0, 1000), // FCM max per request
-      notification: { title, body, icon: '/Jamanot-Logo.png', image: imageUrl || undefined },
-      data: { title, body, tag: tag || 'jamanot', url: url || '/', image: imageUrl || undefined },
-    };
-    await fetch('https://fcm.googleapis.com/fcm/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `key=${serverKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (e: any) {
-    console.warn('[FCM] sendFcmPushToTokens note:', e?.message || e);
+  if (tokens.length > 0) {
+    console.info(
+      `[FCM] Skipping push fan-out to ${tokens.length} token(s) — no server-side sender configured. ` +
+      'Android delivers this natively via the duty service.'
+    );
   }
 }
 
@@ -2347,8 +2343,9 @@ class FallbackStore {
       }
 
       if (targetTokens.length > 0) {
-        // sendFcmPushToTokens is a no-op unless NEXT_PUBLIC_FCM_SERVER_KEY is set.
-        // FCM background messages still work via SW onBackgroundMessage without it.
+        // sendFcmPushToTokens is a no-op — see its docblock. On web, background
+        // delivery relies on the service worker; in the Android app the Java
+        // duty service picks this same notification doc up directly.
         const targetUrl = notif.orderId ? `/?orderId=${notif.orderId}` : '/';
         sendFcmPushToTokens(targetTokens, notif.title, notif.body || '', notif.id, targetUrl, notif.imageUrl);
       }

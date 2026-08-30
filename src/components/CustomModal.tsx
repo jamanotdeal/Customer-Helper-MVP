@@ -7,7 +7,7 @@ export type ModalType = 'info' | 'success' | 'warning' | 'error' | 'confirm' | '
 
 export interface ModalOptions {
   type?: ModalType;
-  permissionType?: 'location' | 'notification';
+  permissionType?: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
   title: string;
   message: string;
   confirmText?: string;
@@ -22,7 +22,7 @@ interface ModalContextType {
   showAlert: (title: string, message: string, type?: ModalType) => Promise<void>;
   showConfirm: (title: string, message: string, confirmText?: string, cancelText?: string) => Promise<boolean>;
   showPermissionModal: (options: {
-    permissionType: 'location' | 'notification';
+    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
     title: string;
     message: string;
     onAllow?: () => Promise<boolean> | boolean;
@@ -71,7 +71,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const showPermissionModal = (options: {
-    permissionType: 'location' | 'notification';
+    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
     title: string;
     message: string;
     onAllow?: () => Promise<boolean> | boolean;

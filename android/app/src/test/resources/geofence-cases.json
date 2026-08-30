@@ -1,0 +1,104 @@
+{
+  "_comment": [
+    "Golden vectors pinning the geofence to identical behaviour in two places:",
+    "  isHelperWithinOrderRadius() in src/lib/pricing.ts",
+    "  OrderMatcher.withinRadius()  in android/.../core/OrderMatcher.java",
+    "Run by `npm run test:geofence` (Node) and OrderMatcherParityTest (Android).",
+    "If you change the algorithm on either side, change it on both — that is what",
+    "these cases exist to enforce. A drift here silently mis-routes real orders."
+  ],
+  "radiusKm": 3.5,
+  "cases": [
+    {
+      "name": "helper on top of pickup",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 23.8103, "lng": 90.4125 },
+      "delivery": { "lat": 23.9000, "lng": 90.5000 },
+      "expectedWithin": true
+    },
+    {
+      "name": "delivery near, pickup far - min() must win",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 24.5000, "lng": 91.0000 },
+      "delivery": { "lat": 23.8150, "lng": 90.4160 },
+      "expectedWithin": true
+    },
+    {
+      "name": "both ends far outside",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 24.5000, "lng": 91.0000 },
+      "delivery": { "lat": 24.6000, "lng": 91.1000 },
+      "expectedWithin": false
+    },
+    {
+      "name": "just inside the radius (~3.4 km north)",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 23.8409, "lng": 90.4125 },
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "just outside the radius (~3.6 km north)",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 23.8427, "lng": 90.4125 },
+      "delivery": null,
+      "expectedWithin": false
+    },
+    {
+      "name": "helper has no fix - must not hide work",
+      "helper": null,
+      "pickup": { "lat": 24.5000, "lng": 91.0000 },
+      "delivery": { "lat": 24.6000, "lng": 91.1000 },
+      "expectedWithin": true
+    },
+    {
+      "name": "order has no coordinates at all - must not hide work",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": null,
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "zero coordinates count as missing (truthy check in pricing.ts)",
+      "helper": { "lat": 0, "lng": 0 },
+      "pickup": { "lat": 24.5000, "lng": 91.0000 },
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "pickup only, well inside",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 23.8120, "lng": 90.4140 },
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "delivery only, well outside",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": null,
+      "delivery": { "lat": 23.9500, "lng": 90.5500 },
+      "expectedWithin": false
+    },
+    {
+      "name": "east-west displacement at Dhaka latitude (~3.2 km)",
+      "helper": { "lat": 23.8103, "lng": 90.4125 },
+      "pickup": { "lat": 23.8103, "lng": 90.4439 },
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "southern hemisphere, negative latitudes",
+      "helper": { "lat": -33.8688, "lng": 151.2093 },
+      "pickup": { "lat": -33.8900, "lng": 151.2200 },
+      "delivery": null,
+      "expectedWithin": true
+    },
+    {
+      "name": "antimeridian - shortest path, not longitude arithmetic",
+      "helper": { "lat": 1.5, "lng": 179.99 },
+      "pickup": { "lat": 1.5, "lng": -179.99 },
+      "delivery": null,
+      "expectedWithin": true
+    }
+  ]
+}

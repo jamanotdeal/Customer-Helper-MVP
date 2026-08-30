@@ -13,6 +13,7 @@ import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
 import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter } from 'lucide-react';
+import { NativeReadinessCard } from '@/components/NativeReadinessCard';
 
 interface HelperDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -597,6 +598,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   return (
     <div className="space-y-5 pb-24">
+      {/* Native permission ladder. Renders nothing on web, and nothing
+          once every permission is granted. */}
+      <NativeReadinessCard />
       {/* Mandatory Location Permission Warning Banner if missing/denied */}
       {locationPermissionDenied && (
         <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-md flex items-center justify-between gap-3 animate-in fade-in duration-300">

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Android 12+ replaces windowBackground with the system splash API, so the
+        launch theme must be redeclared here or the OS paints its own default.
+        windowSplashScreenAnimatedIcon is masked to a circle showing the inner
+        2/3 — ic_splash_logo.png is pre-sized so the logo's diagonal fits it.
+    -->
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="windowSplashScreenAnimationDuration">200</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+        <item name="android:statusBarColor">@color/splash_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">@color/splash_background</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Jamanot</string>
+    <string name="title_activity_main">Jamanot</string>
+    <string name="package_name">com.jamanot.app</string>
+    <string name="custom_url_scheme">com.jamanot.app</string>
+
+    <!-- Notification channels -->
+    <string name="channel_duty_name">On duty</string>
+    <string name="channel_duty_desc">Shows while you are on duty and able to receive new requests.</string>
+    <string name="channel_order_name">New requests</string>
+    <string name="channel_order_desc">Alerts you the moment a nearby request arrives.</string>
+    <string name="channel_general_name">Updates</string>
+    <string name="channel_general_desc">Order status changes and announcements.</string>
+
+    <!-- Duty service -->
+    <string name="duty_title">ডিউটিতে আছেন</string>
+    <string name="duty_body">নতুন অর্ডারের জন্য প্রস্তুত</string>
+    <string name="duty_action_open">খুলুন</string>
+    <string name="duty_action_stop">ডিউটি বন্ধ</string>
+    <string name="duty_resume_title">ডিউটি বন্ধ হয়ে গেছে</string>
+    <string name="duty_resume_body">আবার চালু করতে ট্যাপ করুন</string>
+
+    <!-- New order alert -->
+    <string name="alert_new_order">নতুন অর্ডার এসেছে</string>
+    <string name="alert_view">দেখুন</string>
+    <string name="alert_dismiss">বন্ধ করুন</string>
+</resources>

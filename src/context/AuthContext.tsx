@@ -2,15 +2,26 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { UserProfile, ActiveMode, HelperApplication, StoreApplication } from '@/types';
-import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses } from '@/lib/firebase';
+import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses, saveFcmToken } from '@/lib/firebase';
 import {
   signInWithPopup,
   signInWithRedirect,
+  signInWithCredential,
+  GoogleAuthProvider,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
 import { getSavedActiveMode, saveActiveMode, getSavedDeliveryAddresses, saveSavedDeliveryAddresses } from '@/lib/storage';
-import { getNativePosition } from '@/lib/native';
+import {
+  getNativePosition,
+  isNativeApp,
+  nativeGoogleSignIn,
+  nativeGoogleSignOut,
+  syncNativeUserState,
+  startDutyService,
+  stopDutyService,
+  getNativeFcmToken,
+} from '@/lib/native';
 
 
 interface AuthContextType {
@@ -55,6 +66,51 @@ const checkEduVerified = (email?: string | null): boolean => {
   const lower = email.trim().toLowerCase();
   return domains.some((d) => lower.endsWith(d.toLowerCase().trim()));
 };
+
+/**
+ * Mirrors the signed-in identity into Android SharedPreferences, and starts or
+ * stops the duty foreground service to match.
+ *
+ * This is the whole role-gating mechanism for the background path: once written,
+ * the Java service can decide who to alert without any JavaScript running. It
+ * must therefore be called anywhere role, mode or location changes — not just at
+ * login. No-op on web.
+ */
+async function pushNativeState(
+  profile: UserProfile | null,
+  listenerRole: 'customer' | 'helper' | 'admin' | 'store'
+): Promise<void> {
+  if (!isNativeApp()) return;
+
+  if (!profile) {
+    await syncNativeUserState({ uid: null, onDuty: false });
+    await stopDutyService();
+    return;
+  }
+
+  const onDuty = listenerRole === 'helper' || listenerRole === 'store';
+
+  await syncNativeUserState({
+    uid: profile.uid,
+    role: listenerRole,
+    isHelper: !!profile.isHelper,
+    helperType: profile.helperType || 'commuter',
+    isStoreApproved: !!profile.isStoreApproved,
+    storeId: profile.storeId || null,
+    activeMode: profile.lastActiveMode || listenerRole,
+    onDuty,
+    lat: profile.helperLocation?.lat ?? null,
+    lng: profile.helperLocation?.lng ?? null,
+    radiusKm: fallbackStore.pricingSettings?.helperRadiusKm ?? 3.5,
+  });
+
+  // Customer and Admin never run the service — they get notifications only.
+  if (onDuty) {
+    await startDutyService();
+  } else {
+    await stopDutyService();
+  }
+}
 
 export async function checkLocationPermissionState(): Promise<'granted' | 'denied' | 'prompt'> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return 'denied';
@@ -232,12 +288,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }).catch(() => {});
           }
         }
-        // Initialize FCM push token for this device (async, non-blocking)
-        requestBrowserNotificationPermission().then((granted) => {
-          if (granted) {
-            initFcmMessaging(fbUser.uid).catch(() => {});
-          }
-        });
+        // Mirror identity into SharedPreferences and start/stop the duty
+        // service so the Java background path knows who is signed in.
+        pushNativeState(profile, listenerRole).catch(() => {});
+
+        if (isNativeApp()) {
+          // Native builds get their FCM token from Play Services, not from the
+          // web VAPID flow — the service worker is disabled inside the app.
+          getNativeFcmToken()
+            .then((token) => { if (token) saveFcmToken(fbUser.uid, token); })
+            .catch(() => {});
+        } else {
+          // Initialize FCM push token for this device (async, non-blocking)
+          requestBrowserNotificationPermission().then((granted) => {
+            if (granted) {
+              initFcmMessaging(fbUser.uid).catch(() => {});
+            }
+          });
+        }
       } else {
         setUser(null);
         fallbackStore.currentUserId = null;
@@ -278,6 +346,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(updatedUser);
       setActiveModeState('helper');
       saveActiveMode('helper');
+      // Seed the geofence with the position we just obtained, so the very first
+      // order is matched against a real fix rather than a stale one.
+      pushNativeState(updatedUser, 'helper').catch(() => {});
       return true;
     } catch (err: any) {
       console.warn('[AuthContext] Commuter helper location error:', err?.message);
@@ -326,6 +397,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Switch Firestore listeners to match the new active mode (customer ⇔ helper ⇔ store)
       if (mode === 'customer' || mode === 'helper' || mode === 'store') {
         fallbackStore.initListenersForRole(mode, user.uid, user.helperType, user.storeId);
+        // Java listens on a role-scoped query too, so it has to follow the same
+        // switch — otherwise a helper going off-mode keeps receiving alerts.
+        pushNativeState(updated, mode).catch(() => {});
       }
 
       // When switching to helper mode, get native GPS location for maximum accuracy
@@ -408,6 +482,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      // ─── Native (Capacitor) ───────────────────────────────────────────────
+      // signInWithPopup cannot work inside a WebView, so the app uses Android's
+      // Credential Manager instead. It returns only a Google ID token; signing
+      // the JS SDK in with that keeps onAuthStateChanged as the single source of
+      // truth, so everything below this branch is shared with the web path.
+      if (isNativeApp()) {
+        const { idToken } = await nativeGoogleSignIn();
+        const nativeRes = await signInWithCredential(
+          auth,
+          GoogleAuthProvider.credential(idToken)
+        );
+        if (nativeRes.user) {
+          const savedMode = getSavedActiveMode();
+          const profile = buildProfile(nativeRes.user, savedMode);
+          applyProfile(profile, savedMode);
+        }
+        setLoading(false);
+        return;
+      }
+
+      // ─── Web (unchanged) ──────────────────────────────────────────────────
       // Use popup on all devices (desktop & mobile). Mobile browsers support popups
       // triggered by a direct user gesture. The redirect flow was unreliable on mobile
       // (getRedirectResult failing silently due to cookie/storage restrictions).
@@ -427,6 +522,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     } catch (err: any) {
       console.warn('[Auth] Google login error:', err?.code, err?.message);
+      // The native account chooser rejects with CANCELLED when dismissed —
+      // an ordinary user action, not something to alert about.
+      if (err?.code === 'CANCELLED' || err?.message === 'Sign-in cancelled') {
+        setLoading(false);
+        return;
+      }
       if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/popup-closed-by-user') {
         // Popup was blocked even on desktop — fall back silently to redirect.
         console.info('[Auth] Popup blocked, falling back to redirect.');
@@ -463,6 +564,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await firebaseSignOut(auth);
     } catch (e) {
       // Ignored
+    }
+    // Both sessions must go. The native FirebaseAuth session is what the Java
+    // Firestore listener authenticates with, so leaving it signed in would keep
+    // the duty service running as the previous user.
+    if (isNativeApp()) {
+      await nativeGoogleSignOut().catch(() => {});
+      await pushNativeState(null, 'customer').catch(() => {});
     }
     setUser(null);
     fallbackStore.currentUserId = null;
@@ -536,6 +644,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     setUser(updated);
     fallbackStore.saveUser(updated);
+    // While the app is open the WebView has the better fix; hand it to Java so
+    // the two agree if the app is backgrounded a moment later.
+    if (isNativeApp()) {
+      syncNativeUserState({ lat: helperLoc.lat, lng: helperLoc.lng }).catch(() => {});
+    }
   };
 
   return (

@@ -1,0 +1,20 @@
+// Capacitor 8's plugin modules pin a Java 21 toolchain. This resolver lets
+// Gradle fetch a matching JDK on machines that don't have one installed,
+// instead of failing the build with "Cannot find a Java installation".
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+}
+
+include ':app'
+include ':capacitor-cordova-android-plugins'
+project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
+
+apply from: 'capacitor.settings.gradle'
