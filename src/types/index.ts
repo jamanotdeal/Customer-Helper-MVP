@@ -475,5 +475,7 @@ export interface AppNotification {
   isScheduled?: boolean;
   repeatFrequency?: 'NONE' | 'DAILY' | 'WEEKLY';
   repeatTime?: string; // HH:mm format for recurring push time
+  targetRole?: UserRole;
+  type?: string;
 }
 

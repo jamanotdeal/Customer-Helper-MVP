@@ -147,7 +147,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   // Simplified progress steps
   const steps: { status: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
     { status: 'PENDING', label: 'Order Placed', icon: Check, desc: 'Looking for a helper...' },
-    { status: 'ACCEPTED', label: 'Helper Assigned', icon: UserCheck, desc: 'Helper is heading to pickup' },
+    {
+      status: 'ACCEPTED',
+      label: showAdminAccepted ? 'Admin Accepted' : 'Helper Assigned',
+      icon: UserCheck,
+      desc: showAdminAccepted ? 'Admin accepted the order. Wait for helper...' : 'Helper is heading to pickup'
+    },
     { status: 'PURCHASED_EXECUTED', label: 'Proccessing...', icon: Package, desc: 'Items collected from shop' },
     { status: 'ON_THE_WAY', label: 'On The Way', icon: Truck, desc: 'Coming to your location' },
     { status: 'ARRIVED', label: 'Arrived', icon: Navigation, desc: 'Helper is at your door' },
@@ -438,37 +443,43 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── HELPER CONTACT (shown when helper is assigned) ── */}
-        {order.helperId && (
+        {/* ── HELPER OR ADMIN CONTACT (shown when helper is assigned OR admin accepted) ── */}
+        {(order.helperId || showAdminAccepted) && (
           <div className="bg-white rounded-3xl border border-emerald-100 p-4 shadow-soft space-y-3">
             <div className="flex items-center space-x-3">
               <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
-                {helperName.charAt(0).toUpperCase()}
+                {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
               </div>
               <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">Your Helper</p>
-                <h4 className="font-black text-base text-gray-900 leading-tight">{helperName}</h4>
-                {helperPhone && (
-                  <p className="text-xs font-bold text-gray-500 mt-0.5">{helperPhone}</p>
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
+                  {order.helperId ? 'Your Helper' : 'Admin Support'}
+                </p>
+                <h4 className="font-black text-base text-gray-900 leading-tight">
+                  {order.helperId ? helperName : 'Jamanot Admin'}
+                </h4>
+                {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
+                  <p className="text-xs font-bold text-gray-500 mt-0.5">
+                    {order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}
+                  </p>
                 )}
               </div>
-              <span className="ml-auto px-2.5 py-1 rounded-full bg-emerald-600 text-white font-extrabold text-[10px] flex items-center space-x-1 shrink-0">
-                <UserCheck className="w-3 h-3" />
-                <span>Active</span>
+              <span className={`ml-auto px-2.5 py-1 rounded-full text-white font-extrabold text-[10px] flex items-center space-x-1 shrink-0 ${order.helperId ? 'bg-emerald-600' : 'bg-purple-600'}`}>
+                {order.helperId ? <UserCheck className="w-3 h-3" /> : <ShieldCheck className="w-3 h-3" />}
+                <span>{order.helperId ? 'Active' : 'Admin Accepted'}</span>
               </span>
             </div>
 
-            {helperPhone ? (
+            {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) ? (
               <div className="flex space-x-2">
                 <a
-                  href={`tel:${helperPhone}`}
+                  href={`tel:${order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}`}
                   className="flex-1 py-2.5 px-3 rounded-2xl bg-gray-100 text-gray-900 font-extrabold text-xs flex items-center justify-center space-x-1.5 hover:bg-gray-200 active:scale-95 transition-all"
                 >
                   <Phone className="w-4 h-4 text-gray-600" />
                   <span>Call</span>
                 </a>
                 <a
-                  href={getWhatsAppUrl(helperPhone)}
+                  href={getWhatsAppUrl(order.helperId ? helperPhone! : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || ''))}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 py-2.5 px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-md"
@@ -478,7 +489,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 </a>
               </div>
             ) : (
-              <p className="text-xs text-gray-500 bg-gray-50 rounded-2xl p-3 text-center font-medium">Contact info not provided by helper.</p>
+              <p className="text-xs text-gray-500 bg-gray-50 rounded-2xl p-3 text-center font-medium">Contact info not provided.</p>
             )}
           </div>
         )}
@@ -486,42 +497,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         {/* ── WAITING FOR HELPER / ADMIN ACCEPTED ── */}
         {!order.helperId && !isCanceled && (
           <div className="space-y-3">
-            {/* Admin Accepted — shown ONLY to customer after delay, hides when helper assigned */}
-            {showAdminAccepted && user?.role !== 'helper' && !user?.isAdmin && (
-              <div className="rounded-3xl border border-emerald-200 overflow-hidden shadow-soft">
-                <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-5 pt-4 pb-3 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0">
-                    <ShieldCheck className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-extrabold text-white/70 uppercase tracking-wider">Order Status</p>
-                    <h4 className="font-black text-sm text-white leading-tight">Admin Accepted ✓</h4>
-                  </div>
-                  <span className="ml-auto flex items-center gap-1 bg-white/20 border border-white/30 text-white text-[10px] font-extrabold px-2.5 py-1 rounded-full">
-                    <span className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-pulse" />
-                    Processing
-                  </span>
-                </div>
-                <div className="bg-white px-5 py-4 space-y-3">
-                  <p className="text-xs font-semibold text-gray-700 leading-relaxed">
-                    আপনার অর্ডারটি <strong className="text-emerald-700">Jamanot Admin</strong> কর্তৃক গ্রহণ করা হয়েছে এবং একজন উপযুক্ত হেলপার নির্ধারণের প্রক্রিয়া চলছে। অনুগ্রহ করে একটু অপেক্ষা করুন।
-                  </p>
-                  {(fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2) && (
-                    <a
-                      href={`https://wa.me/880${(fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || '').replace(/^0/, '').replace(/[^0-9]/g, '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 w-full py-2.5 px-4 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs shadow-sm transition-all active:scale-95"
-                    >
-                      <MessageSquare className="w-4 h-4 shrink-0" />
-                      <span>WhatsApp Support — Jamanot Admin</span>
-                    </a>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Standard waiting block */}
+            {/* Standard waiting block (hides if admin accepted since support details are shown inside helper contact block above) */}
             {!showAdminAccepted && (
               <div className="bg-amber-50 rounded-3xl border border-amber-200 p-4 text-center space-y-1 shadow-soft">
                 <Clock className="w-6 h-6 text-amber-500 mx-auto animate-pulse" />

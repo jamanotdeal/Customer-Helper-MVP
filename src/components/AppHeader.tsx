@@ -18,7 +18,7 @@ interface AppHeaderProps {
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNavigate }) => {
   const { user, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
-  const { showAlert, showPermissionModal } = useModal();
+  const { showAlert, showPermissionModal, showConfirm } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
@@ -352,37 +352,43 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   )}
                 </div>
               </div>
-            </div>
 
-
-
-            {/* Helper Center Sidebar Option (Helpers only) */}
-            {user.isHelper && activeMode === 'helper' && (
-              <div className="mt-3 pt-3 border-t border-gray-100">
-                <button
-                  onClick={() => {
-                    setShowProfileMenu(false);
-                    onNavigate?.('helper_center');
-                  }}
-                  className="w-full flex items-center justify-between p-3 rounded-2xl border border-gray-100 hover:bg-emerald-50/50 text-gray-700 transition-all text-left"
-                >
-                  <div className="flex items-center space-x-2.5">
-                    <HeartHandshake className="w-5 h-5 text-emerald-600" />
-                    <div>
-                      <div className="text-sm font-semibold">Helper Center</div>
-                      <div className="text-[11px] text-gray-500 font-normal">অফিস ও যোগাযোগের তথ্য</div>
+              {/* Helper Center Sidebar Option - General, placed below select mode options */}
+              {fallbackStore.pricingSettings.helperCenterEnabled !== false && (
+                <div className="mt-4 pt-3 border-t border-gray-100">
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      onNavigate?.('helper_center');
+                    }}
+                    className="w-full flex items-center justify-between p-3 rounded-2xl border border-gray-100 hover:bg-emerald-50/50 text-gray-700 transition-all text-left"
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <HeartHandshake className="w-5 h-5 text-emerald-600" />
+                      <div>
+                        <div className="text-sm font-semibold">Helper Center</div>
+                        <div className="text-[11px] text-gray-500 font-normal">অফিস ও যোগাযোগের তথ্য</div>
+                      </div>
                     </div>
-                  </div>
-                </button>
-              </div>
-            )}
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Logout Footer */}
             <div className="pt-4 border-t border-gray-100">
               <button
-                onClick={() => {
-                  logout();
-                  setShowProfileMenu(false);
+                onClick={async () => {
+                  const confirmed = await showConfirm(
+                    'লগআউট নিশ্চিত করুন',
+                    'আপনি কি নিশ্চিতভাবে লগআউট করতে চান?',
+                    'লগআউট করুন',
+                    'বাতিল'
+                  );
+                  if (confirmed) {
+                    logout();
+                    setShowProfileMenu(false);
+                  }
                 }}
                 className="w-full flex items-center justify-center space-x-2 p-3 rounded-2xl bg-red-50 text-red-600 hover:bg-red-100 font-semibold text-sm transition-colors"
               >

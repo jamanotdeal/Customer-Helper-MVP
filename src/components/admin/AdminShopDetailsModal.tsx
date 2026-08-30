@@ -120,11 +120,11 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
 
-          {/* Store Description */}
+          {/* Store Description / Products-Services */}
           {shop.description && (
             <div className="bg-orange-50/60 rounded-2xl p-4 border border-orange-100">
               <span className="text-[10px] text-orange-700 font-black uppercase tracking-wider flex items-center gap-1.5 mb-1.5">
-                <FileText className="w-3.5 h-3.5" /> Store Description
+                <FileText className="w-3.5 h-3.5" /> দোকানে কী কী পণ্য/সেবা পাওয়া যায়
               </span>
               <p className="text-xs text-gray-700 font-medium leading-relaxed">{shop.description}</p>
             </div>
@@ -133,12 +133,12 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           {/* Owner & Manager */}
           <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-3">
             <h4 className="text-xs font-black text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-purple-600" /> Owner & Manager
+              <User className="w-3.5 h-3.5 text-purple-600" /> মালিক ও ম্যানেজারের তথ্য
             </h4>
             <div className="grid grid-cols-2 gap-4">
               {/* Owner */}
               <div className="space-y-1">
-                <InfoRow label="Owner / Contact Person" value={shop.contactPerson} />
+                <InfoRow label="মালিকের নাম" value={shop.contactPerson} />
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-xs font-extrabold text-emerald-700 font-mono">{shop.whatsapp || '—'}</span>
                   {whatsappUrl && (
@@ -151,7 +151,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
               </div>
               {/* Manager */}
               <div className="space-y-1">
-                <InfoRow label="Manager Name" value={shop.managerName} />
+                <InfoRow label="ম্যানেজারের নাম" value={shop.managerName || '—'} />
                 {shop.managerWhatsapp && (
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-xs font-extrabold text-emerald-700 font-mono">{shop.managerWhatsapp}</span>
@@ -218,11 +218,11 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl p-4 border border-purple-100 space-y-1.5">
               <h4 className="text-xs font-black text-purple-700 uppercase tracking-wider flex items-center space-x-1.5">
                 <span>💰</span>
-                <span>Retailer Commission Deal</span>
+                <span>প্রতি অর্ডারে কমিশন</span>
               </h4>
               <div className="flex items-center gap-3">
                 <span className="text-2xl font-black text-purple-800">{shop.commissionPercent}%</span>
-                <span className="text-xs text-purple-600 font-semibold">of product cost given back as commission</span>
+                <span className="text-xs text-purple-600 font-semibold">প্রতি অর্ডারের পণ্যমূল্যের উপর কমিশন</span>
               </div>
               {shop.commissionNote && (
                 <p className="text-[11px] text-purple-600 font-medium bg-white/70 px-3 py-1.5 rounded-xl border border-purple-100">

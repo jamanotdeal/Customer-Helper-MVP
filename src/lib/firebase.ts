@@ -230,6 +230,8 @@ function cleanForFirestore<T>(data: T): T {
 // Fires a native browser popup on the CURRENT device for the given notification.
 // Each device calls this for itself via the Firestore onSnapshot listener.
 // -------------------------------------------------------------
+let _lastNotifTime = 0;
+
 export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string; imageUrl?: string }) {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
@@ -245,7 +247,7 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
               badge: '/Jamanot-Logo.png',
               image: notif.imageUrl || undefined,
               tag: notif.id,
-              vibrate: [200, 100, 200, 100, 200],
+              vibrate: [200, 100, 200],
               renotify: true,
               data: { orderId: notif.orderId, url: targetUrl },
             } as any)
@@ -288,10 +290,15 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
         if (notif.orderId) window.location.search = `?orderId=${notif.orderId}`;
       };
     }
-    // Also play sound on the receiving device
-    playNotificationSound();
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+    
+    // Throttling sound and vibration: only trigger if 5 seconds have passed since the last one.
+    const now = Date.now();
+    if (now - _lastNotifTime > 5000) {
+      _lastNotifTime = now;
+      playNotificationSound();
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate([200, 100, 200]); } catch (_) { /* ignore */ }
+      }
     }
   } catch (err) {
     console.warn('[triggerBrowserNotification] note:', err);
@@ -1041,10 +1048,10 @@ class FallbackStore {
 
     // ── ADMIN role ────────────────────────────────────────────────────────────
     } else if (role === 'admin') {
-      // All orders (most recent 200, realtime)
+      // All orders (most recent 20, realtime)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(200)),
+          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(20)),
           (snapshot) => {
             const currentIds = new Set(snapshot.docs.map((d) => d.id));
             for (const key of Array.from(this.orders.keys())) {
@@ -1059,10 +1066,10 @@ class FallbackStore {
         )
       );
 
-      // All users (up to 300, realtime)
+      // All users (up to 30, realtime)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'users'), limit(300)),
+          query(collection(db, 'users'), limit(30)),
           (snapshot) => {
             snapshot.docs.forEach((docSnap) => {
               const u = docSnap.data() as UserProfile;
@@ -1208,10 +1215,10 @@ class FallbackStore {
         )
       );
 
-      // Shops (realtime for admin)
+      // Shops (realtime for admin, limited to 20)
       unsubs.push(
         onSnapshot(
-          collection(db, 'shops'),
+          query(collection(db, 'shops'), limit(20)),
           (snapshot) => {
             snapshot.docs.forEach((docSnap) => {
               this.shops.set(docSnap.id, docSnap.data() as Shop);
@@ -1359,6 +1366,8 @@ class FallbackStore {
       orderId: order.id,
       read: false,
       createdAt: new Date().toISOString(),
+      targetRole: 'helper',
+      type: 'new_order',
     });
 
     this.notify();
@@ -1423,6 +1432,8 @@ class FallbackStore {
           orderId: updated.id,
           read: false,
           createdAt: new Date().toISOString(),
+          targetRole: 'customer',
+          type: 'order_update',
         });
       }
 
@@ -1437,6 +1448,8 @@ class FallbackStore {
           orderId: updated.id,
           read: false,
           createdAt: new Date().toISOString(),
+          targetRole: helperTarget === 'all-helpers' ? undefined : 'helper',
+          type: 'order_update',
         });
       }
 
@@ -1454,6 +1467,8 @@ class FallbackStore {
               orderId: updated.id,
               read: false,
               createdAt: new Date().toISOString(),
+              targetRole: 'store',
+              type: 'order_update',
             });
           }
         });
@@ -1474,6 +1489,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'order_update',
       });
     }
 
@@ -1491,6 +1508,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'order_update',
       });
     }
 
@@ -1508,6 +1527,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'helper',
+        type: 'order_update',
       });
     }
 
@@ -1537,6 +1558,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'order_update',
       });
     }
 
@@ -1558,6 +1581,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'order_update',
       });
     }
 
@@ -1584,6 +1609,8 @@ class FallbackStore {
           orderId: updated.id,
           read: false,
           createdAt: new Date().toISOString(),
+          targetRole: 'helper',
+          type: 'order_update',
         });
       }
     }
@@ -1598,6 +1625,8 @@ class FallbackStore {
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'fee_adjustment',
       });
     }
 
@@ -1645,6 +1674,8 @@ class FallbackStore {
         orderId: shopOrder.parentOrderId,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'store',
+        type: 'new_order',
       });
     }
     try {
@@ -1683,6 +1714,8 @@ class FallbackStore {
         orderId: updated.parentOrderId,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'helper',
+        type: 'order_update',
       });
     }
 
@@ -1696,6 +1729,8 @@ class FallbackStore {
         orderId: updated.parentOrderId,
         read: false,
         createdAt: new Date().toISOString(),
+        targetRole: 'helper',
+        type: 'order_update',
       });
     }
 
@@ -1711,6 +1746,8 @@ class FallbackStore {
           orderId: updated.parentOrderId,
           read: false,
           createdAt: new Date().toISOString(),
+          targetRole: 'store',
+          type: 'order_update',
         });
       }
     }
@@ -1739,6 +1776,8 @@ class FallbackStore {
           orderId: existing.parentOrderId,
           read: false,
           createdAt: new Date().toISOString(),
+          targetRole: 'store',
+          type: 'order_update',
         });
       }
     }

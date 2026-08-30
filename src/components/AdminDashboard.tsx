@@ -2,7 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, db } from '@/lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime } from '@/lib/timeUtils';
 import {
@@ -220,6 +221,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Search, Filter & Pagination states
   const [searchQuery, setSearchQuery] = useState('');
+  const [appliedSearchQuery, setAppliedSearchQuery] = useState('');
+  const [serverOrders, setServerOrders] = useState<Order[] | null>(null);
+  const [serverUsers, setServerUsers] = useState<UserProfile[] | null>(null);
+  const [serverShops, setServerShops] = useState<Shop[] | null>(null);
+  const [isFetchingServer, setIsFetchingServer] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'OLDEST' | 'FEE_HIGH' | 'FEE_LOW' | 'ORDERS_HIGH' | 'SPENT_HIGH'>('NEWEST');
@@ -261,7 +267,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setCurrentPage(1);
   }, [
     activeTab,
-    searchQuery,
+    appliedSearchQuery,
     statusFilter,
     withdrawalStatusFilter,
     sortBy,
@@ -408,6 +414,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       unsub();
     };
   }, []);
+
+  // Server-side fetching effects
+  useEffect(() => {
+    const fetchOrders = async () => {
+      if (activeTab !== 'ORDERS') return;
+      if (currentPage === 1 && !appliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
+        setServerOrders(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
+      try {
+        let q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+        if (statusFilter !== 'ALL' && statusFilter !== 'UNASSIGNED' && statusFilter !== 'DELIVERY_BACK') {
+          q = query(collection(db, 'orders'), where('status', '==', statusFilter), orderBy('createdAt', 'desc'));
+        }
+        const snap = await getDocs(query(q, limit(150)));
+        const fetched = snap.docs.map(d => d.data() as Order);
+        setServerOrders(fetched);
+      } catch (err) {
+        console.error('Error fetching server orders:', err);
+      } finally {
+        setIsFetchingServer(false);
+      }
+    };
+
+    fetchOrders();
+  }, [activeTab, currentPage, appliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      if (activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
+      if (currentPage === 1 && !appliedSearchQuery.trim() && !usersStartDate && !usersEndDate) {
+        setServerUsers(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
+      try {
+        const snap = await getDocs(query(collection(db, 'users'), limit(150)));
+        const fetched = snap.docs.map(d => d.data() as UserProfile);
+        setServerUsers(fetched);
+      } catch (err) {
+        console.error('Error fetching server users:', err);
+      } finally {
+        setIsFetchingServer(false);
+      }
+    };
+
+    fetchUsers();
+  }, [activeTab, currentPage, appliedSearchQuery, usersStartDate, usersEndDate]);
+
+  useEffect(() => {
+    const fetchShops = async () => {
+      if (activeTab !== 'SHOPS') return;
+      if (currentPage === 1 && !appliedSearchQuery.trim()) {
+        setServerShops(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
+      try {
+        const snap = await getDocs(query(collection(db, 'shops'), limit(100)));
+        const fetched = snap.docs.map(d => d.data() as Shop);
+        setServerShops(fetched);
+      } catch (err) {
+        console.error('Error fetching server shops:', err);
+      } finally {
+        setIsFetchingServer(false);
+      }
+    };
+
+    fetchShops();
+  }, [activeTab, currentPage, appliedSearchQuery]);
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -780,8 +860,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Search query filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
+    if (appliedSearchQuery.trim()) {
+      const q = appliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (o) =>
           o.id.toLowerCase().includes(q) ||
@@ -825,6 +905,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // 2. Customer Aggregated List
   const getProcessedCustomers = () => {
+    const usersList = serverUsers !== null ? serverUsers : users;
     const customerMap = new Map<
       string,
       {
@@ -842,7 +923,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     >();
 
     // Seed from users list
-    users.forEach((u) => {
+    usersList.forEach((u) => {
       customerMap.set(u.uid, {
         id: u.uid,
         name: u.displayName || 'Anonymous User',
@@ -887,8 +968,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     let list = Array.from(customerMap.values());
 
     // Search query filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
+    if (appliedSearchQuery.trim()) {
+      const q = appliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
@@ -996,14 +1077,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     let list = Array.from(helperMap.values());
 
     // Search
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
+    if (appliedSearchQuery.trim()) {
+      const q = appliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (h) =>
           h.name.toLowerCase().includes(q) ||
           h.phone.includes(q) ||
           (h.nid && h.nid.includes(q)) ||
-          h.id.toLowerCase().includes(q)
+          h.id.toLowerCase().includes(q) ||
+          (h.email && h.email.toLowerCase().includes(q))
       );
     }
 
@@ -1020,7 +1102,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // 4. Unified Users List with Live Running States
   const getProcessedUsersList = () => {
-    let list = users.map((u) => {
+    const usersList = serverUsers !== null ? serverUsers : users;
+    let list = usersList.map((u) => {
       const activeReq = orders.find(
         (o) => (o.customerId === u.uid || (u.alternativePhone && o.customerPhone === u.alternativePhone)) &&
           o.status !== 'DELIVERED' &&
@@ -1105,15 +1188,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       list = list.filter((item) => new Date(item.user.createdAt).getTime() <= endMs);
     }
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
+    if (appliedSearchQuery.trim()) {
+      const q = appliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (item) =>
-          (item.user.displayName || '').toLowerCase().includes(q) ||
-          (item.user.email || '').toLowerCase().includes(q) ||
-          (item.user.alternativePhone && item.user.alternativePhone.includes(q)) ||
-          (item.user.uid || '').toLowerCase().includes(q) ||
-          (item.user.labels && item.user.labels.some((lbl) => (lbl || '').toLowerCase().includes(q)))
+          item.user.displayName.toLowerCase().includes(q) ||
+          item.user.uid.toLowerCase().includes(q) ||
+          (item.user.email && item.user.email.toLowerCase().includes(q)) ||
+          (item.user.alternativePhone && item.user.alternativePhone.includes(q))
       );
     }
 
@@ -1549,15 +1631,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (
         <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
           {/* Search Box */}
-          <div className="relative w-full">
-            <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
-            <input
-              type="text"
-              placeholder="Search orders, customers, helpers, phone..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 transition-all"
-            />
+          <div className="flex gap-2 w-full">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+              <input
+                type="text"
+                placeholder="Search orders, customers, helpers, phone..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setCurrentPage(1);
+                    setAppliedSearchQuery(searchQuery);
+                  }
+                }}
+                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 transition-all"
+              />
+            </div>
+            <button
+              onClick={() => {
+                setCurrentPage(1);
+                setAppliedSearchQuery(searchQuery);
+              }}
+              disabled={isFetchingServer}
+              className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-extrabold text-xs rounded-2xl shadow-md transition-all active:scale-95 shrink-0 flex items-center gap-1.5"
+            >
+              {isFetchingServer && <RefreshCw className="w-3 h-3 animate-spin" />}
+              {isFetchingServer ? 'Loading...' : 'Search'}
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full">
@@ -2263,7 +2364,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 2: ALL ORDERS TAB --- */}
       {activeTab === 'ORDERS' && isTabAllowed('ORDERS') && (() => {
-        const processed = getProcessedOrders(orders);
+        const ordersSource = serverOrders !== null ? serverOrders : orders;
+        const processed = getProcessedOrders(ordersSource);
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
         const firstOrderIds = getFirstOrderIds(orders);
 
@@ -2858,8 +2960,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 const endMs = new Date(`${appsEndDate}T23:59:59.999`).getTime();
                 filtered = filtered.filter((a) => new Date(a.createdAt).getTime() <= endMs);
               }
-              if (searchQuery.trim()) {
-                const q = searchQuery.toLowerCase().trim();
+              if (appliedSearchQuery.trim()) {
+                const q = appliedSearchQuery.toLowerCase().trim();
                 filtered = filtered.filter(
                   (a) =>
                     (a.legalName || '').toLowerCase().includes(q) ||
@@ -3107,8 +3209,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           const endMs = new Date(`${withdrawalsEndDate}T23:59:59.999`).getTime();
           filtered = filtered.filter((w) => new Date(w.createdAt).getTime() <= endMs);
         }
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
+        if (appliedSearchQuery.trim()) {
+          const q = appliedSearchQuery.toLowerCase().trim();
           filtered = filtered.filter(
             (w) =>
               w.helperName.toLowerCase().includes(q) ||
@@ -3186,7 +3288,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <td className="py-4 px-5 font-extrabold text-gray-900">{w.helperName}</td>
                       <td className="py-4 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
                       <td className="py-4 px-5 font-bold uppercase">{w.paymentMethod}</td>
-                      <td className="py-4 px-5">{w.accountNumber}</td>
+                      <td className="py-4 px-5 font-mono">{w.accountNumber}</td>
                       <td className="py-4 px-5">
                         <span
                           className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${w.status === 'APPROVED'
@@ -3979,7 +4081,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
                 >
-                  <option value="always_on">Always Open (সরাসরি चालू)</option>
+                  <option value="always_on">Always Open (সরাসরি চালু)</option>
                   <option value="always_off">Always Closed (সাময়িকভাবে বন্ধ)</option>
                   <option value="custom_range">Custom Time Range (নির্দিষ্ট সময়সীমা)</option>
                 </select>
@@ -4466,9 +4568,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 8: SHOPS TAB --- */}
       {activeTab === 'SHOPS' && isTabAllowed('SHOPS') && (() => {
-        let filteredShops = [...shops];
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
+        const shopsSource = serverShops !== null ? serverShops : shops;
+        let filteredShops = [...shopsSource];
+        if (appliedSearchQuery.trim()) {
+          const q = appliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
             (s) =>
               (s.name || '').toLowerCase().includes(q) ||

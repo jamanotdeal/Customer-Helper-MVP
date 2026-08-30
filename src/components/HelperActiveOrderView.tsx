@@ -34,6 +34,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
   const [feeReason, setFeeReason] = useState('');
   const [showFeeModal, setShowFeeModal] = useState(false);
+  const [customerAgreed, setCustomerAgreed] = useState(false);
   const { showConfirm, showAlert } = useModal();
 
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -484,6 +485,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const val = parseFloat(feeInput);
     if (isNaN(val) || val < 0) return;
 
+    const limit = fallbackStore.pricingSettings.feeCalculatorMaxLimit || 0;
+    if (val > limit && !customerAgreed) {
+      showAlert(
+        'কাস্টমার সম্মতি আবশ্যক',
+        'ফি লিমিট অতিক্রম করায় অগ্রসর হতে কাস্টমারের সম্মতি নিশ্চিত করা আবশ্যক।',
+        'warning'
+      );
+      return;
+    }
+
     fallbackStore.updateOrder(order.id, (o) => {
       const updatedHistory = [
         ...(o.statusHistory || []),
@@ -608,7 +619,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             : 'bg-red-50/10 border border-red-500'
         }`}>
           {customerLabels.length > 0 && (
-            <div className="absolute top-2 right-2 flex flex-wrap gap-1 max-w-[50%] justify-end">
+            <div className="flex flex-wrap gap-1 mb-2 justify-center w-full">
               {customerLabels.map((lbl, idx) => (
                 <span
                   key={idx}
@@ -1252,6 +1263,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <button
                       onClick={() => {
                         setFeeInput(String(order.deliveryFee));
+                        setCustomerAgreed(false);
                         setShowFeeModal(true);
                       }}
                       className="p-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
@@ -1642,6 +1654,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   required
                 />
               </div>
+
+              {((parseFloat(feeInput) || 0) > (fallbackStore.pricingSettings.feeCalculatorMaxLimit || 0)) && (
+                <div className="p-3.5 bg-red-50 border border-red-200 rounded-2xl text-[11px] text-red-700 font-bold space-y-2">
+                  <p>{fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || "ডেলিভারি ফি সর্বোচ্চ লিমিট অতিক্রম করেছে।"}</p>
+                  <div className="flex items-center space-x-2 bg-white p-2.5 rounded-xl border border-red-200">
+                    <input
+                      type="checkbox"
+                      id="customerAgreed"
+                      checked={customerAgreed}
+                      onChange={(e) => setCustomerAgreed(e.target.checked)}
+                      className="w-4 h-4 text-amber-650 border-gray-300 rounded focus:ring-amber-500 cursor-pointer"
+                      required
+                    />
+                    <label htmlFor="customerAgreed" className="text-xs font-bold text-gray-700 cursor-pointer select-none">
+                      Customer Agreed (কাস্টমার সম্মত হয়েছেন) <span className="text-red-500">*</span>
+                    </label>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer <span className="text-red-500">*</span></label>
