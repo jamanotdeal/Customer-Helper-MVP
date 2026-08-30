@@ -7,10 +7,21 @@
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
-    <!-- Post-splash theme. The background must be white, not @null: a
-         transparent window lets the system's own ground show through for one
-         frame, which reads as a flash between splash and first paint. -->
-    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!--
+        Post-splash theme.
+
+        Parent MUST be Light, not DayNight. The <select> dropdown inside a
+        WebView is drawn by the Android framework using THIS theme, not by page
+        CSS. Under DayNight on a phone in dark mode it picked dark-theme text
+        (white) while the white windowBackground below kept the popup white —
+        giving invisible options. Jamanot is a light-only design, so DayNight was
+        never right here.
+
+        The background must also be white rather than @null: a transparent
+        window lets the system's own ground show through for one frame, which
+        reads as a flash between splash and first paint.
+    -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@color/splash_background</item>
@@ -19,6 +30,7 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">@color/splash_background</item>
         <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:forceDarkAllowed">false</item>
     </style>
 
     <!-- Launch theme, API < 31. windowBackground carries the whole splash. -->

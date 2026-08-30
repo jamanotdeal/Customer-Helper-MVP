@@ -93,45 +93,72 @@ public class GoogleAuthPlugin extends Plugin {
                 .addCredentialOption(option)
                 .build();
 
+        Log.i(TAG, "signIn: requesting credential (clientId ends ..."
+                + webClientId.substring(Math.max(0, webClientId.length() - 12)) + ")");
         requestCredential(call, activity, request, true);
     }
 
+    /**
+     * Capacitor invokes @PluginMethod bodies on a background thread, but
+     * Credential Manager has to launch its bottom-sheet UI. Started off the main
+     * thread it can fail to ever deliver a callback — no sheet, no error, and a
+     * JS promise that never settles. So the request is marshalled onto the UI
+     * thread, and any synchronous throw is turned into a rejection rather than
+     * being allowed to strand the call.
+     */
     private void requestCredential(PluginCall call, Activity activity,
                                    GetCredentialRequest request, boolean allowFallback) {
-        CredentialManager manager = CredentialManager.create(activity);
-        manager.getCredentialAsync(
-                activity,
-                request,
-                new CancellationSignal(),
-                executor,
-                new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
-                    @Override
-                    public void onResult(GetCredentialResponse response) {
-                        handleResponse(call, response);
-                    }
+        activity.runOnUiThread(() -> {
+            try {
+                CredentialManager manager = CredentialManager.create(activity);
+                manager.getCredentialAsync(
+                        activity,
+                        request,
+                        new CancellationSignal(),
+                        executor,
+                        new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
+                            @Override
+                            public void onResult(GetCredentialResponse response) {
+                                Log.i(TAG, "signIn: credential received");
+                                handleResponse(call, response);
+                            }
 
-                    @Override
-                    public void onError(GetCredentialException e) {
-                        if (e instanceof GetCredentialCancellationException) {
-                            // Dismissing the sheet is not an error worth alerting on.
-                            call.reject("Sign-in cancelled", "CANCELLED");
-                            return;
-                        }
-                        if (e instanceof NoCredentialException && allowFallback) {
-                            // No account is currently offered — retry with the
-                            // broader option that includes unauthorised accounts.
-                            retryWithGoogleIdOption(call, activity);
-                            return;
-                        }
-                        Log.w(TAG, "Credential request failed", e);
-                        call.reject(e.getMessage() == null ? "Sign-in failed" : e.getMessage(),
-                                "NO_CREDENTIAL");
-                    }
-                });
+                            @Override
+                            public void onError(GetCredentialException e) {
+                                if (e instanceof GetCredentialCancellationException) {
+                                    // Dismissing the sheet is not an error worth alerting on.
+                                    Log.i(TAG, "signIn: cancelled by user");
+                                    call.reject("Sign-in cancelled", "CANCELLED");
+                                    return;
+                                }
+                                if (e instanceof NoCredentialException && allowFallback) {
+                                    // No account is currently offered — retry with the
+                                    // broader option that includes unauthorised accounts.
+                                    Log.i(TAG, "signIn: no credential, retrying with GetGoogleIdOption");
+                                    retryWithGoogleIdOption(call, activity);
+                                    return;
+                                }
+                                Log.w(TAG, "signIn failed: " + e.getClass().getSimpleName()
+                                        + " — " + e.getMessage(), e);
+                                call.reject(e.getMessage() == null ? "Sign-in failed" : e.getMessage(),
+                                        "NO_CREDENTIAL");
+                            }
+                        });
+            } catch (Throwable t) {
+                // Missing/outdated Play Services, a bad client id, or a linkage
+                // error would otherwise throw here and leave the call dangling.
+                Log.e(TAG, "signIn: credential request threw", t);
+                call.reject(t.getClass().getSimpleName() + ": " + t.getMessage(), "REQUEST_FAILED");
+            }
+        });
     }
 
     private void retryWithGoogleIdOption(PluginCall call, Activity activity) {
         String webClientId = getWebClientId();
+        if (webClientId == null) {
+            call.reject("default_web_client_id is missing", "NO_CLIENT_ID");
+            return;
+        }
         GetGoogleIdOption option = new GetGoogleIdOption.Builder()
                 .setServerClientId(webClientId)
                 .setFilterByAuthorizedAccounts(false)

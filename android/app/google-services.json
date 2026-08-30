@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "685363529279",
+    "firebase_url": "https://jamanot-pwa-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "jamanot-pwa",
+    "storage_bucket": "jamanot-pwa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:685363529279:android:8f79a6443c2cd0a04b9a8a",
+        "android_client_info": {
+          "package_name": "com.jamanot.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "685363529279-76clbis8rl6994eqgjr3i7uur8shaf1b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.jamanot.app",
+            "certificate_hash": "5670273ab00ed0cc167164e9bf9fbc08d91cb0a7"
+          }
+        },
+        {
+          "client_id": "685363529279-373io3jn3e4hf68ia12u0d118nmush9b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQ-u1_5k-EFP4vO0a5rLWeFWhBmQ92eBE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "685363529279-373io3jn3e4hf68ia12u0d118nmush9b.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
