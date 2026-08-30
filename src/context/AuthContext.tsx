@@ -488,17 +488,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // the JS SDK in with that keeps onAuthStateChanged as the single source of
       // truth, so everything below this branch is shared with the web path.
       if (isNativeApp()) {
-        const { idToken } = await nativeGoogleSignIn();
-        const nativeRes = await signInWithCredential(
-          auth,
-          GoogleAuthProvider.credential(idToken)
-        );
-        if (nativeRes.user) {
-          const savedMode = getSavedActiveMode();
-          const profile = buildProfile(nativeRes.user, savedMode);
-          applyProfile(profile, savedMode);
+        try {
+          const { idToken } = await nativeGoogleSignIn();
+          const nativeRes = await signInWithCredential(
+            auth,
+            GoogleAuthProvider.credential(idToken)
+          );
+          if (nativeRes.user) {
+            const savedMode = getSavedActiveMode();
+            const profile = buildProfile(nativeRes.user, savedMode);
+            applyProfile(profile, savedMode);
+          }
+        } finally {
+          // Always clear the loading state. Without this a rejected or stalled
+          // native call leaves the whole app stuck on its skeleton with no retry.
+          setLoading(false);
         }
-        setLoading(false);
         return;
       }
 
@@ -525,6 +530,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // The native account chooser rejects with CANCELLED when dismissed —
       // an ordinary user action, not something to alert about.
       if (err?.code === 'CANCELLED' || err?.message === 'Sign-in cancelled') {
+        setLoading(false);
+        return;
+      }
+      // Any other native failure must be visible. Silently returning here is
+      // what turns a misconfiguration into an unexplained frozen screen.
+      if (isNativeApp()) {
+        console.warn('[Auth] Native sign-in failed:', err?.code, err?.message);
+        alert(`Sign-in failed: ${err?.message || err?.code || 'unknown error'}`);
         setLoading(false);
         return;
       }

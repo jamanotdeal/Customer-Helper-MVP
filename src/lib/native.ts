@@ -45,40 +45,72 @@ export function getPlatform(): 'android' | 'ios' | 'web' {
 // ---------------------------------------------------------------------------
 
 let _jamanotPlugin: any = null;
-
-/**
- * Lazily builds the proxy to our Java plugin. `registerPlugin` is pure JS —
- * it never touches native code — but it is still kept behind isNativeApp()
- * so the website never loads @capacitor/core at all.
- */
-async function jn(): Promise<any | null> {
-  if (!isNativeApp()) return null;
-  if (!_jamanotPlugin) {
-    try {
-      const { registerPlugin } = await import('@capacitor/core');
-      _jamanotPlugin = registerPlugin('JamanotNative');
-    } catch (e) {
-      console.warn('[native] JamanotNative unavailable:', e);
-      return null;
-    }
-  }
-  return _jamanotPlugin;
-}
-
 let _googleAuthPlugin: any = null;
 
-async function googleAuth(): Promise<any | null> {
-  if (!isNativeApp()) return null;
-  if (!_googleAuthPlugin) {
-    try {
-      const { registerPlugin } = await import('@capacitor/core');
-      _googleAuthPlugin = registerPlugin('JamanotGoogleAuth');
-    } catch (e) {
-      console.warn('[native] JamanotGoogleAuth unavailable:', e);
-      return null;
-    }
+/**
+ * A plugin proxy, boxed.
+ *
+ * `registerPlugin()` returns a Proxy that turns EVERY property access into a
+ * native method call — `.then` included. So the proxy must never be the resolved
+ * value of a promise: JavaScript's thenable check would read `.then` off it and
+ * invoke a native method called "then", which fails with
+ * `"JamanotNative.then()" is not implemented on android` and takes the whole
+ * call down with it.
+ *
+ * Boxing it in a plain object keeps the thenable check away from the proxy.
+ * Hence `(await jn())?.p` at every call site rather than `await jn()`.
+ */
+interface PluginBox {
+  p: any;
+}
+
+let _corePromise: Promise<any> | null = null;
+
+async function loadRegisterPlugin(): Promise<((name: string) => any) | null> {
+  try {
+    if (!_corePromise) _corePromise = import('@capacitor/core');
+    const { registerPlugin } = await _corePromise;
+    return registerPlugin;
+  } catch (e) {
+    _corePromise = null;
+    console.warn('[native] @capacitor/core unavailable:', e);
+    return null;
   }
-  return _googleAuthPlugin;
+}
+
+/**
+ * Lazily boxes the proxy to our Java plugin. `registerPlugin` is pure JS — it
+ * never touches native code — but it is still kept behind isNativeApp() so the
+ * website never loads @capacitor/core at all.
+ */
+async function boxPlugin(
+  name: string,
+  cache: 'jamanot' | 'googleAuth'
+): Promise<PluginBox | null> {
+  if (!isNativeApp()) return null;
+  const existing = cache === 'jamanot' ? _jamanotPlugin : _googleAuthPlugin;
+  if (existing) return { p: existing };
+
+  const registerPlugin = await loadRegisterPlugin();
+  if (!registerPlugin) return null;
+
+  // Re-check after the await: several callers can reach this point before any
+  // of them has assigned the cache, and registering twice makes Capacitor warn.
+  const raced = cache === 'jamanot' ? _jamanotPlugin : _googleAuthPlugin;
+  if (raced) return { p: raced };
+
+  const plugin = registerPlugin(name);
+  if (cache === 'jamanot') _jamanotPlugin = plugin;
+  else _googleAuthPlugin = plugin;
+  return { p: plugin };
+}
+
+async function jn(): Promise<PluginBox | null> {
+  return boxPlugin('JamanotNative', 'jamanot');
+}
+
+async function googleAuth(): Promise<PluginBox | null> {
+  return boxPlugin('JamanotGoogleAuth', 'googleAuth');
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +263,7 @@ export interface NativePushRegistration {
  */
 export async function requestNativePushPermission(): Promise<boolean> {
   if (isNativeApp()) {
-    const p = await jn();
+    const p = (await jn())?.p;
     if (p) {
       try {
         const res = await p.requestNotificationPermission();
@@ -258,7 +290,7 @@ export async function requestNativeLocationPermission(): Promise<boolean> {
     // On web the prompt is raised by the geolocation call itself.
     return true;
   }
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return false;
   try {
     const res = await p.requestLocationPermission();
@@ -282,7 +314,7 @@ export interface NativePermissionStatus {
 
 /** Full native permission picture, used by the "Never miss an order" settings card. */
 export async function getNativePermissionStatus(): Promise<NativePermissionStatus | null> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return null;
   try {
     return await p.getPermissionStatus();
@@ -294,7 +326,7 @@ export async function getNativePermissionStatus(): Promise<NativePermissionStatu
 
 /** Send the user to the "Display over other apps" settings screen. */
 export async function requestOverlayPermission(): Promise<boolean> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return false;
   try {
     const res = await p.requestOverlayPermission();
@@ -307,25 +339,25 @@ export async function requestOverlayPermission(): Promise<boolean> {
 
 /** Opens the system battery-optimization list (no restricted permission needed). */
 export async function openBatteryOptimizationSettings(): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.openBatteryOptimizationSettings().catch(() => {});
 }
 
 /** The escape hatch when a permission has been denied permanently. */
 export async function openAppSettings(): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.openAppSettings().catch(() => {});
 }
 
 /** Vendor-specific autostart screen (Xiaomi/Oppo/Vivo/…), falls back to app settings. */
 export async function openOemAutostartSettings(): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.openOemAutostartSettings().catch(() => {});
 }
 
 /** Native FCM registration token (from Play Services), or null on web. */
 export async function getNativeFcmToken(): Promise<string | null> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return null;
   try {
     const res = await p.getFcmToken();
@@ -359,7 +391,7 @@ export async function showNativeLocalNotification(
   data?: any
 ): Promise<void> {
   if (isNativeApp()) {
-    const p = await jn();
+    const p = (await jn())?.p;
     if (p) {
       try {
         await p.showLocalNotification({ title, body, orderId: data?.orderId ?? null });
@@ -401,9 +433,9 @@ export function onOrderAlert(callback: (payload: { orderId: string }) => void): 
   let cancelled = false;
 
   jn()
-    .then((p) => {
-      if (!p || cancelled) return;
-      return p.addListener('orderAlert', (data: any) => {
+    .then((box) => {
+      if (!box || cancelled) return;
+      return box.p.addListener('orderAlert', (data: any) => {
         if (data?.orderId) callback({ orderId: String(data.orderId) });
       });
     })
@@ -424,7 +456,7 @@ export function onOrderAlert(callback: (payload: { orderId: string }) => void): 
  * launched the app long before React mounted, so no event listener existed yet.
  */
 export async function consumePendingOrderAlert(): Promise<string | null> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return null;
   try {
     const res = await p.getPendingIntentPayload();
@@ -457,7 +489,7 @@ export interface NativeUserState {
  * that lets the Java service decide who to alert with no JavaScript running.
  */
 export async function syncNativeUserState(state: NativeUserState): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return;
   try {
     await p.setUserState(state);
@@ -467,7 +499,7 @@ export async function syncNativeUserState(state: NativeUserState): Promise<void>
 }
 
 export async function startDutyService(): Promise<boolean> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (!p) return false;
   try {
     const res = await p.startDutyService();
@@ -479,13 +511,13 @@ export async function startDutyService(): Promise<boolean> {
 }
 
 export async function stopDutyService(): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.stopDutyService().catch(() => {});
 }
 
 /** User-facing opt-in for the app bringing itself to the foreground. Default off. */
 export async function setAutoOpenEnabled(enabled: boolean): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.setAutoOpenEnabled({ enabled }).catch(() => {});
 }
 
@@ -499,7 +531,7 @@ export async function setAutoOpenEnabled(enabled: boolean): Promise<void> {
  * and a drag would otherwise read as a page pull.
  */
 export async function setPullToRefreshEnabled(enabled: boolean): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.setPullToRefreshEnabled({ enabled }).catch(() => {});
 }
 
@@ -510,9 +542,9 @@ export function onPullToRefresh(callback: () => void): () => void {
   let cancelled = false;
 
   jn()
-    .then((p) => {
-      if (!p || cancelled) return;
-      return p.addListener('pullToRefresh', () => callback());
+    .then((box) => {
+      if (!box || cancelled) return;
+      return box.p.addListener('pullToRefresh', () => callback());
     })
     .then((h) => {
       if (cancelled) h?.remove?.();
@@ -528,7 +560,7 @@ export function onPullToRefresh(callback: () => void): () => void {
 
 /** Tell Java the refresh finished so it can retract the spinner. */
 export async function finishRefresh(): Promise<void> {
-  const p = await jn();
+  const p = (await jn())?.p;
   if (p) await p.finishRefresh().catch(() => {});
 }
 
@@ -565,14 +597,35 @@ export interface NativeGoogleCredential {
  * the user dismisses the sheet.
  */
 export async function nativeGoogleSignIn(): Promise<NativeGoogleCredential> {
-  const p = await googleAuth();
+  const p = (await googleAuth())?.p;
   if (!p) throw new Error('Native Google sign-in is unavailable');
-  return await p.signIn();
+
+  // Hard ceiling on the native call. If the account sheet never appears and the
+  // plugin never answers, the caller must still get a rejection — otherwise the
+  // await never settles and the UI sits on its loading state forever, with no
+  // way for the user to retry. 90s is well past any legitimate sign-in.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.signIn() as Promise<NativeGoogleCredential>,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const err: any = new Error(
+            'Google sign-in did not respond. Check that Google Play services is up to date.'
+          );
+          err.code = 'TIMEOUT';
+          reject(err);
+        }, 90_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Clear the native FirebaseAuth session and cached credential state. */
 export async function nativeGoogleSignOut(): Promise<void> {
-  const p = await googleAuth();
+  const p = (await googleAuth())?.p;
   if (p) await p.signOut().catch(() => {});
 }
 

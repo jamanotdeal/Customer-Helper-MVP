@@ -27,8 +27,10 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   onSelectShop,
 }) => {
   // Leaflet consumes the drag itself, so the native pull gesture must be
-  // disarmed while this map is on screen.
-  usePullToRefreshLock();
+  // disarmed while this map is on screen. Passing `isOpen` matters: these modals
+  // stay mounted and toggle visibility, so an unconditional lock would disable
+  // pull-to-refresh permanently (RequestComposer mounts two of these at once).
+  usePullToRefreshLock(isOpen);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const layersRef = useRef<any[]>([]);

@@ -21,6 +21,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const { user, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
   const { showAlert, showPermissionModal, showConfirm } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  // Google serves a generated letter-avatar for accounts with no photo, so
+  // photoURL is usually set even then. It can still fail to load — offline, or a
+  // dead URL — and a broken <img> shows nothing at all, so fall back to the
+  // initial on error as well as on a missing URL.
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  useEffect(() => { setAvatarFailed(false); }, [user?.photoURL]);
+
+  // Guard against an empty displayName, which would render an empty circle.
+  const initial = (user?.displayName?.trim()?.charAt(0) || user?.email?.trim()?.charAt(0) || '?').toUpperCase();
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -106,15 +116,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
                   className="flex items-center space-x-1.5 p-1 rounded-2xl border border-emerald-200 hover:border-emerald-400 bg-white transition-all shadow-sm"
                 >
-                  {user.photoURL ? (
+                  {user.photoURL && !avatarFailed ? (
                     <img
                       src={user.photoURL}
                       alt={user.displayName}
+                      onError={() => setAvatarFailed(true)}
                       className="w-8 h-8 rounded-xl object-cover"
                     />
                   ) : (
                     <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-sm">
-                      {user.displayName.charAt(0)}
+                      {initial}
                     </div>
                   )}
                 </button>
@@ -145,21 +156,26 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           onClick={() => setShowProfileMenu(false)}
         >
           <div
-            className="w-full max-w-xs bg-white h-screen h-[100dvh] max-h-screen max-h-[100dvh] shadow-2xl p-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
+            className="w-full max-w-xs bg-white h-screen h-[100dvh] max-h-screen max-h-[100dvh] shadow-2xl px-5 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200"
+            style={{
+              paddingTop: 'max(20px, calc(env(safe-area-inset-top) + 12px))',
+              paddingBottom: 'max(20px, calc(env(safe-area-inset-bottom) + 12px))',
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <div>
               {/* User Identity Info */}
               <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-                {user.photoURL ? (
+                {user.photoURL && !avatarFailed ? (
                   <img
                     src={user.photoURL}
                     alt={user.displayName}
+                    onError={() => setAvatarFailed(true)}
                     className="w-12 h-12 rounded-2xl object-cover ring-2 ring-emerald-500/20"
                   />
                 ) : (
                   <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-lg">
-                    {user.displayName.charAt(0)}
+                    {initial}
                   </div>
                 )}
                 <div>

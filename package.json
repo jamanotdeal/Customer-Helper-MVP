@@ -12,7 +12,9 @@
     "mobile:ios": "BUILD_TARGET=native next build && npx cap sync ios",
     "cap:sync": "npx cap sync",
     "cap:doctor": "npx cap doctor",
-    "test:geofence": "node scripts/test-geofence.mjs"
+    "test:geofence": "node scripts/test-geofence.mjs",
+    "mobile:apk": "npm run mobile:build && cd android && ./gradlew assembleDebug && echo \"\\nAPK: $(cd .. && pwd)/android/app/build/outputs/apk/debug/app-debug.apk\"",
+    "mobile:install": "npm run mobile:apk && adb install -r android/app/build/outputs/apk/debug/app-debug.apk"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

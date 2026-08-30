@@ -20,6 +20,16 @@
 }
 
 html {
+  /*
+   * Jamanot is a light-only design (white cards on bg-gray-100), so say so
+   * explicitly. Without this the Android WebView on a phone in dark mode renders
+   * NATIVE form controls with dark-mode conventions — most visibly the <select>
+   * dropdown, whose option text came out white on a light popup and so was
+   * invisible. This one line fixes every select, date picker and scrollbar in
+   * the app at once, rather than patching ~40 individual controls.
+   */
+  color-scheme: light;
+
   /* Prevent rubber-band scroll on iOS when at top/bottom */
   overscroll-behavior: none;
   /* Prevent text size adjustment on orientation change */
@@ -150,3 +160,27 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
 }
 
 
+
+
+/* ---------------------------------------------------------------------------
+   Native form controls
+   The <select> popup is drawn by the OS, not the page, so it does not inherit
+   the surrounding Tailwind classes. These rules keep option text legible on
+   devices in dark mode, where it would otherwise render white-on-white.
+   --------------------------------------------------------------------------- */
+select {
+  color-scheme: light;
+  color: #111827;              /* gray-900 */
+  background-color: #ffffff;
+}
+
+select option,
+select optgroup {
+  color: #111827;
+  background-color: #ffffff;
+}
+
+/* Keep placeholder-style options visually distinct without losing contrast. */
+select option[value=""] {
+  color: #6b7280;              /* gray-500 */
+}
