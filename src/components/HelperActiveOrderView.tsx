@@ -5,6 +5,7 @@ import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee }
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
+import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from './CustomModal';
 import { MapPickerModal } from './MapPickerModal';
 import { HelperOrderMapModal } from './HelperOrderMapModal';
