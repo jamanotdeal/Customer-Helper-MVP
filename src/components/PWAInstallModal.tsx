@@ -87,7 +87,15 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
     } else if (isIosDevice()) {
       setShowIosInstructions(true);
     } else {
-      alert('ইনস্টলেশন অপশনটি আপনার ব্রাউজার মেনুতে আছে। ব্রাউজার মেনুর "Add to Home screen" বা "Install App" সিলেক্ট করুন।');
+      if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+        (window as any).showCustomAlert(
+          'ইনস্টল নির্দেশিকা',
+          'ইনস্টলেশন অপশনটি আপনার ব্রাউজার মেনুতে আছে। ব্রাউজার মেনুর "Add to Home screen" বা "Install App" সিলেক্ট করুন।',
+          'info'
+        );
+      } else {
+        alert('ইনস্টলেশন অপশনটি আপনার ব্রাউজার মেনুতে আছে। ব্রাউজার মেনুর "Add to Home screen" বা "Install App" সিলেক্ট করুন।');
+      }
     }
   };
 

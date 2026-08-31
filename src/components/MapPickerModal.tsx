@@ -257,7 +257,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
               });
             }
           } else {
-            alert('কোনো স্থান খুঁজে পাওয়া যায়নি। দয়া করে আবার চেষ্টা করুন।');
+            showAlert('কোনো স্থান পাওয়া যায়নি', 'কোনো স্থান খুঁজে পাওয়া যায়নি। দয়া করে আবার চেষ্টা করুন।', 'warning');
           }
         }
       }
@@ -268,12 +268,12 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     }
   };
 
-  const { showPermissionModal } = useModal();
+  const { showPermissionModal, showAlert } = useModal();
 
   // Device GPS Location with robust high-accuracy fallback
   const handleCurrentLocation = () => {
     if (!navigator.geolocation) {
-      alert('আপনার ব্রাউজার জিপিএস লোকেশন সাপোর্ট করে না।');
+      showAlert('লোকেশন অসমর্থিত', 'আপনার ব্রাউজার জিপিএস লোকেশন সাপোর্ট করে না।', 'error');
       return;
     }
     setIsLocating(true);
@@ -317,7 +317,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           applyPosition,
           (fallbackErr) => {
             console.warn('[MapPicker] Fallback geolocation error:', fallbackErr);
-            alert('জিপিএস লোকেশন পাওয়া যায়নি। অনুগ্রহ করে ম্যাপে স্থানটি সিলেক্ট করুন।');
+            showAlert('লোকেশন পাওয়া যায়নি', 'জিপিএস লোকেশন পাওয়া যায়নি। অনুগ্রহ করে ম্যাপে স্থানটি সিলেক্ট করুন।', 'warning');
             setIsLocating(false);
           },
           { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
@@ -332,7 +332,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     const finalMap = mapAddress.trim();
 
     if (!finalDetail && !finalMap) {
-      alert('দয়া করে ঠিকানার বিবরণ লিখুন বা ম্যাপে পিন সিলেক্ট করুন।');
+      showAlert('তথ্য অসম্পূর্ণ', 'দয়া করে ঠিকানার বিবরণ লিখুন বা ম্যাপে পিন সিলেক্ট করুন।', 'warning');
       return;
     }
 

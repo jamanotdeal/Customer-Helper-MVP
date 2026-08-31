@@ -4,9 +4,10 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle, Edit } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { StoreApplicationModal } from './StoreApplicationModal';
+import { EditStoreModal } from './EditStoreModal';
 import { fallbackStore } from '@/lib/firebase';
 
 import { useModal } from './CustomModal';
@@ -24,6 +25,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [storeAppStatus, setStoreAppStatus] = useState<string | null>(null);
+  const [showEditStoreModal, setShowEditStoreModal] = useState(false);
+  const [storeInfo, setStoreInfo] = useState<any>(null);
 
   useEffect(() => {
     const syncNotifs = () => {
@@ -35,6 +38,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           .filter((a) => a.userId === user.uid)
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
         setStoreAppStatus(latestStoreApp?.status || null);
+
+        // Fetch/sync store info if store approved
+        if (user.storeId) {
+          setStoreInfo(fallbackStore.shops.get(user.storeId) || null);
+        } else {
+          setStoreInfo(null);
+        }
       }
     };
     syncNotifs();
@@ -207,82 +217,101 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                     </div>
                   ) : (
                     <>
-                      <button
-                        onClick={() => {
-                          setActiveMode('customer');
-                          setShowProfileMenu(false);
-                        }}
-                        className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                          activeMode === 'customer'
-                            ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                            : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                        }`}
-                      >
-                        <div className="flex items-center space-x-2.5">
-                          <ShoppingBag className="w-5 h-5 text-emerald-600" />
-                          <div>
-                            <div className="text-sm font-semibold">Customer Mode</div>
-                            <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
+                      {activeMode !== 'store' && (
+                        <button
+                          onClick={() => {
+                            setActiveMode('customer');
+                            setShowProfileMenu(false);
+                          }}
+                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                            activeMode === 'customer'
+                              ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                              : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2.5">
+                            <ShoppingBag className="w-5 h-5 text-emerald-600" />
+                            <div>
+                              <div className="text-sm font-semibold">Customer Mode</div>
+                              <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
+                            </div>
                           </div>
-                        </div>
-                        {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                      </button>
+                          {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                        </button>
+                      )}
 
                       {/* Store Mode — nested under Customer Mode */}
-                      <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
-                        {user.isStoreApproved ? (
-                          <div className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-900 font-bold shadow-sm">
-                            <div className="flex items-center space-x-2">
-                              <Store className="w-4 h-4 text-orange-600" />
-                              <div>
-                                <div className="text-xs font-semibold">Became a Store</div>
-                                <div className="text-[10px] text-gray-500 font-normal">Approved store mode active</div>
+                      {user.helperType !== 'dedicated' && (
+                        <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
+                          {user.isStoreApproved ? (
+                            <div className="w-full p-3 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-950 shadow-sm space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                  <Store className="w-4 h-4 text-orange-600" />
+                                  <div>
+                                    <div className="text-xs font-black text-orange-850">
+                                      {storeInfo?.name || 'My Store'}
+                                    </div>
+                                    <div className="text-[10px] text-gray-600 font-medium">Approved store mode active</div>
+                                  </div>
+                                </div>
+                                <CheckCircle2 className="w-4.5 h-4.5 text-orange-600" />
                               </div>
+                              
+                              <button
+                                onClick={() => {
+                                  setShowProfileMenu(false);
+                                  setShowEditStoreModal(true);
+                                }}
+                                className="w-full py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
+                              >
+                                <Edit className="w-3 h-3 text-white" />
+                                <span>Edit Store Info</span>
+                              </button>
                             </div>
-                            <CheckCircle2 className="w-4 h-4 text-orange-600" />
-                          </div>
-                        ) : storeAppStatus === 'PENDING' ? (
-                          <button
-                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
-                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
-                              <div>
-                                <div className="text-xs font-semibold">Became a Store</div>
-                                <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
+                          ) : storeAppStatus === 'PENDING' ? (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+                                <div>
+                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
+                                </div>
                               </div>
-                            </div>
-                          </button>
-                        ) : storeAppStatus === 'REJECTED' || storeAppStatus === 'CANCELED' ? (
-                          <button
-                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
-                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <Store className="w-4 h-4 text-orange-500" />
-                              <div>
-                                <div className="text-xs font-semibold">Became a Store</div>
-                                <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
+                            </button>
+                          ) : storeAppStatus === 'REJECTED' || storeAppStatus === 'CANCELED' ? (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <Store className="w-4 h-4 text-orange-500" />
+                                <div>
+                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
+                                </div>
                               </div>
-                            </div>
-                            <XCircle className="w-3.5 h-3.5 text-red-400" />
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
-                            className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <Store className="w-4 h-4 text-orange-500" />
-                              <div>
-                                <div className="text-xs font-semibold">Became a Store</div>
-                                <div className="text-[10px] text-gray-500 font-normal">দোকান নিবন্ধন করে স্টোর মোড পান</div>
+                              <XCircle className="w-3.5 h-3.5 text-red-400" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-orange-50/50 hover:border-orange-200 transition-all text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <Store className="w-4 h-4 text-orange-500" />
+                                <div>
+                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-[10px] text-gray-500 font-normal">দোকান নিবন্ধন করে স্টোর মোড পান</div>
+                                </div>
                               </div>
-                            </div>
-                          </button>
-                        )}
-                      </div>
+                            </button>
+                          )}
+                        </div>
+                      )}
 
                       {((user.isHelper && user.helperType === 'dedicated') || !(fallbackStore.pricingSettings.allowedHelperTypes === 'dedicated_only')) && (
                         <button
@@ -408,6 +437,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       {/* Become a Store Modal */}
       {showStoreModal && (
         <StoreApplicationModal onClose={() => setShowStoreModal(false)} />
+      )}
+
+      {/* Edit Store Information Modal */}
+      {showEditStoreModal && storeInfo && (
+        <EditStoreModal shop={storeInfo} onClose={() => setShowEditStoreModal(false)} />
       )}
     </>
   );

@@ -78,8 +78,22 @@ export default function PageClient() {
 
       const unrated = userOrders.find((o) => {
         if (o.feedback) return false;
-        const dismissed = typeof sessionStorage !== 'undefined' && sessionStorage.getItem(`feedback_dismissed_${o.id}`);
-        return !dismissed;
+        const dismissed = typeof localStorage !== 'undefined' && localStorage.getItem(`feedback_dismissed_${o.id}`);
+        if (dismissed) return false;
+
+        // Only show review modal if order was completed within the last 8 hours
+        const completionTimeStr = o.deliveredAt || o.updatedAt || o.createdAt;
+        if (!completionTimeStr) return false;
+        
+        try {
+          const completionTime = new Date(completionTimeStr).getTime();
+          const now = Date.now();
+          const diffMs = now - completionTime;
+          const diffHours = diffMs / (1000 * 60 * 60);
+          return diffHours >= 0 && diffHours <= 8;
+        } catch (e) {
+          return false;
+        }
       });
 
       if (unrated) {
@@ -455,12 +469,17 @@ export default function PageClient() {
         <OrderFeedbackModal
           order={feedbackOrder}
           onClose={() => {
-            if (feedbackOrder && typeof sessionStorage !== 'undefined') {
-              sessionStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
+            if (feedbackOrder && typeof localStorage !== 'undefined') {
+              localStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
             }
             setFeedbackOrder(null);
           }}
-          onSubmitted={() => setFeedbackOrder(null)}
+          onSubmitted={() => {
+            if (feedbackOrder && typeof localStorage !== 'undefined') {
+              localStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
+            }
+            setFeedbackOrder(null);
+          }}
         />
       )}
 

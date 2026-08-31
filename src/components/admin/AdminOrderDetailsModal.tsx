@@ -676,7 +676,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 pricingSettings
               );
               const shopPrices = fallbackStore.getShopOrdersForOrder(order.id);
-              const shopTotal = shopPrices.reduce((sum, so) => sum + (so.price ?? 0), 0);
+              const shopTotal = shopPrices.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price ?? 0), 0);
               const processingFeeValue = est.processingFee;
               const platformRevenueTotal = platformRevenue + processingFeeValue;
               const totalCollectable = order.deliveryFee + productCost + processingFeeValue;

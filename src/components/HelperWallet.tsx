@@ -14,6 +14,7 @@ import {
   Filter,
   DollarSign,
   TrendingUp,
+  ChevronDown,
 } from 'lucide-react';
 
 export const HelperWallet: React.FC = () => {
@@ -57,6 +58,7 @@ export const HelperWallet: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('');
   const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
   const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
 
   const minWithdrawal = fallbackStore.pricingSettings.minWithdrawalAmount || 100;
 
@@ -115,6 +117,18 @@ export const HelperWallet: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     });
+  };
+
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handleOutsideClick = () => setDropdownOpen(false);
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [dropdownOpen]);
+
+  const toggleDropdown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDropdownOpen(!dropdownOpen);
   };
 
   useEffect(() => {
@@ -267,6 +281,14 @@ export const HelperWallet: React.FC = () => {
     return { earnedToday, commissionDueToday };
   }, [deliveredOrders]);
 
+  const presetLabels = {
+    ALL_TIME: 'All Times',
+    TODAY: 'Today',
+    LAST_7: 'Last 7 Days',
+    THIS_MONTH: 'This Month',
+    CUSTOM: 'Custom'
+  };
+
   return (
     <div className="space-y-6 pb-24 animate-in fade-in duration-200">
       {/* Balance Card */}
@@ -277,6 +299,37 @@ export const HelperWallet: React.FC = () => {
               <WalletIcon className="w-5 h-5 text-indigo-300" />
             </div>
             <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings & Commission Dashboard</span>
+          </div>
+
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={toggleDropdown}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 transition-all text-xs font-bold border border-white/10"
+            >
+              <span>{presetLabels[activePreset]}</span>
+              <ChevronDown className="w-3.5 h-3.5 text-white/80" />
+            </button>
+            {dropdownOpen && (
+              <div className="absolute right-0 mt-1 w-40 bg-slate-900 border border-white/10 rounded-2xl shadow-xl z-30 py-1 text-xs">
+                {Object.entries(presetLabels).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      handlePresetSelect(preset as any);
+                      setDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 hover:bg-white/10 transition-colors ${
+                      activePreset === preset ? 'text-indigo-300 font-extrabold' : 'text-white'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -290,8 +343,79 @@ export const HelperWallet: React.FC = () => {
           </span>
         </div>
 
+        {/* Custom Date Pickers */}
+        {activePreset === 'CUSTOM' && (
+          <div className="grid grid-cols-2 gap-2 text-[11px] font-bold mb-4 p-3 bg-white/5 border border-white/10 rounded-2xl animate-in fade-in duration-200">
+            <div className="flex flex-col bg-slate-900/50 border border-white/10 rounded-xl px-2.5 py-1">
+              <span className="text-white/50 text-[8px] uppercase font-extrabold">From:</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
+              />
+            </div>
+            <div className="flex flex-col bg-slate-900/50 border border-white/10 rounded-xl px-2.5 py-1">
+              <span className="text-white/50 text-[8px] uppercase font-extrabold">To:</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 4 Stats Grid */}
+        <div className="grid grid-cols-2 gap-2.5 mb-5 text-white/90">
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+              {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned'}
+            </span>
+            <span className="text-base font-black text-white block truncate">
+              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.earned}
+            </span>
+          </div>
+          
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+              Total Commission
+            </span>
+            <span className="text-base font-black text-white block truncate">
+              ৳{activePreset === 'ALL_TIME' 
+                ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
+                : rangeMetrics.commissionDue}
+            </span>
+          </div>
+
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+              Paid Commission
+            </span>
+            <span className="text-base font-black text-emerald-300 block truncate">
+              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
+            </span>
+          </div>
+
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+              Due Commission
+            </span>
+            <span className="text-base font-black text-amber-300 block truncate">
+              ৳{activePreset === 'ALL_TIME' ? (wallet?.balance || 0) : Math.max(0, rangeMetrics.commissionDue - rangeMetrics.paidCommission)}
+            </span>
+          </div>
+        </div>
+
         {hasPendingPayback && (
-          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-semibold">
+          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-250 text-xs font-semibold">
             ⏳ আপনার ৳{pendingPayback.amount} commission payback অনুরোধ অ্যাডমিনের পর্যালোচনায় আছে।
           </div>
         )}
@@ -322,144 +446,6 @@ export const HelperWallet: React.FC = () => {
             ? 'Pay Commission to Platform'
             : 'No Due Commission'}
         </button>
-      </div>
-
-      {/* Date Range Selector */}
-      <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Calendar className="w-4 h-4 text-emerald-700" />
-            <span className="text-xs font-extrabold text-gray-900">Filter by Date Range</span>
-          </div>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800">
-              Filtered
-            </span>
-          )}
-        </div>
-
-        {/* Quick Filter Presets */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-extrabold scrollbar-none">
-          <button
-            onClick={() => handlePresetSelect('ALL_TIME')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'ALL_TIME'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            All Time
-          </button>
-          <button
-            onClick={() => handlePresetSelect('TODAY')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'TODAY'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Today
-          </button>
-          <button
-            onClick={() => handlePresetSelect('LAST_7')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'LAST_7'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Last 7 Days
-          </button>
-          <button
-            onClick={() => handlePresetSelect('THIS_MONTH')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'THIS_MONTH'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            This Month
-          </button>
-          <button
-            onClick={() => handlePresetSelect('CUSTOM')}
-            className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-              activePreset === 'CUSTOM' || showCustomPicker
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Custom
-          </button>
-        </div>
-
-        {/* Custom Date Pickers - Only shown when Custom button is clicked */}
-        {(showCustomPicker || activePreset === 'CUSTOM') && (
-          <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1 animate-in fade-in duration-200">
-            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-              <span className="text-gray-400 text-[9px] uppercase font-extrabold">From:</span>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setActivePreset('CUSTOM');
-                }}
-                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-              />
-            </div>
-            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-              <span className="text-gray-400 text-[9px] uppercase font-extrabold">To:</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setActivePreset('CUSTOM');
-                }}
-                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Stats Summary */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned'}
-          </span>
-          <span className="text-sm font-black text-gray-900 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.earned}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalEarned || 0}</span>
-          )}
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Paid Commission' : 'Paid Comm.'}
-          </span>
-          <span className="text-sm font-black text-emerald-700 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalPaidCommission || 0}</span>
-          )}
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Commission' : 'Commission'}
-          </span>
-          <span className="text-sm font-black text-blue-700 block truncate">
-            ৳{activePreset === 'ALL_TIME' 
-              ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
-              : rangeMetrics.commissionDue}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0))}</span>
-          )}
-        </div>
       </div>
 
       {/* Withdrawal Requests History */}

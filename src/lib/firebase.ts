@@ -1797,7 +1797,7 @@ class FallbackStore {
 
   public getShopOrdersForStore(shopId: string): ShopOrder[] {
     return Array.from(this.shopOrders.values())
-      .filter((so) => so.shopId === shopId && so.status !== 'CANCELED')
+      .filter((so) => so.shopId === shopId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -1838,16 +1838,18 @@ class FallbackStore {
     const shopDoc = this.shops.get(storeId);
     const commissionRate = shopDoc?.commissionPercent ?? 0;
 
-    // Filter shop orders belonging to this store where parent order is delivered and shop order is not canceled
+    // Filter shop orders belonging to this store where parent order is delivered or shop order is canceled
     const storeShopOrders = Array.from(this.shopOrders.values()).filter((so) => {
-      if (so.shopId !== storeId || so.status === 'CANCELED') return false;
+      if (so.shopId !== storeId) return false;
+      if (so.status === 'CANCELED') return true;
       const parentOrder = this.orders.get(so.parentOrderId);
       return parentOrder?.status === 'DELIVERED';
     });
 
     // Only sum the price set for items ordered from this store
     const totalSales = storeShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0);
-    const totalCommissionDue = Math.round(totalSales * (commissionRate / 100));
+    const nonCanceledShopOrders = storeShopOrders.filter((so) => so.status !== 'CANCELED');
+    const totalCommissionDue = Math.round(nonCanceledShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0) * (commissionRate / 100));
 
     const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
       (w) => w.helperId === storeUserId && w.status === 'APPROVED'

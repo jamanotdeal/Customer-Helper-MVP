@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { Wallet, WithdrawalRequest, Order } from '@/types';
+import { Wallet, WithdrawalRequest, Order, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
 import {
@@ -11,6 +11,7 @@ import {
   ArrowDownLeft,
   Calendar,
   Filter,
+  ChevronDown,
 } from 'lucide-react';
 
 export const StoreWallet: React.FC = () => {
@@ -18,7 +19,7 @@ export const StoreWallet: React.FC = () => {
   const { showAlert } = useModal();
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
-  const [storeOrders, setStoreOrders] = useState<Order[]>([]);
+  const [storeShopOrders, setStoreShopOrders] = useState<ShopOrder[]>([]);
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('100');
@@ -55,6 +56,7 @@ export const StoreWallet: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('');
   const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
   const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
 
   const minWithdrawal = fallbackStore.pricingSettings.minWithdrawalAmount || 100;
 
@@ -115,18 +117,34 @@ export const StoreWallet: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!dropdownOpen) return;
+    const handleOutsideClick = () => setDropdownOpen(false);
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [dropdownOpen]);
+
+  const toggleDropdown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDropdownOpen(!dropdownOpen);
+  };
+
+  useEffect(() => {
     const syncWallet = () => {
       if (user && storeId) {
         const w = fallbackStore.getStoreWallet(user.uid, storeId);
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
-        const allOrders = Array.from(fallbackStore.orders.values());
-        const shopOrders = allOrders.filter(
-          (o) => o.selectedShopIds?.includes(storeId) && o.status === 'DELIVERED'
-        );
+        
+        // Filter shop orders belonging to this store where parent order is delivered or shop order is canceled
+        const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => {
+          if (so.shopId !== storeId) return false;
+          if (so.status === 'CANCELED') return true;
+          const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+          return parentOrder?.status === 'DELIVERED';
+        });
 
         setWallet({ ...w });
         setWithdrawals([...wds]);
-        setStoreOrders(shopOrders);
+        setStoreShopOrders(shopOrders);
       }
     };
 
@@ -144,18 +162,29 @@ export const StoreWallet: React.FC = () => {
     const shopDoc = storeId ? fallbackStore.shops.get(storeId) : null;
     const commissionRate = shopDoc?.commissionPercent ?? 0;
 
-    const list: { id: string; type: 'EARNING' | 'PAYBACK'; amount: number; description: string; createdAt: string }[] = [];
+    const list: { id: string; type: 'EARNING' | 'PAYBACK' | 'CANCELED'; amount: number; description: string; createdAt: string }[] = [];
 
-    storeOrders.forEach((o) => {
-      const sales = o.productCost ?? 0;
-      const commission = Math.round(sales * (commissionRate / 100));
-      list.push({
-        id: `order-${o.id}`,
-        type: 'EARNING',
-        amount: commission, // Store owes this commission to platform
-        description: `Order #${o.id.slice(-4)} completed (Commission ${commissionRate}%: ৳${commission})`,
-        createdAt: o.deliveredAt || o.createdAt,
-      });
+    storeShopOrders.forEach((so) => {
+      const sales = so.price ?? 0;
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+      if (so.status === 'CANCELED') {
+        list.push({
+          id: `order-cancel-${so.id}`,
+          type: 'CANCELED',
+          amount: sales,
+          description: `Order #${so.parentOrderId.slice(-4)} Canceled (No Commission)`,
+          createdAt: so.updatedAt || so.createdAt,
+        });
+      } else {
+        const commission = Math.round(sales * (commissionRate / 100));
+        list.push({
+          id: `order-${so.parentOrderId}`,
+          type: 'EARNING',
+          amount: commission, // Store owes this commission to platform
+          description: `Order #${so.parentOrderId.slice(-4)} completed (Commission ${commissionRate}%: ৳${commission})`,
+          createdAt: parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt,
+        });
+      }
     });
 
     withdrawals.forEach((w) => {
@@ -171,7 +200,7 @@ export const StoreWallet: React.FC = () => {
     });
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [storeOrders, withdrawals, storeId]);
+  }, [storeShopOrders, withdrawals, storeId]);
 
   // Filtered Ledger based on selected Date Range
   const filteredTransactions = useMemo(() => {
@@ -204,17 +233,18 @@ export const StoreWallet: React.FC = () => {
     });
   }, [withdrawals, startDate, endDate]);
 
-  // Filtered Delivered Orders based on selected Date Range
-  const filteredOrders = useMemo(() => {
-    return storeOrders.filter((ord) => {
-      const orderDate = ord.deliveredAt || ord.createdAt;
+  // Filtered Delivered Shop Orders based on selected Date Range
+  const filteredShopOrders = useMemo(() => {
+    return storeShopOrders.filter((so) => {
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+      const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
       const t = new Date(orderDate).getTime();
       if (isNaN(t)) return true;
       if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
       if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
       return true;
     });
-  }, [storeOrders, startDate, endDate]);
+  }, [storeShopOrders, startDate, endDate]);
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
@@ -224,11 +254,16 @@ export const StoreWallet: React.FC = () => {
     let totalSales = 0;
     let commissionDue = 0;
     let paidCommission = 0;
+    let canceledAmount = 0;
 
-    filteredOrders.forEach((o) => {
-      const sales = o.productCost ?? 0;
+    filteredShopOrders.forEach((so) => {
+      const sales = so.price ?? 0;
       totalSales += sales;
-      commissionDue += Math.round(sales * (commissionRate / 100));
+      if (so.status === 'CANCELED') {
+        canceledAmount += sales;
+      } else {
+        commissionDue += Math.round(sales * (commissionRate / 100));
+      }
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -237,8 +272,8 @@ export const StoreWallet: React.FC = () => {
       }
     });
 
-    return { totalSales, commissionDue, paidCommission };
-  }, [filteredOrders, filteredWithdrawals, storeId]);
+    return { totalSales, commissionDue, paidCommission, canceledAmount };
+  }, [filteredShopOrders, filteredWithdrawals, storeId]);
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
@@ -287,16 +322,25 @@ export const StoreWallet: React.FC = () => {
     const todayStr = getTodayStr(); // Local YYYY-MM-DD
     let salesToday = 0;
 
-    storeOrders.forEach((o) => {
-      const orderDate = o.deliveredAt || o.createdAt;
+    storeShopOrders.forEach((so) => {
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+      const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
       const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
       if (orderLocalStr === todayStr) {
-        salesToday += (o.productCost || 0);
+        salesToday += (so.price || 0);
       }
     });
 
     return { salesToday };
-  }, [storeOrders]);
+  }, [storeShopOrders]);
+
+  const presetLabels = {
+    ALL_TIME: 'All Times',
+    TODAY: 'Today',
+    LAST_7: 'Last 7 Days',
+    THIS_MONTH: 'This Month',
+    CUSTOM: 'Custom'
+  };
 
   return (
     <div className="space-y-6 pb-24 animate-in fade-in duration-200">
@@ -307,7 +351,38 @@ export const StoreWallet: React.FC = () => {
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
               <WalletIcon className="w-5 h-5 text-emerald-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Store Sales & Commission Dashboard</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Store Sales & Commission</span>
+          </div>
+
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={toggleDropdown}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 transition-all text-xs font-bold border border-white/10"
+            >
+              <span>{presetLabels[activePreset]}</span>
+              <ChevronDown className="w-3.5 h-3.5 text-white/80" />
+            </button>
+            {dropdownOpen && (
+              <div className="absolute right-0 mt-1 w-40 bg-slate-900 border border-white/10 rounded-2xl shadow-xl z-30 py-1 text-xs">
+                {Object.entries(presetLabels).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      handlePresetSelect(preset as any);
+                      setDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 hover:bg-white/10 transition-colors ${
+                      activePreset === preset ? 'text-emerald-300 font-extrabold' : 'text-white'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -319,6 +394,89 @@ export const StoreWallet: React.FC = () => {
           <span className="text-xs text-emerald-300 font-semibold block mt-1">
             Commission to Payback: ৳{wallet?.balance || 0}
           </span>
+        </div>
+
+        {/* Custom Date Pickers */}
+        {activePreset === 'CUSTOM' && (
+          <div className="grid grid-cols-2 gap-2 text-[11px] font-bold mb-4 p-3 bg-white/5 border border-white/10 rounded-2xl animate-in fade-in duration-200">
+            <div className="flex flex-col bg-slate-900/50 border border-white/10 rounded-xl px-2.5 py-1">
+              <span className="text-white/50 text-[8px] uppercase font-extrabold">From:</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
+              />
+            </div>
+            <div className="flex flex-col bg-slate-900/50 border border-white/10 rounded-xl px-2.5 py-1">
+              <span className="text-white/50 text-[8px] uppercase font-extrabold">To:</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setActivePreset('CUSTOM');
+                }}
+                className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 5 Stats Grid */}
+        <div className="grid grid-cols-2 gap-2.5 mb-5 text-white/90">
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs col-span-2 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] text-emerald-200/80 font-bold block leading-tight">
+                {activePreset === 'ALL_TIME' ? 'Total Sales' : 'Sales'}
+              </span>
+              <span className="text-xl font-black text-white block truncate">
+                ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.totalSales}
+              </span>
+            </div>
+            <div className="text-right border-l border-white/10 pl-4">
+              <span className="text-[10px] text-rose-300 font-bold block leading-tight">
+                Cancelled Amount
+              </span>
+              <span className="text-lg font-black text-rose-300 block truncate">
+                ৳{activePreset === 'ALL_TIME'
+                  ? storeShopOrders.filter(so => so.status === 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)
+                  : rangeMetrics.canceledAmount}
+              </span>
+            </div>
+          </div>
+          
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-emerald-200/80 font-bold block leading-tight">
+              Total Commission
+            </span>
+            <span className="text-base font-black text-white block truncate">
+              ৳{activePreset === 'ALL_TIME' 
+                ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
+                : rangeMetrics.commissionDue}
+            </span>
+          </div>
+
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
+            <span className="text-[10px] text-emerald-200/80 font-bold block leading-tight">
+              Paid Commission
+            </span>
+            <span className="text-base font-black text-emerald-300 block truncate">
+              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
+            </span>
+          </div>
+
+          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs col-span-2">
+            <span className="text-[10px] text-emerald-200/80 font-bold block leading-tight">
+              Due Commission
+            </span>
+            <span className="text-base font-black text-amber-300 block truncate">
+              ৳{activePreset === 'ALL_TIME' ? (wallet?.balance || 0) : Math.max(0, rangeMetrics.commissionDue - rangeMetrics.paidCommission)}
+            </span>
+          </div>
         </div>
 
         {hasPendingPayback && (
@@ -353,113 +511,6 @@ export const StoreWallet: React.FC = () => {
             ? 'Pay Commission to Platform'
             : 'No Due Commission'}
         </button>
-      </div>
-
-      {/* Date Range Selector */}
-      <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Calendar className="w-4 h-4 text-emerald-700" />
-            <span className="text-xs font-extrabold text-gray-900">Filter by Date Range</span>
-          </div>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-55 text-emerald-800">
-              Filtered
-            </span>
-          )}
-        </div>
-
-        {/* Quick Filter Presets */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-extrabold scrollbar-none">
-          {([
-            ['ALL_TIME', 'All Time'],
-            ['TODAY', 'Today'],
-            ['LAST_7', 'Last 7 Days'],
-            ['THIS_MONTH', 'This Month'],
-            ['CUSTOM', 'Custom']
-          ] as const).map(([preset, label]) => (
-            <button
-              key={preset}
-              onClick={() => handlePresetSelect(preset)}
-              className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-                activePreset === preset
-                  ? 'bg-emerald-700 text-white shadow-xs'
-                  : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Custom Date Pickers */}
-        {(showCustomPicker || activePreset === 'CUSTOM') && (
-          <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1 animate-in fade-in duration-200">
-            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-              <span className="text-gray-400 text-[9px] uppercase font-extrabold">From:</span>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setActivePreset('CUSTOM');
-                }}
-                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-              />
-            </div>
-            <div className="flex flex-col bg-gray-50 border border-gray-200 rounded-2xl px-3 py-1.5">
-              <span className="text-gray-400 text-[9px] uppercase font-extrabold">To:</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setActivePreset('CUSTOM');
-                }}
-                className="bg-transparent text-gray-900 font-extrabold focus:outline-none text-xs"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Stats Summary */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Sales' : 'Sales'}
-          </span>
-          <span className="text-sm font-black text-gray-900 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.totalSales}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalEarned || 0}</span>
-          )}
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Paid Commission' : 'Paid Comm.'}
-          </span>
-          <span className="text-sm font-black text-emerald-700 block truncate">
-            ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{wallet?.totalPaidCommission || 0}</span>
-          )}
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-soft space-y-1">
-          <span className="text-[10px] text-gray-400 font-extrabold block leading-tight">
-            {activePreset === 'ALL_TIME' ? 'Total Due Commission' : 'Due Comm.'}
-          </span>
-          <span className="text-sm font-black text-blue-700 block truncate">
-            ৳{activePreset === 'ALL_TIME' 
-              ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
-              : rangeMetrics.commissionDue}
-          </span>
-          {activePreset !== 'ALL_TIME' && (
-            <span className="text-[8px] text-gray-400 block truncate">All-Time: ৳{((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0))}</span>
-          )}
-        </div>
       </div>
 
       {/* Payback Requests History */}
@@ -513,10 +564,16 @@ export const StoreWallet: React.FC = () => {
                   <div className="flex items-center space-x-3">
                     <div
                       className={`p-2 rounded-xl ${
-                        tx.amount > 0 ? 'bg-emerald-105 text-emerald-700' : 'bg-red-105 text-red-700'
+                        tx.type === 'EARNING' ? 'bg-emerald-100 text-emerald-700' : tx.type === 'PAYBACK' ? 'bg-red-100 text-red-700' : 'bg-gray-150 text-gray-500'
                       }`}
                     >
-                      {tx.amount > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
+                      {tx.type === 'EARNING' ? (
+                        <ArrowUpRight className="w-4 h-4" />
+                      ) : tx.type === 'PAYBACK' ? (
+                        <ArrowDownLeft className="w-4 h-4" />
+                      ) : (
+                        <span className="font-extrabold text-[10px]">✕</span>
+                      )}
                     </div>
                     <div>
                       <span className="font-bold text-gray-900 block">{tx.description}</span>
@@ -527,10 +584,10 @@ export const StoreWallet: React.FC = () => {
                   </div>
                   <span
                     className={`font-black text-sm ${
-                      tx.amount > 0 ? 'text-emerald-750' : 'text-red-600'
+                      tx.type === 'EARNING' ? 'text-emerald-750' : tx.type === 'PAYBACK' ? 'text-red-650' : 'text-gray-400 line-through'
                     }`}
                   >
-                    {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
+                    {tx.type === 'EARNING' ? `+৳${tx.amount}` : tx.type === 'PAYBACK' ? `-৳${Math.abs(tx.amount)}` : `৳${tx.amount}`}
                   </span>
                 </div>
               ))}

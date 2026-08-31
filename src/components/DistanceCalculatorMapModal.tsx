@@ -248,7 +248,11 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
             mapInstanceRef.current.setView([lat, lng], 16);
             handleMapClickAt(lat, lng);
           } else {
-            alert('কোনো স্থান পাওয়া যায়নি। আবার চেষ্টা করুন।');
+            if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+              (window as any).showCustomAlert('স্থান পাওয়া যায়নি', 'কোনো স্থান পাওয়া যায়নি। আবার চেষ্টা করুন।', 'warning');
+            } else {
+              alert('কোনো স্থান পাওয়া যায়নি। আবার চেষ্টা করুন।');
+            }
           }
         }
       }
@@ -274,7 +278,11 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
       },
       () => {
         setIsLocating(false);
-        alert('জিপিএস লোকেশন পাওয়া যায়নি।');
+        if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+          (window as any).showCustomAlert('লোকেশন পাওয়া যায়নি', 'জিপিএস লোকেশন পাওয়া যায়নি।', 'warning');
+        } else {
+          alert('জিপিএস লোকেশন পাওয়া যায়নি।');
+        }
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
@@ -282,7 +290,11 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
 
   const handleConfirm = () => {
     if (!calculatedKm || calculatedKm <= 0) {
-      alert('দয়া করে ম্যাপে পিকআপ ও ডেলিভারি দুইটি স্থান সিলেক্ট করুন।');
+      if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+        (window as any).showCustomAlert('স্থান নির্বাচন করুন', 'দয়া করে ম্যাপে পিকআপ ও ডেলিভারি দুইটি স্থান সিলেক্ট করুন।', 'warning');
+      } else {
+        alert('দয়া করে ম্যাপে পিকআপ ও ডেলিভারি দুইটি স্থান সিলেক্ট করুন।');
+      }
       return;
     }
     onSelectDistance(calculatedKm);

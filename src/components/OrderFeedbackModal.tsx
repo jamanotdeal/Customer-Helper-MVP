@@ -132,11 +132,17 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
           <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0 shadow-xs">
             <Sparkles className="w-5 h-5 text-amber-500" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <h3 className="text-base font-extrabold text-gray-900 leading-tight">
               অর্ডার মতামত
             </h3>
-            <span className="text-[11px] font-semibold text-gray-400">
+            <div className="text-[11px] font-bold text-amber-800 truncate" title={order.service || order.title || 'N/A'}>
+              সার্ভিস: {order.service || order.title || 'N/A'}
+            </div>
+            <div className="text-[10px] font-semibold text-gray-500 truncate" title={order.items?.map(it => it.name).join(', ')}>
+              বিবরণ: {order.items?.map(it => it.name).join(', ') || 'N/A'}
+            </div>
+            <span className="text-[10px] font-semibold text-gray-400 block mt-0.5">
               Order #{order.id}
             </span>
           </div>

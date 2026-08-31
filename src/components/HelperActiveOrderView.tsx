@@ -75,6 +75,176 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showMapModal, setShowMapModal] = useState(false);
   const [returnWhen, setReturnWhen] = useState<'now' | 'schedule'>('schedule');
 
+  const pendingMapContainerRef = React.useRef<HTMLDivElement>(null);
+  const pendingMapInstanceRef = React.useRef<any>(null);
+
+  useEffect(() => {
+    if (order.status !== 'PENDING' || !pendingMapContainerRef.current) {
+      if (pendingMapInstanceRef.current) {
+        try {
+          pendingMapInstanceRef.current.remove();
+        } catch (e) {
+          console.warn('[Leaflet] cleanup error:', e);
+        }
+        pendingMapInstanceRef.current = null;
+      }
+      return;
+    }
+
+    let isCancelled = false;
+
+    const initMapAndRender = async () => {
+      const L = await import('leaflet');
+      if (isCancelled) return;
+
+      // Inject Leaflet CSS if not present
+      if (!document.getElementById('leaflet-css-picker')) {
+        const link = document.createElement('link');
+        link.id = 'leaflet-css-picker';
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+      }
+
+      const container = pendingMapContainerRef.current;
+      if (!container) return;
+
+      if (pendingMapInstanceRef.current) {
+        try {
+          pendingMapInstanceRef.current.remove();
+        } catch (e) {
+          console.warn('[Leaflet] cleanup error:', e);
+        }
+        pendingMapInstanceRef.current = null;
+      }
+
+      const defaultLat = 23.8759;
+      const defaultLng = 90.3795;
+      const map = L.map(container, {
+        dragging: true,
+        touchZoom: true,
+        scrollWheelZoom: false,
+      }).setView([defaultLat, defaultLng], 14);
+      pendingMapInstanceRef.current = map;
+
+      L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        attribution: '&copy; Google Maps Satellite',
+        maxZoom: 20,
+      }).addTo(map);
+
+      const boundsPoints: [number, number][] = [];
+
+      const pLat = order.pickupLocation?.lat;
+      const pLng = order.pickupLocation?.lng;
+      const hasPickup = typeof pLat === 'number' && typeof pLng === 'number';
+
+      const dLat = order.deliveryLocation?.lat;
+      const dLng = order.deliveryLocation?.lng;
+      const hasDelivery = typeof dLat === 'number' && typeof dLng === 'number';
+
+      const createCustomMarker = (
+        lat: number,
+        lng: number,
+        label: string,
+        iconSvg: string,
+        badgeBg: string,
+        badgeText: string,
+        borderColor: string,
+        dotColor: string,
+        width: number = 130
+      ) => {
+        const html = `
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: ${width}px; height: 55px; pointer-events: none; box-sizing: border-box;">
+            <div style="height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; background: ${badgeBg}; color: ${badgeText}; border: 2px solid ${borderColor}; padding: 4px 8px; border-radius: 8px; font-family: sans-serif; font-size: 11px; font-weight: 900; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap; line-height: 1; box-sizing: border-box;">
+              ${iconSvg}
+              <span>${label}</span>
+            </div>
+            <div style="width: 2px; height: 16px; background: #000000;"></div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${dotColor}; border: 2px solid #000000; margin-top: -5px; box-shadow: 0 1px 2px rgba(0,0,0,0.3); box-sizing: border-box;"></div>
+          </div>
+        `;
+        return L.marker([lat, lng], {
+          icon: L.divIcon({
+            className: 'custom-route-marker',
+            html,
+            iconSize: [width, 55],
+            iconAnchor: [width / 2, 47],
+          }),
+        });
+      };
+
+      if (hasPickup && pLat && pLng) {
+        createCustomMarker(
+          pLat,
+          pLng,
+          'Pickup',
+          `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>`,
+          '#fef08a',
+          '#854d0e',
+          '#ca8a04',
+          '#eab308',
+          90
+        ).addTo(map);
+        boundsPoints.push([pLat, pLng]);
+      }
+
+      if (hasDelivery && dLat && dLng) {
+        createCustomMarker(
+          dLat,
+          dLng,
+          'Delivery',
+          `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`,
+          '#dcfce7',
+          '#166534',
+          '#16a34a',
+          '#22c55e',
+          90
+        ).addTo(map);
+        boundsPoints.push([dLat, dLng]);
+      }
+
+      if (hasPickup && pLat && pLng && hasDelivery && dLat && dLng) {
+        const routeCoords = await fetchRoadRoute([
+          { lat: pLat, lng: pLng },
+          { lat: dLat, lng: dLng },
+        ]);
+        if (isCancelled) return;
+        if (routeCoords.length > 0) {
+          L.polyline(routeCoords, {
+            color: '#22c55e',
+            weight: 4,
+            opacity: 0.9,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(map);
+        }
+      }
+
+      if (boundsPoints.length > 1) {
+        map.fitBounds(L.latLngBounds(boundsPoints), { padding: [40, 40] });
+      } else if (boundsPoints.length === 1) {
+        map.setView(boundsPoints[0], 15);
+      }
+    };
+
+    initMapAndRender();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [order.id, order.status, order.pickupLocation, order.deliveryLocation]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingMapInstanceRef.current) {
+        try {
+          pendingMapInstanceRef.current.remove();
+        } catch (e) {}
+        pendingMapInstanceRef.current = null;
+      }
+    };
+  }, []);
+
   // Retailer map state
   const [showRetailerMap, setShowRetailerMap] = useState(false);
   const [searchShopQuery, setSearchShopQuery] = useState('');
@@ -100,7 +270,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   }, [order.id]);
 
   useEffect(() => {
-    const calculatedProductCost = shopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
+    // Only auto-update productCost if it has not been set manually (0)
+    const calculatedProductCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
     if (order.productCost !== calculatedProductCost) {
       fallbackStore.updateOrder(order.id, (o) => ({
         ...o,
@@ -270,11 +441,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
     : 0;
 
+  const activeProductCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
+
   const estdPricing = calculateEstimatedFee({
     distanceKm: Math.ceil(distanceKm),
     weightKg: Math.ceil(order.weightKg || 0),
     isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
-    productPrice: order.productCost || 0,
+    productPrice: activeProductCost,
   }, fallbackStore.pricingSettings);
 
   // Validation: helper must enter product cost (which auto-sets delivery fee) before advancing
@@ -343,7 +516,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [uncheckedError, setUncheckedError] = useState('');
 
   const handleUpdateStatusWithCheck = (newStatus: OrderStatus, note?: string) => {
-    const totalCost = shopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
+    const totalCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
     if (totalCost <= 0) {
       showAlert(
         'Product Cost Required',
@@ -371,7 +544,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const handleConfirmUncheckedSubmission = (e: React.FormEvent) => {
     e.preventDefault();
-    const totalCost = shopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
+    const totalCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
     if (totalCost <= 0) {
       showAlert(
         'Product Cost Required',
@@ -776,25 +949,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           {/* PENDING ORDER: Show minimal info only — full details revealed after acceptance */}
           {order.status === 'PENDING' && (
             <div className="space-y-3">
-              {/* Order type / service */}
-              <div>
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
-                  <HelpCircle className="w-4 h-4 text-emerald-600" />
-                  <span>Request Type</span>
-                </h4>
-                <p className="text-sm font-bold text-gray-900 bg-emerald-50/60 border border-emerald-100 p-3 rounded-2xl">
-                  {order.service || order.title || 'Service Needed'}
-                </p>
-              </div>
-
-              {/* Order ID */}
-              <div className="pt-2 border-t border-gray-100">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">Order ID</h4>
-                <span className="font-black font-mono text-sm text-slate-800 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 inline-block">#{order.id}</span>
-              </div>
-
               {/* Order Details / Items */}
-              <div className="pt-2 border-t border-gray-100">
+              <div>
                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
                   <FileText className="w-4 h-4 text-emerald-600" />
                   <span>Order Details</span>
@@ -821,7 +977,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </h4>
                 <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-bold text-gray-900 text-sm">{order.customerName}</span>
+                     <span className="font-bold text-gray-900 text-sm">{order.customerName}</span>
                     {customerLabels.map((lbl, idx) => (
                       <span key={idx} className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
                         {lbl}
@@ -834,21 +990,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
 
-              {/* Delivery Details */}
+              {/* Addresses details */}
               <div className="pt-2 border-t border-gray-100">
                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
                   <MapPin className="w-4 h-4 text-emerald-600" />
-                  <span>Delivery Details</span>
+                  <span>Addresses</span>
                 </h4>
                 <div className="space-y-1.5 text-xs">
-                  <p className="p-3 rounded-2xl bg-emerald-50/50 text-emerald-950 font-bold border border-emerald-100">
-                    {order.deliveryLocation?.address || 'N/A'}
-                  </p>
                   {order.pickupLocation?.address && (
-                    <p className="p-2.5 rounded-xl bg-gray-50 text-gray-700 font-medium border border-gray-100">
-                      <span className="font-semibold text-gray-900">Pickup: </span>{order.pickupLocation.address}
+                    <p className="p-3 rounded-2xl bg-gray-50 text-gray-700 font-bold border border-gray-200">
+                      <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                      <span>{order.pickupLocation.address}</span>
                     </p>
                   )}
+                  <p className="p-3 rounded-2xl bg-emerald-50/50 text-emerald-950 font-bold border border-emerald-100">
+                    <strong className="font-extrabold text-emerald-800">Delivery: </strong>
+                    <span>{order.deliveryLocation?.address || 'N/A'}</span>
+                  </p>
+                </div>
+                {/* Visual Map Under Address Block */}
+                <div className="mt-3 relative w-full h-[220px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-100 shadow-inner">
+                  <div ref={pendingMapContainerRef} className="w-full h-full z-10" />
                 </div>
               </div>
 
@@ -1205,7 +1367,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="flex items-center justify-between">
                 <span className="text-gray-500 font-bold">Product cost</span>
                 <span className="text-sm font-black text-gray-900">
-                  ৳{shopOrders.reduce((sum, so) => sum + (so.price || 0), 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)}
                 </span>
               </div>
 
@@ -1226,7 +1388,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       onChange={(e) => {
                         const val = parseFloat(e.target.value) || 0;
                         setWeightInput(e.target.value);
-                        updateEstdPricing(order.productCost || 0, val);
+                        updateEstdPricing(activeProductCost, val);
                       }}
                       className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-xs outline-none focus:border-emerald-500 bg-white"
                     />
@@ -1278,7 +1440,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total to Collect (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0)}
                 </span>
               </div>
 
@@ -1973,7 +2135,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           shopOrders={shopOrders}
           onSelectShop={(shop) => {
             if (isDone) {
-              alert('এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।');
+              showAlert('অর্ডার সম্পন্ন/বাতিল', 'এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।', 'warning');
               return;
             }
             setShowMapModal(false);
@@ -2200,7 +2362,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      const confirmDel = window.confirm("Are you sure you want to remove this request?");
+                      const confirmDel = await showConfirm("Confirm removal", "Are you sure you want to remove this request?");
                       if (confirmDel) {
                         await fallbackStore.deleteShopOrder(viewRequestDetails.id);
                         setViewRequestDetails(null);

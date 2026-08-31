@@ -427,12 +427,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await signInWithRedirect(auth, googleProvider);
         // Browser navigates away, no further code runs.
       } else if (err?.code === 'auth/unauthorized-domain') {
-        alert(
-          `Domain Not Authorized!\n\nYour domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`
-        );
+        if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+          (window as any).showCustomAlert(
+            'Domain Not Authorized!',
+            `Your domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`,
+            'error'
+          );
+        } else {
+          alert(
+            `Domain Not Authorized!\n\nYour domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`
+          );
+        }
         setLoading(false);
       } else if (err?.code && err.code !== 'auth/cancelled-popup-request') {
-        alert(`Login failed: ${err.message || err.code}`);
+        if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+          (window as any).showCustomAlert('Login failed', err.message || err.code, 'error');
+        } else {
+          alert(`Login failed: ${err.message || err.code}`);
+        }
         setLoading(false);
       } else {
         setLoading(false);

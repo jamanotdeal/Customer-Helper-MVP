@@ -417,7 +417,15 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
 
             shopMarker.on('click', () => {
               if (order.status === 'DELIVERED' || order.status === 'CANCELED') {
-                alert('এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।');
+                if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+                  (window as any).showCustomAlert(
+                    'অর্ডার সম্পন্ন/বাতিল',
+                    'এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।',
+                    'warning'
+                  );
+                } else {
+                  alert('এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।');
+                }
                 return;
               }
               if (onSelectShop) {
