@@ -367,17 +367,26 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const badgeBorderColor = isPending ? '#d97706' : '#1d4ed8';
 
         const orderIconHtml = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 190px; height: 82px;">
-            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid white; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 170px; text-align: center;">
-              <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 155px; line-height: 1.2;">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 210px; height: 120px;">
+            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid white; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center;">
+              <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; line-height: 1.2;">
                 ${orderTitle}
               </div>
-              <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 8px; font-size: 13px; font-weight: 800; margin-top: 3px; color: #ef4444;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 800; margin-top: 3px; color: #ef4444; justify-content: center; width: fit-content;">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                   <circle cx="12" cy="12" r="10"></circle>
                   <polyline points="12 6 12 12 16 14"></polyline>
                 </svg>
                 <span>${elapsedStr}</span>
+              </div>
+              <div style="font-size: 9.5px; font-weight: 700; opacity: 0.95; margin-top: 4px; border-top: 1.5px dashed rgba(255,255,255,0.3); padding-top: 4px; width: 100%;">
+                ID: #${order.id.slice(-6).toUpperCase()}
+              </div>
+              <div style="font-size: 9.5px; font-weight: 700; opacity: 0.95; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;">
+                Cust: ${order.customerName}
+              </div>
+              <div style="font-size: 9px; font-weight: 700; opacity: 0.95; margin-top: 1px; font-family: monospace;">
+                Ph: ${order.customerPhone || order.alternativePhone || 'N/A'}
               </div>
             </div>
             <div style="width: 3px; height: 16px; background: ${badgeColor}; border-left: 1px solid rgba(255,255,255,0.9); border-right: 1px solid rgba(255,255,255,0.9); margin-top: -1px;"></div>
@@ -393,9 +402,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const orderIcon = L.divIcon({
           className: `order-marker-${order.id}`,
           html: orderIconHtml,
-          iconSize: [190, 82],
-          iconAnchor: [95, 82],
-          popupAnchor: [0, -82],
+          iconSize: [210, 120],
+          iconAnchor: [105, 120],
+          popupAnchor: [0, -120],
         });
 
         let existingMarker = markersRef.current.get(order.id);
@@ -415,6 +424,22 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
         // Draw green road polylines only when order structure or coordinates change
         if (routesChanged) {
+          // Draw thin lines connecting order to selected shops/stores
+          if (order.selectedShopIds && order.selectedShopIds.length > 0) {
+            order.selectedShopIds.forEach((shopId) => {
+              const shop = fallbackStore.shops.get(shopId);
+              if (shop && shop.location?.lat && shop.location?.lng) {
+                const connectionLine = L.polyline([[deliveryLat, deliveryLng], [shop.location.lat, shop.location.lng]], {
+                  color: '#c084fc', // sleek purple color for store connection
+                  weight: 2.5,
+                  opacity: 0.8,
+                  dashArray: '5, 8', // dashed pattern
+                }).addTo(map);
+                routePolylinesRef.current.push(connectionLine);
+              }
+            });
+          }
+
           let deliveryRouteCoords = await fetchRoadRoute([helperPoint, deliveryPoint]);
 
           if (isCancelled || !isMapAlive(map)) return;
@@ -672,7 +697,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     <div
       className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${isFullscreen
           ? 'z-[99999]'
-          : 'h-[650px] rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden'
+          : 'h-[650px] rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden z-20'
         }`}
       style={
         isFullscreen
@@ -759,23 +784,48 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
             </div>
 
             {/* Body */}
-            <div className="px-4 py-3 space-y-2.5">
-              {/* Contact Person */}
-              <div className="flex items-center gap-2 text-xs text-gray-700">
-                <User className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-                <span className="font-semibold text-gray-500">Contact:</span>
-                <span className="font-bold">{selectedShop.contactPerson}</span>
+            <div className="px-4 py-3 space-y-2.5 text-xs text-gray-700">
+              {/* Description */}
+              <div className="space-y-1">
+                <span className="font-bold text-gray-600 block">যা যা পাওয়া যায় (What's Available):</span>
+                <p className="bg-purple-50 text-purple-950 p-2.5 rounded-xl border border-purple-100 italic leading-snug">
+                  {selectedShop.description || 'কোনো বিবরণ নেই (No description)'}
+                </p>
+              </div>
+
+              {/* Owner Info */}
+              <div className="space-y-1">
+                <span className="font-bold text-gray-600 block">মালিকের নাম ও যোগাযোগ (Owner Name & Contact):</span>
+                <div className="flex items-center gap-1.5 font-medium">
+                  <User className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                  <span className="font-bold text-purple-950">{selectedShop.contactPerson}</span>
+                  <span className="text-gray-500 font-mono text-[11px]">({selectedShop.whatsapp})</span>
+                </div>
+              </div>
+
+              {/* Manager Info */}
+              <div className="space-y-1">
+                <span className="font-bold text-gray-600 block">ম্যানেজারের নাম ও যোগাযোগ (Manager Name & Contact):</span>
+                {selectedShop.managerName ? (
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <User className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <span className="font-bold text-indigo-950">{selectedShop.managerName}</span>
+                    <span className="text-gray-500 font-mono text-[11px]">({selectedShop.managerWhatsapp || 'নেই'})</span>
+                  </div>
+                ) : (
+                  <span className="text-gray-400 italic">ম্যানেজার তথ্য নেই (No manager details)</span>
+                )}
               </div>
 
               {/* Address */}
-              <div className="flex items-start gap-2 text-xs text-gray-700">
+              <div className="flex items-start gap-1.5 pt-1.5 border-t border-gray-100">
                 <MapPin className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
                 <span className="font-medium leading-snug">{selectedShop.location.address}</span>
               </div>
 
               {/* Added By */}
               {selectedShop.addedByHelperName && (
-                <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                <div className="flex items-center gap-2 text-[10px] text-gray-400 pt-0.5">
                   <span>Added by:</span>
                   <span className="font-semibold text-gray-500">{selectedShop.addedByHelperName}</span>
                 </div>

@@ -3,7 +3,8 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, db } from '@/lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc } from 'firebase/firestore';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { OrderSuccessPwaModal } from './PWAInstallModal';
@@ -95,12 +96,112 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [noteInput, setNoteInput] = useState('');
   const [updatingCost, setUpdatingCost] = useState(false);
 
+  // Completed/Finished shop orders paginated loading state
+  const [completedShopOrders, setCompletedShopOrders] = useState<ShopOrder[]>([]);
+  const [completedParentOrders, setCompletedParentOrders] = useState<Record<string, Order>>({});
+  const [completedLastVisible, setCompletedLastVisible] = useState<any>(null);
+  const [completedLoading, setCompletedLoading] = useState(false);
+  const [completedHasMore, setCompletedHasMore] = useState(true);
+
+  // Completed/Finished customer requests paginated loading state
+  const [completedRequests, setCompletedRequests] = useState<Order[]>([]);
+  const [completedReqLastVisible, setCompletedReqLastVisible] = useState<any>(null);
+  const [completedReqLoading, setCompletedReqLoading] = useState(false);
+  const [completedReqHasMore, setCompletedReqHasMore] = useState(true);
+
+  const storeId = user?.storeId;
+
+  const fetchCompletedPage = async (isFirstPage: boolean) => {
+    if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
+    setCompletedLoading(true);
+    try {
+      let q = query(
+        collection(db, 'shopOrders'),
+        where('shopId', '==', storeId),
+        orderBy('createdAt', 'desc'),
+        limit(15)
+      );
+
+      if (!isFirstPage && completedLastVisible) {
+        q = query(q, startAfter(completedLastVisible));
+      }
+      const snap = await getDocs(q);
+      const newShopOrders: ShopOrder[] = [];
+      const parentOrderFetchPromises: Promise<void>[] = [];
+      const newParentOrders: Record<string, Order> = {};
+
+      snap.docs.forEach((docSnap) => {
+        const so = docSnap.data() as ShopOrder;
+        
+        // Fetch parent order if not cached
+        if (!newParentOrders[so.parentOrderId] && !fallbackStore.orders.has(so.parentOrderId)) {
+          parentOrderFetchPromises.push(
+            getDoc(doc(db, 'orders', so.parentOrderId)).then((pSnap) => {
+              if (pSnap.exists()) {
+                newParentOrders[so.parentOrderId] = pSnap.data() as Order;
+              }
+            })
+          );
+        }
+        newShopOrders.push(so);
+      });
+
+      await Promise.all(parentOrderFetchPromises);
+
+      setCompletedParentOrders(prev => ({ ...prev, ...newParentOrders }));
+      setCompletedShopOrders(prev => isFirstPage ? newShopOrders : [...prev, ...newShopOrders]);
+      setCompletedLastVisible(snap.docs[snap.docs.length - 1] || null);
+      setCompletedHasMore(snap.docs.length === 15);
+    } catch (err) {
+      console.error('Error fetching completed shop orders:', err);
+    } finally {
+      setCompletedLoading(false);
+    }
+  };
+
+  const fetchCompletedRequestsPage = async (isFirstPage: boolean) => {
+    if (completedReqLoading || (!completedReqHasMore && !isFirstPage)) return;
+    setCompletedReqLoading(true);
+    try {
+      let q = query(
+        collection(db, 'orders'),
+        where('customerId', '==', user?.uid),
+        where('status', 'in', ['DELIVERED', 'CANCELED']),
+        orderBy('createdAt', 'desc'),
+        limit(10)
+      );
+      if (!isFirstPage && completedReqLastVisible) {
+        q = query(q, startAfter(completedReqLastVisible));
+      }
+      const snap = await getDocs(q);
+      const newOrders = snap.docs.map(d => d.data() as Order);
+      setCompletedRequests(prev => isFirstPage ? newOrders : [...prev, ...newOrders]);
+      setCompletedReqLastVisible(snap.docs[snap.docs.length - 1] || null);
+      setCompletedReqHasMore(snap.docs.length === 10);
+    } catch (err) {
+      console.error('Error fetching completed requests:', err);
+    } finally {
+      setCompletedReqLoading(false);
+    }
+  };
+
+  // Trigger paginated fetches when tabs change
+  useEffect(() => {
+    if (localActiveTab === 'ORDERS' && ordersSubTab === 'COMPLETED') {
+      fetchCompletedPage(true);
+    }
+  }, [localActiveTab, ordersSubTab, storeId]);
+
+  useEffect(() => {
+    if (localActiveTab === 'MY_REQUESTS') {
+      fetchCompletedRequestsPage(true);
+    }
+  }, [localActiveTab, user?.uid]);
+
   // Pagination
   const PAGE_SIZE = 10;
   const storeLoaderRef = useRef<HTMLDivElement | null>(null);
   const myRequestsLoaderRef = useRef<HTMLDivElement | null>(null);
-
-  const storeId = user?.storeId;
 
   useEffect(() => {
     const syncOrders = () => {
@@ -141,8 +242,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Handle selected shop order updates
   const currentShopOrder = useMemo(() => {
     if (!selectedShopOrderId) return null;
-    return storeShopOrders.find((so) => so.id === selectedShopOrderId) || null;
-  }, [selectedShopOrderId, storeShopOrders]);
+    return storeShopOrders.find((so) => so.id === selectedShopOrderId) || completedShopOrders.find((so) => so.id === selectedShopOrderId) || null;
+  }, [selectedShopOrderId, storeShopOrders, completedShopOrders]);
 
   // Reset inputs when selected shop order changes
   useEffect(() => {
@@ -154,18 +255,19 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // Helpers to check parent order status
   const getParentOrderStatus = (parentOrderId: string) => {
-    const parent = fallbackStore.orders.get(parentOrderId);
+    const parent = fallbackStore.orders.get(parentOrderId) || completedParentOrders[parentOrderId];
     return parent ? parent.status : 'PENDING';
   };
 
   const getParentOrderHelperPhone = (parentOrderId: string) => {
-    const parent = fallbackStore.orders.get(parentOrderId);
+    const parent = fallbackStore.orders.get(parentOrderId) || completedParentOrders[parentOrderId];
     return parent ? parent.helperPhone || parent.customerPhone : '';
   };
 
   // Categorize shop orders based on tabs
   const categorizedShopOrders = useMemo(() => {
-    return storeShopOrders.filter((so) => {
+    const sourceList = ordersSubTab === 'COMPLETED' ? completedShopOrders : storeShopOrders;
+    return sourceList.filter((so) => {
       const parentStatus = getParentOrderStatus(so.parentOrderId);
       
       // Filter out canceled main orders / canceled shop orders from running/new, send to completed
@@ -183,7 +285,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
       return false;
     });
-  }, [storeShopOrders, ordersSubTab]);
+  }, [storeShopOrders, completedShopOrders, ordersSubTab]);
 
   // Apply filters: Status, Date, Sort
   const filteredShopOrders = useMemo(() => {
@@ -227,7 +329,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   }, [categorizedShopOrders, storeStatusFilter, storeDateFilter, storeSortOrder]);
 
   const filteredMyRequests = useMemo(() => {
-    let result = [...myRequests];
+    let result = [...myRequests, ...completedRequests];
+    const seen = new Set<string>();
+    result = result.filter((o) => {
+      if (seen.has(o.id)) return false;
+      seen.add(o.id);
+      return true;
+    });
 
     // Status Filter
     if (myReqStatusFilter !== 'ALL') {
@@ -264,7 +372,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     });
 
     return result;
-  }, [myRequests, myReqStatusFilter, myReqDateFilter, myReqSortOrder]);
+  }, [myRequests, completedRequests, myReqStatusFilter, myReqDateFilter, myReqSortOrder]);
 
 
 
@@ -897,7 +1005,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {filteredShopOrders.slice(0, storeVisibleCount).map((so) => {
+                  {(ordersSubTab === 'COMPLETED' ? filteredShopOrders : filteredShopOrders.slice(0, storeVisibleCount)).map((so) => {
                     const parentStatus = getParentOrderStatus(so.parentOrderId);
                     const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
                     const isDelivered = parentStatus === 'DELIVERED';
@@ -957,13 +1065,25 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     );
                   })}
 
-                  {filteredShopOrders.length > storeVisibleCount && (
-                    <button
-                      onClick={() => setStoreVisibleCount(prev => prev + PAGE_SIZE)}
-                      className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-2"
-                    >
-                      Load More
-                    </button>
+                  {ordersSubTab === 'COMPLETED' ? (
+                    completedHasMore && (
+                      <button
+                        onClick={() => fetchCompletedPage(false)}
+                        disabled={completedLoading}
+                        className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-2 disabled:opacity-50"
+                      >
+                        {completedLoading ? 'Loading...' : 'Load More'}
+                      </button>
+                    )
+                  ) : (
+                    filteredShopOrders.length > storeVisibleCount && (
+                      <button
+                        onClick={() => setStoreVisibleCount(prev => prev + PAGE_SIZE)}
+                        className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-2"
+                      >
+                        Load More
+                      </button>
+                    )
                   )}
                 </div>
               )}
@@ -1045,7 +1165,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredMyRequests.slice(0, myRequestsVisibleCount).map((order) => (
+                {filteredMyRequests.map((order) => (
                   <OrderCard
                     key={order.id}
                     order={order}
@@ -1054,12 +1174,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   />
                 ))}
 
-                {filteredMyRequests.length > myRequestsVisibleCount && (
+                {completedReqHasMore && (
                   <button
-                    onClick={() => setMyRequestsVisibleCount(prev => prev + PAGE_SIZE)}
-                    className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-3"
+                    onClick={() => fetchCompletedRequestsPage(false)}
+                    disabled={completedReqLoading}
+                    className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-3 disabled:opacity-50"
                   >
-                    Load More
+                    {completedReqLoading ? 'Loading...' : 'Load More'}
                   </button>
                 )}
               </div>

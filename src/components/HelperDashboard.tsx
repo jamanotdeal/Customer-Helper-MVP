@@ -282,15 +282,23 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           const freshNewIds = avail
             .filter((o) => !prevIds.has(o.id))
             .map((o) => o.id);
-          if (freshNewIds.length > 0) {
-            setNewOrderIds((prevNew) => {
-              const updated = new Set(prevNew);
-              freshNewIds.forEach((id) => {
-                if (!seenOrderIdsRef.current.has(id)) updated.add(id);
-              });
-              return updated;
+
+          setNewOrderIds((prevNew) => {
+            const updated = new Set<string>();
+            // Keep only those that are still in avail
+            prevNew.forEach((id) => {
+              if (avail.some((o) => o.id === id)) {
+                updated.add(id);
+              }
             });
-          }
+            // Add new ones
+            freshNewIds.forEach((id) => {
+              if (!seenOrderIdsRef.current.has(id)) {
+                updated.add(id);
+              }
+            });
+            return updated;
+          });
           return avail;
         });
         setActiveOrders(act);
@@ -328,6 +336,17 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       return;
     }
 
+    // Check if the order is still pending/unassigned
+    const freshOrder = fallbackStore.orders.get(orderId);
+    if (!freshOrder || freshOrder.status !== 'PENDING' || freshOrder.helperId) {
+      await showAlert(
+        'দুঃখিত!',
+        'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
+        'error'
+      );
+      return;
+    }
+
     const confirmed = await showConfirm(
       'রিকুয়েস্ট গ্রহণ করুন',
       'আপনি কি এই রিকুয়েস্টটি গ্রহণ করতে চান? গ্রহণ করার পর আপনি অর্ডারটি ডেলিভারি করতে বাধ্য থাকবেন।',
@@ -335,6 +354,17 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       'বাতিল'
     );
     if (!confirmed) return;
+
+    // Double-check right before updating to handle any confirmation delay
+    const doubleCheck = fallbackStore.orders.get(orderId);
+    if (!doubleCheck || doubleCheck.status !== 'PENDING' || doubleCheck.helperId) {
+      await showAlert(
+        'দুঃখিত!',
+        'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
+        'error'
+      );
+      return;
+    }
 
     fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
@@ -526,7 +556,14 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   }, [activeTab, hasMoreScheduled, scheduledVisibleCount, filteredScheduledOrders.length]);
 
   if (selectedOrderId) {
-    const targetOrder = fallbackStore.orders.get(selectedOrderId);
+    // First try the live store; fall back to any cached local state (handles
+    // completed orders that may have been evicted from the in-memory map)
+    const targetOrder =
+      fallbackStore.orders.get(selectedOrderId) ||
+      completedOrders.find((o) => o.id === selectedOrderId) ||
+      activeOrders.find((o) => o.id === selectedOrderId) ||
+      availableOrders.find((o) => o.id === selectedOrderId);
+
     if (targetOrder) {
       return (
         <HelperActiveOrderView
@@ -539,6 +576,22 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         />
       );
     }
+
+    // Order genuinely not found — show a simple fallback instead of silently
+    // collapsing back to the dashboard with selectedOrderId still set.
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center">
+        <Package className="w-12 h-12 text-gray-300" />
+        <h3 className="font-extrabold text-gray-700 text-base">অর্ডারটি পাওয়া যাচ্ছে না</h3>
+        <p className="text-sm text-gray-500">এই অর্ডারটি আর উপলব্ধ নেই বা মুছে ফেলা হয়েছে।</p>
+        <button
+          onClick={() => setSelectedOrderId(null)}
+          className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-sm transition-all active:scale-95"
+        >
+          ফিরে যান
+        </button>
+      </div>
+    );
   }
   const isDedicatedHelper = user?.helperType === 'dedicated';
 

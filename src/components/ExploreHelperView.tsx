@@ -108,6 +108,17 @@ export const ExploreHelperView: React.FC = () => {
     );
     if (!confirmed) return;
 
+    // Double-check right before updating to handle any confirmation delay
+    const doubleCheck = fallbackStore.orders.get(orderId);
+    if (!doubleCheck || doubleCheck.status !== 'PENDING' || doubleCheck.helperId) {
+      await showAlert(
+        'অর্ডারটি ইতিমধ্যে গৃহীত',
+        'অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন।',
+        'warning'
+      );
+      return;
+    }
+
     fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
       status: 'ACCEPTED',

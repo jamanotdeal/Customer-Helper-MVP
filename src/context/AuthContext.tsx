@@ -199,8 +199,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 3000);
 
     // Firebase Auth state listener
-    const unsubscribeAuth = onAuthStateChanged(auth, (fbUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
+        // Try fetching user from Firestore first to avoid overwriting or losing the helper/store status
+        try {
+          await fallbackStore.fetchUserFromFirestore(fbUser.uid);
+        } catch (e) {
+          console.warn('[AuthContext] Error fetching user profile on login:', e);
+        }
         const profile = buildProfile(fbUser, savedMode);
         applyProfile(profile, savedMode);
         // Tell the Firestore notification listener which user is on this device

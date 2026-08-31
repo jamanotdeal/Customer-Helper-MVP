@@ -794,10 +794,15 @@ class FallbackStore {
     if (role === 'store') {
       const effectiveStoreId = storeId || `store-${userId}`;
 
-      // Shop orders submitted to this store (realtime)
+      // Shop orders submitted to this store (realtime, active only)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'shopOrders'), where('shopId', '==', effectiveStoreId), limit(100)),
+          query(
+            collection(db, 'shopOrders'),
+            where('shopId', '==', effectiveStoreId),
+            where('status', 'in', ['PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'HANDOVER']),
+            limit(50)
+          ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -812,10 +817,15 @@ class FallbackStore {
         )
       );
 
-      // Parent orders selected for this store (realtime)
+      // Parent orders selected for this store (realtime, active only)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('selectedShopIds', 'array-contains', effectiveStoreId), limit(60)),
+          query(
+            collection(db, 'orders'),
+            where('selectedShopIds', 'array-contains', effectiveStoreId),
+            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
+            limit(50)
+          ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -830,10 +840,15 @@ class FallbackStore {
         )
       );
 
-      // Store owner's own customer orders (realtime)
+      // Store owner's own customer orders (realtime, active only)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('customerId', '==', userId), limit(30)),
+          query(
+            collection(db, 'orders'),
+            where('customerId', '==', userId),
+            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
+            limit(30)
+          ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -1272,6 +1287,21 @@ class FallbackStore {
   }
 
   // --- Actions with Firebase Persistence & Dynamic Notifications ---
+
+  public async fetchUserFromFirestore(uid: string): Promise<UserProfile | null> {
+    try {
+      const snap = await getDoc(doc(db, 'users', uid));
+      if (snap.exists()) {
+        const u = snap.data() as UserProfile;
+        this.users.set(uid, u);
+        this.notify();
+        return u;
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] fetchUserFromFirestore error:', e?.message || e);
+    }
+    return null;
+  }
 
   public async saveUser(user: UserProfile) {
     this.users.set(user.uid, user);

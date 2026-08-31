@@ -3,7 +3,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Wallet, WithdrawalRequest, Order, ShopOrder } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, db } from '@/lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc } from 'firebase/firestore';
 import { useModal } from './CustomModal';
 import {
   Wallet as WalletIcon,
@@ -20,6 +21,11 @@ export const StoreWallet: React.FC = () => {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [storeShopOrders, setStoreShopOrders] = useState<ShopOrder[]>([]);
+  const [completedShopOrders, setCompletedShopOrders] = useState<ShopOrder[]>([]);
+  const [completedParentOrders, setCompletedParentOrders] = useState<Record<string, Order>>({});
+  const [completedLastVisible, setCompletedLastVisible] = useState<any>(null);
+  const [completedLoading, setCompletedLoading] = useState(false);
+  const [completedHasMore, setCompletedHasMore] = useState(true);
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('100');
@@ -128,6 +134,60 @@ export const StoreWallet: React.FC = () => {
     setDropdownOpen(!dropdownOpen);
   };
 
+  const fetchCompletedPage = async (isFirstPage: boolean) => {
+    if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
+    setCompletedLoading(true);
+    try {
+      let q = query(
+        collection(db, 'shopOrders'),
+        where('shopId', '==', storeId),
+        orderBy('createdAt', 'desc'),
+        limit(15)
+      );
+
+      if (!isFirstPage && completedLastVisible) {
+        q = query(q, startAfter(completedLastVisible));
+      }
+      const snap = await getDocs(q);
+      const newShopOrders: ShopOrder[] = [];
+      const parentOrderFetchPromises: Promise<void>[] = [];
+      const newParentOrders: Record<string, Order> = {};
+
+      snap.docs.forEach((docSnap) => {
+        const so = docSnap.data() as ShopOrder;
+        
+        // Fetch parent order if not cached
+        if (!newParentOrders[so.parentOrderId] && !fallbackStore.orders.has(so.parentOrderId)) {
+          parentOrderFetchPromises.push(
+            getDoc(doc(db, 'orders', so.parentOrderId)).then((pSnap) => {
+              if (pSnap.exists()) {
+                newParentOrders[so.parentOrderId] = pSnap.data() as Order;
+              }
+            })
+          );
+        }
+        newShopOrders.push(so);
+      });
+
+      await Promise.all(parentOrderFetchPromises);
+
+      setCompletedParentOrders(prev => ({ ...prev, ...newParentOrders }));
+      setCompletedShopOrders(prev => isFirstPage ? newShopOrders : [...prev, ...newShopOrders]);
+      setCompletedLastVisible(snap.docs[snap.docs.length - 1] || null);
+      setCompletedHasMore(snap.docs.length === 15);
+    } catch (err) {
+      console.error('Error fetching completed shop orders:', err);
+    } finally {
+      setCompletedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (storeId) {
+      fetchCompletedPage(true);
+    }
+  }, [storeId]);
+
   useEffect(() => {
     const syncWallet = () => {
       if (user && storeId) {
@@ -138,7 +198,7 @@ export const StoreWallet: React.FC = () => {
         const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => {
           if (so.shopId !== storeId) return false;
           if (so.status === 'CANCELED') return true;
-          const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+          const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
           return parentOrder?.status === 'DELIVERED';
         });
 
@@ -153,7 +213,18 @@ export const StoreWallet: React.FC = () => {
     return () => {
       unsub();
     };
-  }, [user, storeId]);
+  }, [user, storeId, completedParentOrders]);
+
+  // Combine active storeShopOrders and completed completedShopOrders
+  const combinedShopOrdersList = useMemo(() => {
+    const combined = [...storeShopOrders, ...completedShopOrders];
+    const seen = new Set<string>();
+    return combined.filter((so) => {
+      if (seen.has(so.id)) return false;
+      seen.add(so.id);
+      return true;
+    });
+  }, [storeShopOrders, completedShopOrders]);
 
   // Construct dynamic transaction ledger entries:
   // Positive: Store Sales (Earnings) -> showing the commission owed
@@ -164,9 +235,9 @@ export const StoreWallet: React.FC = () => {
 
     const list: { id: string; type: 'EARNING' | 'PAYBACK' | 'CANCELED'; amount: number; description: string; createdAt: string }[] = [];
 
-    storeShopOrders.forEach((so) => {
+    combinedShopOrdersList.forEach((so) => {
       const sales = so.price ?? 0;
-      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       if (so.status === 'CANCELED') {
         list.push({
           id: `order-cancel-${so.id}`,
@@ -200,7 +271,7 @@ export const StoreWallet: React.FC = () => {
     });
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [storeShopOrders, withdrawals, storeId]);
+  }, [combinedShopOrdersList, withdrawals, storeId, completedParentOrders]);
 
   // Filtered Ledger based on selected Date Range
   const filteredTransactions = useMemo(() => {
@@ -235,8 +306,8 @@ export const StoreWallet: React.FC = () => {
 
   // Filtered Delivered Shop Orders based on selected Date Range
   const filteredShopOrders = useMemo(() => {
-    return storeShopOrders.filter((so) => {
-      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+    return combinedShopOrdersList.filter((so) => {
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
       const t = new Date(orderDate).getTime();
       if (isNaN(t)) return true;
@@ -244,7 +315,7 @@ export const StoreWallet: React.FC = () => {
       if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
       return true;
     });
-  }, [storeShopOrders, startDate, endDate]);
+  }, [combinedShopOrdersList, completedParentOrders, startDate, endDate]);
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
@@ -317,13 +388,12 @@ export const StoreWallet: React.FC = () => {
     await showAlert('অনুরোধ সফল', 'কমিশন পরিশোধের তথ্য ভেরিফিকেশনের জন্য অ্যাডমিনের কাছে পাঠানো হয়েছে।', 'success');
   };
 
-  // Today's Metrics (local timezone date matching)
   const todayMetrics = useMemo(() => {
     const todayStr = getTodayStr(); // Local YYYY-MM-DD
     let salesToday = 0;
 
-    storeShopOrders.forEach((so) => {
-      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+    combinedShopOrdersList.forEach((so) => {
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
       const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
       if (orderLocalStr === todayStr) {
@@ -332,7 +402,7 @@ export const StoreWallet: React.FC = () => {
     });
 
     return { salesToday };
-  }, [storeShopOrders]);
+  }, [combinedShopOrdersList, completedParentOrders]);
 
   const presetLabels = {
     ALL_TIME: 'All Times',
@@ -607,11 +677,16 @@ export const StoreWallet: React.FC = () => {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setLedgerPage((p) => Math.min(p + 1, totalLedgerPages))}
-                  disabled={ledgerPage === totalLedgerPages}
+                  onClick={async () => {
+                    if (ledgerPage === totalLedgerPages && completedHasMore) {
+                      await fetchCompletedPage(false);
+                    }
+                    setLedgerPage((p) => p + 1);
+                  }}
+                  disabled={ledgerPage === totalLedgerPages && !completedHasMore}
                   className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
                 >
-                  Next
+                  {completedLoading ? '...' : 'Next'}
                 </button>
               </div>
             )}

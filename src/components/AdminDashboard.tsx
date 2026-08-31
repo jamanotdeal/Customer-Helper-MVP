@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs, getCountFromServer } from 'firebase/firestore';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime } from '@/lib/timeUtils';
 import {
@@ -99,6 +99,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [customModals, setCustomModals] = useState<AdminCustomModalConfig[]>([]);
   const [pricing, setPricing] = useState<PricingSettings>(fallbackStore.pricingSettings);
   const [allowedAdminTabs, setAllowedAdminTabs] = useState<string[]>([]);
+  const [exactTotalOrders, setExactTotalOrders] = useState<number | null>(null);
+  const [exactCustomerAccounts, setExactCustomerAccounts] = useState<number | null>(null);
+  const [exactActiveHelpers, setExactActiveHelpers] = useState<number | null>(null);
+  const [serverAvgDeliveryTimeMins, setServerAvgDeliveryTimeMins] = useState<number | null>(null);
 
   const [showAddShopModal, setShowAddShopModal] = useState<boolean>(false);
   const [editingShop, setEditingShop] = useState<Shop | null>(null);
@@ -220,6 +224,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
 
   // Search, Filter & Pagination states
+  const [ordersSearchQuery, setOrdersSearchQuery] = useState('');
+  const [ordersAppliedSearchQuery, setOrdersAppliedSearchQuery] = useState('');
+  const [usersSearchQuery, setUsersSearchQuery] = useState('');
+  const [usersAppliedSearchQuery, setUsersAppliedSearchQuery] = useState('');
+  const [customersSearchQuery, setCustomersSearchQuery] = useState('');
+  const [customersAppliedSearchQuery, setCustomersAppliedSearchQuery] = useState('');
+  const [helpersSearchQuery, setHelpersSearchQuery] = useState('');
+  const [helpersAppliedSearchQuery, setHelpersAppliedSearchQuery] = useState('');
+  const [withdrawalsSearchQuery, setWithdrawalsSearchQuery] = useState('');
+  const [withdrawalsAppliedSearchQuery, setWithdrawalsAppliedSearchQuery] = useState('');
+  const [shopsSearchQuery, setShopsSearchQuery] = useState('');
+  const [shopsAppliedSearchQuery, setShopsAppliedSearchQuery] = useState('');
+  const [feedbackSearchQuery, setFeedbackSearchQuery] = useState('');
+  const [feedbackAppliedSearchQuery, setFeedbackAppliedSearchQuery] = useState('');
+  const [customModalsSearchQuery, setCustomModalsSearchQuery] = useState('');
+  const [customModalsAppliedSearchQuery, setCustomModalsAppliedSearchQuery] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [appliedSearchQuery, setAppliedSearchQuery] = useState('');
   const [serverOrders, setServerOrders] = useState<Order[] | null>(null);
@@ -309,6 +329,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
       setUsers(Array.from(fallbackStore.users.values()));
       setShops(Array.from(fallbackStore.shops.values()));
+      setFeedbacks(Array.from(fallbackStore.orderFeedbacks.values()));
+      setCustomModals(Array.from(fallbackStore.customModals.values()));
       const settings = { ...fallbackStore.pricingSettings };
       setPricing(settings);
       setPlaceholdersText((settings.inputPlaceholders || []).join('\n'));
@@ -419,7 +441,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     const fetchOrders = async () => {
       if (activeTab !== 'ORDERS') return;
-      if (currentPage === 1 && !appliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
+      if (currentPage === 1 && !ordersAppliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
         setServerOrders(null);
         return;
       }
@@ -430,7 +452,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (statusFilter !== 'ALL' && statusFilter !== 'UNASSIGNED' && statusFilter !== 'DELIVERY_BACK') {
           q = query(collection(db, 'orders'), where('status', '==', statusFilter), orderBy('createdAt', 'desc'));
         }
-        const snap = await getDocs(query(q, limit(150)));
+        // Use a higher limit when searching so we can do client-side text matching across more records
+        const fetchLimit = ordersAppliedSearchQuery.trim() ? 1000 : 500;
+        const snap = await getDocs(query(q, limit(fetchLimit)));
         const fetched = snap.docs.map(d => d.data() as Order);
         setServerOrders(fetched);
       } catch (err) {
@@ -441,19 +465,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchOrders();
-  }, [activeTab, currentPage, appliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
+  }, [activeTab, currentPage, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
 
   useEffect(() => {
     const fetchUsers = async () => {
       if (activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
-      if (currentPage === 1 && !appliedSearchQuery.trim() && !usersStartDate && !usersEndDate) {
+      const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : activeTab === 'CUSTOMERS' ? customersAppliedSearchQuery : helpersAppliedSearchQuery;
+      if (currentPage === 1 && !currentQuery.trim() && !usersStartDate && !usersEndDate) {
         setServerUsers(null);
         return;
       }
 
       setIsFetchingServer(true);
       try {
-        const snap = await getDocs(query(collection(db, 'users'), limit(150)));
+        // Fetch a generous limit so client-side text search covers all users
+        const snap = await getDocs(query(collection(db, 'users'), limit(1000)));
         const fetched = snap.docs.map(d => d.data() as UserProfile);
         setServerUsers(fetched);
       } catch (err) {
@@ -464,19 +490,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, currentPage, appliedSearchQuery, usersStartDate, usersEndDate]);
+  }, [activeTab, currentPage, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate]);
 
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      if (currentPage === 1 && !appliedSearchQuery.trim()) {
+      if (currentPage === 1 && !shopsAppliedSearchQuery.trim()) {
         setServerShops(null);
         return;
       }
 
       setIsFetchingServer(true);
       try {
-        const snap = await getDocs(query(collection(db, 'shops'), limit(100)));
+        // Fetch all shops so client-side text search is complete
+        const snap = await getDocs(query(collection(db, 'shops'), limit(1000)));
         const fetched = snap.docs.map(d => d.data() as Shop);
         setServerShops(fetched);
       } catch (err) {
@@ -487,7 +514,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, currentPage, appliedSearchQuery]);
+  }, [activeTab, currentPage, shopsAppliedSearchQuery]);
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -520,6 +547,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     });
   }, [orders]);
+
+  useEffect(() => {
+    const fetchExactCounts = async () => {
+      try {
+        const ordersColl = collection(db, 'orders');
+        const usersColl = collection(db, 'users');
+        const helpersQuery = query(usersColl, where('isHelper', '==', true));
+
+        const [ordersSnap, usersSnap, helpersSnap] = await Promise.all([
+          getCountFromServer(ordersColl),
+          getCountFromServer(usersColl),
+          getCountFromServer(helpersQuery)
+        ]);
+
+        setExactTotalOrders(ordersSnap.data().count);
+        setExactCustomerAccounts(usersSnap.data().count);
+        setExactActiveHelpers(helpersSnap.data().count);
+      } catch (err) {
+        console.error('Error fetching exact counts from server:', err);
+      }
+    };
+
+    const fetchServerAvgDeliveryTime = async () => {
+      try {
+        const q = query(
+          collection(db, 'orders'),
+          where('status', '==', 'DELIVERED'),
+          orderBy('deliveredAt', 'desc'),
+          limit(100)
+        );
+        const snap = await getDocs(q);
+        let totalMs = 0;
+        let count = 0;
+        snap.forEach((docSnap) => {
+          const o = docSnap.data() as Order;
+          if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
+            const diff = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+            if (diff > 0) {
+              totalMs += diff;
+              count++;
+            }
+          }
+        });
+        setServerAvgDeliveryTimeMins(count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0);
+      } catch (err) {
+        console.error('Error fetching server average delivery time:', err);
+      }
+    };
+
+    fetchExactCounts();
+    fetchServerAvgDeliveryTime();
+  }, [orders, users]);
 
   // Needs Attention Queue calculations
   const cancellingRequests = orders.filter(
@@ -860,8 +939,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Search query filter
-    if (appliedSearchQuery.trim()) {
-      const q = appliedSearchQuery.toLowerCase().trim();
+    if (ordersAppliedSearchQuery.trim()) {
+      const q = ordersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (o) =>
           o.id.toLowerCase().includes(q) ||
@@ -938,8 +1017,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     });
 
-    // Aggregate from orders
-    orders.forEach((o) => {
+    // Aggregate from allOrders (full history) so order counts are always accurate,
+    // not just from the recent in-memory snapshot (orders).
+    allOrders.forEach((o) => {
       const existing = customerMap.get(o.customerId) || {
         id: o.customerId,
         name: o.customerName || 'Customer',
@@ -968,8 +1048,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     let list = Array.from(customerMap.values());
 
     // Search query filter
-    if (appliedSearchQuery.trim()) {
-      const q = appliedSearchQuery.toLowerCase().trim();
+    if (customersAppliedSearchQuery.trim()) {
+      const q = customersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
@@ -1077,8 +1157,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     let list = Array.from(helperMap.values());
 
     // Search
-    if (appliedSearchQuery.trim()) {
-      const q = appliedSearchQuery.toLowerCase().trim();
+    if (helpersAppliedSearchQuery.trim()) {
+      const q = helpersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (h) =>
           h.name.toLowerCase().includes(q) ||
@@ -1188,8 +1268,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       list = list.filter((item) => new Date(item.user.createdAt).getTime() <= endMs);
     }
 
-    if (appliedSearchQuery.trim()) {
-      const q = appliedSearchQuery.toLowerCase().trim();
+    if (usersAppliedSearchQuery.trim()) {
+      const q = usersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (item) =>
           item.user.displayName.toLowerCase().includes(q) ||
@@ -1368,7 +1448,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
           <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-extrabold text-gray-900">{allOrders.length}</span>
+            <span className="text-3xl font-extrabold text-gray-900">
+              {exactTotalOrders !== null ? exactTotalOrders : allOrders.length}
+            </span>
             <span className="text-xs text-gray-500">total in system</span>
           </div>
         </div>
@@ -1388,7 +1470,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-gray-900">
-              {avgDeliveryTimeMins > 0 ? `${avgDeliveryTimeMins}m` : 'N/A'}
+              {(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) > 0 
+                ? `${serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins}m` 
+                : 'N/A'}
             </span>
             <span className="text-xs text-gray-500">per order</span>
           </div>
@@ -1412,7 +1496,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
           <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-extrabold text-gray-900">{users.length}</span>
+            <span className="text-3xl font-extrabold text-gray-900">
+              {exactCustomerAccounts !== null ? exactCustomerAccounts : users.length}
+            </span>
             <span className="text-xs text-purple-700 font-semibold">registered users</span>
           </div>
         </div>
@@ -1440,7 +1526,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
           <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-extrabold text-gray-900">{approvedHelpersCount}</span>
+            <span className="text-3xl font-extrabold text-gray-900">
+              {exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount}
+            </span>
             <span className="text-xs text-amber-600 font-semibold">({pendingApps.length} pending app)</span>
           </div>
         </div>
@@ -1628,38 +1716,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </DraggableTabsContainer>
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
-      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (
-        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
-          {/* Search Box */}
-          <div className="flex gap-2 w-full">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
-              <input
-                type="text"
-                placeholder="Search orders, customers, helpers, phone..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    setCurrentPage(1);
-                    setAppliedSearchQuery(searchQuery);
-                  }
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (() => {
+        const getTabSearchStates = () => {
+          switch (activeTab) {
+            case 'ORDERS':
+              return { value: ordersSearchQuery, onChange: setOrdersSearchQuery, onSearch: () => { setCurrentPage(1); setOrdersAppliedSearchQuery(ordersSearchQuery); }, placeholder: "Search orders by ID, customer name, phone, item name..." };
+            case 'USERS_LIST':
+              return { value: usersSearchQuery, onChange: setUsersSearchQuery, onSearch: () => { setCurrentPage(1); setUsersAppliedSearchQuery(usersSearchQuery); }, placeholder: "Search users by name, UID, email, phone..." };
+            case 'CUSTOMERS':
+              return { value: customersSearchQuery, onChange: setCustomersSearchQuery, onSearch: () => { setCurrentPage(1); setCustomersAppliedSearchQuery(customersSearchQuery); }, placeholder: "Search customers by name, phone, email, UID..." };
+            case 'HELPERS':
+              return { value: helpersSearchQuery, onChange: setHelpersSearchQuery, onSearch: () => { setCurrentPage(1); setHelpersAppliedSearchQuery(helpersSearchQuery); }, placeholder: "Search helpers by name, phone, email, NID..." };
+            case 'WITHDRAWALS':
+              return { value: withdrawalsSearchQuery, onChange: setWithdrawalsSearchQuery, onSearch: () => { setCurrentPage(1); setWithdrawalsAppliedSearchQuery(withdrawalsSearchQuery); }, placeholder: "Search withdrawals by helper name, account number, ID..." };
+            case 'SHOPS':
+              return { value: shopsSearchQuery, onChange: setShopsSearchQuery, onSearch: () => { setCurrentPage(1); setShopsAppliedSearchQuery(shopsSearchQuery); }, placeholder: "Search shops by name, type, contact person, address..." };
+            case 'FEEDBACK':
+              return { value: feedbackSearchQuery, onChange: setFeedbackSearchQuery, onSearch: () => { setCurrentPage(1); setFeedbackAppliedSearchQuery(feedbackSearchQuery); }, placeholder: "Search feedback by rating, order ID, note..." };
+            case 'CUSTOM_MODALS':
+              return { value: customModalsSearchQuery, onChange: setCustomModalsSearchQuery, onSearch: () => { setCurrentPage(1); setCustomModalsAppliedSearchQuery(customModalsSearchQuery); }, placeholder: "Search custom modals by title, label, ID..." };
+            default:
+              return null;
+          }
+        };
+
+        const searchStates = getTabSearchStates();
+        if (!searchStates) return null;
+
+        return (
+          <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
+            {/* Search Box */}
+            <div className="flex gap-2 w-full">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <input
+                  type="text"
+                  placeholder={searchStates.placeholder}
+                  value={searchStates.value}
+                  onChange={(e) => searchStates.onChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      searchStates.onSearch();
+                    }
+                  }}
+                  className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 transition-all"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  searchStates.onSearch();
                 }}
-                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 transition-all"
-              />
+                disabled={isFetchingServer}
+                className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-extrabold text-xs rounded-2xl shadow-md transition-all active:scale-95 shrink-0 flex items-center gap-1.5"
+              >
+                {isFetchingServer && <RefreshCw className="w-3 h-3 animate-spin" />}
+                {isFetchingServer ? 'Loading...' : 'Search'}
+              </button>
             </div>
-            <button
-              onClick={() => {
-                setCurrentPage(1);
-                setAppliedSearchQuery(searchQuery);
-              }}
-              disabled={isFetchingServer}
-              className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-extrabold text-xs rounded-2xl shadow-md transition-all active:scale-95 shrink-0 flex items-center gap-1.5"
-            >
-              {isFetchingServer && <RefreshCw className="w-3 h-3 animate-spin" />}
-              {isFetchingServer ? 'Loading...' : 'Search'}
-            </button>
           </div>
+        );
+      })()}
+
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (
+        <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3 -mt-4 border-t-0 rounded-t-none">
 
           <div className="flex flex-wrap items-center gap-2 w-full">
             {/* Status Filter (for Orders / Exceptions) */}
@@ -2960,8 +3079,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 const endMs = new Date(`${appsEndDate}T23:59:59.999`).getTime();
                 filtered = filtered.filter((a) => new Date(a.createdAt).getTime() <= endMs);
               }
-              if (appliedSearchQuery.trim()) {
-                const q = appliedSearchQuery.toLowerCase().trim();
+              if (helpersAppliedSearchQuery.trim()) {
+                const q = helpersAppliedSearchQuery.toLowerCase().trim();
                 filtered = filtered.filter(
                   (a) =>
                     (a.legalName || '').toLowerCase().includes(q) ||
@@ -3209,8 +3328,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           const endMs = new Date(`${withdrawalsEndDate}T23:59:59.999`).getTime();
           filtered = filtered.filter((w) => new Date(w.createdAt).getTime() <= endMs);
         }
-        if (appliedSearchQuery.trim()) {
-          const q = appliedSearchQuery.toLowerCase().trim();
+        if (withdrawalsAppliedSearchQuery.trim()) {
+          const q = withdrawalsAppliedSearchQuery.toLowerCase().trim();
           filtered = filtered.filter(
             (w) =>
               w.helperName.toLowerCase().includes(q) ||
@@ -4570,8 +4689,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'SHOPS' && isTabAllowed('SHOPS') && (() => {
         const shopsSource = serverShops !== null ? serverShops : shops;
         let filteredShops = [...shopsSource];
-        if (appliedSearchQuery.trim()) {
-          const q = appliedSearchQuery.toLowerCase().trim();
+        if (shopsAppliedSearchQuery.trim()) {
+          const q = shopsAppliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
             (s) =>
               (s.name || '').toLowerCase().includes(q) ||
@@ -4669,8 +4788,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               /* ── Store Applications Sub-View ── */
               (() => {
                 let filteredStoreApps = [...storeApplications];
-                if (searchQuery.trim()) {
-                  const q = searchQuery.toLowerCase().trim();
+                if (shopsAppliedSearchQuery.trim()) {
+                  const q = shopsAppliedSearchQuery.toLowerCase().trim();
                   filteredStoreApps = filteredStoreApps.filter(
                     (a) =>
                       (a.storeName || '').toLowerCase().includes(q) ||
@@ -5195,8 +5314,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           : '0.0';
 
         let filteredFeedbacks = [...feedbacks];
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
+        if (feedbackAppliedSearchQuery.trim()) {
+          const q = feedbackAppliedSearchQuery.toLowerCase().trim();
           filteredFeedbacks = filteredFeedbacks.filter(
             (f) =>
               f.orderId.toLowerCase().includes(q) ||
