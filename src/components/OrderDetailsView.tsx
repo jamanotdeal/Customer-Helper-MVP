@@ -297,7 +297,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     setShowEditModal(false);
   };
 
-  const canCancel = order.status === 'PENDING' || order.status === 'ACCEPTED';
+  const canCancel = (order.status === 'PENDING' || order.status === 'ACCEPTED') && user?.uid === order.customerId;
   const canEdit = order.status === 'PENDING' || order.status === 'ACCEPTED';
   const isDelivered = order.status === 'DELIVERED';
   const isCanceled = order.status === 'CANCELED';

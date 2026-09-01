@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
@@ -30,6 +31,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   activeOrdersCount,
   activeOrderLimit,
 }) => {
+  const { user } = useAuth();
+  const isAcceptedByThisHelper = order.status !== 'PENDING' && !!order.helperId && user?.uid === order.helperId;
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
@@ -1728,7 +1731,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         )}
 
         {/* Request Cancellation Trigger */}
-        {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+        {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && isAcceptedByThisHelper && (
           <div className="pt-2">
             {order.cancellationRequest ? (
               <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold text-center">
