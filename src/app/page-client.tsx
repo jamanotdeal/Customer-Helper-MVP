@@ -314,7 +314,7 @@ export default function PageClient() {
     }
 
     // Admin view check: by default, logged-in admin users see Admin Dashboard
-    if (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel') {
+    if (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || activeTab === 'admin_panel') {
       return (
         <AdminDashboard
           initialSelectedOrderId={initialSelectedOrderId}
@@ -323,7 +323,12 @@ export default function PageClient() {
       );
     }
 
-    // Helper views check
+    // Store mode: approved store users automatically see StoreDashboard after loading
+    if (user.isStoreApproved || user.role === 'store' || activeMode === 'store') {
+      return <StoreDashboard activeTab={activeTab} setActiveTab={(tab) => setActiveTab(tab as any)} />;
+    }
+
+    // Helper views check: dedicated helpers and helper mode users see Helper view as primary
     if (user.isHelper && activeMode === 'helper') {
       if (activeTab === 'wallet') {
         return <HelperWallet />;
@@ -339,11 +344,6 @@ export default function PageClient() {
       );
     }
 
-    // Store mode: approved stores always see StoreDashboard
-    if (user.isStoreApproved || activeMode === 'store') {
-      return <StoreDashboard activeTab={activeTab} setActiveTab={(tab) => setActiveTab(tab as any)} />;
-    }
-
     // Default Customer view
     return (
       <CustomerHome
@@ -354,7 +354,7 @@ export default function PageClient() {
   };
 
   const isAdminView = Boolean(
-    user && (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel')
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || activeTab === 'admin_panel')
   );
 
   // While Firebase auth is resolving, show a skeleton layout (mirrors real layout to avoid CLS)
