@@ -20,7 +20,7 @@ export const PaginationControl: React.FC<PaginationControlProps> = ({
   pageSize,
   onPageChange,
   onPageSizeChange,
-  pageSizeOptions = [10, 25, 50, 100],
+  pageSizeOptions = [10, 25, 30, 50, 100],
 }) => {
   if (totalItems === 0) return null;
 

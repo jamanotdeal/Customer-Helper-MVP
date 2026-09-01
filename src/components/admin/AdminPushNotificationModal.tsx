@@ -3,6 +3,8 @@ import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
 import { Bell, Send, X, Users, UserCheck, ShieldAlert, Sparkles, CheckCircle2, Search, Clock, Calendar, Repeat } from 'lucide-react';
 import { TimePickerInput } from './TimePickerInput';
+import { UserProfile } from '@/types';
+
 
 interface AdminPushNotificationModalProps {
   onClose: () => void;
@@ -26,16 +28,41 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
   const [scheduledTime, setScheduledTime] = useState<string>('10:00');
   const [repeatFrequency, setRepeatFrequency] = useState<'NONE' | 'DAILY' | 'WEEKLY'>('NONE');
 
-  // List all registered users for specific user selection
-  const allUsers = Array.from(fallbackStore.users.values()).filter(Boolean);
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      Boolean(u) &&
-      ((u.displayName && u.displayName.toLowerCase().includes(searchUserQuery.toLowerCase())) ||
-        (u.email && u.email.toLowerCase().includes(searchUserQuery.toLowerCase())) ||
-        (u.alternativePhone && u.alternativePhone.includes(searchUserQuery)) ||
-        (u.uid && u.uid.includes(searchUserQuery)))
-  );
+  const [isSearchingUser, setIsSearchingUser] = useState<boolean>(false);
+  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
+
+  // Search registered users directly from server when query is entered
+  React.useEffect(() => {
+    if (!searchUserQuery.trim()) {
+      setSearchResults([]);
+      setIsSearchingUser(false);
+      return;
+    }
+
+    setIsSearchingUser(true);
+    const timer = setTimeout(async () => {
+      try {
+        const serverUsersList = await fallbackStore.getAllUsers();
+        const q = searchUserQuery.toLowerCase().trim();
+        const matched = serverUsersList.filter((u) => {
+          if (!u) return false;
+          return (
+            (u.displayName && u.displayName.toLowerCase().includes(q)) ||
+            (u.email && u.email.toLowerCase().includes(q)) ||
+            (u.alternativePhone && u.alternativePhone.toLowerCase().includes(q)) ||
+            (u.uid && u.uid.toLowerCase().includes(q))
+          );
+        }).slice(0, 30);
+        setSearchResults(matched);
+      } catch (err) {
+        console.error('Error fetching users from server:', err);
+      } finally {
+        setIsSearchingUser(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchUserQuery]);
 
   const presets = [
     { label: 'অফার বা আপডেট', title: 'জামানট বিশেষ আপডেট!', body: 'প্রিয় গ্রাহক, জামানট-এর মাধ্যমে দ্রুত ডেলিভারি সেবায় আপনাকে স্বাগতম।' },
@@ -255,49 +282,105 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
           )}
 
           {/* Specific User Search if targeted */}
-          {targetAudience === 'specific' && (
-            <div className="bg-purple-50/70 p-3.5 rounded-2xl border border-purple-200 space-y-2">
-              <label className="block font-bold text-xs text-purple-950">নির্দিষ্ট ইউজার নির্বাচন করুন:</label>
-              <div className="relative">
-                <Search className="w-4 h-4 text-purple-400 absolute left-3 top-3" />
-                <input
-                  type="text"
-                  placeholder="ইউজারের নাম, ইমেইল বা ফোন দিয়ে খুঁজুন..."
-                  value={searchUserQuery}
-                  onChange={(e) => setSearchUserQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-white border border-purple-200 rounded-xl text-xs focus:outline-none focus:border-purple-600"
-                />
-              </div>
+          {targetAudience === 'specific' && (() => {
+            const selectedUserObj = selectedUserUid ? fallbackStore.users.get(selectedUserUid) : null;
 
-              <div className="max-h-36 overflow-y-auto space-y-1 pt-1">
-                {filteredUsers.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-2 text-center">কোনো ইউজার পাওয়া যায়নি</p>
-                ) : (
-                  filteredUsers.map((u, idx) => {
-                    const userId = u.uid || `user-${idx}`;
-                    return (
-                      <button
-                        key={userId}
-                        type="button"
-                        onClick={() => setSelectedUserUid(userId)}
-                        className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between transition-colors ${
-                          selectedUserUid === userId
-                            ? 'bg-purple-900 text-white font-bold'
-                            : 'bg-white hover:bg-purple-100 text-gray-800'
-                        }`}
-                      >
-                        <div>
-                          <div>{u.displayName || u.email || 'ইউজার'}</div>
-                          <div className="text-[10px] opacity-75">{u.email || u.alternativePhone || userId}</div>
+            return (
+              <div className="bg-purple-50/70 p-3.5 rounded-2xl border border-purple-200 space-y-2">
+                <label className="block font-bold text-xs text-purple-950">নির্দিষ্ট ইউজার নির্বাচন করুন:</label>
+
+                {selectedUserObj ? (
+                  <div className="p-3 bg-white rounded-xl border border-purple-300 flex items-center justify-between shadow-xs">
+                    <div className="flex items-center space-x-2.5 overflow-hidden">
+                      <div className="p-2 bg-purple-900 text-white rounded-lg font-bold text-xs">
+                        <UserCheck className="w-4 h-4" />
+                      </div>
+                      <div className="overflow-hidden">
+                        <div className="font-extrabold text-xs text-gray-900 truncate">
+                          {selectedUserObj.displayName || 'ইউজার'}
                         </div>
-                        {selectedUserUid === userId && <CheckCircle2 className="w-4 h-4" />}
-                      </button>
-                    );
-                  })
+                        <div className="text-[10px] text-purple-700 font-mono truncate">
+                          {selectedUserObj.email || selectedUserObj.alternativePhone || selectedUserObj.uid}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUserUid('');
+                        setSearchUserQuery('');
+                      }}
+                      className="p-1.5 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-xs shrink-0 transition-colors"
+                    >
+                      পরিবর্তন করুন
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-purple-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        placeholder="ইউজারের নাম, ইমেইল, আইডি বা ফোন দিয়ে খুঁজুন..."
+                        value={searchUserQuery}
+                        onChange={(e) => setSearchUserQuery(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2 bg-white border border-purple-200 rounded-xl text-xs focus:outline-none focus:border-purple-600"
+                      />
+                    </div>
+
+                    <div className="max-h-40 overflow-y-auto space-y-1 pt-1">
+                      {isSearchingUser ? (
+                        <p className="text-xs text-purple-700 font-bold py-3 text-center animate-pulse">
+                          সার্ভার থেকে ইউজার খোঁজা হচ্ছে...
+                        </p>
+                      ) : !searchUserQuery.trim() ? (
+                        <p className="text-xs text-gray-500 py-3 text-center">
+                          ইউজারের নাম, ইমেইল, আইডি বা ফোন লিখে খুঁজুন...
+                        </p>
+                      ) : searchResults.length === 0 ? (
+                        <p className="text-xs text-rose-600 py-3 text-center font-semibold">
+                          সার্ভারে কোনো ইউজার পাওয়া যায়নি
+                        </p>
+                      ) : (
+                        searchResults.map((u, idx) => {
+                          const userId = u.uid || `user-${idx}`;
+                          return (
+                            <button
+                              key={userId}
+                              type="button"
+                              onClick={() => {
+                                setSelectedUserUid(userId);
+                                setSearchUserQuery('');
+                              }}
+                              className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between transition-colors ${
+                                selectedUserUid === userId
+                                  ? 'bg-purple-900 text-white font-bold'
+                                  : 'bg-white hover:bg-purple-100 text-gray-800 border border-purple-100'
+                              }`}
+                            >
+                              <div className="overflow-hidden">
+                                <div className="font-extrabold truncate">{u.displayName || 'ইউজার'}</div>
+                                <div className="text-[10px] opacity-75 font-mono truncate">
+                                  {u.email ? `${u.email} • ` : ''}{u.alternativePhone ? `${u.alternativePhone} • ` : ''}ID: {userId}
+                                </div>
+                              </div>
+                              {selectedUserUid === userId ? (
+                                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                              ) : (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 shrink-0">
+                                  সিলেক্ট করুন
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Quick Presets */}
           <div>
