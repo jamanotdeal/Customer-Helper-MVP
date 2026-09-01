@@ -35,6 +35,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [storeAppStatus, setStoreAppStatus] = useState<string | null>(null);
+  const [helperAppStatus, setHelperAppStatus] = useState<string | null>(null);
   const [showEditStoreModal, setShowEditStoreModal] = useState(false);
   const [storeInfo, setStoreInfo] = useState<any>(null);
 
@@ -48,6 +49,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           .filter((a) => a.userId === user.uid)
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
         setStoreAppStatus(latestStoreApp?.status || null);
+
+        // Check dedicated helper application status
+        const latestHelperApp = Array.from(fallbackStore.helperApplications.values())
+          .filter((a) => a.userId === user.uid)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        setHelperAppStatus(latestHelperApp?.status || null);
 
         // Fetch/sync store info if store approved
         if (user.storeId) {
@@ -396,6 +403,53 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                           </div>
                           {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
                         </button>
+                      )}
+
+                      {/* Become a Helper (Dedicated Rider) — nested under Helper Mode */}
+                      {!(user.isHelper && user.helperType === 'dedicated') && (
+                        <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
+                          {helperAppStatus === 'PENDING' ? (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+                                <div>
+                                  <div className="text-xs font-semibold">Become a Helper</div>
+                                  <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
+                                </div>
+                              </div>
+                            </button>
+                          ) : helperAppStatus === 'REJECTED' || helperAppStatus === 'CANCELED' ? (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <PlusCircle className="w-4 h-4 text-emerald-500" />
+                                <div>
+                                  <div className="text-xs font-semibold">Become a Helper</div>
+                                  <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
+                                </div>
+                              </div>
+                              <XCircle className="w-3.5 h-3.5 text-red-400" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
+                            >
+                              <div className="flex items-center space-x-2">
+                                <PlusCircle className="w-4 h-4 text-emerald-500" />
+                                <div>
+                                  <div className="text-xs font-semibold">Become a Helper</div>
+                                  <div className="text-[10px] text-gray-500 font-normal">ডেডিকেটেড রাইডার হয়ে লাইভ ম্যাপ ও সব অর্ডার পান</div>
+                                </div>
+                              </div>
+                            </button>
+                          )}
+                        </div>
                       )}
                     </>
                   )}
