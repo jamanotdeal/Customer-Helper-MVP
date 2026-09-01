@@ -245,6 +245,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [serverOrders, setServerOrders] = useState<Order[] | null>(null);
   const [serverUsers, setServerUsers] = useState<UserProfile[] | null>(null);
   const [serverShops, setServerShops] = useState<Shop[] | null>(null);
+  const [serverWithdrawals, setServerWithdrawals] = useState<WithdrawalRequest[] | null>(null);
+  const [serverFeedbacks, setServerFeedbacks] = useState<OrderFeedback[] | null>(null);
+  const [serverCustomModals, setServerCustomModals] = useState<AdminCustomModalConfig[] | null>(null);
   const [isFetchingServer, setIsFetchingServer] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
@@ -437,25 +440,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
-  // Server-side fetching effects
+  // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
+
+  // Server-side fetching effects - fetches full category dataset from server on search
   useEffect(() => {
     const fetchOrders = async () => {
       if (activeTab !== 'ORDERS') return;
-      if (currentPage === 1 && !ordersAppliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
+      if (!ordersAppliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
         setServerOrders(null);
         return;
       }
 
       setIsFetchingServer(true);
       try {
-        let q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-        if (statusFilter !== 'ALL' && statusFilter !== 'UNASSIGNED' && statusFilter !== 'DELIVERY_BACK') {
-          q = query(collection(db, 'orders'), where('status', '==', statusFilter), orderBy('createdAt', 'desc'));
-        }
-        // Use a higher limit when searching so we can do client-side text matching across more records
-        const fetchLimit = ordersAppliedSearchQuery.trim() ? 1000 : 500;
-        const snap = await getDocs(query(q, limit(fetchLimit)));
-        const fetched = snap.docs.map(d => d.data() as Order);
+        const fetched = await fallbackStore.getAllOrders();
         setServerOrders(fetched);
       } catch (err) {
         console.error('Error fetching server orders:', err);
@@ -465,22 +463,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchOrders();
-  }, [activeTab, currentPage, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
+  }, [activeTab, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
 
   useEffect(() => {
     const fetchUsers = async () => {
       if (activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
       const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : activeTab === 'CUSTOMERS' ? customersAppliedSearchQuery : helpersAppliedSearchQuery;
-      if (currentPage === 1 && !currentQuery.trim() && !usersStartDate && !usersEndDate) {
+      if (!currentQuery.trim() && !usersStartDate && !usersEndDate && audienceFilter === 'ALL' && statusFilter === 'ALL') {
         setServerUsers(null);
         return;
       }
 
       setIsFetchingServer(true);
       try {
-        // Fetch a generous limit so client-side text search covers all users
-        const snap = await getDocs(query(collection(db, 'users'), limit(1000)));
-        const fetched = snap.docs.map(d => d.data() as UserProfile);
+        const fetched = await fallbackStore.getAllUsers();
         setServerUsers(fetched);
       } catch (err) {
         console.error('Error fetching server users:', err);
@@ -490,21 +486,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, currentPage, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate]);
+  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter]);
 
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      if (currentPage === 1 && !shopsAppliedSearchQuery.trim()) {
+      if (!shopsAppliedSearchQuery.trim() && statusFilter === 'ALL') {
         setServerShops(null);
         return;
       }
 
       setIsFetchingServer(true);
       try {
-        // Fetch all shops so client-side text search is complete
-        const snap = await getDocs(query(collection(db, 'shops'), limit(1000)));
-        const fetched = snap.docs.map(d => d.data() as Shop);
+        const fetched = await fallbackStore.getAllShops();
         setServerShops(fetched);
       } catch (err) {
         console.error('Error fetching server shops:', err);
@@ -514,19 +508,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, currentPage, shopsAppliedSearchQuery]);
+  }, [activeTab, shopsAppliedSearchQuery, statusFilter]);
 
   useEffect(() => {
-    const fetchAll = async () => {
+    const fetchWithdrawals = async () => {
+      if (activeTab !== 'WITHDRAWALS') return;
+      if (!withdrawalsAppliedSearchQuery.trim() && !withdrawalsStartDate && !withdrawalsEndDate && withdrawalStatusFilter === 'ALL') {
+        setServerWithdrawals(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
       try {
-        const list = await fallbackStore.getAllOrders();
-        setAllOrders(list);
+        const fetched = await fallbackStore.getAllWithdrawals();
+        setServerWithdrawals(fetched);
       } catch (err) {
-        console.warn('Error fetching all orders for overall analysis:', err);
+        console.error('Error fetching server withdrawals:', err);
+      } finally {
+        setIsFetchingServer(false);
       }
     };
-    fetchAll();
-  }, []);
+
+    fetchWithdrawals();
+  }, [activeTab, withdrawalsAppliedSearchQuery, withdrawalStatusFilter, withdrawalsStartDate, withdrawalsEndDate]);
+
+  useEffect(() => {
+    const fetchFeedbacks = async () => {
+      if (activeTab !== 'FEEDBACK') return;
+      if (!feedbackAppliedSearchQuery.trim()) {
+        setServerFeedbacks(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
+      try {
+        const fetched = await fallbackStore.getAllOrderFeedbacks();
+        setServerFeedbacks(fetched);
+      } catch (err) {
+        console.error('Error fetching server feedbacks:', err);
+      } finally {
+        setIsFetchingServer(false);
+      }
+    };
+
+    fetchFeedbacks();
+  }, [activeTab, feedbackAppliedSearchQuery]);
+
+  useEffect(() => {
+    const fetchCustomModals = async () => {
+      if (activeTab !== 'CUSTOM_MODALS') return;
+      if (!customModalsAppliedSearchQuery.trim()) {
+        setServerCustomModals(null);
+        return;
+      }
+
+      setIsFetchingServer(true);
+      try {
+        const fetched = await fallbackStore.getAllCustomModals();
+        setServerCustomModals(fetched);
+      } catch (err) {
+        console.error('Error fetching server custom modals:', err);
+      } finally {
+        setIsFetchingServer(false);
+      }
+    };
+
+    fetchCustomModals();
+  }, [activeTab, customModalsAppliedSearchQuery]);
+
+  // Note: Initial data is loaded via fallbackStore real-time snapshot subscription (first batch)
 
   useEffect(() => {
     setAllOrders((prev) => {
@@ -1307,9 +1357,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Generic Pagination Calculator
-  function paginateList<T>(items: T[]) {
-    const totalPages = Math.ceil(items.length / pageSize) || 1;
-    const paginatedItems = items.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  function paginateList<T>(items: T[], customPage?: number, customPageSize?: number) {
+    const pageToUse = customPage ?? currentPage;
+    const sizeToUse = customPageSize ?? pageSize;
+    const totalPages = Math.ceil(items.length / sizeToUse) || 1;
+    const paginatedItems = items.slice((pageToUse - 1) * sizeToUse, pageToUse * sizeToUse);
     return { totalPages, paginatedItems, totalItems: items.length };
   }
 
@@ -2493,7 +2545,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800">
-                {totalItems} orders found (Latest first)
+                {exactTotalOrders !== null ? exactTotalOrders.toLocaleString() : totalItems} total orders (Latest first)
               </span>
             </div>
 
@@ -2681,7 +2733,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-extrabold text-base text-gray-900">Registered Users Master List</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {totalItems} total users recorded
+                {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
               </span>
             </div>
 
@@ -2926,7 +2978,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-extrabold text-base text-gray-900">Customer Statistics & Order Histories</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {totalItems} total customers
+                {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total customers
               </span>
             </div>
 
@@ -3203,7 +3255,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="p-5 border-b border-gray-100 flex items-center justify-between">
                   <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
                   <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                    {totalItems} helpers recorded
+                    {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
                   </span>
                 </div>
 
@@ -3316,7 +3368,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 6: WITHDRAWALS TAB --- */}
       {activeTab === 'WITHDRAWALS' && isTabAllowed('WITHDRAWALS') && (() => {
-        let filtered = [...withdrawals];
+        const withdrawalsSource = serverWithdrawals !== null ? serverWithdrawals : withdrawals;
+        let filtered = [...withdrawalsSource];
         if (withdrawalStatusFilter !== 'ALL') {
           filtered = filtered.filter((w) => w.status === withdrawalStatusFilter);
         }
@@ -5313,7 +5366,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ? (feedbacks.reduce((sum, f) => sum + f.shopRating, 0) / totalFeedbacks).toFixed(1)
           : '0.0';
 
-        let filteredFeedbacks = [...feedbacks];
+        const feedbacksSource = serverFeedbacks !== null ? serverFeedbacks : feedbacks;
+        let filteredFeedbacks = [...feedbacksSource];
         if (feedbackAppliedSearchQuery.trim()) {
           const q = feedbackAppliedSearchQuery.toLowerCase().trim();
           filteredFeedbacks = filteredFeedbacks.filter(
@@ -5456,17 +5510,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
-            {customModals.length === 0 ? (
-              <div className="p-12 bg-white rounded-3xl border border-gray-100 text-center text-gray-400 space-y-2">
-                <Sparkles className="w-10 h-10 mx-auto text-purple-300" />
-                <p className="font-bold text-gray-700">কোনো ডায়নামিক কাস্টম পপআপ মোডাল যোগ করা হয়নি।</p>
-                <p className="text-xs text-gray-500">
-                  অ্যাডমিন নতুন পপআপ ব্যানার তৈরি করে নির্দিষ্ট ইউজার গ্রুপ ও ইভেন্টে প্রদর্শন করাতে পারেন।
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {customModals.map((modal) => (
+            {(() => {
+              const customModalsSource = serverCustomModals !== null ? serverCustomModals : customModals;
+              let filteredModals = [...customModalsSource];
+              if (customModalsAppliedSearchQuery.trim()) {
+                const q = customModalsAppliedSearchQuery.toLowerCase().trim();
+                filteredModals = filteredModals.filter(
+                  (m) =>
+                    m.title.toLowerCase().includes(q) ||
+                    (m.subtitle && m.subtitle.toLowerCase().includes(q)) ||
+                    (m.description && m.description.toLowerCase().includes(q)) ||
+                    m.id.toLowerCase().includes(q)
+                );
+              }
+
+              if (filteredModals.length === 0) {
+                return (
+                  <div className="p-12 bg-white rounded-3xl border border-gray-100 text-center text-gray-400 space-y-2">
+                    <Sparkles className="w-10 h-10 mx-auto text-purple-300" />
+                    <p className="font-bold text-gray-700">কোনো ডায়নামিক কাস্টম পপআপ মোডাল পাওয়া যায়নি।</p>
+                    <p className="text-xs text-gray-500">
+                      অ্যাডমিন নতুন পপআপ ব্যানার তৈরি করে নির্দিষ্ট ইউজার গ্রুপ ও ইভেন্টে প্রদর্শন করাতে পারেন।
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {filteredModals.map((modal) => (
                   <div
                     key={modal.id}
                     className={`p-5 rounded-3xl bg-white border transition-all shadow-soft flex flex-col justify-between ${modal.isEnabled ? 'border-purple-200' : 'border-gray-200 opacity-75'
@@ -5570,7 +5642,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 ))}
               </div>
-            )}
+            );
+          })()}
           </div>
         );
       })()}

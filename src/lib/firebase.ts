@@ -2798,12 +2798,124 @@ class FallbackStore {
       const snap = await getDocs(collection(db, 'orders'));
       const list: Order[] = [];
       snap.forEach((docSnap) => {
-        list.push(docSnap.data() as Order);
+        const o = docSnap.data() as Order;
+        if (o && o.id) {
+          this.orders.set(o.id, o);
+          list.push(o);
+        }
       });
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllOrders error:', e);
       return Array.from(this.orders.values());
+    }
+  }
+
+  public async getAllUsers(): Promise<UserProfile[]> {
+    try {
+      const snap = await getDocs(collection(db, 'users'));
+      const list: UserProfile[] = [];
+      snap.forEach((docSnap) => {
+        const u = docSnap.data() as UserProfile;
+        if (u && u.uid) {
+          this.users.set(u.uid, u);
+          list.push(u);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllUsers error:', e);
+      return Array.from(this.users.values());
+    }
+  }
+
+  public async getAllShops(): Promise<Shop[]> {
+    try {
+      const snap = await getDocs(collection(db, 'shops'));
+      const list: Shop[] = [];
+      snap.forEach((docSnap) => {
+        const s = docSnap.data() as Shop;
+        if (s && s.id) {
+          this.shops.set(s.id, s);
+          list.push(s);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllShops error:', e);
+      return Array.from(this.shops.values());
+    }
+  }
+
+  public async getAllHelperApplications(): Promise<HelperApplication[]> {
+    try {
+      const snap = await getDocs(collection(db, 'helperApplications'));
+      const list: HelperApplication[] = [];
+      snap.forEach((docSnap) => {
+        const app = docSnap.data() as HelperApplication;
+        if (app && app.id) {
+          this.helperApplications.set(app.id, app);
+          list.push(app);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllHelperApplications error:', e);
+      return Array.from(this.helperApplications.values());
+    }
+  }
+
+  public async getAllWithdrawals(): Promise<WithdrawalRequest[]> {
+    try {
+      const snap = await getDocs(collection(db, 'withdrawals'));
+      const list: WithdrawalRequest[] = [];
+      snap.forEach((docSnap) => {
+        const w = docSnap.data() as WithdrawalRequest;
+        if (w && w.id) {
+          this.withdrawals.set(w.id, w);
+          list.push(w);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllWithdrawals error:', e);
+      return Array.from(this.withdrawals.values());
+    }
+  }
+
+  public async getAllOrderFeedbacks(): Promise<OrderFeedback[]> {
+    try {
+      const snap = await getDocs(collection(db, 'orderFeedbacks'));
+      const list: OrderFeedback[] = [];
+      snap.forEach((docSnap) => {
+        const f = docSnap.data() as OrderFeedback;
+        if (f && f.id) {
+          this.orderFeedbacks.set(f.id, f);
+          list.push(f);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllOrderFeedbacks error:', e);
+      return Array.from(this.orderFeedbacks.values());
+    }
+  }
+
+  public async getAllCustomModals(): Promise<AdminCustomModalConfig[]> {
+    try {
+      const snap = await getDocs(collection(db, 'customModals'));
+      const list: AdminCustomModalConfig[] = [];
+      snap.forEach((docSnap) => {
+        const c = docSnap.data() as AdminCustomModalConfig;
+        if (c && c.id) {
+          this.customModals.set(c.id, c);
+          list.push(c);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] getAllCustomModals error:', e);
+      return Array.from(this.customModals.values());
     }
   }
 }

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { HelperApplication, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
-import { X, User, Phone, Mail, Award, CheckCircle } from 'lucide-react';
+import { X, User, Phone, Mail, Award, CheckCircle, Search } from 'lucide-react';
 
 interface AdminHelperAppModalProps {
   application?: HelperApplication | null;
@@ -23,6 +23,7 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
   const isEdit = !!application;
 
   const [userId, setUserId] = useState(application?.userId || '');
+  const [searchQuery, setSearchQuery] = useState('');
   const [legalName, setLegalName] = useState(application?.legalName || '');
   const [nid, setNid] = useState(application?.nid || '');
   const [email, setEmail] = useState(application?.email || '');
@@ -32,18 +33,55 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
   const [hasCycle, setHasCycle] = useState(application?.hasCycle ?? false);
   const [hasBike, setHasBike] = useState(application?.hasBike ?? false);
   const [status, setStatus] = useState<HelperApplication['status']>(application?.status || 'PENDING');
+  const [selectedUserObj, setSelectedUserObj] = useState<UserProfile | null>(null);
+  const [isSearchingUser, setIsSearchingUser] = useState<boolean>(false);
+  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
 
-  // If a user is chosen, we prefill email and name from their profile
+  // Search users directly from server on query entry
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearchingUser(false);
+      return;
+    }
+
+    setIsSearchingUser(true);
+    const timer = setTimeout(async () => {
+      try {
+        const serverUsersList = await fallbackStore.getAllUsers();
+        const q = searchQuery.toLowerCase().trim();
+        const matched = serverUsersList.filter((u) => {
+          if (!u) return false;
+          return (
+            (u.displayName && u.displayName.toLowerCase().includes(q)) ||
+            (u.email && u.email.toLowerCase().includes(q)) ||
+            (u.alternativePhone && u.alternativePhone.toLowerCase().includes(q)) ||
+            (u.uid && u.uid.toLowerCase().includes(q))
+          );
+        }).slice(0, 30);
+        setSearchResults(matched);
+      } catch (err) {
+        console.error('Error searching server users:', err);
+      } finally {
+        setIsSearchingUser(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // If a user is chosen, prefill email and name from their profile
   useEffect(() => {
     if (!isEdit && userId) {
-      const selectedUser = users.find((u) => u.uid === userId);
-      if (selectedUser) {
-        setEmail(selectedUser.email || '');
-        setLegalName(selectedUser.displayName || '');
-        setWhatsapp(selectedUser.alternativePhone || '');
+      const uObj = selectedUserObj || users.find((u) => u.uid === userId);
+      if (uObj) {
+        setSelectedUserObj(uObj);
+        setEmail(uObj.email || '');
+        setLegalName(uObj.displayName || '');
+        setWhatsapp(uObj.alternativePhone || '');
       }
     }
-  }, [userId, isEdit, users]);
+  }, [userId, isEdit, users, selectedUserObj]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +173,7 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
 
         {/* Modal Form */}
         <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-6 space-y-4">
-          {/* User Profile Dropdown (Only on create) */}
+          {/* Searchable User Profile Selector (Only on create) */}
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1.5">
               Select User Profile *
@@ -145,21 +183,95 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
                 <User className="w-4 h-4 text-gray-400" />
                 <span>{application.userName} ({application.userId})</span>
               </div>
-            ) : (
-              <select
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 outline-none"
-                required
-              >
-                <option value="">-- Choose User --</option>
-                {users.map((u) => (
-                  <option key={u.uid} value={u.uid}>
-                    {u.displayName} ({u.email || u.uid})
-                  </option>
-                ))}
-              </select>
-            )}
+            ) : (() => {
+              const selectedUser = users.find((u) => u.uid === userId);
+
+              return (
+                <div className="space-y-2">
+                  {selectedUser ? (
+                    <div className="p-3 bg-purple-50 rounded-2xl border border-purple-200 flex items-center justify-between">
+                      <div className="flex items-center space-x-2.5 overflow-hidden">
+                        <div className="p-2 bg-purple-900 text-white rounded-xl">
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div className="overflow-hidden">
+                          <div className="font-extrabold text-xs text-purple-950 truncate">
+                            {selectedUser.displayName || 'No Name'}
+                          </div>
+                          <div className="text-[11px] text-purple-700 font-mono truncate">
+                            {selectedUser.email || selectedUser.alternativePhone || selectedUser.uid}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserId('');
+                          setSearchQuery('');
+                        }}
+                        className="p-1.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-xs shrink-0 transition-colors"
+                      >
+                        Change User
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                        <input
+                          type="text"
+                          placeholder="Search by user name, email, phone or user ID..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 text-xs font-semibold bg-white focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 outline-none"
+                        />
+                      </div>
+
+                      <div className="max-h-44 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-1 space-y-1 divide-y divide-gray-50">
+                        {isSearchingUser ? (
+                          <p className="text-xs text-purple-700 font-bold py-3 text-center animate-pulse">
+                            Searching users from server...
+                          </p>
+                        ) : !searchQuery.trim() ? (
+                          <p className="text-xs text-gray-500 py-3 text-center">
+                            Type user name, email, phone or ID to search server...
+                          </p>
+                        ) : searchResults.length === 0 ? (
+                          <p className="text-xs text-rose-600 py-3 text-center font-semibold">
+                            No matching user found on server
+                          </p>
+                        ) : (
+                          searchResults.map((u) => (
+                            <button
+                              key={u.uid}
+                              type="button"
+                              onClick={() => {
+                                setUserId(u.uid);
+                                setSelectedUserObj(u);
+                                setSearchQuery('');
+                              }}
+                              className="w-full text-left p-2.5 rounded-xl hover:bg-purple-50 transition-colors flex items-center justify-between"
+                            >
+                              <div className="overflow-hidden">
+                                <div className="font-extrabold text-xs text-gray-900 truncate">
+                                  {u.displayName || 'Unnamed User'}
+                                </div>
+                                <div className="text-[11px] text-gray-500 font-mono truncate">
+                                  {u.email ? `${u.email} • ` : ''}{u.alternativePhone ? `${u.alternativePhone} • ` : ''}ID: {u.uid}
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 shrink-0">
+                                Select
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Legal Name */}
