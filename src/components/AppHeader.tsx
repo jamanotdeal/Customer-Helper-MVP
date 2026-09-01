@@ -62,6 +62,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
     return () => { unsub(); };
   }, [user]);
 
+  const isAdminView = Boolean(
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin')
+  );
+
   return (
     <>
       <header
@@ -71,7 +75,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           paddingTop: 'max(12px, env(safe-area-inset-top))',
         }}
       >
-        <div className="content-container px-4 py-3 flex items-center justify-between">
+        <div className={isAdminView ? "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between" : "content-container px-4 py-3 flex items-center justify-between"}>
           {/* Logo & Tagline */}
           <div className="flex items-center space-x-3">
             <div className="relative w-10 h-10 rounded-none overflow-hidden shadow-sm border border-emerald-200 flex-shrink-0 bg-emerald-50">

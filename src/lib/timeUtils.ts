@@ -38,12 +38,12 @@ export function formatTimeOnly(dateStr: string): string {
   return `${formattedHours}:${minutes}${ampm}`;
 }
 
-export function getElapsedTime(createdAtStr: string, endAtStr?: string): string {
-  if (!createdAtStr) return '0s';
+export function formatMinSecText(createdAtStr: string, endedAtStr?: string): string {
+  if (!createdAtStr) return '00:00min';
   const start = new Date(createdAtStr).getTime();
-  if (isNaN(start)) return '0s';
-  const end = endAtStr ? new Date(endAtStr).getTime() : Date.now();
-  if (isNaN(end)) return '0s';
+  if (isNaN(start)) return '00:00min';
+  const end = endedAtStr ? new Date(endedAtStr).getTime() : Date.now();
+  if (isNaN(end)) return '00:00min';
 
   const diffMs = Math.max(0, end - start);
   const totalSeconds = Math.floor(diffMs / 1000);
@@ -53,9 +53,13 @@ export function getElapsedTime(createdAtStr: string, endAtStr?: string): string 
   const secs = totalSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}min`;
   }
-  return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}min`;
+}
+
+export function getElapsedTime(createdAtStr: string, endAtStr?: string): string {
+  return formatMinSecText(createdAtStr, endAtStr);
 }
 
 export function getDeliveryDurationText(createdAtStr: string, endedAtStr?: string): string {
@@ -65,19 +69,11 @@ export function getDeliveryDurationText(createdAtStr: string, endedAtStr?: strin
   if (isNaN(start) || isNaN(end)) return '';
 
   const diffMs = Math.max(0, end - start);
-  const totalSeconds = Math.floor(diffMs / 1000);
-
-  const hours = Math.floor(totalSeconds / 3600);
-  const mins = Math.floor((totalSeconds % 3600) / 60);
-  const secs = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours} hr ${mins} min ${secs} sec`;
+  const totalMins = Math.round(diffMs / 60000);
+  if (totalMins > 0) {
+    return `${totalMins}mins`;
   }
-  if (mins > 0) {
-    return `${mins} min ${secs} sec`;
-  }
-  return `${secs} sec`;
+  return formatMinSecText(createdAtStr, endedAtStr);
 }
 
 export function getElapsedMinutes(createdAtStr: string, endedAtStr?: string): number {
@@ -103,7 +99,7 @@ export function getOrderAcceptanceDurationText(order: {
     order.statusHistory?.find((h) => h.status === 'ACCEPTED')?.timestamp;
 
   if (!acceptedTime) return null;
-  return getDeliveryDurationText(order.createdAt, acceptedTime);
+  return formatMinSecText(order.createdAt, acceptedTime);
 }
 
 /**

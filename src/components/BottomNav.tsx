@@ -36,13 +36,13 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
 
   return (
     <nav
-      className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 pt-2 shadow-xl"
+      className="fixed bottom-0 left-0 right-0 w-full z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 pt-2 shadow-xl"
       style={{
         // iPhone home indicator safe area
         paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
       }}
     >
-      <div className="max-w-xl mx-auto flex items-center justify-around px-2">
+      <div className="content-container flex items-center justify-around px-2">
         {/* Customer / Request Tab */}
         <button
           id="nav-tab-request"

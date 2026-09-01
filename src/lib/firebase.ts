@@ -1059,10 +1059,10 @@ class FallbackStore {
 
     // ── ADMIN role ────────────────────────────────────────────────────────────
     } else if (role === 'admin') {
-      // All orders (most recent 20, realtime)
+      // All orders (most recent 100, realtime — used for Needs Attention; full list fetched on-demand in ORDERS tab)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(20)),
+          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100)),
           (snapshot) => {
             const currentIds = new Set(snapshot.docs.map((d) => d.id));
             for (const key of Array.from(this.orders.keys())) {

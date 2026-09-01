@@ -233,7 +233,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!storeName.trim() || !ownerName.trim() || !ownerWhatsapp.trim() || !managerName.trim() || !managerWhatsapp.trim()) {
+    if (!storeName.trim() || !storeDescription.trim() || !ownerName.trim() || !ownerWhatsapp.trim() || !managerName.trim() || !managerWhatsapp.trim()) {
       setError('সকল তারকাচিহ্নিত (*) ঘর পূরণ করুন।');
       return;
     }
@@ -500,13 +500,14 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
 
             {/* 6. দোকানে কী কী পণ্য পাওয়া যায় (description) */}
             <div className="space-y-1 pt-2 border-t border-gray-100">
-              <label className="text-xs font-bold text-gray-600 block">দোকানে কী কী পণ্য/সেবা পাওয়া যায়?</label>
+              <label className="text-xs font-bold text-gray-600 block">দোকানে কী কী পণ্য/সেবা পাওয়া যায়? *</label>
               <textarea
                 value={storeDescription}
                 onChange={(e) => setStoreDescription(e.target.value)}
                 placeholder={ph.storeDescription || 'যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান, টুথপেস্ট, বিভিন্ন গৃহস্থালী পণ্য...'}
                 rows={3}
                 className="w-full p-3 rounded-2xl border border-gray-200 focus:border-orange-500 focus:ring-2 focus:ring-orange-100 outline-none text-sm leading-relaxed resize-none"
+                required
               />
             </div>
 

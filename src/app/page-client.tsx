@@ -411,14 +411,16 @@ export default function PageClient() {
         </main>
 
         {/* Bottom Nav Skeleton */}
-        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t border-gray-100 px-6 pt-2 flex items-center justify-around z-40"
+        <div className="fixed bottom-0 left-0 right-0 w-full bg-white border-t border-gray-100 pt-2 z-40"
           style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex flex-col items-center space-y-1">
-              <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
-              <div className="w-10 h-2.5 rounded bg-gray-100 animate-pulse" />
-            </div>
-          ))}
+          <div className="content-container flex items-center justify-around px-6">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex flex-col items-center space-y-1">
+                <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
+                <div className="w-10 h-2.5 rounded bg-gray-100 animate-pulse" />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     );
