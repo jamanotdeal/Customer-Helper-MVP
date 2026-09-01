@@ -5,7 +5,7 @@ import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingS
 import { fallbackStore, db } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, getCountFromServer } from 'firebase/firestore';
 import { useModal } from './CustomModal';
-import { getOrderAcceptanceDurationText, getElapsedTime } from '@/lib/timeUtils';
+import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -102,6 +102,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [exactTotalOrders, setExactTotalOrders] = useState<number | null>(null);
   const [exactCustomerAccounts, setExactCustomerAccounts] = useState<number | null>(null);
   const [exactActiveHelpers, setExactActiveHelpers] = useState<number | null>(null);
+  const [exactCustomersCount, setExactCustomersCount] = useState<number | null>(null);
+  const [exactShopsCount, setExactShopsCount] = useState<number | null>(null);
+  const [exactFeedbacksCount, setExactFeedbacksCount] = useState<number | null>(null);
+  const [exactCustomModalsCount, setExactCustomModalsCount] = useState<number | null>(null);
+  const [exactWithdrawalsCount, setExactWithdrawalsCount] = useState<number | null>(null);
   const [serverAvgDeliveryTimeMins, setServerAvgDeliveryTimeMins] = useState<number | null>(null);
 
   const [showAddShopModal, setShowAddShopModal] = useState<boolean>(false);
@@ -442,19 +447,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
 
-  // Server-side fetching effects - fetches full category dataset from server on search
+  // Server-side fetching effects - always fetches full orders list when on ORDERS tab
   useEffect(() => {
     const fetchOrders = async () => {
       if (activeTab !== 'ORDERS') return;
-      if (!ordersAppliedSearchQuery.trim() && !ordersStartDate && !ordersEndDate && statusFilter === 'ALL') {
-        setServerOrders(null);
-        return;
-      }
+      // Always fetch all orders from server to support full pagination & filtering
+      if (serverOrders !== null) return; // already fetched
 
       setIsFetchingServer(true);
       try {
         const fetched = await fallbackStore.getAllOrders();
         setServerOrders(fetched);
+        // Merge fetched orders into allOrders so the full dataset is always available
+        setAllOrders((prev) => {
+          const copy = [...prev];
+          fetched.forEach((o) => {
+            const idx = copy.findIndex((item) => item.id === o.id);
+            if (idx > -1) {
+              copy[idx] = o;
+            } else {
+              copy.unshift(o);
+            }
+          });
+          const seen = new Set<string>();
+          return copy.filter((o) => {
+            if (seen.has(o.id)) return false;
+            seen.add(o.id);
+            return true;
+          });
+        });
       } catch (err) {
         console.error('Error fetching server orders:', err);
       } finally {
@@ -463,13 +484,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchOrders();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-fetch when filters change so fresh data is loaded
+  useEffect(() => {
+    if (activeTab !== 'ORDERS') return;
+    setServerOrders(null); // reset to trigger re-fetch
   }, [activeTab, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
 
   useEffect(() => {
     const fetchUsers = async () => {
       if (activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
       const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : activeTab === 'CUSTOMERS' ? customersAppliedSearchQuery : helpersAppliedSearchQuery;
-      if (!currentQuery.trim() && !usersStartDate && !usersEndDate && audienceFilter === 'ALL' && statusFilter === 'ALL') {
+      const hasFilter = Boolean(currentQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
+      const needsPageFetch = (currentPage - 1) * pageSize >= users.length;
+      if (!hasFilter && !needsPageFetch) {
         setServerUsers(null);
         return;
       }
@@ -486,12 +515,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter]);
+  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, currentPage, pageSize, users.length]);
 
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      if (!shopsAppliedSearchQuery.trim() && statusFilter === 'ALL') {
+      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || statusFilter !== 'ALL');
+      const needsPageFetch = (currentPage - 1) * pageSize >= shops.length;
+      if (!hasFilter && !needsPageFetch) {
         setServerShops(null);
         return;
       }
@@ -508,12 +539,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, shopsAppliedSearchQuery, statusFilter]);
+  }, [activeTab, shopsAppliedSearchQuery, statusFilter, currentPage, pageSize, shops.length]);
 
   useEffect(() => {
     const fetchWithdrawals = async () => {
       if (activeTab !== 'WITHDRAWALS') return;
-      if (!withdrawalsAppliedSearchQuery.trim() && !withdrawalsStartDate && !withdrawalsEndDate && withdrawalStatusFilter === 'ALL') {
+      const hasFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL');
+      const needsPageFetch = (currentPage - 1) * pageSize >= withdrawals.length;
+      if (!hasFilter && !needsPageFetch) {
         setServerWithdrawals(null);
         return;
       }
@@ -530,12 +563,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchWithdrawals();
-  }, [activeTab, withdrawalsAppliedSearchQuery, withdrawalStatusFilter, withdrawalsStartDate, withdrawalsEndDate]);
+  }, [activeTab, withdrawalsAppliedSearchQuery, withdrawalStatusFilter, withdrawalsStartDate, withdrawalsEndDate, currentPage, pageSize, withdrawals.length]);
 
   useEffect(() => {
     const fetchFeedbacks = async () => {
       if (activeTab !== 'FEEDBACK') return;
-      if (!feedbackAppliedSearchQuery.trim()) {
+      const hasFilter = Boolean(feedbackAppliedSearchQuery.trim());
+      const needsPageFetch = (currentPage - 1) * pageSize >= feedbacks.length;
+      if (!hasFilter && !needsPageFetch) {
         setServerFeedbacks(null);
         return;
       }
@@ -552,12 +587,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchFeedbacks();
-  }, [activeTab, feedbackAppliedSearchQuery]);
+  }, [activeTab, feedbackAppliedSearchQuery, currentPage, pageSize, feedbacks.length]);
 
   useEffect(() => {
     const fetchCustomModals = async () => {
       if (activeTab !== 'CUSTOM_MODALS') return;
-      if (!customModalsAppliedSearchQuery.trim()) {
+      const hasFilter = Boolean(customModalsAppliedSearchQuery.trim());
+      const needsPageFetch = (currentPage - 1) * pageSize >= customModals.length;
+      if (!hasFilter && !needsPageFetch) {
         setServerCustomModals(null);
         return;
       }
@@ -574,7 +611,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchCustomModals();
-  }, [activeTab, customModalsAppliedSearchQuery]);
+  }, [activeTab, customModalsAppliedSearchQuery, currentPage, pageSize, customModals.length]);
 
   // Note: Initial data is loaded via fallbackStore real-time snapshot subscription (first batch)
 
@@ -604,16 +641,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const ordersColl = collection(db, 'orders');
         const usersColl = collection(db, 'users');
         const helpersQuery = query(usersColl, where('isHelper', '==', true));
+        const customersQuery = query(usersColl, where('role', '==', 'customer'));
+        const shopsColl = collection(db, 'shops');
+        const feedbackColl = collection(db, 'orderFeedbacks');
+        const modalsColl = collection(db, 'customModals');
+        const wdColl = collection(db, 'withdrawals');
 
-        const [ordersSnap, usersSnap, helpersSnap] = await Promise.all([
+        const [ordersSnap, usersSnap, helpersSnap, customersSnap, shopsSnap, feedbackSnap, modalsSnap, wdSnap] = await Promise.all([
           getCountFromServer(ordersColl),
           getCountFromServer(usersColl),
-          getCountFromServer(helpersQuery)
+          getCountFromServer(helpersQuery),
+          getCountFromServer(customersQuery),
+          getCountFromServer(shopsColl),
+          getCountFromServer(feedbackColl),
+          getCountFromServer(modalsColl),
+          getCountFromServer(wdColl)
         ]);
 
         setExactTotalOrders(ordersSnap.data().count);
         setExactCustomerAccounts(usersSnap.data().count);
         setExactActiveHelpers(helpersSnap.data().count);
+        setExactCustomersCount(customersSnap.data().count);
+        setExactShopsCount(shopsSnap.data().count);
+        setExactFeedbacksCount(feedbackSnap.data().count);
+        setExactCustomModalsCount(modalsSnap.data().count);
+        setExactWithdrawalsCount(wdSnap.data().count);
       } catch (err) {
         console.error('Error fetching exact counts from server:', err);
       }
@@ -1357,12 +1409,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Generic Pagination Calculator
-  function paginateList<T>(items: T[], customPage?: number, customPageSize?: number) {
+  function paginateList<T>(items: T[], customPage?: number, customPageSize?: number, overrideTotalCount?: number) {
     const pageToUse = customPage ?? currentPage;
     const sizeToUse = customPageSize ?? pageSize;
-    const totalPages = Math.ceil(items.length / sizeToUse) || 1;
+    const totalCount = (overrideTotalCount !== undefined && overrideTotalCount > 0) ? Math.max(overrideTotalCount, items.length) : items.length;
+    const totalPages = Math.ceil(totalCount / sizeToUse) || 1;
     const paginatedItems = items.slice((pageToUse - 1) * sizeToUse, pageToUse * sizeToUse);
-    return { totalPages, paginatedItems, totalItems: items.length };
+    return { totalPages, paginatedItems, totalItems: totalCount };
   }
 
   const isSuperAdmin = currentUser?.isSuperAdmin;
@@ -1617,7 +1670,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <ShoppingBag className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>All Orders ({orders.length})</span>
+            <span>All Orders ({exactTotalOrders !== null ? exactTotalOrders : orders.length})</span>
           </button>
         )}
 
@@ -1631,7 +1684,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Users className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>User Lists ({users.length})</span>
+            <span>User Lists ({exactCustomerAccounts !== null ? exactCustomerAccounts : users.length})</span>
           </button>
         )}
 
@@ -1645,7 +1698,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Bike className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Helpers ({approvedHelpersCount || getProcessedHelpers().length})</span>
+            <span>Helpers ({exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount})</span>
             {pendingApps.length > 0 && (
               <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] shrink-0 font-bold">
                 {pendingApps.length} app
@@ -1664,7 +1717,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Store className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>Shops ({shops.length})</span>
+            <span>Shops ({exactShopsCount !== null ? exactShopsCount : shops.length})</span>
           </button>
         )}
 
@@ -1678,7 +1731,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Star className="w-4 h-4 text-amber-500 shrink-0" />
-            <span>Order Feedback ({feedbacks.length})</span>
+            <span>Order Feedback ({exactFeedbacksCount !== null ? exactFeedbacksCount : feedbacks.length})</span>
           </button>
         )}
 
@@ -1692,7 +1745,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>Custom Modals ({customModals.length})</span>
+            <span>Custom Modals ({exactCustomModalsCount !== null ? exactCustomModalsCount : customModals.length})</span>
           </button>
         )}
 
@@ -1706,7 +1759,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <User className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>Customers</span>
+            <span>Customers ({exactCustomersCount !== null ? exactCustomersCount : (users.filter(u => !u.isHelper).length)})</span>
           </button>
         )}
 
@@ -1734,7 +1787,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <DollarSign className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>Helper Commissions ({pendingWds.length})</span>
+            <span>Helper Commissions ({exactWithdrawalsCount !== null ? exactWithdrawalsCount : withdrawals.length})</span>
           </button>
         )}
 
@@ -1825,6 +1878,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isFetchingServer ? 'Loading...' : 'Search'}
               </button>
             </div>
+
+            {/* Date Range Filter — Orders tab only */}
+            {activeTab === 'ORDERS' && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-100">
+                <div className="flex items-center gap-1 text-xs font-bold text-gray-500">
+                  <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Date Range:</span>
+                </div>
+                <div className="flex items-center space-x-1 bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1.5">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
+                  <input
+                    type="date"
+                    value={ordersStartDate}
+                    onChange={(e) => { setOrdersStartDate(e.target.value); setCurrentPage(1); }}
+                    className="bg-transparent text-gray-800 font-semibold focus:outline-none text-[11px]"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1.5">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
+                  <input
+                    type="date"
+                    value={ordersEndDate}
+                    onChange={(e) => { setOrdersEndDate(e.target.value); setCurrentPage(1); }}
+                    className="bg-transparent text-gray-800 font-semibold focus:outline-none text-[11px]"
+                  />
+                </div>
+                {(ordersStartDate || ordersEndDate) && (
+                  <button
+                    onClick={() => { setOrdersStartDate(''); setOrdersEndDate(''); setCurrentPage(1); }}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition-all"
+                  >
+                    Clear Dates
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         );
       })()}
@@ -2535,9 +2624,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 2: ALL ORDERS TAB --- */}
       {activeTab === 'ORDERS' && isTabAllowed('ORDERS') && (() => {
-        const ordersSource = serverOrders !== null ? serverOrders : orders;
+        // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
+        const ordersSource = serverOrders !== null ? serverOrders : allOrders;
         const processed = getProcessedOrders(ordersSource);
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
+        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL');
+        // When no filter is active, always use the server count for total (even after serverOrders loaded,
+        // exactTotalOrders is the authoritative number from getCountFromServer)
+        const overrideOrdersCount = (!hasOrdersFilter && exactTotalOrders !== null && exactTotalOrders > processed.length) ? exactTotalOrders : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideOrdersCount);
         const firstOrderIds = getFirstOrderIds(orders);
 
         return (
@@ -2549,160 +2643,181 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
 
-            {/* Date Range Filter Bar */}
-            <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center space-x-2">
-                <Calendar className="w-4 h-4 text-purple-700" />
-                <span className="font-extrabold text-gray-900">Filter by Date Range</span>
+            {/* Sub-Filters and Date Search Controls */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Status Filter</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="PENDING">PENDING</option>
+                  <option value="ACCEPTED">ACCEPTED</option>
+                  <option value="PURCHASED_EXECUTED">PURCHASED_EXECUTED</option>
+                  <option value="ON_THE_WAY">ON_THE_WAY</option>
+                  <option value="ARRIVED">ARRIVED</option>
+                  <option value="DELIVERED">DELIVERED</option>
+                  <option value="CANCELED">CANCELED</option>
+                  <option value="UNASSIGNED">Unassigned Only</option>
+                  <option value="DELIVERY_BACK">Return Orders Only</option>
+                </select>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
-                  <input
-                    type="date"
-                    value={ordersStartDate}
-                    onChange={(e) => setOrdersStartDate(e.target.value)}
-                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
-                  />
-                </div>
-                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
-                  <input
-                    type="date"
-                    value={ordersEndDate}
-                    onChange={(e) => setOrdersEndDate(e.target.value)}
-                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
-                  />
-                </div>
-                {(ordersStartDate || ordersEndDate) && (
-                  <button
-                    onClick={() => {
-                      setOrdersStartDate('');
-                      setOrdersEndDate('');
-                    }}
-                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
-                  >
-                    Clear
-                  </button>
-                )}
+
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Sort By</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="NEWEST">Newest First</option>
+                  <option value="OLDEST">Oldest First</option>
+                </select>
               </div>
             </div>
 
-            {/* Desktop Table View */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[800px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
-                    <th className="py-3.5 px-5">Order ID</th>
-                    <th className="py-3.5 px-5">Customer</th>
-                    <th className="py-3.5 px-5">Title & Items</th>
-                    <th className="py-3.5 px-5">Assigned Helper</th>
-                    <th className="py-3.5 px-5">Fee</th>
-                    <th className="py-3.5 px-5">Status</th>
-                    <th className="py-3.5 px-5 text-right">Action</th>
+                    <th className="py-3 px-5">Order ID</th>
+                    <th className="py-3 px-5">Customer</th>
+                    <th className="py-3 px-5">Ordered Time</th>
+                    <th className="py-3 px-5">Helper</th>
+                    <th className="py-3 px-5">Delivery Fee</th>
+                    <th className="py-3 px-5">Status</th>
+                    <th className="py-3 px-5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedItems.map((ord) => (
-                    <tr
-                      key={ord.id}
-                      className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                      onClick={() => setSelectedOrderId(ord.id)}
-                    >
-                      <td className="py-4 px-5 font-bold text-gray-900">#{ord.id}</td>
-                      <td className="py-4 px-5">
-                        <div className="font-extrabold text-gray-900 flex items-center gap-1.5 flex-wrap">
-                          {ord.customerName}
-                          {firstOrderIds.has(ord.id) && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide shadow-sm shrink-0">
-                              🥇 1st Order
-                            </span>
+                  {paginatedItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                        No orders match your criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedItems.map((ord) => (
+                      <tr
+                        key={ord.id}
+                        className="hover:bg-purple-50/40 cursor-pointer transition-colors"
+                        onClick={() => setSelectedOrderId(ord.id)}
+                      >
+                        <td className="py-4 px-5 font-mono text-purple-950 font-bold text-xs">
+                          #{ord.id}
+                          <div className="text-[10px] text-gray-400 font-normal">{new Date(ord.createdAt).toLocaleDateString()}</div>
+                        </td>
+                        <td className="py-4 px-5">
+                          <div className="font-extrabold text-gray-900 text-xs flex items-center gap-1.5 flex-wrap">
+                            <span>{ord.customerName}</span>
+                            {firstOrderIds.has(ord.id) && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide shadow-sm shrink-0">
+                                🥇 1st Order
+                              </span>
+                            )}
+                            {(() => {
+                              const custUser = fallbackStore.users.get(ord.customerId) || users.find((u) => u.uid === ord.customerId);
+                              if (!custUser?.labels || custUser.labels.length === 0) return null;
+                              return custUser.labels.map((lbl) => (
+                                <span key={lbl} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-100 text-purple-950 font-extrabold text-[9px] border border-amber-200 shrink-0">
+                                  🏷️ {lbl}
+                                </span>
+                              ));
+                            })()}
+                          </div>
+                          <div className="text-[11px] text-gray-400 font-medium">{ord.customerPhone}</div>
+                        </td>
+                        <td className="py-4 px-5">
+                          {ord.title && (
+                            <div className="font-bold text-gray-900 text-xs mb-0.5">{ord.title}</div>
                           )}
-                          {(() => {
-                            const custUser = fallbackStore.users.get(ord.customerId) || users.find((u) => u.uid === ord.customerId);
-                            if (!custUser?.labels || custUser.labels.length === 0) return null;
-                            return custUser.labels.map((lbl) => (
-                              <span key={lbl} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-100 text-purple-950 font-extrabold text-[9px] border border-amber-200 shrink-0">
-                                🏷️ {lbl}
-                              </span>
-                            ));
-                          })()}
-                        </div>
-                        <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
-                      </td>
-                      <td className="py-4 px-5">
-                        <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
-                        <div className="text-[11px] text-gray-500">{(ord.items || []).length} items</div>
-                      </td>
-                      <td className="py-4 px-5">
-                        {ord.helperName ? (
-                          <div>
-                            <div className="font-bold text-purple-900 flex items-center gap-1 flex-wrap">
-                              <span className="flex items-center space-x-1">
-                                <Bike className="w-3.5 h-3.5 text-indigo-600" />
-                                <span>{ord.helperName}</span>
-                              </span>
-                              {(() => {
-                                const hUser = ord.helperId ? (fallbackStore.users.get(ord.helperId) || users.find((u) => u.uid === ord.helperId)) : null;
-                                if (!hUser?.labels || hUser.labels.length === 0) return null;
-                                return hUser.labels.map((lbl) => (
-                                  <span key={lbl} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-950 font-extrabold text-[9px] border border-indigo-200 shrink-0">
-                                    🏷️ {lbl}
-                                  </span>
-                                ));
-                              })()}
+                          <div className="text-[11px] text-gray-500 font-medium flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-purple-600 shrink-0" />
+                            <span>Ordered at: {new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-5">
+                          {ord.helperName ? (
+                            <div>
+                              <div className="font-extrabold text-purple-900 text-xs flex items-center gap-1 flex-wrap">
+                                <span className="flex items-center space-x-1">
+                                  <Bike className="w-3 h-3 text-indigo-600" />
+                                  <span>{ord.helperName}</span>
+                                </span>
+                                {(() => {
+                                  const hUser = ord.helperId ? (fallbackStore.users.get(ord.helperId) || users.find((u) => u.uid === ord.helperId)) : null;
+                                  if (!hUser?.labels || hUser.labels.length === 0) return null;
+                                  return hUser.labels.map((lbl) => (
+                                    <span key={lbl} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-950 font-extrabold text-[9px] border border-indigo-200 shrink-0">
+                                      🏷️ {lbl}
+                                    </span>
+                                  ));
+                                })()}
+                              </div>
+                              {getOrderAcceptanceDurationText(ord) && (
+                                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 mt-0.5 inline-block">
+                                  Accepted in: {getOrderAcceptanceDurationText(ord)}
+                                </span>
+                              )}
                             </div>
-                            {getOrderAcceptanceDurationText(ord) && (
-                              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 mt-0.5 inline-block">
-                                Accepted in: {getOrderAcceptanceDurationText(ord)}
+                          ) : (
+                            <div>
+                              <span className="text-amber-600 font-extrabold text-xs block">Unassigned</span>
+                              <span className="text-[10px] text-amber-700 font-semibold">Pending {getElapsedTime(ord.createdAt)}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-4 px-5 font-black text-emerald-700 text-xs">৳{ord.deliveryFee}</td>
+                        <td className="py-4 px-5">
+                          <div className="flex flex-col gap-0.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] w-fit ${ord.status === 'DELIVERED'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : ord.status === 'CANCELED'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                            >
+                              {ord.status}
+                            </span>
+                            {ord.status === 'DELIVERED' && ord.deliveredAt && (
+                              <span className="text-[10px] font-bold text-emerald-700 block">
+                                in: {getDeliveryDurationText(ord.createdAt, ord.deliveredAt)}
+                              </span>
+                            )}
+                            {ord.status !== 'DELIVERED' && ord.status !== 'CANCELED' && (
+                              <span className="text-[10px] font-bold text-amber-700 block">
+                                {getElapsedTime(ord.createdAt)}
+                              </span>
+                            )}
+                            {ord.needDeliveryBack && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[9px] font-black uppercase tracking-wide w-fit border border-indigo-200">
+                                🔁 Return
                               </span>
                             )}
                           </div>
-                        ) : (
-                          <div>
-                            <span className="text-amber-600 font-bold text-[11px] block">Unassigned</span>
-                            <span className="text-[10px] text-amber-700 font-semibold">Pending {getElapsedTime(ord.createdAt)}</span>
+                        </td>
+                        <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              onClick={() => setAssignHelperOrder(ord)}
+                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                            >
+                              Assign Helper
+                            </button>
+                            <button
+                              onClick={() => setSelectedOrderId(ord.id)}
+                              className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
+                            >
+                              Details
+                            </button>
                           </div>
-                        )}
-                      </td>
-                      <td className="py-4 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
-                      <td className="py-4 px-5">
-                        <div className="flex flex-col gap-1">
-                          <span
-                            className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] w-fit ${ord.status === 'DELIVERED'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : ord.status === 'CANCELED'
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
-                          >
-                            {ord.status}
-                          </span>
-                          {ord.needDeliveryBack && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[9px] font-black uppercase tracking-wide w-fit border border-indigo-200">
-                              🔁 Return
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex justify-end space-x-2">
-                          <button
-                            onClick={() => setAssignHelperOrder(ord)}
-                            className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                          >
-                            Assign Helper
-                          </button>
-                          <button
-                            onClick={() => setSelectedOrderId(ord.id)}
-                            className="py-1.5 px-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-extrabold text-xs transition-all"
-                          >
-                            Details
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -2726,7 +2841,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
         const processed = getProcessedUsersList();
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
+        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
+        const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
@@ -2971,7 +3088,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 3: CUSTOMERS STATS TAB --- */}
       {activeTab === 'CUSTOMERS' && isTabAllowed('CUSTOMERS') && (() => {
         const processed = getProcessedCustomers();
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
+        const hasCustomersFilter = Boolean(customersAppliedSearchQuery.trim());
+        const overrideCustomersCount = (serverUsers === null && !hasCustomersFilter && exactCustomersCount !== null) ? exactCustomersCount : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideCustomersCount);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
@@ -3392,7 +3511,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const { totalPages, paginatedItems, totalItems } = paginateList(filtered);
+        const hasWdFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL');
+        const overrideWdCount = (serverWithdrawals === null && !hasWdFilter && exactWithdrawalsCount !== null) ? exactWithdrawalsCount : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(filtered, undefined, undefined, overrideWdCount);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
@@ -4754,7 +4875,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filteredShops.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops);
+        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim());
+        const overrideShopsCount = (serverShops === null && !hasShopsFilter && exactShopsCount !== null) ? exactShopsCount : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops, undefined, undefined, overrideShopsCount);
 
         return (
           <div className="space-y-4">
@@ -5379,7 +5502,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filteredFeedbacks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks);
+        const hasFeedbackFilter = Boolean(feedbackAppliedSearchQuery.trim());
+        const overrideFeedbacksCount = (serverFeedbacks === null && !hasFeedbackFilter && exactFeedbacksCount !== null) ? exactFeedbacksCount : undefined;
+        const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks, undefined, undefined, overrideFeedbacksCount);
 
         return (
           <div className="space-y-6">

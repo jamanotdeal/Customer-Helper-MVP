@@ -371,7 +371,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   )}
                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white text-[10px] font-bold flex items-center space-x-1">
                     <Clock className="w-3 h-3 text-purple-300" />
-                    <span>{isDone ? `Delivered in: ${durationText}` : `Elapsed: ${durationText}`}</span>
+                    <span>{order.status === 'DELIVERED' && order.deliveredAt ? `delivered in: ${getDeliveryDurationText(order.createdAt, order.deliveredAt)}` : `Running: ${getElapsedTime(order.createdAt)}`}</span>
                   </span>
                 </div>
                 <p className="text-xs text-purple-200 font-medium mt-0.5">
@@ -466,7 +466,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     {getOrderAcceptanceDurationText(order) && (
                       <div className="mt-2 text-[11px] font-extrabold text-indigo-900 bg-indigo-100/80 px-3 py-1.5 rounded-xl border border-indigo-200 flex items-center space-x-1.5">
                         <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Order Accepted in: <strong className="text-indigo-950 font-black">{getOrderAcceptanceDurationText(order)}</strong> after creation</span>
+                        <span>Accepted in: <strong className="text-indigo-950 font-black">{getOrderAcceptanceDurationText(order)}</strong> after creation</span>
                       </div>
                     )}
                   </div>
