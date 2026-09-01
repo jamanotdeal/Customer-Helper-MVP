@@ -145,27 +145,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const applyProfile = (profile: UserProfile, savedMode: ActiveMode) => {
     setUser(profile);
-    if (profile.isAdmin) {
+    if (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(profile.email)) {
       setActiveModeState('admin');
       saveActiveMode('admin');
-    } else if (profile.isStoreApproved) {
+    } else if (profile.isStoreApproved || profile.role === 'store') {
       // Approved stores are always locked into store mode
       setActiveModeState('store');
       saveActiveMode('store');
+    } else if (profile.isHelper && profile.helperType === 'dedicated') {
+      // Dedicated helper type users get helper view as primary automatically on login/load
+      setActiveModeState('helper');
+      saveActiveMode('helper');
     } else {
       let targetMode: ActiveMode;
-      if (profile.isHelper && profile.helperType === 'dedicated') {
-        const storedMode = typeof window !== 'undefined' ? localStorage.getItem('jamanot_last_active_mode') : null;
-        if (storedMode === 'customer') {
-          targetMode = 'customer';
-        } else if (storedMode === 'helper') {
-          targetMode = 'helper';
-        } else {
-          targetMode = 'helper';
-        }
-      } else {
-        targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
-      }
+      targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
       setActiveModeState(targetMode);
       saveActiveMode(targetMode);
     }
@@ -212,11 +205,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = fbUser.uid;
         // Initialize role-scoped Firestore listeners (replaces the old 12-blanket-listeners approach)
-        const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = isUserAdminEmail(fbUser.email)
+        const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
           ? 'admin'
-          : (profile.isStoreApproved || profile.lastActiveMode === 'store' || savedMode === 'store')
+          : (profile.isStoreApproved || profile.role === 'store' || profile.lastActiveMode === 'store' || savedMode === 'store')
           ? 'store'
-          : (profile.isHelper && (profile.lastActiveMode === 'helper' || savedMode === 'helper'))
+          : (profile.isHelper && (profile.helperType === 'dedicated' || profile.lastActiveMode === 'helper' || savedMode === 'helper'))
           ? 'helper'
           : 'customer';
         fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
