@@ -15,7 +15,6 @@ import androidx.core.app.NotificationManagerCompat;
 
 import com.jamanot.app.MainActivity;
 import com.jamanot.app.R;
-import com.jamanot.app.receiver.RestartServiceReceiver;
 
 /**
  * All notification construction lives here so the duty service, the messaging
@@ -136,13 +135,6 @@ public final class NotificationHelper {
                 c, 0, new Intent(c, MainActivity.class),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // A visible off-switch is both good manners and what Play reviewers look
-        // for on a persistent foreground service.
-        Intent stop = new Intent(c, RestartServiceReceiver.class)
-                .setAction(RestartServiceReceiver.ACTION_STOP_DUTY);
-        PendingIntent stopPi = PendingIntent.getBroadcast(
-                c, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
         // A customer is not "on duty" — they are just waiting on their own order,
         // so the persistent notification says that instead.
         boolean customer = Prefs.isCustomerRole(c);
@@ -153,8 +145,7 @@ public final class NotificationHelper {
                 .setContentTitle(c.getString(customer ? R.string.duty_title_customer : R.string.duty_title))
                 .setContentText(c.getString(customer ? R.string.duty_body_customer : R.string.duty_body))
                 .setContentIntent(open)
-                .addAction(0, c.getString(R.string.duty_action_open), open)
-                .addAction(0, c.getString(R.string.duty_action_stop), stopPi)
+                .addAction(0, c.getString(R.string.duty_action_view), open)
                 .setOngoing(true)
                 .setSilent(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)

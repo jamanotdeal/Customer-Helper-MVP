@@ -24,6 +24,7 @@ import {
 } from '@/lib/native';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
+import { getReadiness, requestStep, openSettings, STEP_COPY, type PermissionStep } from '@/lib/permissions';
 
 import { Order } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
@@ -169,40 +170,115 @@ export default function PageClient() {
     }
 
     if (user) {
-      const alreadyGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
-      const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
-
-      if (!alreadyGranted && !alreadyAsked) {
-        requestNativePushPermission().then((granted) => {
-          if (!granted) {
-            const p = fallbackStore.pricingSettings;
-            showPermissionModal({
-              permissionType: 'notification',
-              title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
-              message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
-              onAllow: async () => { 
-                const res = await requestNativePushPermission(); 
-                if (typeof localStorage !== 'undefined') {
-                  localStorage.setItem('notification_permission_prompted', 'true');
-                }
-                return res; 
-              },
-              allowText: 'Allow Notification',
-            }).then(() => {
-              if (typeof localStorage !== 'undefined') {
-                localStorage.setItem('notification_permission_prompted', 'true');
-              }
-            });
-          } else {
-            if (typeof localStorage !== 'undefined') {
-              localStorage.setItem('notification_permission_prompted', 'true');
-            }
-          }
-        });
-      }
+      runPermissionLadder();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  // Sequentially prompts every missing permission via popup. Required steps
+  // (notifications, location) loop until granted; optional steps ask once and
+  // remember the dismissal so the user isn't nagged on every launch.
+  const runPermissionLadder = async () => {
+    if (!isNativeApp()) {
+      // Browser fallback: keep only the notification prompt, since the OS-level
+      // permissions below don't apply.
+      if (typeof window === 'undefined' || !('Notification' in window)) return;
+      if (Notification.permission === 'granted') return;
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true') return;
+
+      const p = fallbackStore.pricingSettings;
+      await showPermissionModal({
+        permissionType: 'notification',
+        title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+        message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+        onAllow: () => requestNativePushPermission(),
+        allowText: 'Allow Notification',
+      });
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('notification_permission_prompted', 'true');
+      }
+      return;
+    }
+
+    const REQUIRED: PermissionStep[] = ['notifications', 'location'];
+    const OPTIONAL: PermissionStep[] = ['battery', 'overlay', 'autostart'];
+    const skipKey = (step: PermissionStep) => `permission_skipped_${step}`;
+    const p = fallbackStore.pricingSettings;
+
+    const modalTypeFor = (step: PermissionStep): 'notification' | 'location' | 'overlay' | 'battery' | 'autostart' =>
+      step === 'notifications' ? 'notification' : step === 'autostart' ? 'battery' : step;
+
+    const copyFor = (step: PermissionStep) => {
+      const base = STEP_COPY[step];
+      if (step === 'notifications') {
+        return {
+          title: p.notificationPermissionModalTitle || base.title,
+          message: p.notificationPermissionModalBody || base.message,
+          action: base.action,
+        };
+      }
+      if (step === 'location') {
+        return {
+          title: p.locationPermissionModalTitle || base.title,
+          message: p.locationPermissionModalBody || base.message,
+          action: base.action,
+        };
+      }
+      return base;
+    };
+
+    // Required steps: loop until granted so the user cannot proceed with a
+    // missing critical permission. Blocked (permanently-denied) states redirect
+    // to the app settings screen.
+    for (const step of REQUIRED) {
+      let granted = false;
+      while (!granted) {
+        const report = await getReadiness();
+        const stillMissing = report.missingCritical.includes(step);
+        if (!stillMissing) { granted = true; break; }
+
+        const blocked =
+          (step === 'notifications' && report.status?.notifications === 'blocked') ||
+          (step === 'location' && report.status?.location === 'blocked');
+        const copy = copyFor(step);
+
+        await showPermissionModal({
+          permissionType: modalTypeFor(step),
+          title: copy.title,
+          message: blocked
+            ? `${copy.message}\n\nআগে বন্ধ করে দেওয়া হয়েছে — সেটিংস থেকে চালু করুন।`
+            : copy.message,
+          allowText: blocked ? 'সেটিংসে যান' : copy.action,
+          onAllow: async () => (blocked ? (await openSettings(), false) : requestStep(step)),
+        });
+
+        const after = await getReadiness();
+        granted = !after.missingCritical.includes(step);
+      }
+    }
+
+    // Optional steps: ask once. If the user closes the modal we remember it
+    // and don't re-prompt on subsequent launches.
+    for (const step of OPTIONAL) {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem(skipKey(step)) === 'true') continue;
+
+      const report = await getReadiness();
+      if (!report.missingOptional.includes(step)) continue;
+
+      const copy = copyFor(step);
+      const accepted = await showPermissionModal({
+        permissionType: modalTypeFor(step),
+        title: copy.title,
+        message: copy.message,
+        allowText: copy.action,
+        onAllow: () => requestStep(step),
+      });
+
+      if (typeof localStorage !== 'undefined' && !accepted) {
+        localStorage.setItem(skipKey(step), 'true');
+      }
+    }
+  };
 
   // ─── Native order alerts ──────────────────────────────────────────────────
   // Two delivery routes, covering a real cold-start race: Java can launch the
