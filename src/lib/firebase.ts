@@ -177,7 +177,10 @@ export async function saveCustomerSavedAddressToFirestore(uid: string, address: 
 }
 
 /**
- * No-op. Kept because callers exist; the send path it used is gone.
+ * No-op on the client, and it must stay that way. Sending is done server-side by
+ * the `pushOnNotificationCreate` Cloud Function (functions/index.js), which
+ * triggers on every `notifications/{id}` create, resolves the target to device
+ * tokens and calls FCM HTTP v1 with credentials that never leave the server.
  *
  * This used to POST to https://fcm.googleapis.com/fcm/send — Google's legacy FCM
  * endpoint, decommissioned in June 2024 — authenticated with a server key read
@@ -190,15 +193,14 @@ export async function saveCustomerSavedAddressToFirestore(uid: string, address: 
  *     An FCM server key is a full-project credential, so shipping one would let
  *     any user push notifications to every other user.
  *
- * Background delivery is instead handled natively: DutyForegroundService holds
- * its own Firestore listener in Java and fires the alert itself, with no push
- * round-trip and no server. See android/.../service/DutyForegroundService.java.
+ * Two paths deliver instead, and they de-duplicate against each other through
+ * Prefs.markSeen(notificationId):
  *
- * TODO(push): to add a true server-side push channel (needed for iOS, which has
- * no equivalent to the Android duty service), deploy a Cloud Function on
- * onDocumentCreated('notifications/{id}') that resolves the pseudo-target to FCM
- * tokens and calls the HTTP v1 API. JamanotMessagingService.java is already
- * wired to receive it.
+ *   1. DutyForegroundService holds its own Firestore listener in Java — no push
+ *      round-trip, and it works with no server involved.
+ *   2. The pushOnNotificationCreate Cloud Function sends an FCM data message.
+ *      This is the one that survives an OEM battery manager freezing the app,
+ *      because Play Services delivers it. Received by JamanotMessagingService.
  */
 export async function sendFcmPushToTokens(
   tokens: string[],

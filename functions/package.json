@@ -1,0 +1,19 @@
+{
+  "name": "jamanot-functions",
+  "description": "Server-side FCM sender for Jamanot notifications",
+  "main": "index.js",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "logs": "firebase functions:log --only pushOnNotificationCreate",
+    "deploy": "firebase deploy --only functions",
+    "test": "node test/logic.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.1.0"
+  }
+}

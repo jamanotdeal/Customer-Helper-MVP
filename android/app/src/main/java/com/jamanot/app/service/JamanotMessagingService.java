@@ -25,13 +25,13 @@ import java.util.Map;
  * delivered by Play Services, which those managers do not touch, so a push can
  * resurrect the app when nothing else would.
  *
- * <p><b>Nothing currently sends these.</b> {@code sendFcmPushToTokens} in
- * src/lib/firebase.ts targets Google's legacy endpoint, decommissioned in 2024,
- * and a replacement needs server-side credentials. Shipping a service-account
- * key inside the APK is not an option — it is extractable and would let anyone
- * push to every user. The supported route is a Cloud Function on
- * {@code onDocumentCreated('notifications/{id}')} calling the FCM HTTP v1 API;
- * this receiver is ready for it whenever that is added.
+ * <p>These are sent by the {@code pushOnNotificationCreate} Cloud Function in
+ * functions/index.js, which triggers on {@code notifications/{id}} creates and
+ * calls the FCM HTTP v1 API. It stays server-side deliberately: a service
+ * account shipped inside the APK is extractable and would let anyone push to
+ * every user. The function sends <b>data-only</b> messages, so this method runs
+ * for every push and the targeting, de-duplication and channel choice below
+ * stay in the app's hands.
  */
 public class JamanotMessagingService extends FirebaseMessagingService {
 
