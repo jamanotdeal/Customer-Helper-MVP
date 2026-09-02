@@ -64,10 +64,23 @@ public final class Prefs {
 
     public static String activeMode(Context c) { return sp(c).getString(K_ACTIVE_MODE, "customer"); }
 
-    /** True only for the two roles that receive new-order alerts. */
+    /**
+     * Roles whose device needs a background Firestore listener.
+     *
+     * <p>Customers are included because there is no server-side push in this
+     * project: without a service of their own, a customer only ever sees an
+     * order update while the app is open in the foreground. The web layer keeps
+     * onDuty false for customers with no active order, so the service is not
+     * running for everyone all the time — see pushNativeState in AuthContext.
+     */
     public static boolean isDutyRole(Context c) {
         String r = role(c);
-        return "helper".equals(r) || "store".equals(r);
+        return "helper".equals(r) || "store".equals(r) || "customer".equals(r);
+    }
+
+    /** Customers get a quieter, differently-worded persistent notification. */
+    public static boolean isCustomerRole(Context c) {
+        return "customer".equals(role(c));
     }
 
     // ── Duty state ──────────────────────────────────────────────────────────

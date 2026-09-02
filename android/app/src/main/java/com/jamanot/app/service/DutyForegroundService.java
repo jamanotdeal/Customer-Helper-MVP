@@ -18,7 +18,9 @@ import androidx.core.content.ContextCompat;
 
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldPath;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.MetadataChanges;
 import com.google.firebase.firestore.Query;
@@ -59,6 +61,9 @@ public class DutyForegroundService extends Service {
 
     /** Same window the web helper listener uses (firebase.ts:1006). */
     private static final int NOTIF_LIMIT = 60;
+
+    /** Window used when the createdAt index is missing — see attachNotifListener. */
+    private static final int NOTIF_LIMIT_FALLBACK = 200;
 
     /** Restart delay after an OEM task-killer or onTaskRemoved. */
     private static final long RESTART_DELAY_MS = 5000L;
@@ -173,19 +178,11 @@ public class DutyForegroundService extends Service {
         Log.i(TAG, "Listening on notifications for targets=" + targets);
 
         // Deliberately the same query shape as the web listener, so behaviour
-        // cannot drift between the two. whereIn on a single field needs no
-        // composite index, and 4 values is well under the 10-value cap.
-        notifReg = db.collection("notifications")
-                .whereIn("userId", targets)
-                .limit(NOTIF_LIMIT)
-                .addSnapshotListener(MetadataChanges.EXCLUDE, (snap, err) -> {
-                    if (err != null) {
-                        Log.w(TAG, "notifications listener: " + err.getMessage());
-                        return;
-                    }
-                    if (snap == null) return;
-                    onNotifications(snap.getDocumentChanges(), snap.getMetadata().isFromCache());
-                });
+        // cannot drift between the two — ordering included. A limit() with no
+        // orderBy is not "the newest N": Firestore returns the first N in
+        // document-id order, i.e. the OLDEST, which starved this listener of
+        // every notification created after the window filled up.
+        attachNotifListener(targets, true);
 
         // Keeps the geofence radius live, so changing it in the admin panel takes
         // effect without an app update.
@@ -196,6 +193,47 @@ public class DutyForegroundService extends Service {
                     if (v instanceof Number) {
                         Prefs.setRadiusKm(this, ((Number) v).floatValue());
                     }
+                });
+    }
+
+    /**
+     * @param ordered order by {@code createdAt desc}, which needs the composite
+     *                index in firestore.indexes.json. When that index has not
+     *                been deployed the query fails with FAILED_PRECONDITION, so
+     *                we retry once ordered by document id — ids are
+     *                {@code notif-<epoch ms>...}, so recent documents still land
+     *                in the window rather than the helper getting nothing.
+     */
+    private void attachNotifListener(List<String> targets, boolean ordered) {
+        Query q = db.collection("notifications").whereIn("userId", targets);
+        q = ordered
+                ? q.orderBy("createdAt", Query.Direction.DESCENDING)
+                : q.orderBy(FieldPath.documentId(), Query.Direction.DESCENDING);
+
+        // Wider window in the fallback: documents written before the web layer
+        // normalised ids to timestamp-first (`notif-ded-*`, `notif-shop-*`) sort
+        // above every `notif-<ms>` id, so a tight window could be filled by that
+        // legacy backlog alone.
+        notifReg = q.limit(ordered ? NOTIF_LIMIT : NOTIF_LIMIT_FALLBACK)
+                .addSnapshotListener(MetadataChanges.EXCLUDE, (snap, err) -> {
+                    if (err != null) {
+                        if (ordered && err.getCode() == FirebaseFirestoreException.Code.FAILED_PRECONDITION) {
+                            Log.w(TAG, "notifications index missing — retrying in document-id order. "
+                                    + "Deploy firestore.indexes.json to restore createdAt ordering.");
+                            if (notifReg != null) { notifReg.remove(); notifReg = null; }
+                            firstSnapshotHandled = false;
+                            attachNotifListener(targets, false);
+                            return;
+                        }
+                        Log.w(TAG, "notifications listener: " + err.getMessage());
+                        return;
+                    }
+                    if (snap == null) return;
+                    Log.i(TAG, "notif snapshot: size=" + snap.size()
+                            + " changes=" + snap.getDocumentChanges().size()
+                            + " fromCache=" + snap.getMetadata().isFromCache()
+                            + " ordered=" + ordered);
+                    onNotifications(snap.getDocumentChanges(), snap.getMetadata().isFromCache());
                 });
     }
 
@@ -214,18 +252,29 @@ public class DutyForegroundService extends Service {
             String type = doc.getString("type");
             Boolean read = doc.getBoolean("read");
 
-            if (!OrderMatcher.targets(this, notifUserId)) continue;
-            if (Boolean.TRUE.equals(read)) continue;
+            if (!OrderMatcher.targets(this, notifUserId)) {
+                Log.d(TAG, "skip " + id + ": not targeted (userId=" + notifUserId + ")");
+                continue;
+            }
+            if (Boolean.TRUE.equals(read)) {
+                Log.d(TAG, "skip " + id + ": already read");
+                continue;
+            }
 
             // Second guard: anything created before this service started is
             // backlog even if the de-dup set was cleared.
             if (suppress || olderThanStart(doc.getString("createdAt"))) {
+                Log.d(TAG, "skip " + id + ": backlog (suppress=" + suppress + ")");
                 Prefs.markSeen(this, id);
                 continue;
             }
 
             // Persisted de-dup, so a restart doesn't re-alert on seen items.
-            if (!Prefs.markSeen(this, id)) continue;
+            if (!Prefs.markSeen(this, id)) {
+                Log.d(TAG, "skip " + id + ": already seen");
+                continue;
+            }
+            Log.i(TAG, "alerting " + id + " type=" + type);
 
             String title = doc.getString("title");
             String body = doc.getString("body");
@@ -266,8 +315,13 @@ public class DutyForegroundService extends Service {
      * notification document carries no coordinates — only the order does.
      */
     private void handleNewOrder(String notifId, String title, String body, String orderId) {
-        if (orderId == null) {
-            dispatchAlert(notifId, title, body, null, null);
+        // The dispatch radius is a helper concept. A store being told a helper
+        // just ordered from them, or a customer being told about their own
+        // order, must never be filtered by distance — and a store account that
+        // was once a helper still carries stale coordinates in Prefs, which
+        // would otherwise silently drop its alerts.
+        if (orderId == null || !"helper".equals(Prefs.role(this))) {
+            dispatchAlert(notifId, title, body, orderId, null);
             return;
         }
 

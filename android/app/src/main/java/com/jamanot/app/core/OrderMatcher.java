@@ -46,6 +46,13 @@ public final class OrderMatcher {
             return Arrays.asList(uid, "all", "all-stores");
         }
 
+        if ("customer".equals(Prefs.role(c))) {
+            // Mirrors the customer branch. Without this a customer would be
+            // subscribed to the helper pseudo-targets and would both miss their
+            // own order updates and be woken by other people's work.
+            return Arrays.asList(uid, "all", "all-customers");
+        }
+
         // Mirrors the helper branch (firebase.ts:1005)
         String group = "dedicated".equals(Prefs.helperType(c))
                 ? "all-dedicated-helpers"

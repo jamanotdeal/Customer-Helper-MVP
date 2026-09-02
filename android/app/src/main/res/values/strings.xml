@@ -18,6 +18,8 @@
     <string name="duty_body">নতুন অর্ডারের জন্য প্রস্তুত</string>
     <string name="duty_action_open">খুলুন</string>
     <string name="duty_action_stop">ডিউটি বন্ধ</string>
+    <string name="duty_title_customer">অর্ডার আপডেট চালু</string>
+    <string name="duty_body_customer">আপনার অর্ডারের আপডেট সাথে সাথে পাবেন</string>
     <string name="duty_resume_title">ডিউটি বন্ধ হয়ে গেছে</string>
     <string name="duty_resume_body">আবার চালু করতে ট্যাপ করুন</string>
 

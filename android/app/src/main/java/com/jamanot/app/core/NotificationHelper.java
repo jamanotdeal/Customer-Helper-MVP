@@ -30,7 +30,16 @@ public final class NotificationHelper {
 
     public static final String CH_DUTY = "jamanot_duty";
     public static final String CH_ORDER = "jamanot_order_alert";
-    public static final String CH_GENERAL = "jamanot_general";
+
+    /**
+     * v2 because channels are immutable: the original {@code jamanot_general}
+     * was IMPORTANCE_DEFAULT with no vibration, so order-status updates arrived
+     * silently and without a heads-up. Raising the values in place would have
+     * done nothing on existing installs, so this is a new id and the old one is
+     * deleted in {@link #createChannels}.
+     */
+    public static final String CH_GENERAL = "jamanot_general_v2";
+    private static final String CH_GENERAL_LEGACY = "jamanot_general";
 
     public static final int ID_DUTY = 1001;
     public static final int ID_RESUME = 1002;
@@ -79,12 +88,33 @@ public final class NotificationHelper {
         }
         nm.createNotificationChannel(order);
 
-        // Everything else: status changes, admin broadcasts, customer updates.
+        // Everything else: order status changes, admin broadcasts, customer
+        // updates. HIGH with sound and vibration — a store moving an order to
+        // "ready" is time-critical for the helper waiting on it, so it has to
+        // be noticeable rather than a silent tray entry.
         NotificationChannel general = new NotificationChannel(
-                CH_GENERAL, c.getString(R.string.channel_general_name), NotificationManager.IMPORTANCE_DEFAULT);
+                CH_GENERAL, c.getString(R.string.channel_general_name), NotificationManager.IMPORTANCE_HIGH);
         general.setDescription(c.getString(R.string.channel_general_desc));
         general.setShowBadge(true);
+        general.enableVibration(true);
+        general.setVibrationPattern(new long[]{0, 300, 150, 300});
+        general.enableLights(true);
+        general.setLightColor(BRAND);
+        Uri generalSound = soundUri(c);
+        if (generalSound != null) {
+            general.setSound(generalSound, new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
+        }
         nm.createNotificationChannel(general);
+
+        // Retire the silent v1 channel so users are not left with a stale,
+        // muted duplicate in the app's notification settings.
+        try {
+            nm.deleteNotificationChannel(CH_GENERAL_LEGACY);
+        } catch (Exception ignored) {
+        }
     }
 
     /**
@@ -113,11 +143,15 @@ public final class NotificationHelper {
         PendingIntent stopPi = PendingIntent.getBroadcast(
                 c, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        // A customer is not "on duty" — they are just waiting on their own order,
+        // so the persistent notification says that instead.
+        boolean customer = Prefs.isCustomerRole(c);
+
         return new NotificationCompat.Builder(c, CH_DUTY)
                 .setSmallIcon(R.drawable.ic_stat_jamanot)
                 .setColor(BRAND)
-                .setContentTitle(c.getString(R.string.duty_title))
-                .setContentText(c.getString(R.string.duty_body))
+                .setContentTitle(c.getString(customer ? R.string.duty_title_customer : R.string.duty_title))
+                .setContentText(c.getString(customer ? R.string.duty_body_customer : R.string.duty_body))
                 .setContentIntent(open)
                 .addAction(0, c.getString(R.string.duty_action_open), open)
                 .addAction(0, c.getString(R.string.duty_action_stop), stopPi)
@@ -162,7 +196,10 @@ public final class NotificationHelper {
         safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, b.build());
     }
 
-    /** Ordinary status update — no heads-up, no custom sound. */
+    /**
+     * Status update — order progress from a store, admin broadcast, customer
+     * update. Heads-up with sound and vibration via CH_GENERAL.
+     */
     public static void postGeneral(Context c, String notifId, String title, String body, String orderId) {
         Intent open = new Intent(c, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -179,8 +216,12 @@ public final class NotificationHelper {
                 .setContentText(body)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                 .setContentIntent(pi)
+                .addAction(0, c.getString(R.string.alert_view), pi)
                 .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .build();
 
         safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, n);

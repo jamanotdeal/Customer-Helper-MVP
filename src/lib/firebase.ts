@@ -14,6 +14,7 @@ import {
   orderBy,
   getDocs,
   limit,
+  documentId,
   arrayUnion,
   writeBatch,
 } from 'firebase/firestore';
@@ -213,6 +214,33 @@ export async function sendFcmPushToTokens(
       'Android delivers this natively via the duty service.'
     );
   }
+}
+
+/**
+ * Normalizes a notification id to `notif-<13-digit epoch ms>-<suffix>`.
+ *
+ * Document ids are the fallback ordering key for the notification listeners (see
+ * _listenNotifications), and that only works if lexicographic order matches
+ * chronological order. Fixed-width milliseconds first guarantees it; anything
+ * already in that shape is returned untouched.
+ */
+function canonicalNotifId(id: string, createdAt?: string): string {
+  if (/^notif-\d{13}/.test(id)) return id;
+
+  let ms = createdAt ? new Date(createdAt).getTime() : NaN;
+  if (!Number.isFinite(ms)) {
+    // Legacy shapes such as `notif-shop-status-1788327245562` already carry one.
+    const embedded = id.match(/(\d{13})/);
+    ms = embedded ? Number(embedded[1]) : Date.now();
+  }
+
+  const suffix = id
+    .replace(/^(admin-)?notif-/, '')
+    .replace(/\d{13,}/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return suffix ? `notif-${ms}-${suffix}` : `notif-${ms}`;
 }
 
 // Helper to recursively strip undefined properties before saving to Firestore
@@ -657,6 +685,68 @@ class FallbackStore {
   //   2. Fires browser popups only for genuinely NEW, unread, targeted notifications
   //      Fix 2: _knownNotifIds is now persisted to sessionStorage so page refreshes
   //             don't re-fire all previously seen notifications.
+  /**
+   * Subscribes to this device's slice of the `notifications` collection.
+   *
+   * The ordering is the whole point. A `limit()` without an `orderBy` does NOT
+   * mean "the newest N" — Firestore returns the first N in document-id order,
+   * which for this collection means the OLDEST documents. Every notification
+   * created after that window filled up was invisible to the listener, so
+   * status updates simply never arrived on any device.
+   *
+   * `createdAt desc` needs the composite index in firestore.indexes.json. Until
+   * that is deployed the query fails with `failed-precondition`, so fall back to
+   * document-id order, which still puts recent documents in the window (ids are
+   * `notif-<epoch ms>...`) rather than leaving the user with nothing.
+   */
+  private _listenNotifications(targets: string[], userId: string, max: number, label: string): () => void {
+    let active: (() => void) | null = null;
+    let disposed = false;
+
+    const attach = (orderBySpec: 'createdAt' | 'id') => {
+      const q =
+        orderBySpec === 'createdAt'
+          ? query(
+              collection(db, 'notifications'),
+              where('userId', 'in', targets),
+              orderBy('createdAt', 'desc'),
+              limit(max)
+            )
+          : query(
+              collection(db, 'notifications'),
+              where('userId', 'in', targets),
+              orderBy(documentId(), 'desc'),
+              // Wider window in the fallback: documents written before
+              // canonicalNotifId() existed (`notif-ded-*`, `notif-shop-*`) sort
+              // above every timestamp-first id, so a tight window could still be
+              // filled entirely by that legacy backlog.
+              limit(Math.max(max, 200))
+            );
+
+      active = onSnapshot(
+        q,
+        (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+        (err: any) => {
+          if (orderBySpec === 'createdAt' && err?.code === 'failed-precondition' && !disposed) {
+            console.warn(
+              `[Firestore] ${label} notifications: composite index (userId, createdAt desc) missing — ` +
+                'falling back to document-id order. Deploy firestore.indexes.json to restore exact ordering.'
+            );
+            attach('id');
+            return;
+          }
+          console.warn(`[Firestore] ${label} notifications sync note:`, err);
+        }
+      );
+    };
+
+    attach('createdAt');
+    return () => {
+      disposed = true;
+      if (active) active();
+    };
+  }
+
   private _handleNotificationSnapshot(snapshot: any, userId: string) {
     const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers']);
     // Fix 4: Max notifications to store per user in memory.
@@ -948,18 +1038,8 @@ class FallbackStore {
         )
       );
 
-      // Notifications for store owner + all-stores (realtime)
-      unsubs.push(
-        onSnapshot(
-          query(
-            collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-stores']),
-            limit(50)
-          ),
-          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
-          (err) => console.warn('[Firestore] Store notifications sync note:', err)
-        )
-      );
+      // Notifications for store owner + all-stores (realtime, newest first)
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-stores'], userId, 50, 'Store'));
 
       // Store owner's wallet document (realtime)
       unsubs.push(
@@ -999,18 +1079,8 @@ class FallbackStore {
         )
       );
 
-      // Own notifications + broadcast ones (realtime)
-      unsubs.push(
-        onSnapshot(
-          query(
-            collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-customers']),
-            limit(50)
-          ),
-          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
-          (err) => console.warn('[Firestore] Customer notifications sync note:', err)
-        )
-      );
+      // Own notifications + broadcast ones (realtime, newest first)
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-customers'], userId, 50, 'Customer'));
 
       // Own withdrawals (realtime)
       unsubs.push(
@@ -1097,18 +1167,8 @@ class FallbackStore {
         )
       );
 
-      // Own notifications + all-helpers broadcast + helperType-specific (realtime)
-      unsubs.push(
-        onSnapshot(
-          query(
-            collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-helpers', helperGroup]),
-            limit(60)
-          ),
-          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
-          (err) => console.warn('[Firestore] Helper notifications sync note:', err)
-        )
-      );
+      // Own notifications + all-helpers broadcast + helperType-specific (realtime, newest first)
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-helpers', helperGroup], userId, 60, 'Helper'));
 
       // Helper's own wallet document (realtime, needed for earnings display)
       unsubs.push(
@@ -1263,10 +1323,11 @@ class FallbackStore {
         )
       );
 
-      // Notifications (up to 200, realtime)
+      // Notifications (200 most recent, realtime). No userId filter here, so a
+      // plain orderBy needs no composite index.
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'notifications'), limit(200)),
+          query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(200)),
           (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
           (err) => console.warn('[Firestore] Admin notifications sync note:', err)
         )
@@ -1455,6 +1516,37 @@ class FallbackStore {
     if (!changed) return null;
     await this.saveUser(next);
     return next;
+  }
+
+  /**
+   * Resolves the user id to notify for a shop.
+   *
+   * The local `shops` cache is a 30-minute snapshot, so a helper ordering from a
+   * store the cache missed would silently notify nobody. Falls back to a direct
+   * read, and then to the `store-<uid>` id convention that approveStoreApp
+   * creates shops with — some older shop documents predate `ownerUserId` and
+   * still have no owner field at all.
+   */
+  public async resolveShopOwnerId(shopId: string): Promise<string | null> {
+    const cached = this.shops.get(shopId);
+    if (cached?.ownerUserId) return cached.ownerUserId;
+
+    try {
+      const snap = await getDoc(doc(db, 'shops', shopId));
+      if (snap.exists()) {
+        const shop = snap.data() as Shop;
+        this.shops.set(shopId, shop);
+        if (shop.ownerUserId) return shop.ownerUserId;
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] resolveShopOwnerId note:', e?.message || e);
+    }
+
+    if (shopId.startsWith('store-')) {
+      const uid = shopId.slice('store-'.length);
+      return uid || null;
+    }
+    return null; // Helper-added shop with no owner account — nobody to notify.
   }
 
   // Admin listeners only cache a limited slice of the `users` collection, so a
@@ -1664,12 +1756,12 @@ class FallbackStore {
       // Notify stores/shops involved in this order when completed (Requirement 4)
       if (updated.status === 'DELIVERED') {
         const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
-        relatedShopOrders.forEach((so) => {
-          const shop = this.shops.get(so.shopId);
-          if (shop?.ownerUserId) {
+        relatedShopOrders.forEach(async (so) => {
+          const shopOwnerId = await this.resolveShopOwnerId(so.shopId);
+          if (shopOwnerId) {
             this.addNotification({
               id: `notif-store-comp-${Date.now()}-${so.id}`,
-              userId: shop.ownerUserId,
+              userId: shopOwnerId,
               title: 'অর্ডার সম্পন্ন হয়েছে!',
               body: `আপনার স্টোরের অর্ডার #${updated.id.slice(-6).toUpperCase()} সফলভাবে সম্পন্ন এবং ডেলিভারি হয়েছে।`,
               orderId: updated.id,
@@ -1871,12 +1963,12 @@ class FallbackStore {
   public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
     this.shopOrders.set(shopOrder.id, shopOrder);
     this.notify();
-    // Notify the store owner if we know their userId
-    const shop = this.shops.get(shopOrder.shopId);
-    if (shop?.ownerUserId) {
+    // Notify the store owner if this shop belongs to one
+    const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
+    if (ownerUserId) {
       this.addNotification({
         id: `notif-shop-order-${Date.now()}`,
-        userId: shop.ownerUserId,
+        userId: ownerUserId,
         title: `নতুন অর্ডার: ${shopOrder.helperName}`,
         body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
         orderId: shopOrder.parentOrderId,
@@ -1914,11 +2006,33 @@ class FallbackStore {
         HANDOVER: 'হস্তান্তর',
         CANCELED: 'বাতিল',
       };
+      // Spelled out per status: the helper reads this on a lock screen and needs
+      // to know what to do next without opening the app.
+      const statusBodies: Record<ShopOrderStatus, string> = {
+        PENDING: 'দোকান অর্ডারটি আবার অপেক্ষমাণ অবস্থায় রেখেছে।',
+        ACCEPTED: 'দোকান আপনার অর্ডারটি গ্রহণ করেছে।',
+        PREPARING: 'দোকান আপনার অর্ডার প্রস্তুত করছে।',
+        READY: 'অর্ডার প্রস্তুত — এখন সংগ্রহ করতে পারেন।',
+        HANDOVER: 'অর্ডার আপনাকে হস্তান্তর করা হয়েছে।',
+        CANCELED: 'দুঃখিত, দোকান অর্ডারটি বাতিল করেছে।',
+      };
+      const itemText = (updated.requestText || '').trim().substring(0, 60);
+      const priceText =
+        typeof updated.price === 'number' && updated.price > 0 ? `মূল্য: ৳${updated.price}` : '';
+      const statusBody = [
+        statusBodies[updated.status],
+        itemText ? `“${itemText}”` : '',
+        priceText,
+        (updated.note || '').trim(),
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
       this.addNotification({
         id: `notif-shop-status-${Date.now()}`,
         userId: updated.helperId,
         title: `${updated.shopName}: অর্ডার ${statusLabels[updated.status]}`,
-        body: updated.note || `আপনার অর্ডারের স্ট্যাটাস আপডেট হয়েছে।`,
+        body: statusBody,
         orderId: updated.parentOrderId,
         read: false,
         createdAt: new Date().toISOString(),
@@ -1933,7 +2047,12 @@ class FallbackStore {
         id: `notif-shop-price-${Date.now()}`,
         userId: updated.helperId,
         title: `${updated.shopName}: মূল্য নির্ধারণ করা হয়েছে`,
-        body: updated.price !== undefined ? `দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন: ৳${updated.price}` : `দোকানদার মূল্য পরিবর্তন করেছেন।`,
+        body:
+          updated.price !== undefined
+            ? [`দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন: ৳${updated.price}`, (updated.requestText || '').trim().substring(0, 60)]
+                .filter(Boolean)
+                .join(' · ')
+            : `দোকানদার মূল্য পরিবর্তন করেছেন।`,
         orderId: updated.parentOrderId,
         read: false,
         createdAt: new Date().toISOString(),
@@ -1944,11 +2063,14 @@ class FallbackStore {
 
     // 3. Notify store owner when helper edits request text or price
     if (actorRole === 'helper') {
-      const shop = this.shops.get(updated.shopId);
-      if (shop?.ownerUserId && (updated.requestText !== existing.requestText || updated.price !== existing.price)) {
+      const editOwnerId =
+        updated.requestText !== existing.requestText || updated.price !== existing.price
+          ? await this.resolveShopOwnerId(updated.shopId)
+          : null;
+      if (editOwnerId) {
         this.addNotification({
           id: `notif-shop-order-edit-${Date.now()}`,
-          userId: shop.ownerUserId,
+          userId: editOwnerId,
           title: `অর্ডার এডিট করা হয়েছে: ${updated.helperName}`,
           body: `হেলপার অর্ডার এডিট করেছেন: ${updated.requestText.substring(0, 80)}${updated.price !== existing.price ? ` (নতুন মূল্য: ৳${updated.price || 0})` : ''}`,
           orderId: updated.parentOrderId,
@@ -1974,11 +2096,11 @@ class FallbackStore {
     this.notify();
 
     if (existing) {
-      const shop = this.shops.get(existing.shopId);
-      if (shop?.ownerUserId) {
+      const deleteOwnerId = await this.resolveShopOwnerId(existing.shopId);
+      if (deleteOwnerId) {
         this.addNotification({
           id: `notif-shop-order-delete-${Date.now()}`,
-          userId: shop.ownerUserId,
+          userId: deleteOwnerId,
           title: `অর্ডার মুছে ফেলা হয়েছে: ${existing.helperName}`,
           body: `হেলপার অর্ডারটি মুছে ফেলেছেন: ${existing.requestText.substring(0, 80)}`,
           orderId: existing.parentOrderId,
@@ -2411,6 +2533,13 @@ class FallbackStore {
   }
 
   public async addNotification(notif: AppNotification) {
+    // The id doubles as the sort key whenever the listener falls back to
+    // document-id order, so it has to start with a fixed-width timestamp.
+    // Ids like `notif-shop-status-<ms>` sort above every `notif-<ms>` id
+    // (letters beat digits), which would let one family crowd the rest out of
+    // the window. Callers keep their descriptive suffix — it just moves after
+    // the timestamp.
+    notif = { ...notif, id: canonicalNotifId(notif.id, notif.createdAt) };
     const target = notif.userId;
     const radiusKm = this.pricingSettings.helperRadiusKm || 3.5;
     const targetOrder = notif.orderId ? this.orders.get(notif.orderId) : undefined;

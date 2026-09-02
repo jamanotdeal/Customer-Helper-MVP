@@ -76,6 +76,29 @@ const checkEduVerified = (email?: string | null): boolean => {
  * must therefore be called anywhere role, mode or location changes — not just at
  * login. No-op on web.
  */
+const ACTIVE_ORDER_STATUSES = [
+  'PENDING',
+  'ACCEPTED',
+  'PURCHASED_EXECUTED',
+  'ON_THE_WAY',
+  'ARRIVED',
+  'SCHEDULED',
+];
+
+/**
+ * Whether this customer has an order in flight.
+ *
+ * There is no server-side push in this project, so a customer with the app
+ * closed can only be reached by a background listener of their own. Running one
+ * permanently for every customer would be a persistent notification for no
+ * reason, so it is tied to actually having an order to hear about.
+ */
+export function customerHasActiveOrder(uid: string): boolean {
+  return Array.from(fallbackStore.orders.values()).some(
+    (o) => o.customerId === uid && ACTIVE_ORDER_STATUSES.includes(o.status as string)
+  );
+}
+
 async function pushNativeState(
   profile: UserProfile | null,
   listenerRole: 'customer' | 'helper' | 'admin' | 'store'
@@ -88,7 +111,10 @@ async function pushNativeState(
     return;
   }
 
-  const onDuty = listenerRole === 'helper' || listenerRole === 'store';
+  const onDuty =
+    listenerRole === 'helper' ||
+    listenerRole === 'store' ||
+    (listenerRole === 'customer' && customerHasActiveOrder(profile.uid));
 
   await syncNativeUserState({
     uid: profile.uid,
@@ -104,7 +130,7 @@ async function pushNativeState(
     radiusKm: fallbackStore.pricingSettings?.helperRadiusKm ?? 3.5,
   });
 
-  // Customer and Admin never run the service — they get notifications only.
+  // Admins never run the service; customers only while an order is in flight.
   if (onDuty) {
     await startDutyService();
   } else {
@@ -325,6 +351,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Starts the background listener when a customer's order goes in flight and
+  // stops it when the last one finishes. Without this a customer is only
+  // reachable while the app is open — there is no server-side push to fall back
+  // on. Helpers and stores are handled at login/mode-switch instead: they are on
+  // duty for as long as they hold that role.
+  useEffect(() => {
+    if (!user || !isNativeApp()) return;
+    if (activeMode !== 'customer' || user.isAdmin) return;
+
+    let lastState: boolean | null = null;
+    const sync = () => {
+      const active = customerHasActiveOrder(user.uid);
+      if (active === lastState) return; // Only act on a transition
+      lastState = active;
+      pushNativeState(user, 'customer').catch(() => {});
+    };
+
+    sync();
+    const unsub = fallbackStore.subscribe(sync);
+    return () => unsub();
+  }, [user, activeMode]);
 
   const enableCommuterHelperWithLocation = async (): Promise<boolean> => {
     if (!user) return false;
