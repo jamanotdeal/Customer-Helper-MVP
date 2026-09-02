@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { fallbackStore } from '@/lib/firebase';
 import { AppNotification } from '@/types';
-import { X, Bell, CheckCheck } from 'lucide-react';
+import { X, Bell } from 'lucide-react';
 
 interface NotificationDrawerProps {
   onClose: () => void;
@@ -15,6 +15,11 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [visibleCount, setVisibleCount] = useState(10);
+
+  // The ids that were unread when the drawer opened. Kept in a ref so the "new"
+  // highlight survives the mark-as-read below — the user still sees what arrived
+  // since last time, but nothing is left to re-announce on the next launch.
+  const wasUnread = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const syncNotifs = () => {
@@ -31,10 +36,23 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
     };
   }, [user]);
 
-  const markAllRead = () => {
+  // Opening the drawer IS seeing them. Marking read here is what stops an
+  // already-viewed notification from being announced again on the next app
+  // launch — the read state is persisted per device, so it survives a restart.
+  useEffect(() => {
     if (!user) return;
-    fallbackStore.markNotificationsRead(user.uid);
-  };
+    const uid = user.uid;
+    const markSeen = () => {
+      (fallbackStore.notifications.get(uid) || []).forEach((n) => {
+        if (!n.read) wasUnread.current.add(n.id);
+      });
+      fallbackStore.markNotificationsRead(uid);
+    };
+    markSeen();
+    // Again on close, so anything that arrived while the drawer was open —
+    // including the first snapshot, if it landed after mount — is covered too.
+    return markSeen;
+  }, [user]);
 
   const visibleNotifications = notifications.slice(0, visibleCount);
   const hasMore = notifications.length > visibleCount;
@@ -62,15 +80,7 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
             </div>
 
             <div className="flex items-center space-x-1">
-              {notifications.some((n) => !n.read) && (
-                <button
-                  onClick={markAllRead}
-                  className="p-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-xl flex items-center space-x-1"
-                >
-                  <CheckCheck className="w-4 h-4" />
-                  <span>Read all</span>
-                </button>
-              )}
+              {/* No "Read all" button: opening the drawer marks everything read. */}
               <button
                 onClick={onClose}
                 className="p-2 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200"
@@ -91,13 +101,14 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
                 <div
                   key={n.id}
                   onClick={() => {
+                    if (user) fallbackStore.markNotificationRead(user.uid, n.id);
                     if (n.orderId && onSelectOrder) {
                       onSelectOrder(n.orderId);
                       onClose();
                     }
                   }}
                   className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
-                    n.read
+                    n.read && !wasUnread.current.has(n.id)
                       ? 'border-gray-100 bg-gray-50/50 text-gray-600'
                       : 'border-emerald-200 bg-emerald-50/40 text-gray-900 shadow-sm'
                   }`}

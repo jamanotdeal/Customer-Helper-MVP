@@ -214,10 +214,18 @@ public final class Prefs {
         e.apply();
     }
 
-    /** Called on logout. Clears identity and duty, keeps the FCM token. */
+    /**
+     * Called on logout. Clears identity and duty, keeps the FCM token — and
+     * keeps the de-duplication set: notification ids are unique per document,
+     * so an id already alerted on stays alerted on. Dropping the set here meant
+     * a logout/login cycle re-announced the whole recent backlog.
+     */
     public static void clearUser(Context c) {
         String token = fcmToken(c);
+        Set<String> seen = sp(c).getStringSet(K_SEEN, null);
+        Set<String> seenCopy = seen == null ? null : new LinkedHashSet<>(seen);
         sp(c).edit().clear().apply();
         if (token != null) setFcmToken(c, token);
+        if (seenCopy != null) sp(c).edit().putStringSet(K_SEEN, seenCopy).apply();
     }
 }

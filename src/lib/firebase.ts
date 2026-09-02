@@ -411,12 +411,33 @@ class FallbackStore {
   // notification listener knows which device belongs to which user.
   public currentUserId: string | null = null;
 
-  // Tracks Firestore notification doc IDs that have already been processed
-  // on this device, so we don't re-fire a browser popup for old ones.
-  // Fix 2: Pre-populated from sessionStorage so page refreshes don't re-fire old notifications.
+  // ─── Per-device notification state ───────────────────────────────────────
+  // Two sets, both persisted in localStorage and both keyed by uid:
+  //
+  //   _knownNotifIds  — doc ids this device has already announced, so a popup
+  //                     never fires twice for the same notification.
+  //   _readNotifIds   — doc ids the user has actually seen in the drawer.
+  //
+  // localStorage, not sessionStorage. In the Capacitor WebView sessionStorage
+  // dies with the process, so every cold start of the app looked like a first
+  // load: `isInitial` was true again, and every still-unread notification was
+  // re-announced — the "same notification comes again and again" report.
+  //
+  // The read set is separate from the `read` field on the document because
+  // broadcast notifications ('all', 'all-helpers', …) are ONE document shared
+  // by every user. Writing read:true there would mark it read for everybody, so
+  // read state for those lives here, on the device, and is overlaid onto the
+  // list built from each snapshot.
   private _knownNotifIds: Set<string> = new Set();
-  private _KNOWN_NOTIF_SS_KEY = 'jamanot_known_notif_ids';
+  private _readNotifIds: Set<string> = new Set();
+  private _KNOWN_NOTIF_KEY = 'jamanot_known_notif_ids';
+  private _READ_NOTIF_KEY = 'jamanot_read_notif_ids';
   private _MAX_KNOWN_NOTIF_IDS = 200;
+  // uid the two sets above were hydrated for; null until the first login.
+  private _notifStateOwner: string | null = null;
+  // False until the first notification snapshot of this session has been
+  // handled. That snapshot is the existing window, not news — see below.
+  private _notifSnapshotPrimed = false;
 
   // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
   // on every Firestore event. Store is written at most every 2 seconds.
@@ -431,36 +452,62 @@ class FallbackStore {
 
   constructor() {
     this.loadFromLocalStorage();
-    // Fix 2: Pre-populate known notif IDs from sessionStorage to survive page refreshes.
-    this._hydrateKnownNotifIds();
+    // The notification sets are hydrated lazily instead — they are keyed by uid,
+    // which isn't known until AuthContext sets currentUserId.
     // NOTE: Firestore listeners are NOT started here.
     // AuthContext calls initListenersForRole() after login so we know the user's role.
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
   }
 
-  // ─── Fix 2: sessionStorage helpers for _knownNotifIds ────────────────────
-  private _hydrateKnownNotifIds() {
-    if (typeof window === 'undefined') return;
+  // ─── localStorage helpers for the known / read notification sets ──────────
+
+  private _loadIdSet(key: string, uid: string): Set<string> {
+    const set = new Set<string>();
+    if (typeof window === 'undefined') return set;
     try {
-      const raw = sessionStorage.getItem(this._KNOWN_NOTIF_SS_KEY);
+      const raw = localStorage.getItem(`${key}:${uid}`);
       if (raw) {
         const ids: string[] = JSON.parse(raw);
-        if (Array.isArray(ids)) {
-          ids.forEach((id) => this._knownNotifIds.add(id));
-        }
+        if (Array.isArray(ids)) ids.forEach((id) => set.add(id));
       }
     } catch (_) { /* ignore */ }
+    return set;
+  }
+
+  private _saveIdSet(key: string, uid: string, set: Set<string>) {
+    if (typeof window === 'undefined') return;
+    try {
+      // Sets keep insertion order, so the tail is the most recent. Trim from the
+      // front to keep the entry bounded.
+      const toStore = Array.from(set).slice(-this._MAX_KNOWN_NOTIF_IDS);
+      localStorage.setItem(`${key}:${uid}`, JSON.stringify(toStore));
+    } catch (_) { /* ignore – storage full, best-effort */ }
+  }
+
+  /**
+   * Loads this user's notification sets on first use, and reloads them when the
+   * account changes. Both sets are per-uid: two people sharing a device must not
+   * inherit each other's "already seen" state for a broadcast notification.
+   */
+  private _ensureNotifState(uid: string) {
+    if (this._notifStateOwner === uid) return;
+    this._notifStateOwner = uid;
+    this._knownNotifIds = this._loadIdSet(this._KNOWN_NOTIF_KEY, uid);
+    this._readNotifIds = this._loadIdSet(this._READ_NOTIF_KEY, uid);
+    this._notifSnapshotPrimed = false;
   }
 
   private _persistKnownNotifIds() {
-    if (typeof window === 'undefined') return;
-    try {
-      // Keep only the most recent N IDs to avoid unbounded growth
-      const ids = Array.from(this._knownNotifIds);
-      const toStore = ids.slice(-this._MAX_KNOWN_NOTIF_IDS);
-      sessionStorage.setItem(this._KNOWN_NOTIF_SS_KEY, JSON.stringify(toStore));
-    } catch (_) { /* ignore – sessionStorage full, best-effort */ }
+    if (this._notifStateOwner) {
+      this._saveIdSet(this._KNOWN_NOTIF_KEY, this._notifStateOwner, this._knownNotifIds);
+    }
+  }
+
+  private _persistReadNotifIds() {
+    if (this._notifStateOwner) {
+      this._saveIdSet(this._READ_NOTIF_KEY, this._notifStateOwner, this._readNotifIds);
+    }
   }
 
   private startRoutingTimer() {
@@ -754,9 +801,18 @@ class FallbackStore {
     // Fix 4: Max notifications to store per user in memory.
     const MAX_NOTIFS_PER_USER = 100;
 
+    // Hydrate this user's seen/read sets before anything reads them.
+    this._ensureNotifState(userId);
+
     const map = new Map<string, AppNotification[]>();
     snapshot.docs.forEach((docSnap: any) => {
-      const data = docSnap.data() as AppNotification;
+      const raw = docSnap.data() as AppNotification;
+      // Overlay the device-local read state. Broadcast documents are shared by
+      // every user, so their read flag can only be tracked here — without this
+      // the drawer showed them unread forever, however many times the user had
+      // already opened them.
+      const data: AppNotification =
+        !raw.read && this._readNotifIds.has(raw.id) ? { ...raw, read: true } : raw;
       // Broadcast notifications are stored under the current user's uid locally
       const storeKey = BROADCAST_IDS.has(data.userId) ? userId : data.userId;
       const userList = map.get(storeKey) || [];
@@ -769,24 +825,39 @@ class FallbackStore {
       this.notifications.set(key, list.slice(0, MAX_NOTIFS_PER_USER));
     });
 
-    // Fire browser popup only for genuinely NEW, unread notifications targeting this device.
-    // Fix 2: Because _knownNotifIds is pre-populated from sessionStorage on refresh,
-    //        previously-seen notifications are already in the set and won't re-fire.
+    // Fire a popup only for genuinely NEW, unread notifications targeting this
+    // device. _knownNotifIds comes from localStorage, so everything announced on
+    // an earlier run — earlier page load, earlier launch of the Android app — is
+    // already in the set and stays quiet.
     if (this.currentUserId) {
       const uid = this.currentUserId;
       const currentUser = this.users.get(uid);
-      // isInitial is now only true when the set truly has zero entries
-      // (i.e. first-ever login in this browser session, not a refresh).
+      // True only when this user has never had a notification announced on this
+      // device (first login here), not on every refresh or app restart.
       const isInitial = this._knownNotifIds.size === 0;
+
+      // The first snapshot is the existing window, delivered because the
+      // listener just attached — not news. Anything unseen in it arrived while
+      // the app was closed, and the native layer already alerted on it at the
+      // time; popping it all up again now, at launch, is exactly the storm the
+      // user reported. Record it silently and let the bell badge carry it.
+      // (The Java duty service suppresses its own first snapshot for the same
+      // reason — see onNotifications in DutyForegroundService.)
+      const isFirstSnapshot = !this._notifSnapshotPrimed;
+      this._notifSnapshotPrimed = true;
       let newUnreadCount = 0;
       const toTrigger: AppNotification[] = [];
       let knownIdsChanged = false;
 
       snapshot.docs.forEach((docSnap: any) => {
         const notif = docSnap.data() as AppNotification;
-        if (this._knownNotifIds.has(notif.id)) return; // already seen — skip
+        if (this._knownNotifIds.has(notif.id)) return; // already announced — skip
         this._knownNotifIds.add(notif.id);
         knownIdsChanged = true;
+
+        // Read on this device (drawer opened / notification tapped) — never
+        // re-announce it, even if the shared broadcast doc still says unread.
+        if (this._readNotifIds.has(notif.id)) return;
 
         const targets =
           notif.userId === uid ||
@@ -797,7 +868,7 @@ class FallbackStore {
           (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
 
         if (targets && !notif.read) {
-          if (isInitial) {
+          if (isFirstSnapshot) {
             newUnreadCount++;
             toTrigger.push(notif);
           } else {
@@ -806,16 +877,22 @@ class FallbackStore {
         }
       });
 
-      // Persist updated set to sessionStorage so refresh won't re-fire these.
+      // Persist so a refresh or an app restart won't re-fire these.
       if (knownIdsChanged) {
         this._persistKnownNotifIds();
       }
 
-      // Flood control on very first load (no sessionStorage data) — consolidate if many unread.
-      if (isInitial && newUnreadCount > 0) {
+      // Flood control on the very first load — consolidate if many unread.
+      // Only on a first-ever load: on later launches the backlog collected above
+      // stays silent.
+      if (isFirstSnapshot && isInitial && newUnreadCount > 0) {
         if (newUnreadCount > 2) {
           triggerBrowserNotification({
-            id: `consolidated-init-${Date.now()}`,
+            // Seeded from the newest notification rather than Date.now(): a
+            // clock-based id is unique on every run, so the native de-dup set
+            // could never recognise it and this summary reappeared on each
+            // launch. Tied to real content, it is posted once and only once.
+            id: `consolidated-${toTrigger[0]?.id || newUnreadCount}`,
             title: 'নতুন নোটিফিকেশন (New Notifications)',
             body: `আপনার ${newUnreadCount}টি নতুন নোটিফিকেশন আছে। দেখতে নোটিফিকেশন বেল ট্যাপ করুন।`,
           });
@@ -2714,25 +2791,61 @@ class FallbackStore {
     return notif;
   }
 
-  public async markNotificationsRead(userId: string) {
+  /**
+   * Marks notifications read for this user, on this device and — where the
+   * document belongs to them alone — in Firestore.
+   *
+   * Read state has two homes on purpose. A notification addressed to a single
+   * uid gets `read: true` on its document, so every device of that user agrees.
+   * A broadcast ('all', 'all-helpers', …) is ONE document shared by everyone:
+   * writing read:true there would mark it read for the entire audience, so it is
+   * recorded only in the device-local read set, which the snapshot handler
+   * overlays when it rebuilds the list. Without that set the broadcast came back
+   * unread on the next snapshot and was re-announced on the next launch.
+   */
+  private async _markRead(userId: string, ids: string[] | null) {
     const list = this.notifications.get(userId) || [];
-    // Only process actually unread items to avoid unnecessary Firestore writes
-    const unread = list.filter((n) => !n.read);
+    const wanted = ids ? new Set(ids) : null;
+    const unread = list.filter((n) => !n.read && (!wanted || wanted.has(n.id)));
     if (unread.length === 0) return;
-    const updated = list.map((n) => ({ ...n, read: true }));
-    this.notifications.set(userId, updated);
+
+    this._ensureNotifState(userId);
+    unread.forEach((n) => {
+      this._readNotifIds.add(n.id);
+      // Seen counts as announced: never pop this one up again.
+      this._knownNotifIds.add(n.id);
+    });
+    this._persistReadNotifIds();
+    this._persistKnownNotifIds();
+
+    const readIds = new Set(unread.map((n) => n.id));
+    this.notifications.set(
+      userId,
+      list.map((n) => (readIds.has(n.id) ? { ...n, read: true } : n))
+    );
     this.notify();
 
+    // Personal documents only — see the docblock.
+    const ownDocs = unread.filter((n) => n.userId === userId);
+    if (ownDocs.length === 0) return;
     try {
-      // Write only the ones that changed (unread → read) using writeBatch to save write requests
       const batch = writeBatch(db);
-      for (const n of unread) {
+      for (const n of ownDocs) {
         batch.set(doc(db, 'notifications', n.id), { read: true }, { merge: true });
       }
       await batch.commit();
     } catch (e: any) {
       console.warn('[Firestore] markNotificationsRead note (saved locally):', e?.message || e);
     }
+  }
+
+  public async markNotificationsRead(userId: string) {
+    return this._markRead(userId, null);
+  }
+
+  /** Read state for a single notification — used when one is tapped. */
+  public async markNotificationRead(userId: string, notifId: string) {
+    return this._markRead(userId, [notifId]);
   }
 
   public async savePricingSettings(settings: PricingSettings) {
