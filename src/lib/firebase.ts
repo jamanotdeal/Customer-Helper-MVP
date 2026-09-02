@@ -228,8 +228,39 @@ function cleanForFirestore<T>(data: T): T {
 // -------------------------------------------------------------
 let _lastNotifTime = 0;
 
-export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string; imageUrl?: string }) {
-  if (typeof window === 'undefined' || !('Notification' in window)) return;
+/** True inside the Capacitor native shell. Kept local so this module stays
+ *  free of a static import on native.ts (which is loaded dynamically below). */
+function isNativeRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  const cap = (window as any).Capacitor;
+  return !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+}
+
+export function triggerBrowserNotification(notif: { id: string; title: string; body?: string; orderId?: string; imageUrl?: string; type?: string }) {
+  if (typeof window === 'undefined') return;
+
+  // ── Native shell (Capacitor WebView) ──────────────────────────────────────
+  // The Android WebView implements neither the DOM Notification API nor
+  // ServiceWorkerRegistration.showNotification, so every web path below is a
+  // no-op inside the app. Route through the JamanotNative plugin instead, which
+  // posts a real Android notification on a channel that has sound + vibration.
+  if (isNativeRuntime()) {
+    // Order traffic goes on the heads-up channel (CH_ORDER: IMPORTANCE_HIGH,
+    // custom sound, vibration pattern, lights). Everything else on CH_GENERAL.
+    const important = notif.type === 'new_order' || !!notif.orderId;
+    import('./native')
+      .then((m) =>
+        m.showNativeLocalNotification(notif.title, notif.body || '', {
+          orderId: notif.orderId,
+          notifId: notif.id,
+          important,
+        })
+      )
+      .catch((e) => console.warn('[triggerBrowserNotification] native note:', e));
+    return;
+  }
+
+  if (!('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   try {
     const targetUrl = notif.orderId ? `/?orderId=${notif.orderId}` : '/';
@@ -785,6 +816,64 @@ class FallbackStore {
         (err) => console.warn('[Firestore] PricingSettings sync note:', err)
       )
     );
+
+    // ── Own applications: realtime for every non-admin role ───────────────────
+    // Without these the maps are only ever filled from this device's
+    // localStorage and from writes made on this device, so an application
+    // submitted on the web never appears in the app (and vice versa) — the user
+    // is shown the blank apply form again on their second device.
+    // Admin already subscribes to the full collections further down.
+    if (role !== 'admin') {
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'helperApplications'), where('userId', '==', userId), limit(10)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') this.helperApplications.delete(change.doc.id);
+              else this.helperApplications.set(change.doc.id, change.doc.data() as HelperApplication);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Own helperApplications sync note:', err)
+        )
+      );
+
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'storeApplications'), where('userId', '==', userId), limit(10)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') this.storeApplications.delete(change.doc.id);
+              else this.storeApplications.set(change.doc.id, change.doc.data() as StoreApplication);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Own storeApplications sync note:', err)
+        )
+      );
+
+      // Own profile document. Approvals, role flips and helperType changes are
+      // written to users/{uid} by the admin panel on another device; without
+      // this listener the applicant's own app keeps showing the pre-approval
+      // state until it is restarted. AuthContext mirrors fallbackStore.users on
+      // every notify(), so writing here is enough to update the UI.
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'users', userId),
+          (docSnap) => {
+            if (!docSnap.exists()) return;
+            const incoming = docSnap.data() as UserProfile;
+            const current = this.users.get(userId);
+            // Only notify on a real change — this fires on our own writes too,
+            // and AuthContext rebuilds the user object on every notification.
+            if (current && JSON.stringify(current) === JSON.stringify(incoming)) return;
+            this.users.set(userId, incoming);
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Own profile sync note:', err)
+        )
+      );
+    }
 
     // ── STORE role ────────────────────────────────────────────────────────────
     if (role === 'store') {

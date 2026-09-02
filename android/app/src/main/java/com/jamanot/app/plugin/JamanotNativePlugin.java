@@ -445,12 +445,32 @@ public class JamanotNativePlugin extends Plugin {
 
     @PluginMethod
     public void showLocalNotification(PluginCall call) {
-        NotificationHelper.postGeneral(
-                getContext(),
-                "local-" + System.currentTimeMillis(),
-                call.getString("title", ""),
-                call.getString("body", ""),
-                call.getString("orderId"));
+        // Prefer the Firestore notification id so this shares a de-dup namespace
+        // with DutyForegroundService. For helper/store the service is listening
+        // on the same documents, so without this the user gets the same alert
+        // twice whenever the app is in the foreground. Whichever path arrives
+        // first wins; the second is dropped.
+        String notifId = call.getString("notifId");
+        if (notifId != null && !notifId.isEmpty()) {
+            if (!Prefs.markSeen(getContext(), notifId)) {
+                call.resolve();
+                return;
+            }
+        } else {
+            notifId = "local-" + System.currentTimeMillis();
+        }
+        String title = call.getString("title", "");
+        String body = call.getString("body", "");
+        String orderId = call.getString("orderId");
+
+        // The WebView has no Notification API, so this is the only way a
+        // foreground in-app notification reaches the user. Order traffic goes on
+        // the heads-up channel so it gets sound and vibration like the web popup.
+        if (Boolean.TRUE.equals(call.getBoolean("important", false))) {
+            NotificationHelper.postOrderAlert(getContext(), notifId, title, body, orderId);
+        } else {
+            NotificationHelper.postGeneral(getContext(), notifId, title, body, orderId);
+        }
         call.resolve();
     }
 

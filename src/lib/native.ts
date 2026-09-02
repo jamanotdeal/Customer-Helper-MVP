@@ -394,7 +394,15 @@ export async function showNativeLocalNotification(
     const p = (await jn())?.p;
     if (p) {
       try {
-        await p.showLocalNotification({ title, body, orderId: data?.orderId ?? null });
+        await p.showLocalNotification({
+          title,
+          body,
+          orderId: data?.orderId ?? null,
+          // Firestore notification id — shares the de-dup set with the duty service
+          notifId: data?.notifId ?? null,
+          // true -> CH_ORDER heads-up channel (sound + vibration + lights)
+          important: data?.important === true,
+        });
         return;
       } catch (e: any) {
         console.warn('[native] showLocalNotification note:', e?.message || e);
