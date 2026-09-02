@@ -157,8 +157,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveModeState('helper');
       saveActiveMode('helper');
     } else {
-      let targetMode: ActiveMode;
-      targetMode = profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : (savedMode || 'customer');
+      // A stale 'admin'/'store' mode left in localStorage must never grant this
+      // user those interfaces — fall back to customer.
+      const safeSavedMode: ActiveMode =
+        savedMode === 'admin' || savedMode === 'store' ? 'customer' : savedMode || 'customer';
+      const targetMode: ActiveMode =
+        profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : safeSavedMode;
       setActiveModeState(targetMode);
       saveActiveMode(targetMode);
     }
@@ -166,7 +170,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const savedMode = getSavedActiveMode();
-    setActiveModeState(savedMode);
+    // Never render admin/store chrome from a persisted mode before the profile
+    // that grants it has been loaded.
+    setActiveModeState(savedMode === 'admin' || savedMode === 'store' ? 'customer' : savedMode);
 
     const unsubscribeStore = fallbackStore.subscribe(() => {
       setUser((prevUser) => {
@@ -200,7 +206,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (e) {
           console.warn('[AuthContext] Error fetching user profile on login:', e);
         }
-        const profile = buildProfile(fbUser, savedMode);
+        let profile = buildProfile(fbUser, savedMode);
+        // Reconcile approved store/helper state — an approved store owner or helper
+        // whose profile never received the flags would otherwise land on the customer UI.
+        const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
+        if (syncedProfile) profile = syncedProfile;
         applyProfile(profile, savedMode);
         // Tell the Firestore notification listener which user is on this device
         fallbackStore.currentUserId = fbUser.uid;
@@ -407,7 +417,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await signInWithPopup(auth, googleProvider);
       if (res.user) {
         const savedMode = getSavedActiveMode();
-        const profile = buildProfile(res.user, savedMode);
+        let profile = buildProfile(res.user, savedMode);
+        const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
+        if (syncedProfile) profile = syncedProfile;
         applyProfile(profile, savedMode);
 
         // Ask browser notification permission immediately after login

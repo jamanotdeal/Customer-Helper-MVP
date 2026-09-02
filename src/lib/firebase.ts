@@ -1288,6 +1288,99 @@ class FallbackStore {
 
   // --- Actions with Firebase Persistence & Dynamic Notifications ---
 
+  // Reconciles a signed-in user's store/helper flags with their applications.
+  // An approval can fail to reach the user document (e.g. the admin's client had
+  // never cached that profile), which would otherwise leave an approved store
+  // owner or helper stuck on the customer interface. Returns the corrected
+  // profile, or null when nothing needed changing.
+  public async syncApprovedRolesForUser(profile: UserProfile): Promise<UserProfile | null> {
+    if (!profile || profile.isAdmin || profile.role === 'admin') return null;
+    let next = profile;
+    let changed = false;
+
+    // ── Store applications ────────────────────────────────────────────────────
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
+      );
+      const apps: StoreApplication[] = [];
+      snap.forEach((docSnap) => {
+        const a = docSnap.data() as StoreApplication;
+        if (a && a.id) {
+          this.storeApplications.set(a.id, a);
+          apps.push(a);
+        }
+      });
+
+      // No application history at all — leave the store flags alone
+      if (apps.length > 0) {
+        const approved = apps.some((a) => a.status === 'APPROVED');
+        const shopId = `store-${profile.uid}`;
+
+        if (approved) {
+          if (!next.isStore || !next.isStoreApproved || next.storeId !== shopId) {
+            next = { ...next, isStore: true, isStoreApproved: true, storeId: shopId, lastActiveMode: 'store' };
+            changed = true;
+          }
+        } else if (next.isStore || next.isStoreApproved || next.storeId) {
+          // Application exists but is not approved — clear any stale store flags
+          next = {
+            ...next,
+            isStore: false,
+            isStoreApproved: false,
+            storeId: undefined,
+            lastActiveMode: next.lastActiveMode === 'store' ? 'customer' : next.lastActiveMode,
+          };
+          changed = true;
+        }
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] syncApprovedRolesForUser store note:', e?.message || e);
+    }
+
+    // ── Helper applications ───────────────────────────────────────────────────
+    // Promote only: commuter helpers enable themselves without ever filing an
+    // application, so a missing/rejected application must never revoke isHelper.
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'helperApplications'), where('userId', '==', profile.uid), limit(10))
+      );
+      const apps: HelperApplication[] = [];
+      snap.forEach((docSnap) => {
+        const a = docSnap.data() as HelperApplication;
+        if (a && a.id) {
+          this.helperApplications.set(a.id, a);
+          apps.push(a);
+        }
+      });
+
+      const approved = apps.find((a) => a.status === 'APPROVED');
+      if (approved) {
+        const isDedicated = approved.applicationType === 'dedicated' || !approved.applicationType;
+        const targetType = isDedicated ? 'dedicated' : next.helperType || 'commuter';
+        if (!next.isHelper || next.helperType !== targetType) {
+          next = { ...next, isHelper: true, helperType: targetType };
+          changed = true;
+        }
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] syncApprovedRolesForUser helper note:', e?.message || e);
+    }
+
+    if (!changed) return null;
+    await this.saveUser(next);
+    return next;
+  }
+
+  // Admin listeners only cache a limited slice of the `users` collection, so a
+  // profile an admin action needs to mutate is often missing locally. Always go
+  // through this before updating a user from an admin flow.
+  public async getUserForUpdate(uid: string): Promise<UserProfile | null> {
+    const cached = this.users.get(uid);
+    if (cached) return cached;
+    return await this.fetchUserFromFirestore(uid);
+  }
+
   public async fetchUserFromFirestore(uid: string): Promise<UserProfile | null> {
     try {
       const snap = await getDoc(doc(db, 'users', uid));
@@ -2151,14 +2244,14 @@ class FallbackStore {
     app.status = 'APPROVED';
     this.helperApplications.set(appId, app);
 
-    const user = this.users.get(app.userId);
-    if (user) {
+    const applicant = await this.getUserForUpdate(app.userId);
+    if (applicant) {
       const isDedicated = app.applicationType === 'dedicated' || !app.applicationType;
       const updatedUser: UserProfile = {
-        ...user,
+        ...applicant,
         isHelper: true,
-        helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
-        alternativePhone: app.whatsapp || user.alternativePhone,
+        helperType: isDedicated ? 'dedicated' : (applicant.helperType || 'commuter'),
+        alternativePhone: app.whatsapp || applicant.alternativePhone,
       };
       this.users.set(app.userId, updatedUser);
       await this.saveUser(updatedUser);
@@ -2173,7 +2266,7 @@ class FallbackStore {
   }
 
   public async removeHelperEligibility(uid: string) {
-    const existing = this.users.get(uid);
+    const existing = await this.getUserForUpdate(uid);
     if (!existing) return;
     const updated: UserProfile = {
       ...existing,
@@ -2688,10 +2781,10 @@ class FallbackStore {
     this.shops.set(shopId, shop);
 
     // Update user profile: mark as approved store
-    const user = this.users.get(existing.userId);
-    if (user) {
+    const storeOwner = await this.getUserForUpdate(existing.userId);
+    if (storeOwner) {
       const updatedUser: UserProfile = {
-        ...user,
+        ...storeOwner,
         isStore: true,
         isStoreApproved: true,
         storeId: shopId,
@@ -2699,6 +2792,24 @@ class FallbackStore {
       };
       this.users.set(existing.userId, updatedUser);
       try { await this.saveUser(updatedUser); } catch (_) {}
+    } else {
+      // Owner's profile document is missing — still persist the store flags so the
+      // owner lands on the store dashboard the next time they sign in.
+      try {
+        await setDoc(
+          doc(db, 'users', existing.userId),
+          cleanForFirestore({
+            uid: existing.userId,
+            email: existing.userEmail,
+            displayName: existing.userName,
+            isStore: true,
+            isStoreApproved: true,
+            storeId: shopId,
+            lastActiveMode: 'store',
+          }),
+          { merge: true }
+        );
+      } catch (_) {}
     }
 
     // Notify store owner that application was approved (Requirement 4)
@@ -2757,13 +2868,14 @@ class FallbackStore {
       this.shops.delete(shopId);
       try { await deleteDoc(doc(db, 'shops', shopId)); } catch (_) {}
 
-      const user = this.users.get(existing.userId);
-      if (user) {
+      const storeOwner = await this.getUserForUpdate(existing.userId);
+      if (storeOwner) {
         const updatedUser: UserProfile = {
-          ...user,
+          ...storeOwner,
           isStore: false,
           isStoreApproved: false,
           storeId: undefined,
+          lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
         };
         this.users.set(existing.userId, updatedUser);
         try { await this.saveUser(updatedUser); } catch (_) {}
@@ -2779,10 +2891,10 @@ class FallbackStore {
   }
 
   public async blockStoreUser(userId: string, reason: string) {
-    const user = this.users.get(userId);
-    if (!user) return;
+    const storeOwner = await this.getUserForUpdate(userId);
+    if (!storeOwner) return;
     const updatedUser: UserProfile = {
-      ...user,
+      ...storeOwner,
       isBlocked: true,
       blockedReason: reason,
       isStore: false,
