@@ -115,43 +115,84 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
     setCompletedLoading(true);
     try {
-      let q = query(
-        collection(db, 'shopOrders'),
-        where('shopId', '==', storeId),
+      // Query 1: completed parent orders (DELIVERED / CANCELED) that include this shop, paginated.
+      let parentQ = query(
+        collection(db, 'orders'),
+        where('selectedShopIds', 'array-contains', storeId),
+        where('status', 'in', ['DELIVERED', 'CANCELED']),
         orderBy('createdAt', 'desc'),
         limit(15)
       );
-
       if (!isFirstPage && completedLastVisible) {
-        q = query(q, startAfter(completedLastVisible));
+        parentQ = query(parentQ, startAfter(completedLastVisible));
       }
-      const snap = await getDocs(q);
-      const newShopOrders: ShopOrder[] = [];
-      const parentOrderFetchPromises: Promise<void>[] = [];
+      const parentSnap = await getDocs(parentQ);
+      const fetchedParents = parentSnap.docs.map((d) => d.data() as Order);
       const newParentOrders: Record<string, Order> = {};
+      fetchedParents.forEach((p) => { newParentOrders[p.id] = p; });
 
-      snap.docs.forEach((docSnap) => {
-        const so = docSnap.data() as ShopOrder;
-        
-        // Fetch parent order if not cached
-        if (!newParentOrders[so.parentOrderId] && !fallbackStore.orders.has(so.parentOrderId)) {
-          parentOrderFetchPromises.push(
-            getDoc(doc(db, 'orders', so.parentOrderId)).then((pSnap) => {
-              if (pSnap.exists()) {
-                newParentOrders[so.parentOrderId] = pSnap.data() as Order;
-              }
-            })
-          );
+      // Query 2: shopOrders for those parents (this shop only). 'in' allows up to 30 values per query.
+      const parentIds = fetchedParents.map((p) => p.id);
+      const shopOrdersFromParents: ShopOrder[] = [];
+      if (parentIds.length > 0) {
+        const chunks: string[][] = [];
+        for (let i = 0; i < parentIds.length; i += 30) chunks.push(parentIds.slice(i, i + 30));
+        const chunkSnaps = await Promise.all(
+          chunks.map((chunk) =>
+            getDocs(query(
+              collection(db, 'shopOrders'),
+              where('shopId', '==', storeId),
+              where('parentOrderId', 'in', chunk)
+            ))
+          )
+        );
+        chunkSnaps.forEach((snap) => snap.docs.forEach((d) => shopOrdersFromParents.push(d.data() as ShopOrder)));
+      }
+
+      // Query 3 (first page only): CANCELED shopOrders whose parent may still be active.
+      let canceledShopOrders: ShopOrder[] = [];
+      if (isFirstPage) {
+        try {
+          const canceledSnap = await getDocs(query(
+            collection(db, 'shopOrders'),
+            where('shopId', '==', storeId),
+            where('status', '==', 'CANCELED'),
+            limit(50)
+          ));
+          canceledShopOrders = canceledSnap.docs.map((d) => d.data() as ShopOrder);
+
+          // Fill in missing parent orders for these canceled shopOrders.
+          const missingParentIds = Array.from(new Set(
+            canceledShopOrders
+              .map((so) => so.parentOrderId)
+              .filter((pid) => !newParentOrders[pid] && !fallbackStore.orders.has(pid))
+          ));
+          if (missingParentIds.length > 0) {
+            const parentDocs = await Promise.all(
+              missingParentIds.map((pid) => getDoc(doc(db, 'orders', pid)))
+            );
+            parentDocs.forEach((pSnap) => {
+              if (pSnap.exists()) newParentOrders[pSnap.id] = pSnap.data() as Order;
+            });
+          }
+        } catch (err) {
+          console.warn('Canceled shopOrders fetch note:', err);
         }
-        newShopOrders.push(so);
+      }
+
+      // Merge + dedupe by shopOrder id.
+      const mergedMap = new Map<string, ShopOrder>();
+      [...shopOrdersFromParents, ...canceledShopOrders].forEach((so) => mergedMap.set(so.id, so));
+      const merged = Array.from(mergedMap.values());
+
+      setCompletedParentOrders((prev) => ({ ...prev, ...newParentOrders }));
+      setCompletedShopOrders((prev) => {
+        if (isFirstPage) return merged;
+        const existing = new Set(prev.map((so) => so.id));
+        return [...prev, ...merged.filter((so) => !existing.has(so.id))];
       });
-
-      await Promise.all(parentOrderFetchPromises);
-
-      setCompletedParentOrders(prev => ({ ...prev, ...newParentOrders }));
-      setCompletedShopOrders(prev => isFirstPage ? newShopOrders : [...prev, ...newShopOrders]);
-      setCompletedLastVisible(snap.docs[snap.docs.length - 1] || null);
-      setCompletedHasMore(snap.docs.length === 15);
+      setCompletedLastVisible(parentSnap.docs[parentSnap.docs.length - 1] || null);
+      setCompletedHasMore(parentSnap.docs.length === 15);
     } catch (err) {
       console.error('Error fetching completed shop orders:', err);
     } finally {
@@ -185,18 +226,19 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
   };
 
-  // Trigger paginated fetches when tabs change
+  // Fetch finished shopOrders once storeId is known so the Finished tab count is accurate
+  // before the user opens the tab, and refresh whenever the sub-tab lands on COMPLETED.
   useEffect(() => {
-    if (localActiveTab === 'ORDERS' && ordersSubTab === 'COMPLETED') {
+    if (storeId) {
       fetchCompletedPage(true);
     }
-  }, [localActiveTab, ordersSubTab, storeId]);
+  }, [storeId, ordersSubTab]);
 
   useEffect(() => {
-    if (localActiveTab === 'MY_REQUESTS') {
+    if (user?.uid) {
       fetchCompletedRequestsPage(true);
     }
-  }, [localActiveTab, user?.uid]);
+  }, [user?.uid]);
 
   // Pagination
   const PAGE_SIZE = 10;
@@ -400,6 +442,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         },
       ],
     }), 'store');
+
+    // A cancellation moves the shopOrder into the Finished bucket; the Firestore
+    // subscription filters CANCELED out of the live cache, so refresh the Finished list.
+    if (newStatus === 'CANCELED') {
+      fetchCompletedPage(true);
+    }
   };
 
   const handleUpdateCostAndNote = async (soId: string) => {
@@ -907,14 +955,24 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             {/* Sub-tabs: New, Running, Completed */}
             <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200">
               {(['NEW', 'RUNNING', 'COMPLETED'] as const).map((tab) => {
-                const count = storeShopOrders.filter((so) => {
-                  const parentStatus = getParentOrderStatus(so.parentOrderId);
-                  const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-                  const isDelivered = parentStatus === 'DELIVERED';
-                  if (tab === 'NEW') return so.status === 'PENDING' && !isCanceled && !isDelivered;
-                  if (tab === 'RUNNING') return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered;
-                  return isDelivered || isCanceled;
-                }).length;
+                let count = 0;
+                if (tab === 'COMPLETED') {
+                  // Use paginated Firestore data so count matches what's rendered.
+                  count = completedShopOrders.filter((so) => {
+                    const parentStatus = getParentOrderStatus(so.parentOrderId);
+                    const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+                    const isDelivered = parentStatus === 'DELIVERED';
+                    return isDelivered || isCanceled;
+                  }).length;
+                } else {
+                  count = storeShopOrders.filter((so) => {
+                    const parentStatus = getParentOrderStatus(so.parentOrderId);
+                    const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+                    const isDelivered = parentStatus === 'DELIVERED';
+                    if (tab === 'NEW') return so.status === 'PENDING' && !isCanceled && !isDelivered;
+                    return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered;
+                  }).length;
+                }
 
                 const isRunningWithCount = tab === 'RUNNING' && count > 0;
                 let tabStyle = '';
