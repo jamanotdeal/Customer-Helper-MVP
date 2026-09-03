@@ -201,7 +201,9 @@ export default function PageClient() {
     }
 
     const REQUIRED: PermissionStep[] = ['notifications', 'location'];
-    const OPTIONAL: PermissionStep[] = ['battery', 'overlay', 'autostart'];
+    // Battery optimization is intentionally omitted — it confused users more than
+    // it helped, and reliability without it is acceptable on non-aggressive OEMs.
+    const OPTIONAL: PermissionStep[] = ['overlay', 'autostart'];
     const skipKey = (step: PermissionStep) => `permission_skipped_${step}`;
     const p = fallbackStore.pricingSettings;
 

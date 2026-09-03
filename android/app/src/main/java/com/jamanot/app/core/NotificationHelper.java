@@ -28,17 +28,23 @@ import com.jamanot.app.R;
 public final class NotificationHelper {
 
     public static final String CH_DUTY = "jamanot_duty";
-    public static final String CH_ORDER = "jamanot_order_alert";
 
     /**
-     * v2 because channels are immutable: the original {@code jamanot_general}
-     * was IMPORTANCE_DEFAULT with no vibration, so order-status updates arrived
-     * silently and without a heads-up. Raising the values in place would have
-     * done nothing on existing installs, so this is a new id and the old one is
-     * deleted in {@link #createChannels}.
+     * v2 because channels are immutable: the original {@code jamanot_order_alert}
+     * had vibration enabled with a long pattern, which users complained was too
+     * intense. Turning it off in place would do nothing on existing installs, so
+     * this is a new id and the old one is deleted in {@link #createChannels}.
      */
-    public static final String CH_GENERAL = "jamanot_general_v2";
-    private static final String CH_GENERAL_LEGACY = "jamanot_general";
+    public static final String CH_ORDER = "jamanot_order_alert_v2";
+    private static final String CH_ORDER_LEGACY = "jamanot_order_alert";
+
+    /**
+     * v3 because channels are immutable: v2 had vibration on. Same reasoning as
+     * CH_ORDER above — bumped id + delete of the old one to force new settings.
+     */
+    public static final String CH_GENERAL = "jamanot_general_v3";
+    private static final String CH_GENERAL_LEGACY_V1 = "jamanot_general";
+    private static final String CH_GENERAL_LEGACY_V2 = "jamanot_general_v2";
 
     public static final int ID_DUTY = 1001;
     public static final int ID_RESUME = 1002;
@@ -67,13 +73,14 @@ public final class NotificationHelper {
         duty.setSound(null, null);
         nm.createNotificationChannel(duty);
 
-        // New order. HIGH so it heads-up over whatever the user is doing, with a
-        // distinctive pattern mirroring navigator.vibrate([200,100,200,100,200]).
+        // New order. HIGH so it heads-up over whatever the user is doing.
+        // Vibration disabled — sound and heads-up are enough; the previous
+        // long pattern was too intense for repeated alerts.
         NotificationChannel order = new NotificationChannel(
                 CH_ORDER, c.getString(R.string.channel_order_name), NotificationManager.IMPORTANCE_HIGH);
         order.setDescription(c.getString(R.string.channel_order_desc));
-        order.enableVibration(true);
-        order.setVibrationPattern(new long[]{0, 400, 200, 400, 200, 400});
+        order.enableVibration(false);
+        order.setVibrationPattern(null);
         order.enableLights(true);
         order.setLightColor(BRAND);
         order.setShowBadge(true);
@@ -88,15 +95,14 @@ public final class NotificationHelper {
         nm.createNotificationChannel(order);
 
         // Everything else: order status changes, admin broadcasts, customer
-        // updates. HIGH with sound and vibration — a store moving an order to
-        // "ready" is time-critical for the helper waiting on it, so it has to
-        // be noticeable rather than a silent tray entry.
+        // updates. HIGH with sound (no vibration) — still noticeable via the
+        // heads-up + sound, but without the constant buzzing.
         NotificationChannel general = new NotificationChannel(
                 CH_GENERAL, c.getString(R.string.channel_general_name), NotificationManager.IMPORTANCE_HIGH);
         general.setDescription(c.getString(R.string.channel_general_desc));
         general.setShowBadge(true);
-        general.enableVibration(true);
-        general.setVibrationPattern(new long[]{0, 300, 150, 300});
+        general.enableVibration(false);
+        general.setVibrationPattern(null);
         general.enableLights(true);
         general.setLightColor(BRAND);
         Uri generalSound = soundUri(c);
@@ -108,12 +114,11 @@ public final class NotificationHelper {
         }
         nm.createNotificationChannel(general);
 
-        // Retire the silent v1 channel so users are not left with a stale,
-        // muted duplicate in the app's notification settings.
-        try {
-            nm.deleteNotificationChannel(CH_GENERAL_LEGACY);
-        } catch (Exception ignored) {
-        }
+        // Retire prior channel ids so users aren't left with stale duplicates
+        // (with vibration enabled) in the app's notification settings.
+        try { nm.deleteNotificationChannel(CH_ORDER_LEGACY); } catch (Exception ignored) {}
+        try { nm.deleteNotificationChannel(CH_GENERAL_LEGACY_V1); } catch (Exception ignored) {}
+        try { nm.deleteNotificationChannel(CH_GENERAL_LEGACY_V2); } catch (Exception ignored) {}
     }
 
     /**
@@ -182,7 +187,8 @@ public final class NotificationHelper {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setDefaults(NotificationCompat.DEFAULT_ALL);
+                .setVibrate(new long[]{0})
+                .setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_LIGHTS);
 
         safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, b.build());
     }
@@ -212,7 +218,8 @@ public final class NotificationHelper {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setVibrate(new long[]{0})
+                .setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_LIGHTS)
                 .build();
 
         safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, n);
