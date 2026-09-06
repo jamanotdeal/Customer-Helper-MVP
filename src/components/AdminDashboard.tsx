@@ -382,8 +382,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const syncAdminData = () => {
       const freshOrders = Array.from(fallbackStore.orders.values());
       setOrders(freshOrders);
-      // Also merge into allOrders so Mutually Discussed changes are reflected immediately
+      // Also merge into allOrders so Mutually Discussed changes and new realtime orders are reflected immediately
       setAllOrders((prev) => {
+        const existingIds = new Set(prev.map((item) => item.id));
+        let addedCount = 0;
+        freshOrders.forEach((o) => {
+          if (!existingIds.has(o.id)) {
+            addedCount++;
+          }
+        });
+        if (addedCount > 0) {
+          setExactTotalOrders((count) => (count !== null ? count + addedCount : null));
+        }
         const copy = [...prev];
         freshOrders.forEach((o) => {
           const idx = copy.findIndex((item) => item.id === o.id);
@@ -400,12 +410,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           return true;
         });
       });
-      setApplications(Array.from(fallbackStore.helperApplications.values()));
-      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
-      setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
-      setUsers(Array.from(fallbackStore.users.values()));
-      setShops(Array.from(fallbackStore.shops.values()));
-      setFeedbacks(Array.from(fallbackStore.orderFeedbacks.values()));
+
+      const freshApps = Array.from(fallbackStore.helperApplications.values());
+      setApplications((prev) => {
+        if (prev.length > 0 && freshApps.length > prev.length) {
+          const diff = freshApps.length - prev.length;
+          setExactActiveHelpers((count) => (count !== null ? count : null));
+        }
+        return freshApps;
+      });
+
+      const freshStoreApps = Array.from(fallbackStore.storeApplications.values());
+      setStoreApplications(freshStoreApps);
+
+      const freshWds = Array.from(fallbackStore.withdrawals.values());
+      setWithdrawals((prev) => {
+        if (prev.length > 0 && freshWds.length > prev.length) {
+          const diff = freshWds.length - prev.length;
+          setExactWithdrawalsCount((count) => (count !== null ? count + diff : null));
+        }
+        return freshWds;
+      });
+
+      const freshUsers = Array.from(fallbackStore.users.values());
+      setUsers((prev) => {
+        if (prev.length > 0 && freshUsers.length > prev.length) {
+          const diff = freshUsers.length - prev.length;
+          setExactCustomerAccounts((count) => (count !== null ? count + diff : null));
+        }
+        return freshUsers;
+      });
+
+      const freshShops = Array.from(fallbackStore.shops.values());
+      setShops((prev) => {
+        if (prev.length > 0 && freshShops.length > prev.length) {
+          const diff = freshShops.length - prev.length;
+          setExactShopsCount((count) => (count !== null ? count + diff : null));
+        }
+        return freshShops;
+      });
+
+      const freshFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
+      setFeedbacks((prev) => {
+        if (prev.length > 0 && freshFeedbacks.length > prev.length) {
+          const diff = freshFeedbacks.length - prev.length;
+          setExactFeedbacksCount((count) => (count !== null ? count + diff : null));
+        }
+        return freshFeedbacks;
+      });
+
       setCustomModals(Array.from(fallbackStore.customModals.values()));
       const settings = { ...fallbackStore.pricingSettings };
       setPricing(settings);
@@ -708,6 +761,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [orders]);
 
+  // Initial mount: load overall database datasets for cumulative accurate top stats & counts
+  useEffect(() => {
+    const fetchOverallAdminData = async () => {
+      try {
+        const [
+          fetchedOrders,
+          fetchedUsers,
+          fetchedApps,
+          fetchedWds,
+          fetchedShops,
+          fetchedFeedbacks,
+          fetchedModals,
+        ] = await Promise.all([
+          fallbackStore.getAllOrders(),
+          fallbackStore.getAllUsers(),
+          fallbackStore.getAllHelperApplications(),
+          fallbackStore.getAllWithdrawals(),
+          fallbackStore.getAllShops(),
+          fallbackStore.getAllOrderFeedbacks(),
+          fallbackStore.getAllCustomModals(),
+        ]);
+        if (fetchedOrders.length > 0) {
+          setAllOrders(fetchedOrders);
+          setServerOrders(fetchedOrders);
+        }
+        if (fetchedUsers.length > 0) setUsers(fetchedUsers);
+        if (fetchedApps.length > 0) setApplications(fetchedApps);
+        if (fetchedWds.length > 0) setWithdrawals(fetchedWds);
+        if (fetchedShops.length > 0) setShops(fetchedShops);
+        if (fetchedFeedbacks.length > 0) setFeedbacks(fetchedFeedbacks);
+        if (fetchedModals.length > 0) setCustomModals(fetchedModals);
+      } catch (err) {
+        console.error('Error fetching overall admin data:', err);
+      }
+    };
+
+    fetchOverallAdminData();
+  }, []);
+
   useEffect(() => {
     const fetchExactCounts = async () => {
       try {
@@ -758,9 +850,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       try {
         const q = query(
           collection(db, 'orders'),
-          where('status', '==', 'DELIVERED'),
-          orderBy('deliveredAt', 'desc'),
-          limit(100)
+          where('status', '==', 'DELIVERED')
         );
         const snap = await getDocs(q);
         let totalMs = 0;
@@ -784,9 +874,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const fetchServerAvgAcceptanceTime = async () => {
       try {
         const q = query(
-          collection(db, 'orders'),
-          orderBy('createdAt', 'desc'),
-          limit(100)
+          collection(db, 'orders')
         );
         const snap = await getDocs(q);
         let totalMs = 0;
@@ -810,17 +898,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     fetchExactCounts();
     fetchServerAvgDeliveryTime();
     fetchServerAvgAcceptanceTime();
-  }, [orders, users]);
+  }, []);
 
-  // Needs Attention Queue calculations
-  const cancellingRequests = orders.filter(
+  // Needs Attention Queue calculations — computed from overall allOrders dataset for complete accuracy across DB
+  const cancellingRequests = allOrders.filter(
     (o) =>
       (o.cancellationRequest && o.cancellationRequest.status === 'PENDING') ||
       (o.status === 'CANCELED' && new Date().getTime() - new Date(o.cancelledAt || o.updatedAt).getTime() < 86400000)
   );
 
-  const notAcceptedRequests = orders.filter((o) => o.status === 'PENDING');
-  const feeAdjustmentsPending = orders.filter(
+  const notAcceptedRequests = allOrders.filter((o) => o.status === 'PENDING');
+  const feeAdjustmentsPending = allOrders.filter(
     (o) => o.feeAdjustment && o.feeAdjustment.status === 'PENDING'
   );
   const pendingApps = applications.filter((a) => a.status === 'PENDING');
