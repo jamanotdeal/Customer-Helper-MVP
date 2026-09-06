@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { fallbackStore } from '@/lib/firebase';
 import { AppNotification } from '@/types';
 import { X, Bell, CheckCheck } from 'lucide-react';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface NotificationDrawerProps {
   onClose: () => void;
@@ -59,13 +60,13 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
 
             <div className="flex items-center space-x-1">
               {notifications.some((n) => !n.read) && (
-                <button
+                <AsyncButton
                   onClick={markAllRead}
+                  icon={<CheckCheck className="w-4 h-4" />}
                   className="p-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-xl flex items-center space-x-1"
                 >
-                  <CheckCheck className="w-4 h-4" />
                   <span>Read all</span>
-                </button>
+                </AsyncButton>
               )}
               <button
                 onClick={onClose}

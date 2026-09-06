@@ -794,14 +794,13 @@ class FallbackStore {
     if (role === 'store') {
       const effectiveStoreId = storeId || `store-${userId}`;
 
-      // Shop orders submitted to this store (realtime, active only)
+      // Shop orders submitted to this store (realtime)
       unsubs.push(
         onSnapshot(
           query(
             collection(db, 'shopOrders'),
             where('shopId', '==', effectiveStoreId),
-            where('status', 'in', ['PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'HANDOVER']),
-            limit(50)
+            limit(100)
           ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -817,14 +816,13 @@ class FallbackStore {
         )
       );
 
-      // Parent orders selected for this store (realtime, active only)
+      // Parent orders selected for this store (realtime)
       unsubs.push(
         onSnapshot(
           query(
             collection(db, 'orders'),
             where('selectedShopIds', 'array-contains', effectiveStoreId),
-            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
-            limit(50)
+            limit(100)
           ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -887,6 +885,24 @@ class FallbackStore {
             }
           },
           (err) => console.warn('[Firestore] Store wallet sync note:', err)
+        )
+      );
+
+      // Store owner's withdrawals (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.withdrawals.delete(change.doc.id);
+              } else {
+                this.withdrawals.set(change.doc.id, change.doc.data() as WithdrawalRequest);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Store withdrawals sync note:', err)
         )
       );
 
@@ -960,12 +976,16 @@ class FallbackStore {
           query(
             collection(db, 'orders'),
             where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
-            limit(60)
+            limit(100)
           ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                this.orders.delete(change.doc.id);
+                const existing = this.orders.get(change.doc.id);
+                // Do not delete helper's own orders when they leave active status (e.g. DELIVERED)
+                if (!existing || existing.helperId !== userId) {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, change.doc.data() as Order);
               }
@@ -977,9 +997,11 @@ class FallbackStore {
       );
 
       // This helper's own orders — all statuses (history, delivered, etc.) (realtime)
+      // Limit 200 with orderBy createdAt desc so newest orders are always included;
+      // Using a high limit prevents wallet recomputation from dropping older delivered orders.
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('helperId', '==', userId), limit(30)),
+          query(collection(db, 'orders'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(200)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -1036,6 +1058,23 @@ class FallbackStore {
             }
           },
           (err) => console.warn('[Firestore] Helper wallet sync note:', err)
+        )
+      );
+
+      // Helper's own wallet transactions (realtime, needed for ledger display)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'walletTransactions'), where('userId', '==', userId), limit(100)),
+          (snapshot) => {
+            const txs: WalletTransaction[] = [];
+            snapshot.forEach((docSnap) => {
+              txs.push(docSnap.data() as WalletTransaction);
+            });
+            txs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            this.walletTransactions.set(userId, txs);
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper walletTransactions sync note:', err)
         )
       );
 
@@ -1560,19 +1599,45 @@ class FallbackStore {
         });
       }
 
-      // If order canceled, also notify assigned helper or all helpers
+      // If order canceled, notify assigned helper or all helpers
       if (updated.status === 'CANCELED') {
         const helperTarget = updated.helperId || existing.helperId || 'all-helpers';
+        const isCustomerCancel = updated.cancellationRequest?.requestedBy === 'customer' || updated.statusHistory?.some(h => h.actor === 'Customer');
+        const notifTitle = isCustomerCancel ? 'কাস্টমার অর্ডার বাতিল করেছেন' : 'অর্ডার বাতিল করা হয়েছে';
+        const notifBody = isCustomerCancel
+          ? `কাস্টমার আপনার অ্যাসাইন করা অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করেছেন।`
+          : `অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করা হয়েছে।`;
+
         this.addNotification({
           id: `notif-cancel-hlp-${Date.now()}`,
           userId: helperTarget,
-          title: 'অর্ডার বাতিল করা হয়েছে',
-          body: `অর্ডার #${updated.id} বাতিল করা হয়েছে।`,
+          title: notifTitle,
+          body: notifBody,
           orderId: updated.id,
           read: false,
           createdAt: new Date().toISOString(),
           targetRole: helperTarget === 'all-helpers' ? undefined : 'helper',
           type: 'order_update',
+        });
+
+        // Notify connected stores/shops involved in this order when main order is cancelled by anyone
+        const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
+        relatedShopOrders.forEach((so) => {
+          const shop = this.shops.get(so.shopId);
+          const ownerId = shop?.ownerUserId || (so.shopId.startsWith('store-') ? so.shopId.replace('store-', '') : null);
+          if (ownerId) {
+            this.addNotification({
+              id: `notif-store-canc-${Date.now()}-${so.id}`,
+              userId: ownerId,
+              title: 'অর্ডার বাতিল হয়েছে!',
+              body: `মূল অর্ডার #${updated.id.slice(-6).toUpperCase()} বাতিল হওয়ায় আপনার স্টোরের অর্ডারটি বাতিল করা হয়েছে।`,
+              orderId: updated.id,
+              read: false,
+              createdAt: new Date().toISOString(),
+              targetRole: 'store',
+              type: 'order_update',
+            });
+          }
         });
       }
 
@@ -1581,10 +1646,11 @@ class FallbackStore {
         const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
         relatedShopOrders.forEach((so) => {
           const shop = this.shops.get(so.shopId);
-          if (shop?.ownerUserId) {
+          const ownerId = shop?.ownerUserId || (so.shopId.startsWith('store-') ? so.shopId.replace('store-', '') : null);
+          if (ownerId) {
             this.addNotification({
               id: `notif-store-comp-${Date.now()}-${so.id}`,
-              userId: shop.ownerUserId,
+              userId: ownerId,
               title: 'অর্ডার সম্পন্ন হয়েছে!',
               body: `আপনার স্টোরের অর্ডার #${updated.id.slice(-6).toUpperCase()} সফলভাবে সম্পন্ন এবং ডেলিভারি হয়েছে।`,
               orderId: updated.id,
@@ -1593,6 +1659,31 @@ class FallbackStore {
               targetRole: 'store',
               type: 'order_update',
             });
+          }
+        });
+      }
+
+      // Update related shop orders status when main order is DELIVERED or CANCELED
+      if (updated.status === 'DELIVERED' || updated.status === 'CANCELED') {
+        const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
+        const targetStatus: ShopOrderStatus = updated.status === 'DELIVERED' ? 'DELIVERED' : 'CANCELED';
+        relatedShopOrders.forEach((so) => {
+          if (so.status !== targetStatus) {
+            if (updated.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'PREPARING' || so.status === 'ACCEPTED' || so.status === 'PENDING') {
+              this.updateShopOrder(so.id, (prev) => ({
+                ...prev,
+                status: targetStatus,
+                statusHistory: [
+                  ...prev.statusHistory,
+                  {
+                    status: targetStatus,
+                    timestamp: new Date().toISOString(),
+                    actor: 'System',
+                    note: `Main order #${updated.id} ${updated.status === 'DELIVERED' ? 'delivered' : 'canceled'}.`,
+                  },
+                ],
+              }));
+            }
           }
         });
       }
@@ -1758,8 +1849,11 @@ class FallbackStore {
       const helperId = updated.helperId || existing.helperId;
       if (helperId) {
         if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED') {
-          const commission = calculateHelperCommission(updated.deliveryFee, this.pricingSettings);
-          await this.creditHelperEarning(helperId, commission, updated.deliveryFee, updated.id);
+          // Use effective fee = max(deliveryFee, minFee) to match what the helper sees in the UI
+          const minFee = this.pricingSettings.feeCalculatorMinFee ?? 0;
+          const effectiveFee = Math.max(updated.deliveryFee || 0, minFee);
+          const helperShare = calculateHelperCommission(effectiveFee, this.pricingSettings);
+          await this.creditHelperEarning(helperId, helperShare, effectiveFee, updated.id);
         } else {
           const updatedWallet = this.getHelperWallet(helperId);
           this.wallets.set(helperId, updatedWallet);
@@ -1782,6 +1876,12 @@ class FallbackStore {
   }
 
   // ─── Shop Orders (Helper → Store ordering system) ──────────────────────────
+
+  public markShopOrderViewed(id: string) {
+    const existing = this.shopOrders.get(id);
+    if (!existing || existing.viewedByStore) return;
+    this.updateShopOrder(id, (so) => ({ ...so, viewedByStore: true }), 'store');
+  }
 
   public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
     this.shopOrders.set(shopOrder.id, shopOrder);
@@ -1827,6 +1927,7 @@ class FallbackStore {
         PREPARING: 'প্রস্তুত হচ্ছে',
         READY: 'প্রস্তুত',
         HANDOVER: 'হস্তান্তর',
+        DELIVERED: 'ডেলিভার্ড',
         CANCELED: 'বাতিল',
       };
       this.addNotification({
@@ -1938,10 +2039,12 @@ class FallbackStore {
     let totalEarned = 0;
     let totalPlatformShare = 0;
 
+    const minFee = this.pricingSettings.feeCalculatorMinFee ?? 20;
     helperOrders.forEach((o) => {
-      const helperShare = calculateHelperCommission(o.deliveryFee, this.pricingSettings);
+      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(effectiveFee, this.pricingSettings);
       totalEarned += helperShare;
-      totalPlatformShare += (o.deliveryFee - helperShare);
+      totalPlatformShare += (effectiveFee - helperShare);
     });
 
     const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
@@ -1957,19 +2060,20 @@ class FallbackStore {
     };
   }
 
-  public getStoreWallet(storeUserId: string, storeId: string): Wallet {
+  public getStoreWallet(storeUserId: string, storeId: string, cachedParentOrders?: Record<string, Order>): Wallet {
     const shopDoc = this.shops.get(storeId);
     const commissionRate = shopDoc?.commissionPercent ?? 0;
 
-    // Filter shop orders belonging to this store where parent order is delivered or shop order is canceled
+    // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
     const storeShopOrders = Array.from(this.shopOrders.values()).filter((so) => {
       if (so.shopId !== storeId) return false;
       if (so.status === 'CANCELED') return true;
-      const parentOrder = this.orders.get(so.parentOrderId);
+      if (so.status === 'HANDOVER') return true;
+      const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
       return parentOrder?.status === 'DELIVERED';
     });
 
-    // Only sum the price set for items ordered from this store
+    // Sum price set for items ordered from this store (completed + cancelled)
     const totalSales = storeShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0);
     const nonCanceledShopOrders = storeShopOrders.filter((so) => so.status !== 'CANCELED');
     const totalCommissionDue = Math.round(nonCanceledShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0) * (commissionRate / 100));
@@ -1993,31 +2097,47 @@ class FallbackStore {
 
 
   public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
-    const platformShare = deliveryFee - helperShare;
+    const platformShare = Math.max(0, deliveryFee - helperShare);
+    const commissionPercent = 100 - (this.pricingSettings.helperCommissionPercent ?? 80);
+
+    // ── Wallet: purely additive increment ──────────────────────────────────
+    // NEVER recompute from the order list — it's query-limited and will give
+    // wrong results for helpers with many orders. Instead, increment on top
+    // of the current stored Firestore wallet so totals always grow correctly.
+    const existing = this.wallets.get(helperId);
+    const updatedWallet: Wallet = {
+      userId: helperId,
+      totalEarned: (existing?.totalEarned ?? 0) + helperShare,
+      balance:     (existing?.balance     ?? 0) + platformShare,
+      totalPaidCommission: existing?.totalPaidCommission ?? 0,
+      totalWithdrawn:      existing?.totalWithdrawn      ?? 0,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(helperId, updatedWallet);
+
+    // Transaction ledger entry
     const txs = this.walletTransactions.get(helperId) || [];
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
       userId: helperId,
-      amount: platformShare,
+      amount: helperShare,
       type: 'EARNING',
       orderId: orderId,
-      description: `Order #${orderId} completed (Commission ${100 - this.pricingSettings.helperCommissionPercent}% due: ৳${platformShare})`,
+      description: `Order #${orderId} completed — Earned ৳${helperShare} (${commissionPercent}% platform commission ৳${platformShare} due)`,
       createdAt: new Date().toISOString(),
     };
     txs.unshift(newTx);
     this.walletTransactions.set(helperId, txs);
-
-    const wallet = this.getHelperWallet(helperId);
-    this.wallets.set(helperId, wallet);
     this.notify();
 
     try {
-      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
+      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
     } catch (e: any) {
       console.warn('[Firestore] creditHelperEarning note (saved locally):', e?.message || e);
     }
   }
+
 
   public async recordHelperPayback(helperId: string, amount: number, note: string) {
     const txs = this.walletTransactions.get(helperId) || [];
@@ -2047,12 +2167,21 @@ class FallbackStore {
     };
     this.withdrawals.set(req.id, req);
 
-    const wallet = this.getHelperWallet(helperId);
-    this.wallets.set(helperId, wallet);
+    // ── Wallet: purely subtractive decrement ───────────────────────────────
+    const existing = this.wallets.get(helperId);
+    const updatedWallet: Wallet = {
+      userId: helperId,
+      totalEarned:         existing?.totalEarned         ?? 0,
+      balance:             Math.max(0, (existing?.balance ?? 0) - amount),
+      totalPaidCommission: (existing?.totalPaidCommission ?? 0) + amount,
+      totalWithdrawn:      (existing?.totalWithdrawn      ?? 0) + amount,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(helperId, updatedWallet);
     this.notify();
 
     try {
-      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(wallet), { merge: true });
+      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
     } catch (e: any) {
@@ -2065,7 +2194,8 @@ class FallbackStore {
     helperName: string,
     amount: number,
     paymentMethod: string,
-    accountNumber: string
+    accountNumber: string,
+    userType?: 'helper' | 'store'
   ) {
     const req: WithdrawalRequest = {
       id: `wd-${Date.now()}`,
@@ -2075,6 +2205,7 @@ class FallbackStore {
       status: 'PENDING',
       paymentMethod,
       accountNumber,
+      userType,
       createdAt: new Date().toISOString(),
     };
     this.withdrawals.set(req.id, req);
@@ -2088,51 +2219,89 @@ class FallbackStore {
     return req;
   }
 
-  public async approveWithdrawal(withdrawalId: string) {
+  public async updateWithdrawalRequest(
+    withdrawalId: string,
+    updates: { status?: 'PENDING' | 'APPROVED' | 'REJECTED'; amount?: number }
+  ) {
     const req = this.withdrawals.get(withdrawalId);
-    if (!req || req.status !== 'PENDING') return;
-    req.status = 'APPROVED';
+    if (!req) return;
+
+    const oldStatus = req.status;
+    const oldAmount = req.amount;
+
+    const newStatus = updates.status !== undefined ? updates.status : oldStatus;
+    const newAmount = updates.amount !== undefined && !isNaN(updates.amount) && updates.amount > 0 ? updates.amount : oldAmount;
+
+    req.status = newStatus;
+    req.amount = newAmount;
     req.processedAt = new Date().toISOString();
     this.withdrawals.set(withdrawalId, req);
 
-    const txs = this.walletTransactions.get(req.helperId) || [];
-    const newTx: WalletTransaction = {
-      id: `tx-${Date.now()}`,
-      userId: req.helperId,
-      amount: -req.amount,
-      type: 'PAYBACK',
-      description: `Commission payback approved (#${req.id})`,
-      createdAt: new Date().toISOString(),
-    };
-    txs.unshift(newTx);
-    this.walletTransactions.set(req.helperId, txs);
+    const existingWallet = this.wallets.get(req.helperId);
+    let currentBalance = existingWallet?.balance ?? 0;
+    let currentTotalPaid = existingWallet?.totalPaidCommission ?? 0;
+    let currentTotalWithdrawn = existingWallet?.totalWithdrawn ?? 0;
 
-    const wallet = this.getHelperWallet(req.helperId);
-    this.wallets.set(req.helperId, wallet);
+    // Adjust wallet if transitions occurred between APPROVED and non-APPROVED, or if APPROVED amount changed
+    if (oldStatus === 'APPROVED' && newStatus !== 'APPROVED') {
+      // Revert previous approval
+      currentBalance = currentBalance + oldAmount;
+      currentTotalPaid = Math.max(0, currentTotalPaid - oldAmount);
+      currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn - oldAmount);
+    } else if (oldStatus !== 'APPROVED' && newStatus === 'APPROVED') {
+      // Apply new approval
+      currentBalance = Math.max(0, currentBalance - newAmount);
+      currentTotalPaid = currentTotalPaid + newAmount;
+      currentTotalWithdrawn = currentTotalWithdrawn + newAmount;
+
+      // Add transaction ledger entry
+      const txs = this.walletTransactions.get(req.helperId) || [];
+      const newTx: WalletTransaction = {
+        id: `tx-${Date.now()}`,
+        userId: req.helperId,
+        amount: -newAmount,
+        type: 'PAYBACK',
+        description: `Commission payback approved (#${req.id})`,
+        createdAt: new Date().toISOString(),
+      };
+      txs.unshift(newTx);
+      this.walletTransactions.set(req.helperId, txs);
+      try {
+        await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      } catch (e) {}
+    } else if (oldStatus === 'APPROVED' && newStatus === 'APPROVED' && oldAmount !== newAmount) {
+      // Amount changed while remaining approved
+      const diff = newAmount - oldAmount;
+      currentBalance = Math.max(0, currentBalance - diff);
+      currentTotalPaid = Math.max(0, currentTotalPaid + diff);
+      currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn + diff);
+    }
+
+    const updatedWallet: Wallet = {
+      userId: req.helperId,
+      totalEarned: existingWallet?.totalEarned ?? 0,
+      balance: currentBalance,
+      totalPaidCommission: currentTotalPaid,
+      totalWithdrawn: currentTotalWithdrawn,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(req.helperId, updatedWallet);
     this.notify();
 
     try {
-      await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(wallet), { merge: true });
-      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      await setDoc(doc(db, 'wallets', req.helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
     } catch (e: any) {
-      console.warn('[Firestore] approveWithdrawal note (saved locally):', e?.message || e);
+      console.warn('[Firestore] updateWithdrawalRequest note:', e?.message || e);
     }
   }
 
-  public async rejectWithdrawal(withdrawalId: string) {
-    const req = this.withdrawals.get(withdrawalId);
-    if (!req || req.status !== 'PENDING') return;
-    req.status = 'REJECTED';
-    req.processedAt = new Date().toISOString();
-    this.withdrawals.set(withdrawalId, req);
-    this.notify();
+  public async approveWithdrawal(withdrawalId: string) {
+    return this.updateWithdrawalRequest(withdrawalId, { status: 'APPROVED' });
+  }
 
-    try {
-      await setDoc(doc(db, 'withdrawals', withdrawalId), cleanForFirestore(req), { merge: true });
-    } catch (e: any) {
-      console.warn('[Firestore] rejectWithdrawal note (saved locally):', e?.message || e);
-    }
+  public async rejectWithdrawal(withdrawalId: string) {
+    return this.updateWithdrawalRequest(withdrawalId, { status: 'REJECTED' });
   }
 
   public async submitHelperApp(app: HelperApplication) {
@@ -2630,13 +2799,70 @@ class FallbackStore {
   }
 
   public async saveShop(shop: Shop) {
-    this.shops.set(shop.id, shop);
+    const shopToSave: Shop = {
+      ...shop,
+      status: shop.status || 'Approved',
+    };
+    this.shops.set(shopToSave.id, shopToSave);
     this.notify();
     try {
-      await setDoc(doc(db, 'shops', shop.id), cleanForFirestore(shop), { merge: true });
+      await setDoc(doc(db, 'shops', shopToSave.id), cleanForFirestore(shopToSave), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] saveShop note (saved locally):', e?.message || e);
     }
+  }
+
+  public async updateShopStatus(shopId: string, status: 'Approved' | 'Pending' | 'Rejected') {
+    const existing = this.shops.get(shopId);
+    const normalizedStatus: 'Approved' | 'Pending' | 'Rejected' = status;
+    const appStatus: 'APPROVED' | 'PENDING' | 'REJECTED' =
+      status === 'Approved' ? 'APPROVED' : status === 'Pending' ? 'PENDING' : 'REJECTED';
+
+    if (existing) {
+      const updatedShop: Shop = { ...existing, status: normalizedStatus, updatedAt: new Date().toISOString() };
+      this.shops.set(shopId, updatedShop);
+      try {
+        await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updatedShop), { merge: true });
+      } catch (e: any) {
+        console.warn('[Firestore] updateShopStatus note (saved locally):', e?.message || e);
+      }
+    }
+
+    // Update associated StoreApplication if present
+    const storeApp = Array.from(this.storeApplications.values()).find(
+      (a) => a.id === existing?.applicationId || (existing?.ownerUserId && a.userId === existing.ownerUserId)
+    );
+    if (storeApp) {
+      const updatedApp: StoreApplication = {
+        ...storeApp,
+        status: appStatus,
+        reviewedAt: new Date().toISOString(),
+      };
+      this.storeApplications.set(storeApp.id, updatedApp);
+      try {
+        await setDoc(doc(db, 'storeApplications', storeApp.id), cleanForFirestore(updatedApp), { merge: true });
+      } catch (_) {}
+    }
+
+    // Update owner user profile if present
+    if (existing?.ownerUserId) {
+      const storeOwner = await this.getUserForUpdate(existing.ownerUserId);
+      if (storeOwner) {
+        const isApproved = status === 'Approved';
+        const isPending = status === 'Pending';
+        const updatedUser: UserProfile = {
+          ...storeOwner,
+          isStore: isApproved || isPending,
+          isStoreApproved: isApproved,
+          storeId: isApproved || isPending ? shopId : undefined,
+          lastActiveMode: isApproved ? 'store' : (storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode),
+        };
+        this.users.set(existing.ownerUserId, updatedUser);
+        try { await this.saveUser(updatedUser); } catch (_) {}
+      }
+    }
+
+    this.notify();
   }
 
   public async deleteShop(shopId: string) {
@@ -2777,6 +3003,7 @@ class FallbackStore {
       createdAt: existing.createdAt,
       updatedAt: new Date().toISOString(),
       commissionPercent: existing.commissionPercent,
+      status: 'Approved',
     };
     this.shops.set(shopId, shop);
 

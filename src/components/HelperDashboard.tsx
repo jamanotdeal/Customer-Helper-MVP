@@ -685,7 +685,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             });
             setNewOrderIds(new Set());
           }}
-          className={`flex-1 py-2.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${
             activeTab === 'NEW'
               ? 'bg-white text-emerald-800 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
@@ -701,7 +701,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         <button
           onClick={() => { setActiveTab('ACTIVE'); setActiveVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-2.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
             activeTab === 'ACTIVE'
               ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
               : filteredActiveOrders.length > 0
@@ -725,7 +725,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         <button
           onClick={() => { setActiveTab('SCHEDULED'); setScheduledVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-2.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
             activeTab === 'SCHEDULED'
               ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
               : 'text-gray-600 hover:text-gray-900'
@@ -736,7 +736,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         <button
           onClick={() => { setActiveTab('COMPLETED'); setCompletedVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-2.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
             activeTab === 'COMPLETED'
               ? 'bg-white text-emerald-800 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
@@ -834,7 +834,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  <span>Normal View</span>
+                  <span>Norm</span>
                 </button>
                 <button
                   type="button"
@@ -846,7 +846,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   }`}
                 >
                   <Map className="w-3.5 h-3.5" />
-                  <span>Map View</span>
+                  <span>Map</span>
                 </button>
               </div>
             )}

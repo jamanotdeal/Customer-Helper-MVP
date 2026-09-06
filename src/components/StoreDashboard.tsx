@@ -4,17 +4,18 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { OrderSuccessPwaModal } from './PWAInstallModal';
 import { StoreWallet } from './StoreWallet';
 import {
   Store, PlusCircle, Package, ShoppingBag,
-  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare
+  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare, CheckCircle2, Bell
 } from 'lucide-react';
 import { ShopOrder, ShopOrderStatus } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
+import { useModal } from './CustomModal';
 
 
 // Timer component to display live elapsed time
@@ -43,11 +44,24 @@ const OrderTimer: React.FC<{ createdAt: string; className?: string; hideIcon?: b
   }, [createdAt]);
 
   return (
-    <div className={`flex items-center space-x-1 ${className || 'text-gray-500'}`}>
+    <span className={`inline-flex items-center space-x-1 ${className || 'text-gray-500'}`}>
       {!hideIcon && <Clock className="w-3.5 h-3.5" />}
       <span className="font-semibold">{elapsed}</span>
-    </div>
+    </span>
   );
+};
+
+const formatOrderDateTime = (isoString?: string) => {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 };
 
 
@@ -61,6 +75,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   setActiveTab: parentSetActiveTab,
 }) => {
   const { user } = useAuth();
+  const { showAlert, showConfirm } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
   const [ordersSubTab, setOrdersSubTab] = useState<'NEW' | 'RUNNING' | 'COMPLETED'>('NEW');
   
@@ -109,7 +124,132 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [completedReqLoading, setCompletedReqLoading] = useState(false);
   const [completedReqHasMore, setCompletedReqHasMore] = useState(true);
 
-  const storeId = user?.storeId;
+  const storeId = useMemo(() => {
+    if (user?.storeId) return user.storeId;
+    const foundShop = Array.from(fallbackStore.shops.values()).find(
+      (s) => s.ownerUserId === user?.uid
+    );
+    return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
+  }, [user]);
+
+  // Track viewed shop order IDs in local state and sync with fallbackStore
+  const [unviewedShopOrderIds, setUnviewedShopOrderIds] = useState<Set<string>>(new Set());
+  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+
+  // Audio Context & Sound/Vibration alarm loop for Store
+  useEffect(() => {
+    if (unviewedShopOrderIds.size > 0) {
+      setIsAlarmPlaying(true);
+    } else {
+      setIsAlarmPlaying(false);
+    }
+  }, [unviewedShopOrderIds]);
+
+  useEffect(() => {
+    if (!isAlarmPlaying) return;
+
+    let active = true;
+    let audioCtx: AudioContext | null = null;
+    let intervalId: any = null;
+
+    const startAlarm = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass();
+        }
+      } catch (e) {
+        console.warn('AudioContext init failed:', e);
+      }
+
+      const triggerAlert = () => {
+        if (!active) return;
+
+        // Vibrate: heavy pulse pattern for store
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate([500, 250, 500, 250, 500]);
+        }
+
+        // Sound: store high double chime tone
+        if (audioCtx) {
+          try {
+            if (audioCtx.state === 'suspended') {
+              audioCtx.resume();
+            }
+            const osc1 = audioCtx.createOscillator();
+            const osc2 = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(1046.5, audioCtx.currentTime); // C6
+            osc2.type = 'triangle';
+            osc2.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.9);
+
+            osc1.connect(gain);
+            osc2.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc1.start();
+            osc2.start();
+            osc1.stop(audioCtx.currentTime + 0.9);
+            osc2.stop(audioCtx.currentTime + 0.9);
+          } catch (e) {
+            console.warn('Oscillator failed:', e);
+          }
+        }
+      };
+
+      triggerAlert();
+      intervalId = setInterval(triggerAlert, 1500);
+    };
+
+    startAlarm();
+
+    const timeoutId = setTimeout(() => {
+      setIsAlarmPlaying(false);
+    }, 60000);
+
+    return () => {
+      active = false;
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [isAlarmPlaying]);
+
+  // Real-time Firestore listener for all shop orders for this store
+  useEffect(() => {
+    if (!storeId) return;
+    const q = query(
+      collection(db, 'shopOrders'),
+      where('shopId', '==', storeId)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: ShopOrder[] = [];
+        const unviewedSet = new Set<string>();
+        snap.docs.forEach((d) => {
+          const so = d.data() as ShopOrder;
+          list.push(so);
+          fallbackStore.shopOrders.set(so.id, so);
+          if (so.status === 'PENDING' && !so.viewedByStore) {
+            unviewedSet.add(so.id);
+          }
+        });
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setStoreShopOrders(list);
+        setUnviewedShopOrderIds(unviewedSet);
+      },
+      (err) => console.warn('[StoreDashboard] shopOrders listener error:', err)
+    );
+    return () => unsub();
+  }, [storeId]);
 
   const fetchCompletedPage = async (isFirstPage: boolean) => {
     if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
@@ -229,9 +369,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       setStoreOrders(shopOrders);
       setMyRequests(myReqs);
 
-      // Helper Shop Orders placed specifically to this store
-      if (storeId) {
-        setStoreShopOrders(fallbackStore.getShopOrdersForStore(storeId));
+      // Helper Shop Orders placed specifically to this store (fallback if onSnapshot not triggered)
+      if (storeId && fallbackStore.getShopOrdersForStore(storeId).length > 0) {
+        setStoreShopOrders((prev) => prev.length > 0 ? prev : fallbackStore.getShopOrdersForStore(storeId));
       }
     };
     syncOrders();
@@ -248,44 +388,182 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Reset inputs when selected shop order changes
   useEffect(() => {
     if (currentShopOrder) {
-      setCostInput(currentShopOrder.price !== undefined ? String(currentShopOrder.price) : '');
+      setCostInput(currentShopOrder.price !== undefined && currentShopOrder.price !== null ? String(currentShopOrder.price) : '');
       setNoteInput(currentShopOrder.note || '');
+    } else {
+      setCostInput('');
+      setNoteInput('');
     }
   }, [currentShopOrder]);
 
   // Helpers to check parent order status
+  const getParentOrder = (parentOrderId: string) => {
+    return fallbackStore.orders.get(parentOrderId) || completedParentOrders[parentOrderId];
+  };
+
   const getParentOrderStatus = (parentOrderId: string) => {
-    const parent = fallbackStore.orders.get(parentOrderId) || completedParentOrders[parentOrderId];
-    return parent ? parent.status : 'PENDING';
+    const parent = getParentOrder(parentOrderId);
+    return parent ? parent.status : undefined;
   };
 
   const getParentOrderHelperPhone = (parentOrderId: string) => {
-    const parent = fallbackStore.orders.get(parentOrderId) || completedParentOrders[parentOrderId];
+    const parent = getParentOrder(parentOrderId);
     return parent ? parent.helperPhone || parent.customerPhone : '';
   };
 
+  // Real-time listeners & direct fetch for parent orders so main order delivery/cancellation dynamically moves shop orders to finished tab
+  useEffect(() => {
+    const parentIds = new Set<string>();
+    [...storeShopOrders, ...completedShopOrders].forEach((so) => {
+      if (so.parentOrderId) {
+        parentIds.add(so.parentOrderId);
+      }
+    });
+
+    if (parentIds.size === 0) return;
+
+    // Immediately fetch parent orders from Firestore to populate completedParentOrders & fallbackStore.orders
+    const fetchParentOrders = async () => {
+      const missing = Array.from(parentIds).filter(pId => !fallbackStore.orders.has(pId) && !completedParentOrders[pId]);
+      if (missing.length === 0) return;
+      const newFetched: Record<string, Order> = {};
+      await Promise.all(
+        missing.map(async (pId) => {
+          try {
+            const snap = await getDoc(doc(db, 'orders', pId));
+            if (snap.exists()) {
+              const ord = snap.data() as Order;
+              newFetched[pId] = ord;
+              fallbackStore.orders.set(pId, ord);
+            }
+          } catch (e) {
+            console.error('[Firestore] Error fetching parent order:', pId, e);
+          }
+        })
+      );
+      if (Object.keys(newFetched).length > 0) {
+        setCompletedParentOrders((prev) => ({ ...prev, ...newFetched }));
+        fallbackStore.notify();
+      }
+    };
+    fetchParentOrders();
+
+    // Subscribe to real-time updates for all parent orders
+    const unsubs: (() => void)[] = [];
+    parentIds.forEach((pId) => {
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'orders', pId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const updatedParent = docSnap.data() as Order;
+              setCompletedParentOrders((prev) => ({
+                ...prev,
+                [pId]: updatedParent,
+              }));
+              fallbackStore.orders.set(pId, updatedParent);
+              fallbackStore.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Realtime parent order sync error:', err)
+        )
+      );
+    });
+
+    return () => {
+      unsubs.forEach((unsub) => unsub());
+    };
+  }, [storeShopOrders, completedShopOrders]);
+
+  // Auto-sync shop order status when main order is DELIVERED or CANCELED
+  useEffect(() => {
+    [...storeShopOrders, ...completedShopOrders].forEach((so) => {
+      const parent = getParentOrder(so.parentOrderId);
+      if (parent) {
+        if (parent.status === 'DELIVERED' && so.status !== 'DELIVERED' && so.status !== 'CANCELED') {
+          fallbackStore.updateShopOrder(so.id, (prev) => ({
+            ...prev,
+            status: 'DELIVERED',
+            statusHistory: [
+              ...prev.statusHistory,
+              {
+                status: 'DELIVERED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: 'Main order delivered.',
+              },
+            ],
+          }), 'store');
+        } else if (parent.status === 'CANCELED' && so.status !== 'CANCELED') {
+          fallbackStore.updateShopOrder(so.id, (prev) => ({
+            ...prev,
+            status: 'CANCELED',
+            statusHistory: [
+              ...prev.statusHistory,
+              {
+                status: 'CANCELED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: 'Main order canceled.',
+              },
+            ],
+          }), 'store');
+        }
+      }
+    });
+  }, [storeShopOrders, completedShopOrders, completedParentOrders]);
+
+  // Combine and deduplicate storeShopOrders and completedShopOrders
+  const allAvailableShopOrders = useMemo(() => {
+    const map = new Map<string, ShopOrder>();
+    storeShopOrders.forEach((so) => map.set(so.id, so));
+    completedShopOrders.forEach((so) => map.set(so.id, so));
+    return Array.from(map.values());
+  }, [storeShopOrders, completedShopOrders]);
+
   // Categorize shop orders based on tabs
   const categorizedShopOrders = useMemo(() => {
-    const sourceList = ordersSubTab === 'COMPLETED' ? completedShopOrders : storeShopOrders;
-    return sourceList.filter((so) => {
+    return allAvailableShopOrders.filter((so) => {
       const parentStatus = getParentOrderStatus(so.parentOrderId);
       
-      // Filter out canceled main orders / canceled shop orders from running/new, send to completed
       const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-      const isDelivered = parentStatus === 'DELIVERED';
+      const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+
+      const isFinished = isDelivered || isCanceled;
 
       if (ordersSubTab === 'NEW') {
-        return so.status === 'PENDING' && !isCanceled && !isDelivered;
+        return so.status === 'PENDING' && !isFinished;
       }
       if (ordersSubTab === 'RUNNING') {
-        return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered;
+        return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isFinished;
       }
       if (ordersSubTab === 'COMPLETED') {
-        return isDelivered || isCanceled;
+        return isFinished;
       }
       return false;
     });
-  }, [storeShopOrders, completedShopOrders, ordersSubTab]);
+  }, [allAvailableShopOrders, ordersSubTab, completedParentOrders]);
+
+  // Calculate sub-tab counts matching exact tab list filters
+  const subTabCounts = useMemo(() => {
+    const counts = { NEW: 0, RUNNING: 0, COMPLETED: 0 };
+    allAvailableShopOrders.forEach((so) => {
+      const parentStatus = getParentOrderStatus(so.parentOrderId);
+      const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+      const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+
+      const isFinished = isDelivered || isCanceled;
+
+      if (isFinished) {
+        counts.COMPLETED++;
+      } else if (so.status === 'PENDING') {
+        counts.NEW++;
+      } else if (['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status)) {
+        counts.RUNNING++;
+      }
+    });
+    return counts;
+  }, [allAvailableShopOrders, completedParentOrders]);
 
   // Apply filters: Status, Date, Sort
   const filteredShopOrders = useMemo(() => {
@@ -381,6 +659,22 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // Handle operations
   const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
+    if (newStatus === 'DELIVERED') {
+      showAlert('সতর্কতা', 'দোকানদার সরাসরি ডেলিভার্ড স্ট্যাটাস সেট করতে পারবেন না। মূল অর্ডারটি সম্পন্ন হলে এটি স্বয়ংক্রিয়ভাবে Delivered হবে।', 'warning');
+      return;
+    }
+
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    if (targetSo) {
+      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
+      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
+        if (newStatus !== 'CANCELED') {
+          showAlert('অর্ডার হ্যান্ডওভার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে হেল্পারকে হ্যান্ডওভার বা সম্পন্ন করা হয়েছে। মূল অর্ডার ডেলিভারি হওয়া পর্যন্ত স্ট্যাটাস হ্যান্ডওভার থাকবে।', 'warning');
+          return;
+        }
+      }
+    }
+
     // Automatically save price & note when status moves
     const currentPrice = costInput ? parseFloat(costInput) : undefined;
     const currentNote = noteInput.trim() || undefined;
@@ -403,6 +697,15 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   };
 
   const handleUpdateCostAndNote = async (soId: string) => {
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    if (targetSo) {
+      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
+      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
+        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর তথ্য বা দাম পরিবর্তন করা যাবে না।', 'warning');
+        return;
+      }
+    }
+
     setUpdatingCost(true);
     await fallbackStore.updateShopOrder(soId, (prev) => ({
       ...prev,
@@ -482,18 +785,21 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (currentShopOrder) {
       const parentStatus = getParentOrderStatus(currentShopOrder.parentOrderId);
       const isCanceled = currentShopOrder.status === 'CANCELED' || parentStatus === 'CANCELED';
-      const isDelivered = parentStatus === 'DELIVERED';
+      const isDelivered = parentStatus === 'DELIVERED' || currentShopOrder.status === 'DELIVERED';
       
       const shopOrderSteps: { status: ShopOrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
         { status: 'ACCEPTED', label: 'Accepted', icon: Check, desc: 'Store accepted the request' },
-        { status: 'PREPARING', label: 'Preparing', icon: Package, desc: 'Store is preparing the items' },
+        { status: 'PREPARING', label: 'Processing', icon: Package, desc: 'Store is preparing the items' },
         { status: 'READY', label: 'Ready', icon: CheckCircle, desc: 'Items are ready for pickup' },
         { status: 'HANDOVER', label: 'Handed Over', icon: ArrowRight, desc: 'Handed over to helper' },
+        { status: 'DELIVERED', label: 'Delivered', icon: CheckCircle2, desc: 'Order delivered to customer' },
       ];
 
+      const effectiveStatus: ShopOrderStatus = isCanceled ? 'CANCELED' : isDelivered ? 'DELIVERED' : currentShopOrder.status;
+
       const getShopOrderStepState = (stepStatus: ShopOrderStatus) => {
-        if (currentShopOrder.status === 'CANCELED' || parentStatus === 'CANCELED') return 'CANCELED';
-        const orderIndex = shopOrderSteps.findIndex((s) => s.status === currentShopOrder.status);
+        if (isCanceled) return 'CANCELED';
+        const orderIndex = shopOrderSteps.findIndex((s) => s.status === effectiveStatus);
         const stepIndex = shopOrderSteps.findIndex((s) => s.status === stepStatus);
         if (stepIndex < orderIndex) return 'COMPLETED';
         if (stepIndex === orderIndex) return 'CURRENT';
@@ -519,23 +825,32 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
           <div className="max-w-md mx-auto p-4 space-y-5">
             {/* DYNAMIC URGENCIES TIMER BLOCK */}
-            <div className="bg-gradient-to-br from-red-100 via-rose-50 to-red-100 border-2 border-red-400 shadow-md shadow-red-100 rounded-2xl py-3 px-4 flex flex-col items-center justify-center transition-all">
-              <div className="flex items-center space-x-2.5">
-                <Clock className="w-5 h-5 text-red-600 animate-pulse" />
+            <div className="bg-gradient-to-br from-red-100 via-rose-50 to-red-100 border-2 border-red-400 shadow-md shadow-red-100 rounded-2xl py-3 px-4 flex flex-col items-center justify-center space-y-1 transition-all text-center">
+              <div className="flex items-center justify-center space-x-2 flex-wrap">
+                <Clock className="w-4 h-4 text-red-600 animate-pulse shrink-0" />
                 <span className="text-xs font-black uppercase tracking-wider text-red-950">
                   Requested:
                 </span>
-                <span className="text-xl font-black font-mono text-red-950">
-                  <OrderTimer createdAt={currentShopOrder.createdAt} className="text-red-600 text-base font-black" hideIcon />
+                <span className="text-sm font-extrabold text-red-950">
+                  {formatOrderDateTime(currentShopOrder.createdAt)}
                 </span>
+              </div>
+              <div className="text-xs font-black text-red-700 flex items-center justify-center">
+                <span>(</span>
+                <OrderTimer createdAt={currentShopOrder.createdAt} className="text-red-700 text-xs font-black" hideIcon />
+                <span>)</span>
               </div>
             </div>
 
             {currentShopOrder.status === 'PENDING' ? (
               <>
-                {/* Request Details (Order details) */}
+                {/* Service Type (Order details) */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">Request Details</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
+                      {getParentOrder(currentShopOrder.parentOrderId)?.service || 'Request Details'}
+                    </h3>
+                  </div>
                   <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
                     {currentShopOrder.requestText
                       ? currentShopOrder.requestText
@@ -583,22 +898,42 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   )}
                 </div>
 
-                {/* 2 Buttons Side by Side (Accept, Reject) */}
-                <div className="flex space-x-3 pt-2">
-                  <button
-                    onClick={() => handleCancelOrderClick(currentShopOrder.id)}
-                    className="flex-1 py-3.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-2xl text-xs font-bold border border-red-100 transition-all active:scale-95 text-center"
-                  >
-                    Reject
-                  </button>
+                {/* 3 Buttons Side by Side (Left: দেখতেছি [30%], Middle: Accept [flex-1], Right: Cancel [30%]) */}
+                <div className="flex space-x-1.5 pt-2">
                   <button
                     onClick={() => {
+                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
+                      setSelectedShopOrderId(null);
+                    }}
+                    className="w-[30%] py-3.5 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all active:scale-95 text-center shrink-0"
+                  >
+                    দেখতেছি
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const confirmed = await showConfirm(
+                        'অর্ডার গ্রহণ করুন',
+                        'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
+                        'হ্যাঁ, Accept করুন',
+                        'বাতিল'
+                      );
+                      if (!confirmed) return;
+                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
                       handleUpdateStatus(currentShopOrder.id, 'ACCEPTED');
                       setSelectedShopOrderId(null);
                     }}
-                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
+                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all active:scale-95 text-center"
                   >
                     Accept Request
+                  </button>
+                  <button
+                    onClick={() => {
+                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
+                      handleCancelOrderClick(currentShopOrder.id);
+                    }}
+                    className="w-[30%] py-3.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-2xl text-xs font-extrabold border border-red-100 transition-all active:scale-95 text-center shrink-0"
+                  >
+                    Cancel
                   </button>
                 </div>
               </>
@@ -623,7 +958,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         const state = getShopOrderStepState(step.status);
                         const StepIcon = step.icon;
                         const isHandover = currentShopOrder.status === 'HANDOVER';
-                        const canChangeStatus = !isHandover && !isCanceled && !isDelivered;
+                        const canChangeStatus = !isHandover && !isCanceled && !isDelivered && step.status !== 'DELIVERED';
 
                         return (
                           <div 
@@ -698,9 +1033,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   </div>
                 )}
 
-                {/* Request Details Card including Pricing */}
+                {/* Service Type Card including Pricing */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">Request Details</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
+                      {getParentOrder(currentShopOrder.parentOrderId)?.service || 'Request Details'}
+                    </h3>
+                  </div>
                   <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
                     {currentShopOrder.requestText
                       ? currentShopOrder.requestText
@@ -873,8 +1212,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           const runningCount = storeShopOrders.filter((so) => {
             const parentStatus = getParentOrderStatus(so.parentOrderId);
             const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-            const isDelivered = parentStatus === 'DELIVERED';
-            return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered;
+            const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+            const isHandover = so.status === 'HANDOVER';
+            const isFinished = isDelivered || isCanceled || isHandover;
+            return ['ACCEPTED', 'PREPARING', 'READY'].includes(so.status) && !isFinished;
           }).length;
           if (runningCount === 0) return null;
           return (
@@ -909,14 +1250,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             {/* Sub-tabs: New, Running, Completed */}
             <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200">
               {(['NEW', 'RUNNING', 'COMPLETED'] as const).map((tab) => {
-                const count = storeShopOrders.filter((so) => {
-                  const parentStatus = getParentOrderStatus(so.parentOrderId);
-                  const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-                  const isDelivered = parentStatus === 'DELIVERED';
-                  if (tab === 'NEW') return so.status === 'PENDING' && !isCanceled && !isDelivered;
-                  if (tab === 'RUNNING') return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered;
-                  return isDelivered || isCanceled;
-                }).length;
+                const count = subTabCounts[tab];
 
                 const isRunningWithCount = tab === 'RUNNING' && count > 0;
                 let tabStyle = '';
@@ -977,7 +1311,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     >
                       <option value="ALL">All Running</option>
                       <option value="ACCEPTED">Accepted</option>
-                      <option value="PREPARING">Preparing</option>
+                      <option value="PREPARING">Processing</option>
                       <option value="READY">Ready</option>
                       <option value="HANDOVER">Handover</option>
                     </select>
@@ -1007,23 +1341,32 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 <div className="space-y-3">
                   {(ordersSubTab === 'COMPLETED' ? filteredShopOrders : filteredShopOrders.slice(0, storeVisibleCount)).map((so) => {
                     const parentStatus = getParentOrderStatus(so.parentOrderId);
+                    const parentOrder = getParentOrder(so.parentOrderId);
+                    const serviceName = parentOrder?.service || parentOrder?.title;
                     const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-                    const isDelivered = parentStatus === 'DELIVERED';
+                    const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
 
                     return (
                       <div
                         key={so.id}
-                        onClick={() => setSelectedShopOrderId(so.id)}
+                        onClick={() => {
+                          fallbackStore.markShopOrderViewed(so.id);
+                          setSelectedShopOrderId(so.id);
+                        }}
                         className="bg-white rounded-3xl border border-gray-100 p-4 shadow-sm space-y-3 hover:shadow-md transition-all cursor-pointer"
                       >
-                        {/* Header: ID | Timer | Status */}
+                        {/* Header: ID | Requested Time | Timer | Status */}
                         <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div className="flex items-center space-x-2">
-                            <h4 className="font-extrabold text-sm text-gray-900">
-                              Order Id: <span className="font-mono text-emerald-800 font-black">#{so.parentOrderId.slice(-6).toUpperCase()}</span>
+                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                            <h4 className="font-mono text-emerald-800 font-black text-sm">
+                              #{so.parentOrderId.slice(-6).toUpperCase()}
                             </h4>
                             <span className="text-xs font-semibold text-gray-400">|</span>
-                            <OrderTimer createdAt={so.createdAt} className="text-red-600 text-sm font-black" hideIcon />
+                            <span className="text-xs font-bold text-gray-600">
+                              {formatOrderDateTime(so.createdAt)}
+                            </span>
+                            <span className="text-xs font-semibold text-gray-400">|</span>
+                            <OrderTimer createdAt={so.createdAt} className="text-red-600 text-xs font-black" hideIcon />
                           </div>
                           <div className="text-right">
                             {isCanceled ? (
@@ -1032,7 +1375,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                               </span>
                             ) : isDelivered ? (
                               <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                Completed
+                                Finished
                               </span>
                             ) : (
                               <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
@@ -1042,25 +1385,71 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                           </div>
                         </div>
 
-                        {/* Request Text without Background, Padding, Border */}
-                        <div className="text-xs text-gray-600 truncate">
-                          {so.requestText}
+                        {/* Service/Order Type Title and Truncated Details */}
+                        <div className="space-y-0.5 min-w-0">
+                          <h5 className="font-extrabold text-sm text-gray-900 truncate">
+                            {serviceName || 'Store Order'}
+                          </h5>
+                          <p className="text-xs text-gray-600 font-medium truncate">
+                            {so.requestText}
+                          </p>
                         </div>
 
-                        {/* Actions: Accept button shown only when Pending, Details removed as entire card redirects */}
-                        {so.status === 'PENDING' && !isCanceled && !isDelivered && (
-                          <div className="flex gap-2 pt-2">
+                        {/* Actions: 3 In-Line Buttons (দেখতেছি: 30%, Accept: middle flex-1, Cancel: 30%) */}
+                        <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-gray-100 mt-1">
+                          {so.status === 'PENDING' && !isCanceled && !isDelivered ? (
+                            <div className="flex gap-1.5 w-full">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  fallbackStore.markShopOrderViewed(so.id);
+                                  setSelectedShopOrderId(so.id);
+                                }}
+                                className="w-[30%] py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-extrabold transition-all shadow-sm shrink-0 text-center"
+                              >
+                                দেখতেছি
+                              </button>
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const confirmed = await showConfirm(
+                                    'অর্ডার গ্রহণ করুন',
+                                    'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
+                                    'হ্যাঁ, Accept করুন',
+                                    'বাতিল'
+                                  );
+                                  if (!confirmed) return;
+                                  fallbackStore.markShopOrderViewed(so.id);
+                                  handleUpdateStatus(so.id, 'ACCEPTED');
+                                }}
+                                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all shadow-sm text-center"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  fallbackStore.markShopOrderViewed(so.id);
+                                  handleCancelOrderClick(so.id);
+                                }}
+                                className="w-[30%] py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-extrabold transition-all border border-red-100 shrink-0 text-center"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleUpdateStatus(so.id, 'ACCEPTED');
+                                setSelectedShopOrderId(so.id);
                               }}
-                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+                              className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1"
                             >
-                              Accept
+                              <span>View Details</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
                             </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -1268,7 +1657,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               <div className="space-y-1.5">
                 <h3 className="text-base font-black text-gray-900">পণ্যের দাম আবশ্যক</h3>
                 <p className="text-xs text-gray-600 font-semibold leading-relaxed">
-                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Preparing স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
+                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Processing স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
                 </p>
               </div>
               <button
@@ -1281,7 +1670,271 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* ── Store New Order Alert Fullscreen Overlay with Carousel ── */}
+      {isAlarmPlaying && unviewedShopOrderIds.size > 0 && (
+        <StoreNewOrderAlertOverlay
+          unviewedShopOrderIds={unviewedShopOrderIds}
+          onAccept={async (soId) => {
+            const confirmed = await showConfirm(
+              'অর্ডার গ্রহণ করুন',
+              'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
+              'হ্যাঁ, Accept করুন',
+              'বাতিল'
+            );
+            if (!confirmed) return;
+
+            await handleUpdateStatus(soId, 'ACCEPTED');
+            fallbackStore.markShopOrderViewed(soId);
+            setUnviewedShopOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(soId);
+              return updated;
+            });
+            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
+          }}
+          onCancel={(soId) => {
+            handleCancelOrderClick(soId);
+            fallbackStore.markShopOrderViewed(soId);
+            setUnviewedShopOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(soId);
+              return updated;
+            });
+            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
+          }}
+          onViewOne={(soId) => {
+            fallbackStore.markShopOrderViewed(soId);
+            setUnviewedShopOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(soId);
+              return updated;
+            });
+            setLocalActiveTab('ORDERS');
+            setOrdersSubTab('NEW');
+            setSelectedShopOrderId(soId);
+            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
+          }}
+          onDismissAll={() => {
+            setIsAlarmPlaying(false);
+          }}
+        />
+      )}
     </>
+  );
+};
+
+interface StoreNewOrderAlertOverlayProps {
+  unviewedShopOrderIds: Set<string>;
+  onAccept: (soId: string) => Promise<void>;
+  onCancel: (soId: string) => void;
+  onViewOne: (soId: string) => void;
+  onDismissAll: () => void;
+}
+
+const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
+  unviewedShopOrderIds,
+  onAccept,
+  onCancel,
+  onViewOne,
+  onDismissAll,
+}) => {
+  const shopOrderIdList = Array.from(unviewedShopOrderIds);
+  const [currentIdx, setCurrentIdx] = useState(shopOrderIdList.length - 1);
+  const [processing, setProcessing] = useState(false);
+
+  const safeIdx = Math.min(currentIdx, shopOrderIdList.length - 1);
+  const soId = shopOrderIdList[safeIdx];
+  const shopOrder = soId ? fallbackStore.shopOrders.get(soId) : null;
+  const parentOrder = shopOrder ? fallbackStore.orders.get(shopOrder.parentOrderId) : null;
+
+  const goNext = () => setCurrentIdx((i) => Math.min(i + 1, shopOrderIdList.length - 1));
+  const goPrev = () => setCurrentIdx((i) => Math.max(i - 1, 0));
+
+  const handleAcceptClick = async () => {
+    if (!shopOrder || processing) return;
+    setProcessing(true);
+    await onAccept(shopOrder.id);
+    setProcessing(false);
+  };
+
+  if (!shopOrder) return null;
+
+  const helperPhone = parentOrder?.helperPhone || parentOrder?.customerPhone || '';
+
+  return (
+    <div
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+      className="z-[9999] bg-red-950/85 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300"
+    >
+      {/* Pulsing glow background */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-red-500/20 animate-ping" />
+      </div>
+
+      {/* Top Header */}
+      <div className="w-full max-w-sm flex items-center justify-between mb-3 relative z-10">
+        <div className="flex items-center space-x-2">
+          <div className="w-8 h-8 bg-red-500/30 rounded-full flex items-center justify-center animate-bounce">
+            <Bell className="w-4 h-4 text-white" />
+          </div>
+          <span className="text-white font-black text-sm">🚨 নতুন অর্ডার এসেছে!</span>
+        </div>
+        <button
+          onClick={onDismissAll}
+          className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold transition-all"
+        >
+          <X className="w-3.5 h-3.5" />
+          <span>মিউট</span>
+        </button>
+      </div>
+
+      <div className="relative w-full max-w-sm flex items-center justify-center z-10">
+        {/* Left Navigation Arrow */}
+        {shopOrderIdList.length > 1 && (
+          <button
+            onClick={goPrev}
+            disabled={safeIdx === 0}
+            className="absolute -left-6 md:-left-16 z-20 w-11 h-11 rounded-full bg-white hover:bg-red-50 text-red-600 shadow-2xl border border-red-200 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-all hover:scale-110 active:scale-95 shrink-0"
+          >
+            <ArrowLeft className="w-6 h-6 stroke-[3px]" />
+          </button>
+        )}
+
+        {/* Card */}
+        <div className="w-full bg-white rounded-3xl shadow-2xl border-2 border-red-400 relative overflow-hidden animate-in zoom-in-95 duration-300">
+          <div className="h-1.5 bg-gradient-to-r from-red-500 via-orange-400 to-red-500 animate-pulse" />
+
+          {shopOrderIdList.length > 1 && (
+            <div className="absolute top-3 right-3 bg-red-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full shadow-md">
+              {safeIdx + 1} / {shopOrderIdList.length}
+            </div>
+          )}
+
+          <div className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2.5 py-0.5 rounded-md shadow-xs">
+                #{shopOrder.parentOrderId.slice(-6).toUpperCase()}
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-black">
+                {shopOrder.status}
+              </span>
+            </div>
+
+            {/* Request text */}
+            <div className="bg-red-50/60 border border-red-100 rounded-2xl p-3.5">
+              <p className="text-[10px] text-red-800 font-bold uppercase tracking-wide mb-1">অর্ডার / প্রোডাক্ট বিবরণ</p>
+              <p className="text-sm text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
+                {shopOrder.requestText}
+              </p>
+            </div>
+
+            {/* Helper Info with Phone Number */}
+            <div className="flex items-center space-x-3 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-base shadow-sm shrink-0">
+                {shopOrder.helperName.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] text-emerald-700 font-extrabold uppercase tracking-wide">Helper Details</p>
+                <p className="text-xs font-black text-gray-900 truncate">{shopOrder.helperName}</p>
+                {helperPhone && (
+                  <p className="text-xs font-bold text-gray-600 flex items-center space-x-1 mt-0.5">
+                    <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                    <span>{helperPhone}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Timing */}
+            <div className="flex items-center justify-between text-xs text-gray-500 font-semibold px-1">
+              <span>অনুরোধের সময়:</span>
+              <OrderTimer createdAt={shopOrder.createdAt} className="text-red-600 font-black text-xs" />
+            </div>
+          </div>
+
+          {/* Slide navigation indicators */}
+          {shopOrderIdList.length > 1 && (
+            <div className="px-5 pb-2">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={goPrev}
+                  disabled={safeIdx === 0}
+                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 disabled:opacity-30 transition-all"
+                >
+                  <ArrowLeft className="w-4 h-4 text-gray-700" />
+                </button>
+                <div className="flex items-center space-x-1.5">
+                  {shopOrderIdList.map((_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setCurrentIdx(i)}
+                      className={`rounded-full transition-all ${
+                        i === safeIdx
+                          ? 'w-5 h-2 bg-red-500'
+                          : 'w-2 h-2 bg-gray-300 hover:bg-gray-400'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={goNext}
+                  disabled={safeIdx === shopOrderIdList.length - 1}
+                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 disabled:opacity-30 transition-all"
+                >
+                  <ArrowRight className="w-4 h-4 text-gray-700" />
+                </button>
+              </div>
+              <p className="text-center text-[10px] text-gray-400 font-medium mt-1">
+                স্লাইড করে অন্যান্য দোকান অর্ডার দেখুন
+              </p>
+            </div>
+          )}
+
+          {/* Action buttons (3 In-Line Buttons: দেখতেছি [30%], Accept [flex-1], Cancel [30%]) */}
+          <div className="px-5 pb-5 pt-2">
+            <div className="flex space-x-1.5 w-full">
+              <button
+                onClick={() => onViewOne(shopOrder.id)}
+                className="w-[30%] py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl font-extrabold text-xs shadow-md transition-all active:scale-95 text-center shrink-0"
+              >
+                দেখতেছি
+              </button>
+              <button
+                onClick={handleAcceptClick}
+                disabled={processing}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 text-center"
+              >
+                {processing ? 'Accpet...' : '✅ Accept'}
+              </button>
+              <button
+                onClick={() => onCancel(shopOrder.id)}
+                className="w-[30%] py-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-2xl font-extrabold text-xs transition-all active:scale-95 shrink-0 text-center"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Navigation Arrow */}
+        {shopOrderIdList.length > 1 && (
+          <button
+            onClick={goNext}
+            disabled={safeIdx === shopOrderIdList.length - 1}
+            className="absolute -right-6 md:-right-16 z-20 w-11 h-11 rounded-full bg-white hover:bg-red-50 text-red-600 shadow-2xl border border-red-200 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-all hover:scale-110 active:scale-95 shrink-0"
+          >
+            <ArrowRight className="w-6 h-6 stroke-[3px]" />
+          </button>
+        )}
+      </div>
+
+      <p className="mt-4 text-white/70 text-[11px] font-medium text-center relative z-10">
+        {shopOrderIdList.length > 1
+          ? `${shopOrderIdList.length}টি দোকান অর্ডার আপনার অনুমোদনের অপেক্ষায়`
+          : 'কাস্টমার/হেলপারের রিকুয়েস্ট চেক করুন'}
+      </p>
+    </div>
   );
 };
 

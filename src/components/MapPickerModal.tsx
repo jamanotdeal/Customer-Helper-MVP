@@ -8,6 +8,7 @@ import { MapPin, X, Navigation, Check, Search, AlertTriangle } from 'lucide-reac
 
 import { useModal } from '@/components/CustomModal';
 import { getMapGuideShowCount, incrementMapGuideShowCount } from '@/lib/storage';
+import { isLocationInAllowedAreas } from '@/lib/geofenceUtils';
 
 interface MapPickerModalProps {
   isOpen: boolean;
@@ -138,21 +139,45 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         // Trigger initial reverse geocode for the starting position
         reverseGeocode(initialLat, initialLng);
 
+        // Calculate allowed serving area bounds for initial view fitting (without drawing visual polygon graphics)
+        const pSettings = fallbackStore.pricingSettings;
+        if (pSettings.allowedDeliveryAreasEnabled && pSettings.allowedDeliveryAreas && pSettings.allowedDeliveryAreas.length > 0) {
+          const allPoints: [number, number][] = [];
+
+          pSettings.allowedDeliveryAreas.forEach((area) => {
+            if (area.coordinates && area.coordinates.length >= 3) {
+              area.coordinates.forEach((c) => allPoints.push([c.lat, c.lng]));
+            }
+          });
+
+          if (allPoints.length >= 3) {
+            // Fit initial map view to service area
+            const bounds = L.latLngBounds(allPoints);
+            map.fitBounds(bounds, { padding: [30, 30] });
+          }
+        }
+
         // Auto-locate to user's GPS position whenever the map opens — even if an
-        // initialLocation was provided. This ensures the map is always centered on
-        // the customer's actual position. The address text field keeps the prefilled
-        // value so the customer can confirm/keep their saved address if it's nearby.
+        // initialLocation was provided. This ensures the map is centered on customer position
+        // if inside allowed service area.
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const userLat = pos.coords.latitude;
               const userLng = pos.coords.longitude;
+              const pSet = fallbackStore.pricingSettings;
+              const isAllowed = isLocationInAllowedAreas(
+                { lat: userLat, lng: userLng },
+                pSet.allowedDeliveryAreasEnabled,
+                pSet.allowedDeliveryAreas
+              );
+              if (!isAllowed) return; // Keep centered within allowed service area
+
               setLat(userLat);
               setLng(userLng);
               if (mapInstanceRef.current) {
                 mapInstanceRef.current.setView([userLat, userLng], 17, { animate: true });
                 mapInstanceRef.current.once('moveend', () => {
-                  // Only reverse-geocode if no detail address was pre-filled
                   if (!initialLocation?.address) {
                     reverseGeocode(userLat, userLng);
                   }
@@ -331,8 +356,8 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     const finalDetail = detailAddress.trim();
     const finalMap = mapAddress.trim();
 
-    if (!finalDetail && !finalMap) {
-      showAlert('তথ্য অসম্পূর্ণ', 'দয়া করে ঠিকানার বিবরণ লিখুন বা ম্যাপে পিন সিলেক্ট করুন।', 'warning');
+    if (!finalDetail) {
+      showAlert('ঠিকানা আবশ্যক!', 'অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।', 'warning');
       return;
     }
 
@@ -344,7 +369,70 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         combinedAddress = `${finalDetail}, ${finalMap}`;
       }
     } else {
-      combinedAddress = finalDetail || finalMap;
+      combinedAddress = finalDetail;
+    }
+
+    // Validate location against allowed serving area polygons if enabled
+    const pSettings = fallbackStore.pricingSettings;
+    if (!mapError && typeof lat === 'number' && typeof lng === 'number') {
+      const allowed = isLocationInAllowedAreas(
+        { lat, lng },
+        pSettings.allowedDeliveryAreasEnabled,
+        pSettings.allowedDeliveryAreas
+      );
+      if (!allowed) {
+        // Calculate center or valid point inside allowed area
+        let insideLat: number | undefined;
+        let insideLng: number | undefined;
+
+        if (pSettings.allowedDeliveryAreas && pSettings.allowedDeliveryAreas.length > 0) {
+          const allPts: { lat: number; lng: number }[] = [];
+          pSettings.allowedDeliveryAreas.forEach((area) => {
+            if (area.coordinates && area.coordinates.length > 0) {
+              area.coordinates.forEach((pt) => allPts.push(pt));
+            }
+          });
+
+          if (allPts.length > 0) {
+            const sumLat = allPts.reduce((acc, pt) => acc + pt.lat, 0);
+            const sumLng = allPts.reduce((acc, pt) => acc + pt.lng, 0);
+            const avgLat = sumLat / allPts.length;
+            const avgLng = sumLng / allPts.length;
+
+            if (isLocationInAllowedAreas({ lat: avgLat, lng: avgLng }, true, pSettings.allowedDeliveryAreas)) {
+              insideLat = avgLat;
+              insideLng = avgLng;
+            } else {
+              const firstPt = pSettings.allowedDeliveryAreas[0].coordinates[0];
+              if (firstPt) {
+                insideLat = firstPt.lat;
+                insideLng = firstPt.lng;
+              }
+            }
+          }
+        }
+
+        // Move map automatically inside allowed area
+        if (typeof insideLat === 'number' && typeof insideLng === 'number' && mapInstanceRef.current) {
+          const targetLat = insideLat;
+          const targetLng = insideLng;
+          setLat(targetLat);
+          setLng(targetLng);
+          mapInstanceRef.current.setView([targetLat, targetLng], 17, { animate: true });
+          mapInstanceRef.current.once('moveend', () => {
+            reverseGeocode(targetLat, targetLng);
+          });
+        }
+
+        const areaNames = (pSettings.allowedDeliveryAreas || []).map((a) => a.name).join(', ');
+        const customMsg = pSettings.outOfServiceAreaMessage?.trim();
+        const alertBody = customMsg
+          ? `${customMsg}\n\n📍 অনুমোদিত সেবা এলাকা: ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}\n\nপয়েন্টটি সার্ভিস এরিয়ার ভেতরে আনা হয়েছে।`
+          : `দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। আমরা বর্তমানে শুধুমাত্র নিম্নোক্ত এলাকায় সার্ভিস প্রদান করছি:\n\n📍 ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}\n\nম্যাপটি স্বয়ংক্রিয়ভাবে সার্ভিস এরিয়ার ভেতরে সরানো হয়েছে। অনুগ্রহ করে সার্ভিস এরিয়ার ভেতরে লোকেশন নির্বাচন করুন।`;
+
+        showAlert('সার্ভিস এরিয়ার বাইরে!', alertBody, 'warning');
+        return;
+      }
     }
 
     onSelectLocation({
@@ -362,6 +450,10 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     ? (p.mapPickerDeliveryGuideText || p.mapPickerGuideText || 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।')
     : (p.mapPickerPickupGuideText || p.mapPickerGuideText || 'যে দোকান বা স্থান থেকে আনতে হবে, সেই স্থানে পিন সরিয়ে নিয়ে যান অথবা ক্লিক করুন। দোকানের নাম বা বিস্তারিত ঠিকানা নিচের input box-এ লিখুন।');
   const guideOkText = p.mapPickerGuideOkText || 'ঠিক আছে';
+
+  const inputPlaceholder = modalType === 'delivery'
+    ? (p.mapPickerDeliveryPlaceholder || p.mapPickerPlaceholder || addressPlaceholder || 'যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.')
+    : (p.mapPickerPickupPlaceholder || p.mapPickerPlaceholder || addressPlaceholder || 'যেমন: আরিফ স্টোর, আশুলিয়া বাজার.');
 
   return createPortal(
     <div
@@ -462,22 +554,16 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
                 <div className="w-4 h-2 rounded-full blur-[2px]" style={{ background: 'rgba(163,230,53,0.45)' }} />
               </div>
 
-              {/* Combined Detail Address and Selected Address Overlay - bottom of the map */}
-              <div className="absolute bottom-[3px] left-0 right-0 z-20 flex items-center gap-2 py-4 px-3 bg-white rounded-t-2xl shadow-xl border-t border-emerald-100">
+              {/* Detail Address Overlay - bottom of the map */}
+              <div className="absolute bottom-[3px] left-0 right-0 z-20 flex items-center py-3.5 px-3 bg-white rounded-t-2xl shadow-xl border-t border-emerald-100">
                 <input
                   type="text"
                   value={detailAddress}
                   onChange={(e) => setDetailAddress(e.target.value)}
-                  placeholder={addressPlaceholder || 'Rahman Villa...'}
-                  className="w-2/5 min-w-[120px] bg-transparent outline-none text-xs text-gray-900 placeholder-gray-400 font-semibold border-r border-gray-200 pr-2"
+                  placeholder={inputPlaceholder}
+                  className="w-full bg-transparent outline-none text-xs text-gray-900 placeholder-gray-400 font-semibold px-1"
+                  required
                 />
-                <span className="text-[9px] font-medium text-gray-600 truncate flex-1 leading-tight pl-1">
-                  {isGeocoding ? (
-                    <span className="text-emerald-600 italic">ঠিকানা খোঁজা হচ্ছে...</span>
-                  ) : (
-                    mapAddress || 'ম্যাপে স্থান নির্বাচন করুন'
-                  )}
-                </span>
               </div>
 
               <button

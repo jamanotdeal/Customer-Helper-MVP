@@ -31,9 +31,8 @@ export const HelperWallet: React.FC = () => {
   const [accountNumber, setAccountNumber] = useState('01812345678');
   const [submitting, setSubmitting] = useState(false);
 
-  // Pagination for Wallet Ledger
-  const [ledgerPage, setLedgerPage] = useState(1);
-  const ledgerPageSize = 10;
+  // Pagination / Day-by-Day history for Wallet Ledger
+  const [daysToLoad, setDaysToLoad] = useState<number>(1);
 
   const getPaymentInstructions = () => {
     const settings = fallbackStore.pricingSettings;
@@ -134,9 +133,30 @@ export const HelperWallet: React.FC = () => {
   useEffect(() => {
     const syncWallet = () => {
       if (user) {
-        const w = fallbackStore.getHelperWallet(user.uid);
+        // ── Source of truth for lifetime totals: the Firestore wallet document ──
+        // This is written additively on every order completion and payback,
+        // so it's always accurate regardless of how many orders the helper has.
+        // We NEVER recompute totals from the local order cache (getHelperWallet)
+        // because it's query-limited and gives wrong results with many orders.
+        const firestoreWallet = fallbackStore.wallets.get(user.uid);
+
+        // Use the Firestore wallet if available; otherwise start with zeroes
+        // (will be replaced by the real document once the first order completes).
+        const w: Wallet = firestoreWallet ?? {
+          userId: user.uid,
+          totalEarned: 0,
+          balance: 0,
+          totalPaidCommission: 0,
+          totalWithdrawn: 0,
+          updatedAt: new Date().toISOString(),
+        };
+
         const txs = fallbackStore.walletTransactions.get(user.uid) || [];
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
+
+        // Delivered orders are still needed for the date-range / Today breakdowns
+        // (we need per-order detail for filtering by date). Lifetime totals come
+        // from the wallet document above, not from summing these orders.
         const allOrders = Array.from(fallbackStore.orders.values());
         const helperOrders = allOrders.filter(
           (o) => o.helperId === user.uid && o.status === 'DELIVERED'
@@ -156,6 +176,7 @@ export const HelperWallet: React.FC = () => {
     };
   }, [user]);
 
+
   // Filtered Transactions & Withdrawals based on selected Date Range
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
@@ -167,15 +188,36 @@ export const HelperWallet: React.FC = () => {
     });
   }, [transactions, startDate, endDate]);
 
-  const totalLedgerPages = Math.ceil(filteredTransactions.length / ledgerPageSize) || 1;
-  const paginatedTransactions = useMemo(() => {
-    return filteredTransactions.slice((ledgerPage - 1) * ledgerPageSize, ledgerPage * ledgerPageSize);
-  }, [filteredTransactions, ledgerPage]);
-
-  // Reset ledger page on transactions change
-  useEffect(() => {
-    setLedgerPage(1);
+  // Group filtered transactions by local date (YYYY-MM-DD) sorted descending
+  const groupedTransactionsByDay = useMemo(() => {
+    const map = new Map<string, WalletTransaction[]>();
+    filteredTransactions.forEach((tx) => {
+      const d = new Date(tx.createdAt);
+      const dateKey = isNaN(d.getTime()) ? 'Unknown' : getLocalYYYYMMDD(d);
+      if (!map.has(dateKey)) {
+        map.set(dateKey, []);
+      }
+      map.get(dateKey)!.push(tx);
+    });
+    // Distinct sorted dates (newest first)
+    const sortedDates = Array.from(map.keys()).sort((a, b) => (a < b ? 1 : -1));
+    return { map, sortedDates };
   }, [filteredTransactions]);
+
+  const visibleDates = useMemo(() => {
+    return groupedTransactionsByDay.sortedDates.slice(0, daysToLoad);
+  }, [groupedTransactionsByDay, daysToLoad]);
+
+  const visibleTransactions = useMemo(() => {
+    const list: WalletTransaction[] = [];
+    visibleDates.forEach((dateKey) => {
+      const dayTxs = groupedTransactionsByDay.map.get(dateKey) || [];
+      list.push(...dayTxs);
+    });
+    return list;
+  }, [visibleDates, groupedTransactionsByDay]);
+
+  const hasMoreDays = daysToLoad < groupedTransactionsByDay.sortedDates.length;
 
   const filteredWithdrawals = useMemo(() => {
     return withdrawals.filter((w) => {
@@ -205,10 +247,12 @@ export const HelperWallet: React.FC = () => {
     let commissionDue = 0;
     let paidCommission = 0;
 
+    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
     filteredOrders.forEach((o) => {
-      const helperShare = calculateHelperCommission(o.deliveryFee, fallbackStore.pricingSettings);
+      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
       earned += helperShare;
-      commissionDue += (o.deliveryFee - helperShare);
+      commissionDue += (effectiveFee - helperShare);
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -256,7 +300,7 @@ export const HelperWallet: React.FC = () => {
     }
 
     setSubmitting(true);
-    await fallbackStore.submitWithdrawalRequest(user.uid, user.displayName, amt, paymentMethod, accountNumber);
+    await fallbackStore.submitWithdrawalRequest(user.uid, user.displayName, amt, paymentMethod, accountNumber, 'helper');
     setSubmitting(false);
     setShowWithdrawModal(false);
     await showAlert('অনুরোধ সফল', 'কমিশন পরিশোধের তথ্য ভেরিফিকেশনের জন্য অ্যাডমিনের কাছে পাঠানো হয়েছে।', 'success');
@@ -268,13 +312,15 @@ export const HelperWallet: React.FC = () => {
     let earnedToday = 0;
     let commissionDueToday = 0;
 
+    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
     deliveredOrders.forEach((o) => {
       const orderDate = o.deliveredAt || o.createdAt;
       const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
       if (orderLocalStr === todayStr) {
-        const helperShare = calculateHelperCommission(o.deliveryFee, fallbackStore.pricingSettings);
+        const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+        const helperShare = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
         earnedToday += helperShare;
-        commissionDueToday += (o.deliveryFee - helperShare);
+        commissionDueToday += (effectiveFee - helperShare);
       }
     });
 
@@ -298,7 +344,7 @@ export const HelperWallet: React.FC = () => {
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
               <WalletIcon className="w-5 h-5 text-indigo-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings & Commission Dashboard</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings</span>
           </div>
 
           {/* Filter Dropdown */}
@@ -489,12 +535,12 @@ export const HelperWallet: React.FC = () => {
             Wallet Ledger ({filteredTransactions.length})
           </h3>
         </div>
-        {filteredTransactions.length === 0 ? (
+        {visibleTransactions.length === 0 ? (
           <p className="text-xs text-gray-400 text-center py-4">কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</p>
         ) : (
           <>
             <div className="space-y-2.5">
-              {paginatedTransactions.map((tx) => (
+              {visibleTransactions.map((tx) => (
                 <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50/70 border border-gray-100 text-xs">
                   <div className="flex items-center space-x-3">
                     <div
@@ -521,26 +567,14 @@ export const HelperWallet: React.FC = () => {
                 </div>
               ))}
             </div>
-            {filteredTransactions.length > ledgerPageSize && (
-              <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+            {hasMoreDays && (
+              <div className="pt-3 border-t border-gray-100 text-center">
                 <button
                   type="button"
-                  onClick={() => setLedgerPage((p) => Math.max(p - 1, 1))}
-                  disabled={ledgerPage === 1}
-                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
+                  onClick={() => setDaysToLoad((prev) => prev + 1)}
+                  className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 active:scale-98 text-gray-800 rounded-2xl text-xs font-black transition-all select-none shadow-xs"
                 >
-                  Prev
-                </button>
-                <span className="text-xs font-black text-slate-800">
-                  Page {ledgerPage} of {totalLedgerPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setLedgerPage((p) => Math.min(p + 1, totalLedgerPages))}
-                  disabled={ledgerPage === totalLedgerPages}
-                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
-                >
-                  Next
+                  পূর্ববর্তী ১ দিনের ইতিহাস দেখুন (Load Previous Day)
                 </button>
               </div>
             )}
@@ -597,14 +631,13 @@ export const HelperWallet: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">মোবাইল নম্বর / ট্রানজেকশন আইডি (TxID)</label>
-                <input
-                  type="text"
+                <label className="text-xs font-bold text-gray-700 block mb-1">Note (optional)</label>
+                <textarea
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
-                  placeholder="মোবাইল বা TxID লিখুন..."
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none"
-                  required
+                  placeholder="Transaction id or anything for clearification"
+                  rows={3}
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none resize-none"
                 />
               </div>
 
@@ -619,9 +652,16 @@ export const HelperWallet: React.FC = () => {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700"
+                  className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
-                  তথ্য জমা দিন
+                  {submitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>জমা হচ্ছে...</span>
+                    </>
+                  ) : (
+                    <span>তথ্য জমা দিন</span>
+                  )}
                 </button>
               </div>
             </form>

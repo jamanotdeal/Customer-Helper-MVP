@@ -25,9 +25,19 @@ interface RevenueAnalyticsProps {
   orders: Order[];
   pricing: PricingSettings;
   shops?: Shop[];
+  serverTotalDeliveryFees?: number | null;
+  serverTotalProductCosts?: number | null;
+  serverTotalCollection?: number | null;
 }
 
-export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pricing, shops = [] }) => {
+export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
+  orders,
+  pricing,
+  shops = [],
+  serverTotalDeliveryFees = null,
+  serverTotalProductCosts = null,
+  serverTotalCollection = null,
+}) => {
   // Local Date Helper (YYYY-MM-DD in user's local timezone)
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {
     const year = d.getFullYear();
@@ -168,14 +178,17 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
 
     // Calculate all-time figures for the ledger to avoid date range mismatch
     const allDeliveredOrders = orders.filter((o) => o.status === 'DELIVERED');
-    const allTimeGrossDeliveryFees = allDeliveredOrders.reduce((sum, o) => sum + o.deliveryFee, 0);
+    const localDeliveredFees = allDeliveredOrders.reduce((sum, o) => sum + o.deliveryFee, 0);
+    const allTimeGrossDeliveryFees = serverTotalDeliveryFees !== null ? serverTotalDeliveryFees : localDeliveredFees;
     const allTimeApprovedPayouts = allWithdrawals
       .filter((w) => w.status === 'APPROVED')
       .reduce((sum, w) => sum + w.amount, 0);
 
+    const minFee = pricing.feeCalculatorMinFee ?? 20;
     const allTimePlatformCommission = allDeliveredOrders.reduce((sum, o) => {
-      const helperPayout = calculateHelperCommission(o.deliveryFee, pricing);
-      return sum + (o.deliveryFee - helperPayout);
+      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+      const helperPayout = calculateHelperCommission(effectiveFee, pricing);
+      return sum + (effectiveFee - helperPayout);
     }, 0);
 
     const totalPlatformCommissionPaidBack = allWallets.reduce((sum, w) => sum + (w.totalPaidCommission || 0), 0);
@@ -204,7 +217,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
       const t = getOrderCompletedTime(o);
       const dateStr = getLocalYYYYMMDD(new Date(t));
 
-      const fee = o.deliveryFee;
+      const fee = Math.max(o.deliveryFee || 0, minFee);
       const pCost = o.productCost || 0;
       const helperPayout = calculateHelperCommission(fee, pricing);
       const platformShare = fee - helperPayout;
@@ -278,8 +291,9 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({ orders, pric
     const cancelledOrderValue = cancelledGoodsValue + cancelledDeliveryFees;
 
     const platformCommissionEarnedInRange = deliveredInRange.reduce((sum, o) => {
-      const helperPayout = calculateHelperCommission(o.deliveryFee, pricing);
-      return sum + (o.deliveryFee - helperPayout);
+      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+      const helperPayout = calculateHelperCommission(effectiveFee, pricing);
+      return sum + (effectiveFee - helperPayout);
     }, 0);
 
     // Sum PAYBACK transactions in range (absolute value)

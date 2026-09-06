@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, Navigation, Search, AlertTriangle } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 import { StoreApplication, LocationData } from '@/types';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface StoreApplicationModalProps {
   onClose: () => void;
@@ -227,8 +228,14 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
     location.lng !== 90.4125
   );
 
+  const isHelperUser = Boolean(user && (user.isHelper || user.role === 'helper'));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isHelperUser) {
+      setError('হেলপার ইউজার কখনো স্টোর মোডের আবেদন করতে পারবেন না।');
+      return;
+    }
     if (!storeName.trim() || !storeDescription.trim() || !ownerName.trim() || !ownerWhatsapp.trim() || !managerName.trim() || !managerWhatsapp.trim()) {
       setError('সকল তারকাচিহ্নিত (*) ঘর পূরণ করুন।');
       return;
@@ -599,14 +606,14 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
 
             {/* Submit */}
             <div className="pt-2">
-              <button
+              <AsyncButton
                 type="submit"
-                disabled={submitting}
+                isLoading={submitting}
+                icon={<Store className="w-5 h-5" />}
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold text-sm shadow-lg shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center space-x-2"
               >
-                <Store className="w-5 h-5" />
-                <span>{submitting ? 'জমা হচ্ছে...' : 'আবেদন জমা দিন'}</span>
-              </button>
+                <span>আবেদন জমা দিন</span>
+              </AsyncButton>
             </div>
           </form>
         </div>

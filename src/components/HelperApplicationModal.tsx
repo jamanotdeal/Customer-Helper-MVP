@@ -3,6 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { X, Bike, Check, AlertCircle, Trash2, Edit3 } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 import { HelperApplication } from '@/types';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface HelperApplicationModalProps {
   onClose: () => void;
@@ -32,7 +33,30 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  const isStoreUser = Boolean(
+    user && (
+      user.isStore ||
+      user.isStoreApproved ||
+      Boolean(user.storeId) ||
+      user.role === 'store'
+    )
+  );
+
   useEffect(() => {
+    if (isStoreUser) {
+      setError('স্টোর ইউজার কখনো হেলপার হতে পারবেন না।');
+      return;
+    }
+
+    if (user?.isHelper) {
+      setSuccessMessage('আপনি ইতিমধ্যে একজন নিবন্ধিত হেলপার! হেলপার ভিউতে পাঠানো হচ্ছে...');
+      setSubmitted(true);
+      setTimeout(() => {
+        onClose();
+      }, 1500);
+      return;
+    }
+
     if (existingPendingApp) {
       setLegalName(existingPendingApp.legalName);
       setNid(existingPendingApp.nid);
@@ -43,10 +67,14 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
       setHasCycle(existingPendingApp.hasCycle);
       setHasBike(existingPendingApp.hasBike);
     }
-  }, [existingPendingApp, user]);
+  }, [existingPendingApp, user, onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isStoreUser) {
+      setError('স্টোর ইউজার কখনো হেলপার হতে পারবেন না।');
+      return;
+    }
     if (!legalName.trim() || !nid.trim() || !whatsapp.trim() || !fbProfile.trim()) {
       setError('আপনার পূর্ণ নাম, NID নম্বর, হোয়াটসঅ্যাপ নম্বর এবং ফেসবুক প্রোফাইল লিংক প্রদান করুন।');
       return;
@@ -54,6 +82,16 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
 
     if (!/^01[3-9]\d{8}$/.test(whatsapp.trim())) {
       setError('অনুগ্রহ করে ১১ ডিজিটের সঠিক হোয়াটসঅ্যাপ নম্বর (যেমন: 01712345678) লিখুন।');
+      return;
+    }
+
+    // Check if user is already an approved helper
+    if (user?.isHelper) {
+      setSuccessMessage('আপনি ইতিমধ্যে একজন নিবন্ধিত হেলপার! হেলপার ভিউতে রিডাইরেক্ট করা হচ্ছে...');
+      setSubmitted(true);
+      setTimeout(() => {
+        onClose();
+      }, 1500);
       return;
     }
 
@@ -275,27 +313,23 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
 
             <div className="flex gap-2 pt-2">
               {existingPendingApp && (
-                <button
+                <AsyncButton
                   type="button"
                   onClick={handleCancelApplication}
-                  disabled={submitting}
+                  isLoading={submitting}
+                  icon={<Trash2 className="w-4 h-4" />}
                   className="flex-1 py-3.5 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs flex items-center justify-center space-x-1.5 transition-all"
                 >
-                  <Trash2 className="w-4 h-4" />
                   <span>আবেদন বাতিল</span>
-                </button>
+                </AsyncButton>
               )}
-              <button
+              <AsyncButton
                 type="submit"
-                disabled={submitting}
+                isLoading={submitting}
                 className="flex-1 py-3.5 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-lg shadow-purple-500/20 active:scale-98 transition-all flex items-center justify-center space-x-2"
               >
-                {submitting ? (
-                  <span>জমা হচ্ছে...</span>
-                ) : (
-                  <span>{existingPendingApp ? 'Update Application' : 'Submit Application'}</span>
-                )}
-              </button>
+                <span>{existingPendingApp ? 'Update Application' : 'Submit Application'}</span>
+              </AsyncButton>
             </div>
           </form>
         )}

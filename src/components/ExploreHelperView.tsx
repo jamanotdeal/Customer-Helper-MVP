@@ -409,7 +409,7 @@ export const ExploreHelperView: React.FC = () => {
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Normal View</span>
+            <span>Norm</span>
           </button>
           <button
             type="button"
@@ -421,7 +421,7 @@ export const ExploreHelperView: React.FC = () => {
             }`}
           >
             <MapIcon className="w-3.5 h-3.5" />
-            <span>Map View</span>
+            <span>Map</span>
           </button>
         </div>
       </div>

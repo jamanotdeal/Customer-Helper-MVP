@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
@@ -267,6 +267,48 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showCustomCostModal, setShowCustomCostModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [customProductCost, setCustomProductCost] = useState('');
+  const [isSubmittingCustomCost, setIsSubmittingCustomCost] = useState(false);
+  const [checkedNoteItems, setCheckedNoteItems] = useState<Record<number, boolean>>({});
+  const [checkedSubItems, setCheckedSubItems] = useState<Record<string, boolean>>({});
+
+  const parsedItems = useMemo(() => {
+    if (!order.items || order.items.length === 0) return [];
+    const result: Array<{ id: string; originalId: string; name: string; qty?: string | number; purchased: boolean }> = [];
+    order.items.forEach((item) => {
+      const parts = item.name.split(',').map((p) => p.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        parts.forEach((part, index) => {
+          const subId = `${item.id}-${index}`;
+          const isSubChecked = checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : !!item.purchased;
+          result.push({
+            id: subId,
+            originalId: item.id,
+            name: part,
+            qty: index === 0 ? item.qty : undefined,
+            purchased: isSubChecked,
+          });
+        });
+      } else {
+        const isSubChecked = checkedSubItems[item.id] !== undefined ? checkedSubItems[item.id] : !!item.purchased;
+        result.push({
+          id: item.id,
+          originalId: item.id,
+          name: item.name,
+          qty: item.qty,
+          purchased: isSubChecked,
+        });
+      }
+    });
+    return result;
+  }, [order.items, checkedSubItems]);
+
+  const parsedNoteItems = useMemo(() => {
+    if (!order.additionalNote) return [];
+    return order.additionalNote
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }, [order.additionalNote]);
 
   useEffect(() => {
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(order.id));
@@ -390,29 +432,33 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const handlePlaceShopOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingOrder) return;
     if (!placeOrderShop || !orderText.trim()) {
       setOrderTextError('অর্ডার বিস্তারিত লিখুন।');
       return;
     }
     setIsSubmittingOrder(true);
-    const newShopOrder: ShopOrder = {
-      id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      parentOrderId: order.id,
-      shopId: placeOrderShop.id,
-      shopName: placeOrderShop.name,
-      helperId: order.helperId || '',
-      helperName: order.helperName || 'Helper',
-      requestText: orderText.trim(),
-      status: 'PENDING',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
-    };
-    await fallbackStore.addShopOrder(newShopOrder);
-    setPlaceOrderShop(null);
-    setOrderText('');
-    setOrderTextError('');
-    setIsSubmittingOrder(false);
+    try {
+      const newShopOrder: ShopOrder = {
+        id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        parentOrderId: order.id,
+        shopId: placeOrderShop.id,
+        shopName: placeOrderShop.name,
+        helperId: order.helperId || '',
+        helperName: order.helperName || 'Helper',
+        requestText: orderText.trim(),
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+      };
+      await fallbackStore.addShopOrder(newShopOrder);
+      setPlaceOrderShop(null);
+      setOrderText('');
+      setOrderTextError('');
+    } finally {
+      setIsSubmittingOrder(false);
+    }
   };
 
   const handleOpenGoogleMapsDirection = () => {
@@ -460,24 +506,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const badge = getStatusBadgeInfo(order.status);
 
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
-  const endTimestamp = order.deliveredAt || order.cancelledAt || order.updatedAt;
   const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
-      ? getDeliveryDurationText(order.createdAt, endTimestamp)
-      : getElapsedTime(order.createdAt)
+      ? getDeliveryDurationText(order)
+      : getElapsedTime(order)
   );
 
   useEffect(() => {
-    if (isDone) return;
-    // Pause live timer only if Two-Way AND scheduled (not instant)
-    if (order.needDeliveryBack && order.deliveryBackTime) return;
+    if (isDone) {
+      setElapsed(getDeliveryDurationText(order));
+      return;
+    }
+    setElapsed(getElapsedTime(order));
     const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order.createdAt));
+      setElapsed(getElapsedTime(order));
     }, 1000);
     return () => clearInterval(timer);
-  }, [order.createdAt, isDone, order.needDeliveryBack, order.deliveryBackTime]);
+  }, [order, isDone]);
 
   const handleUpdateStatus = (newStatus: OrderStatus, note?: string) => {
     fallbackStore.updateOrder(order.id, (o) => {
@@ -506,12 +553,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     });
   };
 
-  const toggleItemPurchased = (itemId: string) => {
+  const toggleParsedItemPurchased = (subId: string, originalId: string) => {
     if (isDone) return;
-    fallbackStore.updateOrder(order.id, (o) => ({
-      ...o,
-      items: o.items.map((i) => (i.id === itemId ? { ...i, purchased: !i.purchased } : i)),
-    }));
+    setCheckedSubItems((prev) => {
+      const currentVal = prev[subId] !== undefined ? prev[subId] : !!(order.items || []).find((i) => i.id === originalId)?.purchased;
+      const nextMap = { ...prev, [subId]: !currentVal };
+
+      // Sync overall order.items purchased status if all sub-items of an item are checked
+      const relatedSubItems = parsedItems.filter((i) => i.originalId === originalId);
+      const allSubChecked = relatedSubItems.every((si) => (nextMap[si.id] !== undefined ? nextMap[si.id] : si.purchased));
+
+      fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        items: o.items.map((i) => (i.id === originalId ? { ...i, purchased: allSubChecked } : i)),
+      }));
+
+      return nextMap;
+    });
   };
 
   const [showUncheckedModal, setShowUncheckedModal] = useState(false);
@@ -530,7 +588,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return;
     }
 
-    const allChecked = (order.items || []).every((i) => i.purchased);
+    const allChecked = parsedItems.length > 0 ? parsedItems.every((i) => i.purchased) : (order.items || []).every((i) => i.purchased);
     if (!allChecked && !note) {
       setPendingNextStatus(newStatus);
       setUncheckedNote('');
@@ -762,7 +820,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const handleConfirmDeliveryWithModal = () => {
-    const earned = calculateHelperCommission(order.deliveryFee, fallbackStore.pricingSettings);
+    const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+    const earned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
     setEarnedAmount(earned);
     handleUpdateStatus('DELIVERED');
     setShowCompletionModal(true);
@@ -952,49 +1011,40 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-4">
           {/* PENDING ORDER: Show minimal info only — full details revealed after acceptance */}
           {order.status === 'PENDING' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {/* Order Details / Items */}
               <div>
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
-                  <FileText className="w-4 h-4 text-emerald-600" />
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1.5">
+                  <FileText className="w-4.5 h-4.5 text-emerald-600" />
                   <span>Order Details</span>
                 </h4>
-                <div className="space-y-1.5">
-                   {(order.items || []).map((i) => (
-                    <p key={i.id} className="text-xs font-semibold text-white bg-[#19a24c] border-[#19a24c] p-2.5 rounded-xl">
+                <div className="space-y-2">
+                  {parsedItems.map((i) => (
+                    <p key={i.id} className="text-base font-extrabold text-white bg-[#19a24c] border-[#19a24c] p-3.5 rounded-2xl shadow-sm leading-snug">
                       {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
                     </p>
                   ))}
                 </div>
                 {order.additionalNote && (
-                  <p className="mt-2 text-xs text-amber-900 bg-amber-50/70 border border-amber-100 p-2.5 rounded-xl font-medium">
-                    <span className="font-bold">Note: </span>{order.additionalNote}
-                  </p>
+                  <div className="mt-3 text-sm text-amber-950 bg-amber-50/90 border border-amber-200 p-3.5 rounded-2xl font-bold space-y-2">
+                    <span className="font-black block text-amber-950 text-xs uppercase tracking-wider">Customer Note / Details:</span>
+                    {parsedNoteItems.length > 1 ? (
+                      <div className="space-y-1.5">
+                        {parsedNoteItems.map((itemStr, idx) => (
+                          <div key={idx} className="flex items-center space-x-2 bg-amber-100/70 p-2 rounded-xl border border-amber-200/60 text-sm">
+                            <span className="w-2 h-2 rounded-full bg-amber-600 shrink-0" />
+                            <span className="font-extrabold text-amber-950">{itemStr}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="font-extrabold text-amber-950 text-sm leading-relaxed">{order.additionalNote}</p>
+                    )}
+                  </div>
                 )}
               </div>
 
-              {/* Customer Details */}
-              <div className="pt-2 border-t border-gray-100">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
-                  <Phone className="w-4 h-4 text-emerald-600" />
-                  <span>Customer Details</span>
-                </h4>
-                <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                     <span className="font-bold text-gray-900 text-sm">{order.customerName}</span>
-                    {customerLabels.map((lbl, idx) => (
-                      <span key={idx} className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
-                        {lbl}
-                      </span>
-                    ))}
-                  </div>
-                  <span className="text-[11px] text-gray-500 mt-0.5 block">
-                    {order.alternativePhone || order.customerPhone ? '📞 Contact visible after acceptance' : 'No contact provided'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Addresses details */}
+              {/* Addresses & Visual Map before Customer Details */}
               <div className="pt-2 border-t border-gray-100">
                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
                   <MapPin className="w-4 h-4 text-emerald-600" />
@@ -1012,9 +1062,30 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <span>{order.deliveryLocation?.address || 'N/A'}</span>
                   </p>
                 </div>
-                {/* Visual Map Under Address Block */}
+                {/* Visual Map */}
                 <div className="mt-3 relative w-full h-[220px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-100 shadow-inner">
                   <div ref={pendingMapContainerRef} className="w-full h-full z-10" />
+                </div>
+              </div>
+
+              {/* Customer Details */}
+              <div className="pt-2 border-t border-gray-100">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
+                  <Phone className="w-4 h-4 text-emerald-600" />
+                  <span>Customer Details</span>
+                </h4>
+                <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-gray-900 text-sm">{order.customerName}</span>
+                    {customerLabels.map((lbl, idx) => (
+                      <span key={idx} className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
+                        {lbl}
+                      </span>
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-gray-500 mt-0.5 block">
+                    {order.alternativePhone || order.customerPhone ? '📞 Contact visible after acceptance' : 'No contact provided'}
+                  </span>
                 </div>
               </div>
 
@@ -1046,42 +1117,77 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           {/* 1. ITEMS (Interactive Checklist) */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
-                <ShoppingBag className="w-3.5 h-3.5 text-emerald-600" />
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
+                <ShoppingBag className="w-4 h-4 text-emerald-600" />
                 <span>Items Checklist</span>
               </h4>
-              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100">
-                {(order.items || []).filter((i) => i.purchased).length}/{(order.items || []).length} Checked
+              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100">
+                {parsedItems.filter((i) => i.purchased).length}/{parsedItems.length} Checked
               </span>
             </div>
-            <div className="space-y-1.5">
-              {(order.items || []).map((i) => (
+            <div className="space-y-2">
+              {parsedItems.map((i) => (
                 <div
                   key={i.id}
-                  onClick={() => !isDone && toggleItemPurchased(i.id)}
-                  className={`flex items-center justify-between text-xs p-2.5 rounded-xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${
+                  onClick={() => !isDone && toggleParsedItemPurchased(i.id, i.originalId)}
+                  className={`flex items-center justify-between text-sm p-3 rounded-2xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${
                     isDone
                       ? 'cursor-default opacity-65'
                       : 'cursor-pointer hover:brightness-105 active:scale-[0.99]'
                   } ${
-                    i.purchased ? 'opacity-85 font-medium' : 'font-bold'
+                    i.purchased ? 'opacity-85 font-medium' : 'font-extrabold'
                   }`}
                 >
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2.5">
                     <input
                       type="checkbox"
                       checked={!!i.purchased}
                       disabled={isDone}
                       onChange={() => {}} // Handled by parent container onClick
-                      className="w-3.5 h-3.5 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-50"
+                      className="w-4 h-4 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-50"
                     />
-                    <span className={i.purchased ? 'line-through text-white/80' : ''}>
-                      {i.name}
+                    <span className={`text-sm ${i.purchased ? 'line-through text-white/80' : ''}`}>
+                      {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
                     </span>
                   </div>
                 </div>
               ))}
             </div>
+
+            {/* Customer Description Comma-Separated Checklist */}
+            {parsedNoteItems.length > 0 && (
+              <div className="mt-3 p-3 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1">
+                    📝 Description Checklist ({parsedNoteItems.filter((_, idx) => checkedNoteItems[idx]).length}/{parsedNoteItems.length})
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {parsedNoteItems.map((itemStr, idx) => {
+                    const isChecked = !!checkedNoteItems[idx];
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => setCheckedNoteItems((prev) => ({ ...prev, [idx]: !prev[idx] }))}
+                        className={`flex items-center space-x-2 text-xs p-2.5 rounded-xl border transition-all cursor-pointer select-none ${
+                          isChecked
+                            ? 'bg-amber-200/90 border-amber-300 text-amber-950 line-through opacity-80'
+                            : 'bg-white border-amber-200 text-amber-950 font-bold hover:bg-amber-100/60'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {}}
+                          className="w-3.5 h-3.5 accent-amber-700 rounded cursor-pointer"
+                        />
+                        <span className={isChecked ? 'line-through text-amber-900' : ''}>{itemStr}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Two-Way Delivery Toggle */}
@@ -1230,7 +1336,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             so.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
                             'bg-red-100 text-red-800 border-red-250'
                           }`}>
-                            {so.status}
+                            {so.status === 'PREPARING' ? 'Processing' : so.status}
                           </span>
                           {so.price !== undefined && (
                             <span className="text-[10px] font-extrabold text-gray-650">
@@ -1308,7 +1414,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
               {order.pickupLocation?.address && (
                 <div className="flex items-start justify-between gap-2 min-w-0">
-                  <p className="text-[11px] text-gray-700 flex-1 min-w-0 truncate" title={order.pickupLocation.address}>
+                  <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation.address}>
                     <strong className="font-extrabold text-emerald-800">Pickup: </strong>
                     <span>{order.pickupLocation.address}</span>
                   </p>
@@ -1324,7 +1430,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               )}
               <div className="flex items-start justify-between gap-2 min-w-0">
-                <p className="text-[11px] text-gray-700 flex-1 min-w-0 truncate" title={order.deliveryLocation?.address || 'N/A'}>
+                <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
                   <strong className="font-extrabold text-emerald-800">Delivery: </strong>
                   <span>{order.deliveryLocation?.address || 'N/A'}</span>
                 </p>
@@ -1450,7 +1556,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
               {/* Helper Earnings after Platfrom Commission Deduction */}
               {(() => {
-                const netEarned = calculateHelperCommission(order.deliveryFee, fallbackStore.pricingSettings);
+                const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                const netEarned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
                 return (
                   <div className="flex items-center justify-between bg-purple-50/60 p-2.5 rounded-xl border border-purple-100 -mx-0.5">
                     <div>
@@ -1603,6 +1710,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       needDeliveryBack: true,
                       needReturnItems: true,
                       deliveryBackTime: returnWhen === 'schedule' ? new Date(deliveryBackTimeInput).toISOString() : undefined,
+                      deliveryBackSetAt: new Date().toISOString(),
                       originalDeliveryFee: o.originalDeliveryFee || o.deliveryFee,
                       deliveryFee: targetFee,
                     }));
@@ -1623,13 +1731,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {/* PENDING → ACCEPTED */}
             {order.status === 'PENDING' && onAccept && !order.helperId && (
               <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 space-y-3 shadow-sm animate-in fade-in duration-200">
-                <div className="flex items-center space-x-2 text-emerald-800">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                  <span className="font-extrabold text-sm">Accept This Request</span>
-                </div>
-                <p className="text-xs text-emerald-700/80 font-medium">
-                  Ready to assist this customer? Accept the request to assign yourself as the helper.
-                </p>
                 <button
                   onClick={() => onAccept(order.id)}
                   disabled={activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit}
@@ -1889,7 +1990,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div>
                 <h3 className="font-black text-base text-gray-900 leading-tight">অসম্পূর্ণ আইটেম নোট</h3>
                 <span className="text-[11px] text-amber-700 font-bold">
-                  {order.items.filter((i) => !i.purchased).length}টি আইটেম এখনো চেক করা হয়নি
+                  {(parsedItems.length > 0 ? parsedItems : (order.items || [])).filter((i) => !i.purchased).length}টি আইটেম এখনো চেক করা হয়নি
                 </span>
               </div>
             </div>
@@ -2030,7 +2131,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {order.deliveryFee !== undefined && (
                 <div className="flex items-center justify-between text-xs mt-1.5">
                   <span className="text-gray-500 font-bold uppercase tracking-wide">Delivery Fee</span>
-                  <span className="font-extrabold text-emerald-700">৳{order.deliveryFee}</span>
+                  <span className="font-extrabold text-emerald-700">৳{Math.max(order.deliveryFee || 0, estdPricing.minFee)}</span>
                 </div>
               )}
             </div>
@@ -2080,8 +2181,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {(() => {
               const commissionPercent = fallbackStore.pricingSettings?.helperCommissionPercent || 80;
               const platformPercent = 100 - commissionPercent;
-              const netEarned = calculateHelperCommission(order.deliveryFee, fallbackStore.pricingSettings);
-              const platformCommissionFee = Math.max(0, (order.deliveryFee || 0) - netEarned);
+              const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+              const netEarned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
+              const platformCommissionFee = Math.max(0, effectiveFee - netEarned);
 
               return (
                 <div className="space-y-3">
@@ -2413,26 +2515,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (isSubmittingCustomCost) return;
                 if (!customProductName.trim() || !customProductCost.trim()) return;
-                const cost = parseFloat(customProductCost) || 0;
-                const newShopOrder: ShopOrder = {
-                  id: `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                  parentOrderId: order.id,
-                  shopId: 'myself',
-                  shopName: 'MySelf',
-                  helperId: order.helperId || '',
-                  helperName: order.helperName || 'Helper',
-                  requestText: customProductName.trim(),
-                  status: 'ACCEPTED',
-                  price: cost,
-                  createdAt: new Date().toISOString(),
-                  updatedAt: new Date().toISOString(),
-                  statusHistory: [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
-                };
-                await fallbackStore.addShopOrder(newShopOrder);
-                setShowCustomCostModal(false);
-                setCustomProductName('');
-                setCustomProductCost('');
+                setIsSubmittingCustomCost(true);
+                try {
+                  const cost = parseFloat(customProductCost) || 0;
+                  const newShopOrder: ShopOrder = {
+                    id: `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                    parentOrderId: order.id,
+                    shopId: 'myself',
+                    shopName: 'MySelf',
+                    helperId: order.helperId || '',
+                    helperName: order.helperName || 'Helper',
+                    requestText: customProductName.trim(),
+                    status: 'ACCEPTED',
+                    price: cost,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    statusHistory: [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+                  };
+                  await fallbackStore.addShopOrder(newShopOrder);
+                  setShowCustomCostModal(false);
+                  setCustomProductName('');
+                  setCustomProductCost('');
+                } finally {
+                  setIsSubmittingCustomCost(false);
+                }
               }}
               className="space-y-3"
             >
@@ -2463,15 +2571,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowCustomCostModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-750 font-bold text-xs"
+                  disabled={isSubmittingCustomCost}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-750 font-bold text-xs disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-3 rounded-2xl bg-purple-700 text-white font-bold text-xs shadow-md"
+                  disabled={isSubmittingCustomCost}
+                  className="flex-1 py-3 rounded-2xl bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center justify-center space-x-1"
                 >
-                  Save Cost
+                  {isSubmittingCustomCost ? <span>Saving...</span> : <span>Save Cost</span>}
                 </button>
               </div>
             </form>

@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion } from '@/types';
+import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, getCountFromServer } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
 import { useModal } from './CustomModal';
-import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText } from '@/lib/timeUtils';
+import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
+import { AreaDrawerModal } from './admin/AreaDrawerModal';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -46,6 +47,8 @@ import {
   Store,
   Star,
   MessageSquare,
+  Timer,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -66,6 +69,7 @@ import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
 import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -100,6 +104,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [pricing, setPricing] = useState<PricingSettings>(fallbackStore.pricingSettings);
   const [allowedAdminTabs, setAllowedAdminTabs] = useState<string[]>([]);
   const [exactTotalOrders, setExactTotalOrders] = useState<number | null>(null);
+  const [exactTotalDeliveryFees, setExactTotalDeliveryFees] = useState<number | null>(null);
+  const [exactTotalProductCosts, setExactTotalProductCosts] = useState<number | null>(null);
+  const [exactTotalCollection, setExactTotalCollection] = useState<number | null>(null);
   const [exactCustomerAccounts, setExactCustomerAccounts] = useState<number | null>(null);
   const [exactActiveHelpers, setExactActiveHelpers] = useState<number | null>(null);
   const [exactCustomersCount, setExactCustomersCount] = useState<number | null>(null);
@@ -108,6 +115,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [exactCustomModalsCount, setExactCustomModalsCount] = useState<number | null>(null);
   const [exactWithdrawalsCount, setExactWithdrawalsCount] = useState<number | null>(null);
   const [serverAvgDeliveryTimeMins, setServerAvgDeliveryTimeMins] = useState<number | null>(null);
+  const [serverAvgAcceptanceTimeMins, setServerAvgAcceptanceTimeMins] = useState<number | null>(null);
 
   const [showAddShopModal, setShowAddShopModal] = useState<boolean>(false);
   const [editingShop, setEditingShop] = useState<Shop | null>(null);
@@ -128,8 +136,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [mapLocationPref, setMapLocationPref] = useState<'BD' | 'GLOBAL' | 'CUSTOM'>('BD');
   const [customCountryCode, setCustomCountryCode] = useState<string>('bd');
 
-  // PWA Install Prompt Admin Controls
-  const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
+  // Geofencing Serving Areas
+  const [allowedDeliveryAreasEnabled, setAllowedDeliveryAreasEnabled] = useState<boolean>(false);
+  const [allowedDeliveryAreas, setAllowedDeliveryAreas] = useState<AllowedAreaPolygon[]>([]);
+  const [outOfServiceAreaMessage, setOutOfServiceAreaMessage] = useState<string>('');
+  const [showAreaDrawerModal, setShowAreaDrawerModal] = useState<boolean>(false);
+  const [editingArea, setEditingArea] = useState<AllowedAreaPolygon | null>(null);
 
   // Payback instructions & Store types
   const [bkashInstructions, setBkashInstructions] = useState<string>('');
@@ -156,6 +168,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     managerPhone: '',
     commissionPercent: '',
   });
+  const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -172,6 +185,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [mapPickerDeliveryGuideText, setMapPickerDeliveryGuideText] = useState<string>('আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন। ডেলিভারি ঠিকানা নির্ভুল হলে হেল্পার ঠিক সময়ে পৌঁছাতে পারবেন। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।');
   const [mapPickerGuideOkText, setMapPickerGuideOkText] = useState<string>('ঠিক আছে');
   const [mapPickerGuideShowCount, setMapPickerGuideShowCount] = useState<number>(5);
+  const [mapPickerPickupPlaceholder, setMapPickerPickupPlaceholder] = useState<string>('যেমন: আরিফ স্টোর, আশুলিয়া বাজার.');
+  const [mapPickerDeliveryPlaceholder, setMapPickerDeliveryPlaceholder] = useState<string>('যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.');
   const [noSavePickupServicesText, setNoSavePickupServicesText] = useState<string>('মিক্স কিছু কাজ করে দিন\nনা, অন্য একটা কাজ করে দিন\nআমার একটা জিনিস দিয়ে আসুন');
 
   // Helper Center contact info
@@ -212,6 +227,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+
+  // Multi-select state for bulk deletion of orders
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [isDeletingOrders, setIsDeletingOrders] = useState<boolean>(false);
+
+  const handleToggleSelectOrder = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedOrderIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleToggleSelectAllOrders = (currentList: Order[]) => {
+    const currentIds = currentList.map((o) => o.id);
+    const allSelected = currentIds.every((id) => selectedOrderIds.includes(id));
+    if (allSelected) {
+      setSelectedOrderIds((prev) => prev.filter((id) => !currentIds.includes(id)));
+    } else {
+      setSelectedOrderIds((prev) => Array.from(new Set([...prev, ...currentIds])));
+    }
+  };
+
+  const handleBulkDeleteOrders = async () => {
+    if (selectedOrderIds.length === 0) return;
+    const isConfirmed = await showConfirm(
+      'ডিলিট নিশ্চিতকরণ (Batch Delete)',
+      `আপনি কি নিশ্চিত যে নির্বাচিত ${selectedOrderIds.length}টি অর্ডার স্থায়ীভাবে ডিলিট করতে চান?`,
+      'হ্যাঁ, ডিলিট করুন',
+      'বাতিল'
+    );
+    if (!isConfirmed) return;
+
+    setIsDeletingOrders(true);
+    try {
+      for (const id of selectedOrderIds) {
+        await fallbackStore.deleteOrder(id);
+      }
+      setOrders((prev) => prev.filter((o) => !selectedOrderIds.includes(o.id)));
+      setAllOrders((prev) => prev.filter((o) => !selectedOrderIds.includes(o.id)));
+      if (serverOrders) {
+        setServerOrders((prev) => (prev ? prev.filter((o) => !selectedOrderIds.includes(o.id)) : null));
+      }
+      setSelectedOrderIds([]);
+      await showAlert('সফল', `${selectedOrderIds.length}টি অর্ডার সফলভাবে ডিলিট করা হয়েছে।`, 'success');
+    } catch (err: any) {
+      showAlert('ত্রুটি', `অর্ডার ডিলিট করতে সমস্যা হয়েছে: ${err?.message || err}`, 'error');
+    } finally {
+      setIsDeletingOrders(false);
+    }
+  };
 
   useEffect(() => {
     if (initialSelectedOrderId) {
@@ -256,7 +321,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isFetchingServer, setIsFetchingServer] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
+  const [withdrawalTypeFilter, setWithdrawalTypeFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'OLDEST' | 'FEE_HIGH' | 'FEE_LOW' | 'ORDERS_HIGH' | 'SPENT_HIGH'>('NEWEST');
+  const [fleetSortColumn, setFleetSortColumn] = useState<string | null>(null);
+  const [fleetSortDirection, setFleetSortDirection] = useState<'asc' | 'desc'>('asc');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -351,6 +419,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setHelperRadiusKm(settings.helperRadiusKm ?? 3.5);
       setMapLocationPref(settings.mapLocationPreference || 'BD');
       setCustomCountryCode(settings.customCountryCode || 'bd');
+      setAllowedDeliveryAreasEnabled(settings.allowedDeliveryAreasEnabled || false);
+      setAllowedDeliveryAreas(settings.allowedDeliveryAreas || []);
+      setOutOfServiceAreaMessage(settings.outOfServiceAreaMessage || '');
       setPwaInstallPromptEnabled(settings.pwaInstallPromptEnabled !== false);
       setPwaInstallPromptTitle(settings.pwaInstallPromptTitle || 'Install Jamanot App');
       setPwaInstallPromptDescription(
@@ -402,6 +473,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setMapPickerDeliveryGuideText(settings.mapPickerDeliveryGuideText || 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন।');
       setMapPickerGuideOkText(settings.mapPickerGuideOkText || 'ঠিক আছে');
       setMapPickerGuideShowCount(settings.mapPickerGuideShowCount ?? 5);
+      setMapPickerPickupPlaceholder(settings.mapPickerPickupPlaceholder || 'যেমন: আরিফ স্টোর, আশুলিয়া বাজার.');
+      setMapPickerDeliveryPlaceholder(settings.mapPickerDeliveryPlaceholder || 'যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.');
       setNoSavePickupServicesText((settings.noSavePickupLocationServices || [
         'মিক্স কিছু কাজ করে দিন',
         'না, অন্য একটা কাজ করে দিন',
@@ -544,7 +617,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     const fetchWithdrawals = async () => {
       if (activeTab !== 'WITHDRAWALS') return;
-      const hasFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL');
+      const hasFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL' || withdrawalTypeFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= withdrawals.length;
       if (!hasFilter && !needsPageFetch) {
         setServerWithdrawals(null);
@@ -563,7 +636,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchWithdrawals();
-  }, [activeTab, withdrawalsAppliedSearchQuery, withdrawalStatusFilter, withdrawalsStartDate, withdrawalsEndDate, currentPage, pageSize, withdrawals.length]);
+  }, [activeTab, withdrawalsAppliedSearchQuery, withdrawalStatusFilter, withdrawalTypeFilter, withdrawalsStartDate, withdrawalsEndDate, currentPage, pageSize, withdrawals.length]);
 
   useEffect(() => {
     const fetchFeedbacks = async () => {
@@ -647,7 +720,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const modalsColl = collection(db, 'customModals');
         const wdColl = collection(db, 'withdrawals');
 
-        const [ordersSnap, usersSnap, helpersSnap, customersSnap, shopsSnap, feedbackSnap, modalsSnap, wdSnap] = await Promise.all([
+        const [ordersSnap, usersSnap, helpersSnap, customersSnap, shopsSnap, feedbackSnap, modalsSnap, wdSnap, orderAggSnap] = await Promise.all([
           getCountFromServer(ordersColl),
           getCountFromServer(usersColl),
           getCountFromServer(helpersQuery),
@@ -655,7 +728,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           getCountFromServer(shopsColl),
           getCountFromServer(feedbackColl),
           getCountFromServer(modalsColl),
-          getCountFromServer(wdColl)
+          getCountFromServer(wdColl),
+          getAggregateFromServer(ordersColl, {
+            totalDeliveryFees: sum('deliveryFee'),
+            totalProductCosts: sum('productCost'),
+          })
         ]);
 
         setExactTotalOrders(ordersSnap.data().count);
@@ -666,6 +743,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setExactFeedbacksCount(feedbackSnap.data().count);
         setExactCustomModalsCount(modalsSnap.data().count);
         setExactWithdrawalsCount(wdSnap.data().count);
+
+        const dFees = orderAggSnap.data().totalDeliveryFees || 0;
+        const pCosts = orderAggSnap.data().totalProductCosts || 0;
+        setExactTotalDeliveryFees(dFees);
+        setExactTotalProductCosts(pCosts);
+        setExactTotalCollection(dFees + pCosts);
       } catch (err) {
         console.error('Error fetching exact counts from server:', err);
       }
@@ -698,8 +781,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     };
 
+    const fetchServerAvgAcceptanceTime = async () => {
+      try {
+        const q = query(
+          collection(db, 'orders'),
+          orderBy('createdAt', 'desc'),
+          limit(100)
+        );
+        const snap = await getDocs(q);
+        let totalMs = 0;
+        let count = 0;
+        snap.forEach((docSnap) => {
+          const o = docSnap.data() as Order;
+          if (o.acceptedAt && o.createdAt) {
+            const diff = new Date(o.acceptedAt).getTime() - new Date(o.createdAt).getTime();
+            if (diff > 0) {
+              totalMs += diff;
+              count++;
+            }
+          }
+        });
+        setServerAvgAcceptanceTimeMins(count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0);
+      } catch (err) {
+        console.error('Error fetching server average acceptance time:', err);
+      }
+    };
+
     fetchExactCounts();
     fetchServerAvgDeliveryTime();
+    fetchServerAvgAcceptanceTime();
   }, [orders, users]);
 
   // Needs Attention Queue calculations
@@ -750,6 +860,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0;
   }, [allOrders]);
 
+  const avgAcceptanceTimeMins = React.useMemo(() => {
+    let totalMs = 0;
+    let count = 0;
+    allOrders.forEach(o => {
+      if (o.acceptedAt && o.createdAt) {
+        const diff = new Date(o.acceptedAt).getTime() - new Date(o.createdAt).getTime();
+        if (diff > 0) {
+          totalMs += diff;
+          count++;
+        }
+      }
+    });
+    return count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0;
+  }, [allOrders]);
+
+  const overallReviewStats = React.useMemo(() => {
+    const totalCount = exactFeedbacksCount !== null ? exactFeedbacksCount : feedbacks.length;
+    if (feedbacks.length === 0) return { avgRating: '0.0', count: totalCount };
+
+    const sumRatings = feedbacks.reduce((acc, f) => {
+      const validRatings = [f.serviceRating, f.riderRating, f.shopRating].filter(
+        (r) => typeof r === 'number' && r > 0
+      );
+      const avgSingle = validRatings.length > 0
+        ? validRatings.reduce((a, b) => a + b, 0) / validRatings.length
+        : (f.serviceRating || 5);
+      return acc + avgSingle;
+    }, 0);
+
+    const avg = (sumRatings / feedbacks.length).toFixed(1);
+    return { avgRating: avg, count: totalCount };
+  }, [feedbacks, exactFeedbacksCount]);
+
+  const totalHoursOfWork = React.useMemo(() => {
+    const delivered = allOrders.filter(o => o.status === 'DELIVERED');
+    let totalMs = 0;
+    delivered.forEach(o => {
+      if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
+        const diff = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
+        if (diff > 0) {
+          totalMs += diff;
+        }
+      }
+    });
+    const hours = totalMs / (1000 * 60 * 60);
+    return hours > 0 ? (hours >= 10 ? Math.round(hours).toString() : hours.toFixed(1)) : '0';
+  }, [allOrders]);
+
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
   const approvedHelpersCount = applications.filter((a) => a.status === 'APPROVED').length;
 
@@ -775,14 +933,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleApproveWd = (wdId: string) => {
-    fallbackStore.approveWithdrawal(wdId);
+  const [editingWd, setEditingWd] = useState<WithdrawalRequest | null>(null);
+  const [editWdStatus, setEditWdStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED'>('PENDING');
+  const [editWdAmount, setEditWdAmount] = useState<string>('0');
+
+  const handleApproveWd = async (wdId: string) => {
+    const w = fallbackStore.withdrawals.get(wdId);
+    const targetName = w?.helperName || 'অনুরোধকারী';
+    const isConfirmed = await showConfirm(
+      'পে-ব্যাক অনুমোদন নিশ্চিতকরণ',
+      `আপনি কি নিশ্চিত যে ৳${w?.amount || ''} পে-ব্যাক অনুরোধটি (${targetName}) অনুমোদন করতে চান?`,
+      'হ্যাঁ, অনুমোদন করুন',
+      'বাতিল'
+    );
+    if (!isConfirmed) return;
+    await fallbackStore.approveWithdrawal(wdId);
     showAlert('উইথড্রয়াল অনুমোদিত', 'পেমেন্ট পেআউট অনুমোদন সফল হয়েছে।', 'success');
   };
 
-  const handleRejectWd = (wdId: string) => {
-    fallbackStore.rejectWithdrawal(wdId);
+  const handleRejectWd = async (wdId: string) => {
+    const w = fallbackStore.withdrawals.get(wdId);
+    const targetName = w?.helperName || 'অনুরোধকারী';
+    const isConfirmed = await showConfirm(
+      'পে-ব্যাক বাতিল নিশ্চিতকরণ',
+      `আপনি কি নিশ্চিত যে ৳${w?.amount || ''} পে-ব্যাক অনুরোধটি (${targetName}) বাতিল করতে চান?`,
+      'হ্যাঁ, বাতিল করুন',
+      'ফিরে যান'
+    );
+    if (!isConfirmed) return;
+    await fallbackStore.rejectWithdrawal(wdId);
     showAlert('উইথড্রয়াল বাতিল', 'উইথড্রয়াল আবেদন বাতিল করা হয়েছে।', 'info');
+  };
+
+  const openEditWdModal = (w: WithdrawalRequest) => {
+    setEditingWd(w);
+    setEditWdStatus(w.status);
+    setEditWdAmount(String(w.amount));
+  };
+
+  const handleSaveWdEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingWd) return;
+
+    const newAmt = parseFloat(editWdAmount);
+    if (isNaN(newAmt) || newAmt <= 0) {
+      await showAlert('ভুল পরিমাণ', 'অনুগ্রহ করে সঠিক পরিমাণ সংখ্যায় লিখুন।', 'warning');
+      return;
+    }
+
+    const isConfirmed = await showConfirm(
+      'অনুরোধ আপডেট নিশ্চিতকরণ',
+      `আপনি কি নিশ্চিত যে পে-ব্যাক অনুরোধের স্ট্যাটাস (${editWdStatus}) এবং পরিমাণ (৳${newAmt}) আপডেট করতে চান? এটি ওয়ালেট ব্যালেন্স ও রেভিনিউ ক্যালকুলেশন আপডেট করবে।`,
+      'হ্যাঁ, আপডেট করুন',
+      'বাতিল'
+    );
+    if (!isConfirmed) return;
+
+    await fallbackStore.updateWithdrawalRequest(editingWd.id, {
+      status: editWdStatus,
+      amount: newAmt,
+    });
+
+    setEditingWd(null);
+    showAlert('সফল', 'পে-ব্যাক অনুরোধ এবং ওয়ালেট সফলভাবে আপডেট করা হয়েছে।', 'success');
   };
 
   const handleApproveCancellation = (orderId: string) => {
@@ -917,6 +1130,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       helperRadiusKm: Number(helperRadiusKm) || 3.5,
       mapLocationPreference: mapLocationPref,
       customCountryCode: customCountryCode.trim().toLowerCase() || 'bd',
+      allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
+      allowedDeliveryAreas: allowedDeliveryAreas,
+      outOfServiceAreaMessage: outOfServiceAreaMessage.trim() || undefined,
       pwaInstallPromptEnabled: pwaInstallPromptEnabled,
       pwaInstallPromptTitle: pwaInstallPromptTitle.trim() || undefined,
       pwaInstallPromptDescription: pwaInstallPromptDescription.trim() || undefined,
@@ -949,6 +1165,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       mapPickerDeliveryGuideText: mapPickerDeliveryGuideText.trim() || undefined,
       mapPickerGuideOkText: mapPickerGuideOkText.trim() || undefined,
       mapPickerGuideShowCount: Number(mapPickerGuideShowCount) || 5,
+      mapPickerPickupPlaceholder: mapPickerPickupPlaceholder.trim() || undefined,
+      mapPickerDeliveryPlaceholder: mapPickerDeliveryPlaceholder.trim() || undefined,
       noSavePickupLocationServices: noSavePickupServicesText.split('\n').map(s => s.trim()).filter(Boolean),
       // Helper center settings
       helperCenterEnabled: helperCenterEnabled,
@@ -1147,7 +1365,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       customerMap.set(o.customerId, existing);
     });
 
-    let list = Array.from(customerMap.values());
+    const customerUids = new Set(
+      usersList.filter((u) => !u.isHelper && u.role !== 'store' && u.role !== 'admin').map((u) => u.uid)
+    );
+
+    let list = Array.from(customerMap.values()).filter(
+      (c) => c.totalOrders > 0 || customerUids.has(c.id)
+    );
 
     // Search query filter
     if (customersAppliedSearchQuery.trim()) {
@@ -1432,7 +1656,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { key: 'CUSTOM_MODALS', label: 'Custom Modals', icon: Sparkles, color: 'text-purple-600' },
     { key: 'CUSTOMERS', label: 'Customers', icon: User, color: 'text-indigo-600' },
     { key: 'REVENUE', label: 'Revenue Analytics', icon: TrendingUp, color: 'text-emerald-600' },
-    { key: 'WITHDRAWALS', label: 'Helper Commissions', icon: DollarSign, color: 'text-purple-600' },
+    { key: 'WITHDRAWALS', label: 'Commissions Requests', icon: DollarSign, color: 'text-purple-600' },
     { key: 'PRICING', label: 'Pricing', icon: DollarSign, color: 'text-emerald-600' },
     { key: 'SETTINGS', label: 'Settings', icon: Settings, color: 'text-purple-600' },
   ];
@@ -1508,7 +1732,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Metrics Summary Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-4">
         {/* Needs Attention Metric */}
         <div
           onClick={() => isTabAllowed('EXCEPTIONS') && setActiveTab('EXCEPTIONS')}
@@ -1560,6 +1784,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
+        {/* Average Order Acceptance Time Metric */}
+        <div
+          onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${
+            isTabAllowed('ORDERS')
+              ? 'bg-white border-gray-100 hover:border-blue-300 cursor-pointer'
+              : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Avg Accept Time
+            </span>
+            <div className="p-2 rounded-2xl bg-blue-100 text-blue-700">
+              <Zap className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-baseline space-x-2">
+            <span className="text-3xl font-extrabold text-gray-900">
+              {(serverAvgAcceptanceTimeMins !== null ? serverAvgAcceptanceTimeMins : avgAcceptanceTimeMins) > 0
+                ? formatDurationMinutes(serverAvgAcceptanceTimeMins !== null ? serverAvgAcceptanceTimeMins : avgAcceptanceTimeMins)
+                : 'N/A'}
+            </span>
+            <span className="text-xs text-blue-600 font-semibold">order acceptance</span>
+          </div>
+        </div>
+
         {/* Average Delivery Time Metric */}
         <div
           onClick={() => setShowHighDurationModal(true)}
@@ -1576,10 +1827,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-gray-900">
               {(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) > 0 
-                ? `${serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins}m` 
+                ? formatDurationMinutes(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) 
                 : 'N/A'}
             </span>
             <span className="text-xs text-gray-500">per order</span>
+          </div>
+        </div>
+
+        {/* Total Hours of Work Metric */}
+        <div
+          onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${
+            isTabAllowed('ORDERS')
+              ? 'bg-white border-gray-100 hover:border-teal-300 cursor-pointer'
+              : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Total Work Hours
+            </span>
+            <div className="p-2 rounded-2xl bg-teal-100 text-teal-700">
+              <Timer className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-baseline space-x-2">
+            <span className="text-3xl font-extrabold text-gray-900">
+              {totalHoursOfWork} <span className="text-lg font-bold text-gray-600">hrs</span>
+            </span>
+            <span className="text-xs text-teal-700 font-semibold">sum of durations</span>
+          </div>
+        </div>
+
+        {/* Overall Reviews Metric */}
+        <div
+          onClick={() => isTabAllowed('FEEDBACK') && setActiveTab('FEEDBACK')}
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${
+            isTabAllowed('FEEDBACK')
+              ? 'bg-white border-gray-100 hover:border-amber-300 cursor-pointer'
+              : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
+              Overall Reviews
+            </span>
+            <div className="p-2 rounded-2xl bg-amber-100 text-amber-700">
+              <Star className="w-5 h-5 fill-amber-400 text-amber-500" />
+            </div>
+          </div>
+          <div className="flex items-baseline space-x-2">
+            <span className="text-3xl font-extrabold text-gray-900">
+              {overallReviewStats.avgRating} <span className="text-amber-500 text-xl font-bold">★</span>
+            </span>
+            <span className="text-xs text-amber-700 font-semibold">({overallReviewStats.count} reviews)</span>
           </div>
         </div>
 
@@ -1787,7 +2088,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <DollarSign className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>Helper Commissions ({exactWithdrawalsCount !== null ? exactWithdrawalsCount : withdrawals.length})</span>
+            <span>Commissions Requests ({exactWithdrawalsCount !== null ? exactWithdrawalsCount : withdrawals.length})</span>
           </button>
         )}
 
@@ -1986,18 +2287,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
 
             {activeTab === 'WITHDRAWALS' && (
-              <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
-                <Filter className="w-4 h-4 text-gray-400" />
-                <select
-                  value={withdrawalStatusFilter}
-                  onChange={(e) => setWithdrawalStatusFilter(e.target.value)}
-                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="PENDING">Pending Payouts</option>
-                  <option value="APPROVED">Approved Payouts</option>
-                  <option value="REJECTED">Rejected Payouts</option>
-                </select>
+              <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                  <Filter className="w-4 h-4 text-gray-400" />
+                  <select
+                    value={withdrawalStatusFilter}
+                    onChange={(e) => setWithdrawalStatusFilter(e.target.value)}
+                    className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="PENDING">Pending Payouts</option>
+                    <option value="APPROVED">Approved Payouts</option>
+                    <option value="REJECTED">Rejected Payouts</option>
+                  </select>
+                </div>
+                <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                  <select
+                    value={withdrawalTypeFilter}
+                    onChange={(e) => setWithdrawalTypeFilter(e.target.value)}
+                    className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600"
+                  >
+                    <option value="ALL">All Types (Helper & Store)</option>
+                    <option value="HELPER">Helper Only</option>
+                    <option value="STORE">Store Only</option>
+                  </select>
+                </div>
               </div>
             )}
 
@@ -2570,17 +2884,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <table className="w-full text-left text-xs text-gray-600 min-w-[580px]">
                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                           <tr>
-                            <th className="py-3 px-5">Helper Name</th>
+                            <th className="py-3 px-5">Type</th>
+                            <th className="py-3 px-5">Name</th>
                             <th className="py-3 px-5">Amount</th>
                             <th className="py-3 px-5">Method</th>
-                            <th className="py-3 px-5">Mobile / TxID</th>
+                            <th className="py-3 px-5">Note / Mobile / TxID</th>
                             <th className="py-3 px-5 text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
-                          {pwd.items.map((w) => (
-                            <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="py-3.5 px-5 font-bold text-gray-900">{w.helperName}</td>
+                          {pwd.items.map((w) => {
+                            const shop = shops.find(s => s.ownerUserId === w.helperId);
+                            const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                            const storeName = shop?.name;
+                            return (
+                              <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
+                                <td className="py-3.5 px-5">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
+                                      isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
+                                    }`}
+                                  >
+                                    {isStore ? 'Store' : 'Helper'}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-5">
+                                  {storeName ? (
+                                    <div>
+                                      <span className="font-extrabold text-purple-950 block text-xs">{storeName}</span>
+                                      <span className="text-[10px] text-gray-500 font-medium block">{w.helperName}</span>
+                                    </div>
+                                  ) : (
+                                    <span className="font-bold text-gray-900">{w.helperName}</span>
+                                  )}
+                                </td>
                               <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
                               <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
                               <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
@@ -2601,8 +2938,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </div>
                               </td>
                             </tr>
-                          ))}
-                        </tbody>
+                          );
+                        })}
+                      </tbody>
                       </table>
                     </div>
                     <PaginationControl
@@ -2636,11 +2974,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden space-y-2">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800">
-                {exactTotalOrders !== null ? exactTotalOrders.toLocaleString() : totalItems} total orders (Latest first)
-              </span>
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
+                <p className="text-xs text-gray-500">Select multiple orders to batch delete or manage</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {selectedOrderIds.length > 0 && (
+                  <AsyncButton
+                    onClick={handleBulkDeleteOrders}
+                    isLoading={isDeletingOrders}
+                    icon={<Trash2 className="w-4 h-4" />}
+                    className="py-1.5 px-3.5 rounded-xl bg-red-600 hover:bg-red-700 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5 disabled:opacity-50"
+                  >
+                    <span>Delete Selected ({selectedOrderIds.length})</span>
+                  </AsyncButton>
+                )}
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 flex items-center gap-2 flex-wrap">
+                  <span>{exactTotalOrders !== null ? exactTotalOrders.toLocaleString() : totalItems} total orders</span>
+                  {exactTotalCollection !== null && (
+                    <>
+                      <span className="text-emerald-300">•</span>
+                      <span>Total Collection: ৳{exactTotalCollection.toLocaleString()}</span>
+                    </>
+                  )}
+                </span>
+              </div>
             </div>
 
             {/* Sub-Filters and Date Search Controls */}
@@ -2679,9 +3038,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600 min-w-[800px]">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[850px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
+                    <th className="py-3 px-4 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={
+                          paginatedItems.length > 0 &&
+                          paginatedItems.every((o) => selectedOrderIds.includes(o.id))
+                        }
+                        onChange={() => handleToggleSelectAllOrders(paginatedItems)}
+                        className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                        title="Select All on page"
+                      />
+                    </th>
                     <th className="py-3 px-5">Order ID</th>
                     <th className="py-3 px-5">Customer</th>
                     <th className="py-3 px-5">Ordered Time</th>
@@ -2694,7 +3065,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <tbody className="divide-y divide-gray-100 font-medium">
                   {paginatedItems.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                      <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
                         No orders match your criteria.
                       </td>
                     </tr>
@@ -2702,9 +3073,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     paginatedItems.map((ord) => (
                       <tr
                         key={ord.id}
-                        className="hover:bg-purple-50/40 cursor-pointer transition-colors"
+                        className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${
+                          selectedOrderIds.includes(ord.id) ? 'bg-purple-50/70' : ''
+                        }`}
                         onClick={() => setSelectedOrderId(ord.id)}
                       >
+                        <td className="py-4 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedOrderIds.includes(ord.id)}
+                            onChange={(e) => handleToggleSelectOrder(ord.id, e as any)}
+                            className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                          />
+                        </td>
                         <td className="py-4 px-5 font-mono text-purple-950 font-bold text-xs">
                           #{ord.id}
                           <div className="text-[10px] text-gray-400 font-normal">{new Date(ord.createdAt).toLocaleDateString()}</div>
@@ -2765,7 +3146,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ) : (
                             <div>
                               <span className="text-amber-600 font-extrabold text-xs block">Unassigned</span>
-                              <span className="text-[10px] text-amber-700 font-semibold">Pending {getElapsedTime(ord.createdAt)}</span>
+                              <span className="text-[10px] text-amber-700 font-semibold">Pending {getElapsedTime(ord)}</span>
                             </div>
                           )}
                         </td>
@@ -2782,14 +3163,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               {ord.status}
                             </span>
-                            {ord.status === 'DELIVERED' && ord.deliveredAt && (
+                            {ord.status === 'DELIVERED' && (
                               <span className="text-[10px] font-bold text-emerald-700 block">
-                                in: {getDeliveryDurationText(ord.createdAt, ord.deliveredAt)}
+                                in: {getDeliveryDurationText(ord)}
+                              </span>
+                            )}
+                            {ord.status === 'CANCELED' && (
+                              <span className="text-[10px] font-bold text-red-700 block">
+                                in: {getDeliveryDurationText(ord)}
                               </span>
                             )}
                             {ord.status !== 'DELIVERED' && ord.status !== 'CANCELED' && (
                               <span className="text-[10px] font-bold text-amber-700 block">
-                                {getElapsedTime(ord.createdAt)}
+                                {getElapsedTime(ord)}
                               </span>
                             )}
                             {ord.needDeliveryBack && (
@@ -3082,7 +3468,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 4: REVENUE ANALYTICS TAB --- */}
       {activeTab === 'REVENUE' && isTabAllowed('REVENUE') && (
-        <RevenueAnalytics orders={allOrders} pricing={pricing} shops={shops} />
+        <RevenueAnalytics
+          orders={allOrders}
+          pricing={pricing}
+          shops={shops}
+          serverTotalDeliveryFees={exactTotalDeliveryFees}
+          serverTotalProductCosts={exactTotalProductCosts}
+          serverTotalCollection={exactTotalCollection}
+        />
       )}
 
       {/* --- TAB 3: CUSTOMERS STATS TAB --- */}
@@ -3097,7 +3490,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-extrabold text-base text-gray-900">Customer Statistics & Order Histories</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total customers
+                {exactCustomersCount !== null ? exactCustomersCount.toLocaleString() : totalItems} total customers
               </span>
             </div>
 
@@ -3369,116 +3762,254 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             })()}
 
             {/* Helper Performance Table View Component */}
-            {helperSubView === 'TABLE' && (
-              <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
-                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
-                    {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
+            {helperSubView === 'TABLE' && (() => {
+              // Deduplicate list by id
+              const processedList = getProcessedHelpers();
+              const uniqueProcessedMap = new Map<string, typeof processedList[0]>();
+              processedList.forEach((h) => {
+                if (!uniqueProcessedMap.has(h.id)) {
+                  uniqueProcessedMap.set(h.id, h);
+                }
+              });
+              let fleetList = Array.from(uniqueProcessedMap.values());
+
+              // Column sorting logic for Registered Fleet
+              if (fleetSortColumn) {
+                fleetList.sort((a, b) => {
+                  let valA: any = a[fleetSortColumn as keyof typeof a];
+                  let valB: any = b[fleetSortColumn as keyof typeof b];
+
+                  if (fleetSortColumn === 'name') {
+                    valA = (a.name || '').toLowerCase();
+                    valB = (b.name || '').toLowerCase();
+                  } else if (fleetSortColumn === 'helperType') {
+                    const typeA = fallbackStore.users.get(a.id)?.helperType || 'commuter';
+                    const typeB = fallbackStore.users.get(b.id)?.helperType || 'commuter';
+                    valA = typeA;
+                    valB = typeB;
+                  } else if (fleetSortColumn === 'nid') {
+                    valA = (a.nid || '').toLowerCase();
+                    valB = (b.nid || '').toLowerCase();
+                  } else if (fleetSortColumn === 'completedJobs') {
+                    valA = a.completedJobs ?? 0;
+                    valB = b.completedJobs ?? 0;
+                  } else if (fleetSortColumn === 'activeOrders') {
+                    valA = a.activeOrders ?? 0;
+                    valB = b.activeOrders ?? 0;
+                  } else if (fleetSortColumn === 'avgDeliveryTimeMins') {
+                    valA = a.avgDeliveryTimeMins ?? 999999;
+                    valB = b.avgDeliveryTimeMins ?? 999999;
+                  } else if (fleetSortColumn === 'totalEarned') {
+                    valA = a.totalEarned ?? 0;
+                    valB = b.totalEarned ?? 0;
+                  } else if (fleetSortColumn === 'balance') {
+                    valA = a.balance ?? 0;
+                    valB = b.balance ?? 0;
+                  }
+
+                  if (valA < valB) return fleetSortDirection === 'asc' ? -1 : 1;
+                  if (valA > valB) return fleetSortDirection === 'asc' ? 1 : -1;
+                  return 0;
+                });
+              }
+
+              const { totalPages, paginatedItems, totalItems } = paginateList(fleetList);
+
+              const handleSortClick = (col: string) => {
+                if (fleetSortColumn === col) {
+                  setFleetSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                } else {
+                  setFleetSortColumn(col);
+                  setFleetSortDirection('asc');
+                }
+              };
+
+              const renderSortIcon = (col: string) => {
+                if (fleetSortColumn !== col) {
+                  return <ArrowUpDown className="w-3 h-3 opacity-40 inline ml-1" />;
+                }
+                return (
+                  <span className="inline ml-1 font-bold text-purple-600">
+                    {fleetSortDirection === 'asc' ? '▲' : '▼'}
                   </span>
-                </div>
+                );
+              };
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
-                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                      <tr>
-                        <th className="py-3.5 px-5">Helper Name</th>
-                        <th className="py-3.5 px-5">Helper Type / Status</th>
-                        <th className="py-3.5 px-5">NID #</th>
-                        <th className="py-3.5 px-5">Completed Jobs</th>
-                        <th className="py-3.5 px-5">Active Assigned Jobs</th>
-                        <th className="py-3.5 px-5">Avg Delivery</th>
-                        <th className="py-3.5 px-5">Total Earned</th>
-                        <th className="py-3.5 px-5">Wallet Balance</th>
-                        <th className="py-3.5 px-5 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-medium">
-                      {paginatedItems.map((h) => {
-                        const helperUser = fallbackStore.users.get(h.id);
-                        const helperType = helperUser?.helperType || 'commuter';
-                        const isEdu = helperUser?.isEduVerified;
+              return (
+                <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                  <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                    <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                      {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
+                    </span>
+                  </div>
 
-                        return (
-                          <tr
-                            key={h.id}
-                            className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                            onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
+                      <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                        <tr>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('name')}
                           >
-                            <td className="py-4 px-5">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-extrabold text-gray-900">{h.name}</span>
-                                {isEdu && (
-                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
-                                    <Check className="w-2.5 h-2.5 text-blue-600" />
-                                    <span>Edu</span>
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
-                              <select
-                                value={helperType}
-                                onChange={async (e) => {
-                                  const newType = e.target.value as 'commuter' | 'dedicated';
-                                  if (helperUser) {
-                                    const updated = { ...helperUser, helperType: newType, isHelper: true };
-                                    await fallbackStore.saveUser(updated);
-                                    setUsers(Array.from(fallbackStore.users.values()));
-                                    showAlert('স্ট্যাটাস পরিবর্তিত', `${h.name}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`, 'success');
-                                  }
-                                }}
-                                className="px-2 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                              >
-                                <option value="commuter">🚲 Commuter Helper</option>
-                                <option value="dedicated">⚡ Dedicated Rider</option>
-                              </select>
-                            </td>
-                            <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
-                            <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
-                            <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
-                            <td className="py-4 px-5 font-black text-blue-700">
-                              {h.avgDeliveryTimeMins != null
-                                ? `${Math.floor(h.avgDeliveryTimeMins / 60) > 0 ? `${Math.floor(h.avgDeliveryTimeMins / 60)}h ` : ''}${h.avgDeliveryTimeMins % 60}m`
-                                : '—'}
-                            </td>
-                            <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
-                            <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
-                            <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() => setSelectedUserId(h.id)}
-                                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
-                              >
-                                Profile
-                              </button>
-                              <button
-                                onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
-                                className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                              >
-                                History
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                            <div className="flex items-center space-x-1">
+                              <span>Helper Name</span>
+                              {renderSortIcon('name')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('helperType')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Helper Type / Status</span>
+                              {renderSortIcon('helperType')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('nid')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>NID #</span>
+                              {renderSortIcon('nid')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('completedJobs')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Completed Jobs</span>
+                              {renderSortIcon('completedJobs')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('activeOrders')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Active Assigned Jobs</span>
+                              {renderSortIcon('activeOrders')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('avgDeliveryTimeMins')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Avg Delivery</span>
+                              {renderSortIcon('avgDeliveryTimeMins')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('totalEarned')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Total Earned</span>
+                              {renderSortIcon('totalEarned')}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('balance')}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Wallet Balance</span>
+                              {renderSortIcon('balance')}
+                            </div>
+                          </th>
+                          <th className="py-3.5 px-5 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 font-medium">
+                        {paginatedItems.map((h) => {
+                          const helperUser = fallbackStore.users.get(h.id);
+                          const helperType = helperUser?.helperType || 'commuter';
+                          const isEdu = helperUser?.isEduVerified;
 
-                {/* Pagination Controls */}
-                <PaginationControl
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  totalItems={totalItems}
-                  pageSize={pageSize}
-                  onPageChange={(p) => setCurrentPage(p)}
-                  onPageSizeChange={(s) => {
-                    setPageSize(s);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            )}
+                          return (
+                            <tr
+                              key={h.id}
+                              className="hover:bg-gray-50/80 transition-colors cursor-pointer"
+                              onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                            >
+                              <td className="py-4 px-5">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-extrabold text-gray-900">{h.name}</span>
+                                  {isEdu && (
+                                    <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
+                                      <Check className="w-2.5 h-2.5 text-blue-600" />
+                                      <span>Edu</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
+                                <select
+                                  value={helperType}
+                                  onChange={async (e) => {
+                                    const newType = e.target.value as 'commuter' | 'dedicated';
+                                    if (helperUser) {
+                                      const updated = { ...helperUser, helperType: newType, isHelper: true };
+                                      await fallbackStore.saveUser(updated);
+                                      setUsers(Array.from(fallbackStore.users.values()));
+                                      showAlert('স্ট্যাটাস পরিবর্তিত', `${h.name}-এর হেলপার টাইপ ${newType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} হিসেবে সেট করা হয়েছে।`, 'success');
+                                    }
+                                  }}
+                                  className="px-2 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                >
+                                  <option value="commuter">🚲 Commuter Helper</option>
+                                  <option value="dedicated">⚡ Dedicated Rider</option>
+                                </select>
+                              </td>
+                              <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
+                              <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
+                              <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
+                              <td className="py-4 px-5 font-black text-blue-700">
+                                {h.avgDeliveryTimeMins != null
+                                  ? formatDurationMinutes(h.avgDeliveryTimeMins)
+                                  : '—'}
+                              </td>
+                              <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
+                              <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
+                              <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => setSelectedUserId(h.id)}
+                                  className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
+                                >
+                                  Profile
+                                </button>
+                                <button
+                                  onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
+                                  className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
+                                >
+                                  History
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Controls */}
+                  <PaginationControl
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={totalItems}
+                    pageSize={pageSize}
+                    onPageChange={(p) => setCurrentPage(p)}
+                    onPageSizeChange={(s) => {
+                      setPageSize(s);
+                      setCurrentPage(1);
+                    }}
+                  />
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
@@ -3491,6 +4022,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         let filtered = [...withdrawalsSource];
         if (withdrawalStatusFilter !== 'ALL') {
           filtered = filtered.filter((w) => w.status === withdrawalStatusFilter);
+        }
+        if (withdrawalTypeFilter !== 'ALL') {
+          filtered = filtered.filter((w) => {
+            const isStore = w.userType === 'store' || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store')) || shops.some(s => s.ownerUserId === w.helperId);
+            return withdrawalTypeFilter === 'STORE' ? isStore : !isStore;
+          });
         }
         if (withdrawalsStartDate) {
           const startMs = new Date(`${withdrawalsStartDate}T00:00:00`).getTime();
@@ -3511,14 +4048,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const hasWdFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL');
+        const hasWdFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL' || withdrawalTypeFilter !== 'ALL');
         const overrideWdCount = (serverWithdrawals === null && !hasWdFilter && exactWithdrawalsCount !== null) ? exactWithdrawalsCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filtered, undefined, undefined, overrideWdCount);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">Helper Commission Payback Requests</h3>
+              <h3 className="font-extrabold text-base text-gray-900">Commission Payback Requests</h3>
               <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
                 {totalItems} total payback requests
               </span>
@@ -3567,55 +4104,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
-                    <th className="py-3.5 px-5">Helper Name</th>
+                    <th className="py-3.5 px-5">Type</th>
+                    <th className="py-3.5 px-5">Name</th>
                     <th className="py-3.5 px-5">Amount (৳)</th>
                     <th className="py-3.5 px-5">Payment Method</th>
-                    <th className="py-3.5 px-5">Mobile / TxID</th>
+                    <th className="py-3.5 px-5">Note / Mobile / TxID</th>
                     <th className="py-3.5 px-5">Status</th>
                     <th className="py-3.5 px-5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedItems.map((w) => (
-                    <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="py-4 px-5 font-extrabold text-gray-900">{w.helperName}</td>
-                      <td className="py-4 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
-                      <td className="py-4 px-5 font-bold uppercase">{w.paymentMethod}</td>
-                      <td className="py-4 px-5 font-mono">{w.accountNumber}</td>
-                      <td className="py-4 px-5">
-                        <span
-                          className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${w.status === 'APPROVED'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : w.status === 'REJECTED'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-amber-100 text-amber-800'
+                  {paginatedItems.map((w) => {
+                    const shop = shops.find(s => s.ownerUserId === w.helperId);
+                    const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                    const storeName = shop?.name;
+                    return (
+                      <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="py-4 px-5">
+                          <span
+                            className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${
+                              isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
                             }`}
-                        >
-                          {w.status}
-                        </span>
-                      </td>
-                      <td className="py-4 px-5 text-right">
-                        {w.status === 'PENDING' ? (
-                          <div className="flex justify-end space-x-2">
-                            <button
-                              onClick={() => handleApproveWd(w.id)}
-                              className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => handleRejectWd(w.id)}
-                              className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs"
-                            >
-                              Reject
-                            </button>
+                          >
+                            {isStore ? 'Store' : 'Helper'}
+                          </span>
+                        </td>
+                        <td className="py-4 px-5">
+                          {storeName ? (
+                            <div>
+                              <span className="font-extrabold text-purple-950 block text-xs">{storeName}</span>
+                              <span className="text-[10px] text-gray-500 font-medium block">{w.helperName}</span>
+                            </div>
+                          ) : (
+                            <span className="font-extrabold text-gray-900">{w.helperName}</span>
+                          )}
+                        </td>
+                        <td className="py-4 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
+                        <td className="py-4 px-5 font-bold uppercase">{w.paymentMethod}</td>
+                        <td className="py-4 px-5 font-mono whitespace-pre-wrap max-w-xs">{w.accountNumber || '—'}</td>
+                        <td className="py-4 px-5">
+                          <span
+                            className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${w.status === 'APPROVED'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : w.status === 'REJECTED'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                          >
+                            {w.status}
+                          </span>
+                        </td>
+                        <td className="py-4 px-5 text-right">
+                          <div className="flex items-center justify-end space-x-2">
+                            {w.status === 'PENDING' ? (
+                              <>
+                                <button
+                                  onClick={() => handleApproveWd(w.id)}
+                                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => handleRejectWd(w.id)}
+                                  className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs"
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            ) : (
+                              <span className="text-gray-400 text-xs">Processed</span>
+                            )}
+                            {isSuperAdmin && (
+                              <button
+                                onClick={() => openEditWdModal(w)}
+                                className="py-1.5 px-3 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-xs transition-all flex items-center space-x-1"
+                              >
+                                <span>Edit</span>
+                              </button>
+                            )}
                           </div>
-                        ) : (
-                          <span className="text-gray-400 text-xs">Processed</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -4217,6 +4788,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* Specific Allowed Serving Areas (Geofencing Polygons) Settings */}
+          <div className="p-5 rounded-3xl bg-purple-50/80 border border-purple-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-extrabold text-sm text-purple-950 uppercase tracking-wider flex items-center space-x-2">
+                  <Globe className="w-5 h-5 text-purple-700" />
+                  <span>Specific Serving Areas & Geofencing (নির্দিষ্ট সার্ভিস এলাকা ও ম্যাপ বাউন্ডারি)</span>
+                </h4>
+                <p className="text-[11px] text-purple-900 font-medium mt-0.5">
+                  এডমিন ম্যাপে নির্দিষ্ট এলাকার (যেমন: Bangladesh → Uttara 18, Ashulia Model Town) সীমানা এঁকে দিলে ফ্রন্টএন্ডে গ্রাহকরা কেবল এই এলাকাগুলোর ভেতরেই অর্ডার ও ঠিকানা নির্বাচন করতে পারবেন।
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingArea(null);
+                  setShowAreaDrawerModal(true);
+                }}
+                className="py-2 px-3.5 bg-purple-900 hover:bg-purple-950 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all flex items-center space-x-1.5 shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Serving Area</span>
+              </button>
+            </div>
+
+            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-purple-100">
+              <input
+                type="checkbox"
+                id="allowedDeliveryAreasEnabled"
+                checked={allowedDeliveryAreasEnabled}
+                onChange={(e) => setAllowedDeliveryAreasEnabled(e.target.checked)}
+                className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500 border-gray-300"
+              />
+              <label htmlFor="allowedDeliveryAreasEnabled" className="text-xs font-extrabold text-gray-900 cursor-pointer">
+                সার্ভিস এলাকা বাউন্ডারি চেক চালু করুন (Enforce Serving Area Restriction)
+              </label>
+            </div>
+
+            {allowedDeliveryAreas.length === 0 ? (
+              <div className="p-6 bg-white rounded-2xl border border-purple-100 text-center text-xs text-purple-700 font-medium">
+                কোনো নির্দিষ্ট সার্ভিস এলাকা ড্র করা হয়নি। এলাকা ড্র করতে উপরের &ldquo;Add Serving Area&rdquo; বাটনে ক্লিক করুন।
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {allowedDeliveryAreas.map((area) => (
+                  <div key={area.id} className="p-3.5 bg-white rounded-2xl border border-purple-200 shadow-xs flex items-center justify-between">
+                    <div>
+                      <div className="font-extrabold text-xs text-gray-900">{area.name}</div>
+                      <div className="text-[10px] text-purple-700 font-semibold mt-0.5">
+                        {area.country || 'Bangladesh'} • {area.coordinates?.length || 0} polygon points
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingArea(area);
+                          setShowAreaDrawerModal(true);
+                        }}
+                        className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        title="Edit area"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const confirmed = await showConfirm(
+                            'এলাকা ডিলিট নিশ্চিতকরণ',
+                            `আপনি কি "${area.name}" এলাকাটি ডিলিট করতে চান?`,
+                            'হ্যাঁ, ডিলিট করুন',
+                            'বাতিল'
+                          );
+                          if (confirmed) {
+                            setAllowedDeliveryAreas((prev) => prev.filter((a) => a.id !== area.id));
+                          }
+                        }}
+                        className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
+                        title="Delete area"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                সার্ভিস এরিয়ার বাইরে নির্বাচন করলে দেখানোর নোটিশ বার্তা (Out of Service Area Warning Message):
+              </label>
+              <textarea
+                value={outOfServiceAreaMessage}
+                onChange={(e) => setOutOfServiceAreaMessage(e.target.value)}
+                placeholder="যেমন: দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। অনুগ্রহ করে নির্ধারিত সার্ভিস এরিয়ার ভেতর থেকে পয়েন্ট নির্বাচন করুন।"
+                rows={2}
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-purple-600 leading-relaxed font-sans"
+              />
+              <p className="text-[10px] text-gray-500 mt-1">
+                গ্রাহক সার্ভিস এরিয়ার বাইরের অবস্থান বাছাই করে &ldquo;ঠিকানা নিশ্চিত করুন&rdquo; বাটনে ক্লিক করলে এই বার্তাটি পপআপে দেখানো হবে এবং ম্যাপটি স্বয়ংক্রিয়ভাবে সার্ভিস এরিয়ার ভেতরে চলে আসবে।
+              </p>
+            </div>
+          </div>
+
           {/* PWA App Installation Prompt Settings */}
           <div className="p-5 rounded-3xl bg-indigo-50/80 border border-indigo-200 space-y-4">
             <h4 className="font-extrabold text-sm text-indigo-950 uppercase tracking-wider flex items-center space-x-2">
@@ -4655,6 +5332,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
                 />
                 <p className="text-[11px] text-gray-500 mt-1">Default: 5 বার</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-purple-100/60">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  পিকআপ ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Pickup Input Placeholder):
+                </label>
+                <input
+                  type="text"
+                  value={mapPickerPickupPlaceholder}
+                  onChange={(e) => setMapPickerPickupPlaceholder(e.target.value)}
+                  placeholder="যেমন: আরিফ স্টোর, আশুলিয়া বাজার."
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  ডেলিভারি ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Delivery Input Placeholder):
+                </label>
+                <input
+                  type="text"
+                  value={mapPickerDeliveryPlaceholder}
+                  onChange={(e) => setMapPickerDeliveryPlaceholder(e.target.value)}
+                  placeholder="যেমন: ৪এ, রহমান ভিলা, মডেল টাউন."
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
               </div>
             </div>
             <div>
@@ -5185,92 +5888,195 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[950px]">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                       <tr>
-                        <th className="py-3.5 px-5">Store Name</th>
-                        <th className="py-3.5 px-5">Store Type</th>
-                        <th className="py-3.5 px-5">Contact Person & WhatsApp</th>
-                        <th className="py-3.5 px-5">Location Address</th>
-                        <th className="py-3.5 px-5">Added By</th>
-                        <th className="py-3.5 px-5 text-right">Actions</th>
+                        <th className="py-3.5 px-4">Store Name & Status</th>
+                        <th className="py-3.5 px-4">Store Type</th>
+                        <th className="py-3.5 px-4">Orders & Revenue Stats</th>
+                        <th className="py-3.5 px-4">Contact & WhatsApp</th>
+                        <th className="py-3.5 px-4">Location Address</th>
+                        <th className="py-3.5 px-4">Added By</th>
+                        <th className="py-3.5 px-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-medium">
-                      {paginatedItems.map((s) => (
-                        <tr
-                          key={s.id}
-                          onClick={() => setSelectedShopDetails(s)}
-                          className="hover:bg-purple-50/50 transition-colors cursor-pointer"
-                        >
-                          <td className="py-4 px-5">
-                            <div className="font-extrabold text-gray-900 flex items-center space-x-2">
-                              <Store className="w-4 h-4 text-purple-600 shrink-0" />
-                              <span>{s.name}</span>
-                            </div>
-                          </td>
-                          <td className="py-4 px-5">
-                            <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
-                              {s.type}
-                            </span>
-                          </td>
-                          <td className="py-4 px-5">
-                            <div className="font-bold text-gray-800">{s.contactPerson}</div>
-                            <div className="text-[11px] text-emerald-700 font-extrabold">WA: {s.whatsapp}</div>
-                          </td>
-                          <td className="py-4 px-5">
-                            <div className="text-gray-800 font-semibold max-w-xs">{s.location.address}</div>
-                            {typeof s.location.lat === 'number' && typeof s.location.lng === 'number' && (
-                              <div className="text-[10px] text-gray-400 font-mono">
-                                {s.location.lat.toFixed(4)}, {s.location.lng.toFixed(4)}
+                      {paginatedItems.map((s) => {
+                        const shopOrdersList = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.shopId === s.id);
+                        const mainOrdersForThisShop = allOrders.filter((o) => o.selectedShopIds?.includes(s.id));
+
+                        let completed = 0;
+                        let rejected = 0;
+                        let running = 0;
+                        let totalSales = 0;
+
+                        if (shopOrdersList.length > 0) {
+                          const seenParentIds = new Set<string>();
+                          shopOrdersList.forEach((so) => {
+                            seenParentIds.add(so.parentOrderId);
+                            const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
+                            const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+                            const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
+
+                            if (isCanceled) {
+                              rejected++;
+                            } else if (isCompleted) {
+                              completed++;
+                              totalSales += (so.price || parentOrder?.productCost || 0);
+                            } else {
+                              running++;
+                              totalSales += (so.price || 0);
+                            }
+                          });
+
+                          mainOrdersForThisShop.forEach((mo) => {
+                            if (!seenParentIds.has(mo.id)) {
+                              if (mo.status === 'CANCELED') {
+                                rejected++;
+                              } else if (mo.status === 'DELIVERED') {
+                                completed++;
+                                totalSales += (mo.productCost || 0);
+                              } else {
+                                running++;
+                                totalSales += (mo.productCost || 0);
+                              }
+                            }
+                          });
+                        } else {
+                          mainOrdersForThisShop.forEach((mo) => {
+                            if (mo.status === 'CANCELED') {
+                              rejected++;
+                            } else if (mo.status === 'DELIVERED') {
+                              completed++;
+                              totalSales += (mo.productCost || 0);
+                            } else {
+                              running++;
+                              totalSales += (mo.productCost || 0);
+                            }
+                          });
+                        }
+
+                        const commission = Math.round(totalSales * ((s.commissionPercent || 0) / 100));
+                        const sStatus = s.status === 'Pending' || s.status === 'PENDING'
+                          ? 'Pending'
+                          : s.status === 'Rejected' || s.status === 'REJECTED'
+                          ? 'Rejected'
+                          : 'Approved';
+
+                        return (
+                          <tr
+                            key={s.id}
+                            onClick={() => setSelectedShopDetails(s)}
+                            className="hover:bg-purple-50/50 transition-colors cursor-pointer"
+                          >
+                            <td className="py-4 px-4">
+                              <div className="font-extrabold text-gray-900 flex items-center space-x-2">
+                                <Store className="w-4 h-4 text-purple-600 shrink-0" />
+                                <span>{s.name}</span>
                               </div>
-                            )}
-                          </td>
-                          <td className="py-4 px-5 text-gray-500 font-medium">
-                            {s.addedByHelperName || 'Admin'}
-                          </td>
-                          <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end space-x-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedShopDetails(s)}
-                                className="p-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-xs"
-                                title="View Details"
-                              >
-                                <Globe className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingShop(s);
-                                  setShowAddShopModal(true);
-                                }}
-                                className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  const confirmed = await showConfirm(
-                                    'দোকান ডিলিট নিশ্চিতকরণ',
-                                    `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
-                                    'হ্যাঁ, ডিলিট করুন',
-                                    'বাতিল'
-                                  );
-                                  if (!confirmed) return;
-                                  await fallbackStore.deleteShop(s.id);
-                                  setShops(Array.from(fallbackStore.shops.values()));
-                                  showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
-                                }}
-                                className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                              <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+                                <select
+                                  value={sStatus}
+                                  onChange={async (e) => {
+                                    const newStatus = e.target.value as 'Approved' | 'Pending' | 'Rejected';
+                                    await fallbackStore.updateShopStatus(s.id, newStatus);
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    showAlert('সফল', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
+                                  }}
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase border cursor-pointer outline-none ${
+                                    sStatus === 'Approved'
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                      : sStatus === 'Pending'
+                                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                      : 'bg-red-100 text-red-800 border-red-300'
+                                  }`}
+                                >
+                                  <option value="Approved">Approved</option>
+                                  <option value="Pending">Pending</option>
+                                  <option value="Rejected">Rejected</option>
+                                </select>
+                              </div>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
+                                {s.type}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-black text-[10px] border border-emerald-200" title="Completed Orders">
+                                  ✓ {completed}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-black text-[10px] border border-amber-200" title="Running Orders">
+                                  ⚡ {running}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 font-black text-[10px] border border-rose-200" title="Rejected Orders">
+                                  ✕ {rejected}
+                                </span>
+                              </div>
+                              <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
+                                <div>Sales: <strong className="text-emerald-700">৳{totalSales.toLocaleString()}</strong></div>
+                                <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{commission.toLocaleString()}</strong></div>
+                              </div>
+                            </td>
+                            <td className="py-4 px-4">
+                              <div className="font-bold text-gray-800">{s.contactPerson}</div>
+                              <div className="text-[11px] text-emerald-700 font-extrabold">WA: {s.whatsapp}</div>
+                            </td>
+                            <td className="py-4 px-4">
+                              <div className="text-gray-800 font-semibold max-w-xs">{s.location.address}</div>
+                              {typeof s.location.lat === 'number' && typeof s.location.lng === 'number' && (
+                                <div className="text-[10px] text-gray-400 font-mono">
+                                  {s.location.lat.toFixed(4)}, {s.location.lng.toFixed(4)}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-4 px-4 text-gray-500 font-medium">
+                              {s.addedByHelperName || 'Admin'}
+                            </td>
+                            <td className="py-4 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end space-x-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedShopDetails(s)}
+                                  className="p-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-xs"
+                                  title="View Details"
+                                >
+                                  <Globe className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingShop(s);
+                                    setShowAddShopModal(true);
+                                  }}
+                                  className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const confirmed = await showConfirm(
+                                      'দোকান ডিলিট নিশ্চিতকরণ',
+                                      `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
+                                      'হ্যাঁ, ডিলিট করুন',
+                                      'বাতিল'
+                                    );
+                                    if (!confirmed) return;
+                                    await fallbackStore.deleteShop(s.id);
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
+                                  }}
+                                  className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -5839,16 +6645,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div>
                   <h2 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
                     <Clock className="w-5 h-5 text-purple-700" />
-                    Top High-Duration Deliveries
+                    Top High-Duration Deliveries (Average Order List)
                   </h2>
                   <p className="text-xs text-gray-400 mt-0.5">Most recent completed orders with longest delivery times</p>
                 </div>
-                <button
-                  onClick={() => setShowHighDurationModal(false)}
-                  className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-2">
+                  {selectedOrderIds.length > 0 && (
+                    <AsyncButton
+                      onClick={handleBulkDeleteOrders}
+                      isLoading={isDeletingOrders}
+                      icon={<Trash2 className="w-3.5 h-3.5" />}
+                      className="py-1.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1 disabled:opacity-50"
+                    >
+                      <span>Delete ({selectedOrderIds.length})</span>
+                    </AsyncButton>
+                  )}
+                  <button
+                    onClick={() => setShowHighDurationModal(false)}
+                    className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
               {/* Summary stat */}
@@ -5858,7 +6676,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">Overall Avg</div>
                     <div className="text-xl font-extrabold text-purple-900">
                       {avgDeliveryTimeMins > 0
-                        ? `${Math.floor(avgDeliveryTimeMins / 60) > 0 ? `${Math.floor(avgDeliveryTimeMins / 60)}h ` : ''}${avgDeliveryTimeMins % 60}m`
+                        ? formatDurationMinutes(avgDeliveryTimeMins)
                         : 'N/A'}
                     </div>
                   </div>
@@ -5878,7 +6696,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <table className="w-full text-xs text-left text-gray-600">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 sticky top-0">
                       <tr>
-                        <th className="py-3 px-5">#</th>
+                        <th className="py-3 px-4 w-10 text-center">
+                          <input
+                            type="checkbox"
+                            checked={
+                              highDurationOrders.length > 0 &&
+                              highDurationOrders.every((o) => selectedOrderIds.includes(o.id))
+                            }
+                            onChange={() => handleToggleSelectAllOrders(highDurationOrders)}
+                            className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                            title="Select All"
+                          />
+                        </th>
+                        <th className="py-3 px-3">#</th>
                         <th className="py-3 px-5">Order</th>
                         <th className="py-3 px-5">Customer / Helper</th>
                         <th className="py-3 px-5 text-right">Duration</th>
@@ -5888,10 +6718,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {highDurationOrders.map((o, idx) => (
                         <tr
                           key={o.id}
-                          className="hover:bg-purple-50/40 transition-colors cursor-pointer"
+                          className={`hover:bg-purple-50/40 transition-colors cursor-pointer ${
+                            selectedOrderIds.includes(o.id) ? 'bg-purple-50/70' : ''
+                          }`}
                           onClick={() => { setShowHighDurationModal(false); setSelectedOrderId(o.id); }}
                         >
-                          <td className="py-3.5 px-5 font-extrabold text-gray-400">{idx + 1}</td>
+                          <td className="py-3.5 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedOrderIds.includes(o.id)}
+                              onChange={(e) => handleToggleSelectOrder(o.id, e as any)}
+                              className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                            />
+                          </td>
+                          <td className="py-3.5 px-3 font-extrabold text-gray-400">{idx + 1}</td>
                           <td className="py-3.5 px-5">
                             <div className="font-extrabold text-purple-900">#{o.id}</div>
                             <div className="text-[10px] text-gray-400">{new Date(o.deliveredAt!).toLocaleDateString()}</div>
@@ -6136,6 +6976,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         />
       )}
 
+      {showAreaDrawerModal && (
+        <AreaDrawerModal
+          isOpen={showAreaDrawerModal}
+          areaToEdit={editingArea}
+          onClose={() => {
+            setShowAreaDrawerModal(false);
+            setEditingArea(null);
+          }}
+          onSaveArea={(savedArea) => {
+            setAllowedDeliveryAreas((prev) => {
+              const idx = prev.findIndex((a) => a.id === savedArea.id);
+              if (idx > -1) {
+                const next = [...prev];
+                next[idx] = savedArea;
+                return next;
+              }
+              return [...prev, savedArea];
+            });
+            setShowAreaDrawerModal(false);
+            setEditingArea(null);
+          }}
+        />
+      )}
+
       {selectedStoreApp && (
         <AdminStoreAppDetailsModal
           application={selectedStoreApp}
@@ -6147,6 +7011,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             setSelectedStoreApp(null);
           }}
         />
+      )}
+
+      {/* Super Admin Edit Payback Request Modal */}
+      {editingWd && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-extrabold text-base text-gray-900">
+                Edit Payback Request
+              </h3>
+              <button
+                onClick={() => setEditingWd(null)}
+                className="text-gray-400 hover:text-gray-600 font-extrabold text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWdEdit} className="space-y-4">
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 block mb-1">
+                  Applicant / Target
+                </label>
+                <input
+                  type="text"
+                  value={editingWd.helperName}
+                  disabled
+                  className="w-full p-3 rounded-2xl bg-gray-100 border border-gray-200 text-xs font-bold text-gray-700 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 block mb-1">
+                  Status
+                </label>
+                <select
+                  value={editWdStatus}
+                  onChange={(e) => setEditWdStatus(e.target.value as any)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-extrabold text-gray-800 focus:border-purple-600 outline-none bg-white"
+                >
+                  <option value="PENDING">PENDING (অপেক্ষমাণ)</option>
+                  <option value="APPROVED">APPROVED (অনুমোদিত)</option>
+                  <option value="REJECTED">REJECTED (বাতিল)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 block mb-1">
+                  Payback Amount (৳)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editWdAmount}
+                  onChange={(e) => setEditWdAmount(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-base font-extrabold text-purple-900 focus:border-purple-600 outline-none"
+                  required
+                />
+              </div>
+
+              {editingWd.accountNumber && (
+                <div>
+                  <label className="text-xs font-extrabold text-gray-500 block mb-1">
+                    Note / Account details
+                  </label>
+                  <div className="p-3 bg-gray-50 rounded-2xl text-xs font-mono text-gray-700 whitespace-pre-wrap max-h-24 overflow-y-auto border border-gray-100">
+                    {editingWd.accountNumber}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingWd(null)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-all"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all"
+                >
+                  সংরক্ষণ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

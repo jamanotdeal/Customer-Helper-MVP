@@ -146,12 +146,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Simplified progress steps
   const steps: { status: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
-    { status: 'PENDING', label: 'Order Placed', icon: Check, desc: 'Looking for a helper...' },
+    { status: 'PENDING', label: 'Order Placed', icon: Check, desc: 'Order Placed Successfully' },
     {
       status: 'ACCEPTED',
       label: showAdminAccepted ? 'Admin Accepted' : 'Helper Assigned',
       icon: UserCheck,
-      desc: showAdminAccepted ? 'Admin accepted the order. Wait for helper...' : 'Helper is heading to pickup'
+      desc: showAdminAccepted ? 'Admin finding helper for you...' : 'Helper is heading to pickup'
     },
     { status: 'PURCHASED_EXECUTED', label: 'Proccessing...', icon: Package, desc: 'Items collected from shop' },
     { status: 'ON_THE_WAY', label: 'On The Way', icon: Truck, desc: 'Coming to your location' },
@@ -160,9 +160,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   ];
 
   const getStepState = (stepStatus: OrderStatus) => {
+    if (order.status === 'CANCELED') return 'CANCELED';
+    
+    // When admin accepted (but order status is still PENDING without helper assigned), step ACCEPTED is active current step
+    if (showAdminAccepted && order.status === 'PENDING') {
+      if (stepStatus === 'PENDING') return 'COMPLETED';
+      if (stepStatus === 'ACCEPTED') return 'CURRENT';
+      return 'UPCOMING';
+    }
+
     const orderIndex = steps.findIndex((s) => s.status === order.status);
     const stepIndex = steps.findIndex((s) => s.status === stepStatus);
-    if (order.status === 'CANCELED') return 'CANCELED';
     if (stepIndex < orderIndex) return 'COMPLETED';
     if (stepIndex === orderIndex) return 'CURRENT';
     return 'UPCOMING';
@@ -494,24 +502,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── WAITING FOR HELPER / ADMIN ACCEPTED ── */}
-        {!order.helperId && !isCanceled && (
-          <div className="space-y-3">
-            {/* Standard waiting block (hides if admin accepted since support details are shown inside helper contact block above) */}
-            {!showAdminAccepted && (
-              <div className="bg-amber-50 rounded-3xl border border-amber-200 p-4 text-center space-y-1 shadow-soft">
-                <Clock className="w-6 h-6 text-amber-500 mx-auto animate-pulse" />
-                <p className="font-extrabold text-sm text-amber-900">Waiting for a Helper</p>
-                <p className="text-[11px] text-amber-700 font-medium mb-2">
-                  A nearby helper will accept your order soon. Their contact will appear here once assigned.
-                </p>
-                <p className="text-xs text-emerald-800 font-bold bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100/50">
-                  আপনার অর্ডারটি দেখা হচ্ছে। ধৈর্য ধরে অপেক্ষা করার জন্য আপনাকে অনেক অনেক ধন্যবাদ।
-                </p>
-              </div>
-            )}
-          </div>
-        )}
+
 
 
 

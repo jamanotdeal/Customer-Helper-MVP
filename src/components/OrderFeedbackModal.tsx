@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Order, OrderFeedback } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { Star, Check, X, Sparkles } from 'lucide-react';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface OrderFeedbackModalProps {
   order: Order;
@@ -186,14 +187,14 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
             >
               পরে
             </button>
-            <button
+            <AsyncButton
               type="submit"
-              disabled={submitting}
+              isLoading={submitting}
+              icon={<Check className="w-4 h-4" />}
               className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-1.5 disabled:opacity-50"
             >
-              <Check className="w-4 h-4" />
               <span>জমা দিন</span>
-            </button>
+            </AsyncButton>
           </div>
         </form>
       </div>

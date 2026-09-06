@@ -8,6 +8,7 @@ import { MapPickerModal } from './MapPickerModal';
 import {
   X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle,
 } from 'lucide-react';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface AddShopModalProps {
   shopToEdit?: Shop | null;
@@ -557,14 +558,14 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               >
                 বাতিল
               </button>
-              <button
+              <AsyncButton
                 type="submit"
-                disabled={submitting}
+                isLoading={submitting}
+                icon={<Check className="w-4 h-4" />}
                 className="flex-1 py-3.5 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-2"
               >
-                <Check className="w-4 h-4" />
-                <span>{submitting ? 'সংরক্ষণ হচ্ছে...' : shopToEdit ? 'আপডেট করুন' : 'দোকান সংরক্ষণ করুন'}</span>
-              </button>
+                <span>{shopToEdit ? 'আপডেট করুন' : 'দোকান সংরক্ষণ করুন'}</span>
+              </AsyncButton>
             </div>
           </form>
         </div>

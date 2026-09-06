@@ -796,11 +796,14 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
             {/* TAB 4: WALLET TRANSACTIONS */}
             {activeTab === 'WALLET' && (() => {
               const pricing = fallbackStore.pricingSettings;
+              const minFee = pricing.feeCalculatorMinFee ?? 20;
               const totalRiderEarned = completedHelperOrders.reduce((sum, o) => {
-                return sum + calculateHelperCommission(o.deliveryFee, pricing);
+                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                return sum + calculateHelperCommission(effectiveFee, pricing);
               }, 0);
               const totalPlatformShare = completedHelperOrders.reduce((sum, o) => {
-                return sum + (o.deliveryFee - calculateHelperCommission(o.deliveryFee, pricing));
+                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                return sum + (effectiveFee - calculateHelperCommission(effectiveFee, pricing));
               }, 0);
               const totalPaidCommission = wallet.totalPaidCommission || 0;
               const remainingDueCommission = Math.max(0, totalPlatformShare - totalPaidCommission);

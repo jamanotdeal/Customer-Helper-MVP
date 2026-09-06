@@ -18,7 +18,7 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNavigate }) => {
-  const { user, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
+  const { user, loading, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
   const { showAlert, showPermissionModal, showConfirm } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
@@ -63,6 +63,27 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
     user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin')
   );
 
+  const isStoreUser = Boolean(
+    user && (
+      user.isStore ||
+      user.isStoreApproved ||
+      Boolean(user.storeId) ||
+      user.role === 'store' ||
+      activeMode === 'store' ||
+      Boolean((user as any).storeType) ||
+      storeAppStatus === 'APPROVED'
+    )
+  );
+
+  const isHelperUser = Boolean(
+    user && (
+      user.isHelper ||
+      user.role === 'helper' ||
+      activeMode === 'helper' ||
+      helperAppStatus === 'APPROVED'
+    )
+  );
+
   return (
     <>
       <header
@@ -98,7 +119,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
 
           {/* Action Buttons */}
           <div className="flex items-center space-x-2">
-            {user ? (
+            {loading ? (
+              <div className="w-8 h-8 rounded-xl bg-gray-200 animate-pulse" />
+            ) : user ? (
               <>
                 {/* Notifications Bell */}
                 <button
@@ -252,7 +275,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                       )}
 
                       {/* Store Mode — nested under Customer Mode */}
-                      {user.helperType !== 'dedicated' && (
+                      {!isHelperUser && user.helperType !== 'dedicated' && (
                         <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
                           {user.isStoreApproved ? (
                             <div className="w-full p-3 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-950 shadow-sm space-y-2">
@@ -324,116 +347,73 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                         </div>
                       )}
 
-                      {((user.isHelper && user.helperType === 'dedicated') || !(fallbackStore.pricingSettings.allowedHelperTypes === 'dedicated_only')) && (
-                        <button
-                          onClick={async () => {
-                            setShowProfileMenu(false);
-                            if (user.isHelper) {
+                      {/* Single Helper Option: "Helper Mode" if user is helper, "Become Helper" if not rider/helper */}
+                      {!isStoreUser && (
+                        user.isHelper ? (
+                          <button
+                            onClick={() => {
+                              setShowProfileMenu(false);
                               setActiveMode('helper');
-                            } else {
-                              const activated = await enableCommuterHelperWithLocation();
-                              if (!activated) {
-                                const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('location_permission_prompted') === 'true';
-                                if (!alreadyAsked) {
-                                  const p = fallbackStore.pricingSettings;
-                                  await showPermissionModal({
-                                    permissionType: 'location',
-                                    title: p.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)',
-                                    message: p.locationPermissionModalBody || 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক।',
-                                    onAllow: async () => {
-                                      const res = await enableCommuterHelperWithLocation();
-                                      if (typeof localStorage !== 'undefined') {
-                                        localStorage.setItem('location_permission_prompted', 'true');
-                                      }
-                                      return res;
-                                    },
-                                    allowText: 'Allow Location',
-                                  });
-                                  if (typeof localStorage !== 'undefined') {
-                                    localStorage.setItem('location_permission_prompted', 'true');
-                                  }
-                                } else {
-                                  // Force activeMode switch since they already chose
-                                  const updatedUser = {
-                                    ...user,
-                                    isHelper: true,
-                                    helperType: user.helperType || 'commuter',
-                                    lastActiveMode: 'helper' as const,
-                                  };
-                                  fallbackStore.saveUser(updatedUser);
-                                  setActiveMode('helper');
-                                }
-                              }
-                            }
-                          }}
-                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                            activeMode === 'helper'
-                              ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                              : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          <div className="flex items-center space-x-2.5">
-                            <Bike className="w-5 h-5 text-emerald-600" />
-                            <div>
-                              <div className="text-sm font-semibold">
-                                {user.helperType === 'dedicated' ? 'Dedicated Rider Mode' : 'Commuter Helper Mode'}
-                              </div>
-                              <div className="text-[11px] text-gray-500 font-normal">
-                                {user.helperType === 'dedicated'
-                                  ? 'Accept requests & deliver'
-                                  : (user.isHelper ? 'Accept requests & earn' : 'Switch directly & allow location')}
+                              onNavigate?.('helper_tasks');
+                            }}
+                            className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                              activeMode === 'helper'
+                                ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                                : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2.5">
+                              <Bike className="w-5 h-5 text-emerald-600" />
+                              <div>
+                                <div className="text-sm font-semibold">Helper Mode</div>
+                                <div className="text-[11px] text-gray-500 font-normal">
+                                  {user.helperType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} • Accept requests & earn
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                        </button>
-                      )}
-
-                      {/* Become a Helper (Dedicated Rider) — nested under Helper Mode */}
-                      {!(user.isHelper && user.helperType === 'dedicated') && (
-                        <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
-                          {helperAppStatus === 'PENDING' ? (
-                            <button
-                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
-                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
-                            >
-                              <div className="flex items-center space-x-2">
-                                <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
-                                <div>
-                                  <div className="text-xs font-semibold">Become a Helper</div>
-                                  <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
-                                </div>
+                            {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                          </button>
+                        ) : helperAppStatus === 'PENDING' ? (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                            className="w-full flex items-center justify-between p-3 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
+                          >
+                            <div className="flex items-center space-x-2.5">
+                              <Clock className="w-5 h-5 text-amber-600 animate-pulse" />
+                              <div>
+                                <div className="text-sm font-semibold">Become Helper</div>
+                                <div className="text-[11px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
                               </div>
-                            </button>
-                          ) : helperAppStatus === 'REJECTED' || helperAppStatus === 'CANCELED' ? (
-                            <button
-                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
-                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
-                            >
-                              <div className="flex items-center space-x-2">
-                                <PlusCircle className="w-4 h-4 text-emerald-500" />
-                                <div>
-                                  <div className="text-xs font-semibold">Become a Helper</div>
-                                  <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
-                                </div>
+                            </div>
+                          </button>
+                        ) : helperAppStatus === 'REJECTED' || helperAppStatus === 'CANCELED' ? (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                            className="w-full flex items-center justify-between p-3 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
+                          >
+                            <div className="flex items-center space-x-2.5">
+                              <PlusCircle className="w-5 h-5 text-emerald-500" />
+                              <div>
+                                <div className="text-sm font-semibold">Become Helper</div>
+                                <div className="text-[11px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
                               </div>
-                              <XCircle className="w-3.5 h-3.5 text-red-400" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
-                              className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
-                            >
-                              <div className="flex items-center space-x-2">
-                                <PlusCircle className="w-4 h-4 text-emerald-500" />
-                                <div>
-                                  <div className="text-xs font-semibold">Become a Helper</div>
-                                  <div className="text-[10px] text-gray-500 font-normal">ডেডিকেটেড রাইডার হয়ে লাইভ ম্যাপ ও সব অর্ডার পান</div>
-                                </div>
+                            </div>
+                            <XCircle className="w-4 h-4 text-red-400" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
+                            className="w-full flex items-center justify-between p-3 rounded-2xl border border-gray-100 text-gray-700 hover:bg-emerald-50/50 hover:border-emerald-200 transition-all text-left"
+                          >
+                            <div className="flex items-center space-x-2.5">
+                              <PlusCircle className="w-5 h-5 text-emerald-500" />
+                              <div>
+                                <div className="text-sm font-semibold">Become Helper</div>
+                                <div className="text-[11px] text-gray-500 font-normal">রাইডার/হেলপার হয়ে আয় করুন</div>
                               </div>
-                            </button>
-                          )}
-                        </div>
+                            </div>
+                          </button>
+                        )
                       )}
                     </>
                   )}
