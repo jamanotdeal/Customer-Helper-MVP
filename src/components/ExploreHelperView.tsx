@@ -10,6 +10,7 @@ import { fetchRoadRoute } from '@/lib/routeUtils';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { useModal } from './CustomModal';
 import { Compass, Map as MapIcon, Layers, Clock, MapPin, Bike, Navigation, RefreshCw, AlertTriangle } from 'lucide-react';
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 export const ExploreHelperView: React.FC = () => {
   const { user } = useAuth();
@@ -234,11 +235,17 @@ export const ExploreHelperView: React.FC = () => {
 
       const allBoundsPoints: [number, number][] = [[helperLat, helperLng]];
 
-      for (const order of unacceptedOrders) {
-        const pickupLat = order.pickupLocation?.lat || helperLat + 0.002;
-        const pickupLng = order.pickupLocation?.lng || helperLng + 0.002;
+      const spiderfiedOrders = getSpiderfiedCoordinates(
+        unacceptedOrders,
+        (o) => o.pickupLocation?.lat || helperLat + 0.002,
+        (o) => o.pickupLocation?.lng || helperLng + 0.002
+      );
+
+      for (const entry of spiderfiedOrders) {
+        const { item: order, displayLat: pickupLat, displayLng: pickupLng, overlapCount, overlapIndex } = entry;
         const deliveryLat = order.deliveryLocation.lat || helperLat - 0.002;
         const deliveryLng = order.deliveryLocation.lng || helperLng - 0.002;
+        const hasOverlap = overlapCount > 1;
 
         allBoundsPoints.push([pickupLat, pickupLng]);
         allBoundsPoints.push([deliveryLat, deliveryLng]);
@@ -246,10 +253,14 @@ export const ExploreHelperView: React.FC = () => {
         const orderTitle = order.service || order.title || 'errand';
         const elapsedStr = getElapsedTime(order.createdAt);
 
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
+          : '';
+
         // Pickup: Yellow point block showing "Order type and timers"
         const pickupIconHtml = `
-          <div style="background-color: #fef08a; color: #854d0e; padding: 6px 10px; border-radius: 12px; border: 2px solid #eab308; box-shadow: 0 4px 10px rgba(234,179,8,0.5); font-weight: 850; font-size: 11px; text-align: center; white-space: nowrap; cursor: pointer;">
-            <div>${orderTitle}</div>
+          <div style="background-color: #fef08a; color: #854d0e; padding: 6px 10px; border-radius: 12px; border: 2px solid ${hasOverlap ? '#f59e0b' : '#eab308'}; box-shadow: 0 4px 10px rgba(234,179,8,0.5); font-weight: 850; font-size: 11px; text-align: center; white-space: nowrap; cursor: pointer; display: flex; flex-direction: column; align-items: center;">
+            <div style="display: flex; align-items: center;">${orderTitle} ${overlapBadgeHtml}</div>
             <div style="color: #ca8a04; font-size: 9.5px; font-weight: 900; margin-top: 1px;">⏱️ ${elapsedStr}</div>
           </div>
         `;
@@ -258,10 +269,12 @@ export const ExploreHelperView: React.FC = () => {
           icon: L.divIcon({
             className: `pickup-marker-${order.id}`,
             html: pickupIconHtml,
-            iconSize: [140, 50],
-            iconAnchor: [70, 25],
+            iconSize: [145, 50],
+            iconAnchor: [72, 25],
           })
         }).addTo(map);
+
+        setupMarkerHoverElevation(pickupMarker);
 
         pickupMarker.on('click', () => {
           setSelectedOrderId(order.id);
@@ -296,6 +309,8 @@ export const ExploreHelperView: React.FC = () => {
             iconAnchor: [15, 15],
           })
         }).addTo(map);
+
+        setupMarkerHoverElevation(deliveryIconMarker);
 
         markersRef.current.set(`delivery-${order.id}`, deliveryMarker);
         markersRef.current.set(`delivery-icon-${order.id}`, deliveryIconMarker);

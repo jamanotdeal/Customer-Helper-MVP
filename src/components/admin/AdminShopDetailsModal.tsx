@@ -337,6 +337,41 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             )}
           </div>
 
+          {/* Order Receiving Capability */}
+          <div className="bg-purple-50/80 rounded-2xl p-4 border border-purple-200/80 flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-xs font-black text-purple-950 uppercase tracking-wider">
+                Order Receiving Capability
+              </h4>
+              <p className="text-[11px] text-purple-800 font-semibold mt-0.5">
+                {(shop.canReceiveOrders !== false)
+                  ? 'সরাসরি অর্ডার গ্রহণ সক্ষম (Accepts requests directly via Store App)'
+                  : 'ম্যানুয়াল দোকান (Added by admin - Helper updates price, note & status manually)'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const currentVal = shop.canReceiveOrders !== undefined ? shop.canReceiveOrders : true;
+                const updated = { ...shop, canReceiveOrders: !currentVal };
+                await fallbackStore.saveShop(updated);
+                showAlert(
+                  'Order Receive Capability Updated',
+                  `"${shop.name}" এর জন্য Order Receive Capability ${!currentVal ? 'সক্রিয় (Can Receive)' : 'নিষ্ক্রিয় (Manual Only)'} করা হয়েছে।`,
+                  'success'
+                );
+                onClose();
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border shadow-sm transition-all cursor-pointer ${
+                (shop.canReceiveOrders !== false)
+                  ? 'bg-purple-700 hover:bg-purple-800 text-white border-purple-600'
+                  : 'bg-gray-200 hover:bg-gray-300 text-gray-800 border-gray-400'
+              }`}
+            >
+              {(shop.canReceiveOrders !== false) ? 'Can Receive: YES' : 'Can Receive: NO'}
+            </button>
+          </div>
+
           {/* Commission */}
           {shop.commissionPercent !== undefined && (
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl p-4 border border-purple-100 space-y-1.5">

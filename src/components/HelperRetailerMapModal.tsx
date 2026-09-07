@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Shop, LocationData } from '@/types';
 import { X, Navigation, Store } from 'lucide-react';
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 interface HelperRetailerMapModalProps {
   isOpen: boolean;
@@ -145,44 +146,56 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
         }
       });
 
-      for (const shop of shops) {
-        if (!shop.location?.lat || !shop.location?.lng) continue;
-        const lat = shop.location.lat;
-        const lng = shop.location.lng;
-        allPoints.push([lat, lng]);
+      const spiderfiedShops = getSpiderfiedCoordinates(
+        shops,
+        (s) => s.location?.lat,
+        (s) => s.location?.lng
+      );
+
+      for (const entry of spiderfiedShops) {
+        const { item: shop, originalLat, originalLng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
+        allPoints.push([originalLat, originalLng]);
         const isSelected = selectedShopIds.includes(shop.id);
         const hasCommission = shop.commissionPercent !== undefined;
+        const hasOverlap = overlapCount > 1;
+
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:8px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
+          : '';
 
         const markerHtml = `
           <div style="position:relative;display:flex;flex-direction:column;align-items:center;cursor:pointer;">
-            <div style="background:${isSelected ? 'linear-gradient(135deg,#059669,#065f46)' : 'linear-gradient(135deg,#6b21a8,#4c1d95)'};color:white;padding:6px 11px;border-radius:14px;border:2.5px solid ${isSelected ? '#34d399' : '#c084fc'};box-shadow:0 6px 20px rgba(${isSelected ? '5,150,105' : '107,33,168'},0.55);display:flex;align-items:center;gap:7px;font-family:sans-serif;white-space:nowrap;max-width:200px;">
+            <div style="background:${isSelected ? 'linear-gradient(135deg,#059669,#065f46)' : 'linear-gradient(135deg,#6b21a8,#4c1d95)'};color:white;padding:6px 11px;border-radius:14px;border:2.5px solid ${isSelected ? '#34d399' : hasOverlap ? '#f59e0b' : '#c084fc'};box-shadow:0 6px 20px rgba(${isSelected ? '5,150,105' : '107,33,168'},0.55);display:flex;align-items:center;gap:7px;font-family:sans-serif;white-space:nowrap;max-width:220px;">
               <div style="width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
               </div>
               <div style="display:flex;flex-direction:column;min-width:0;text-align:left;">
-                <div style="font-size:11px;font-weight:900;color:#fff;overflow:hidden;text-overflow:ellipsis;line-height:1.2;">${shop.name}</div>
+                <div style="font-size:11px;font-weight:900;color:#fff;overflow:hidden;text-overflow:ellipsis;line-height:1.2;display:flex;align-items:center;">
+                  ${shop.name} ${overlapBadgeHtml}
+                </div>
                 <div style="font-size:9px;font-weight:700;color:${isSelected ? '#a7f3d0' : '#e9d5ff'};overflow:hidden;text-overflow:ellipsis;">${shop.type}${hasCommission ? ` · ${shop.commissionPercent}% comm.` : ''}</div>
               </div>
               ${isSelected ? '<div style="width:16px;height:16px;border-radius:50%;background:#34d399;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' : ''}
             </div>
             <div style="width:3px;height:16px;background:#0f172a;margin-top:-1px;"></div>
-            <div style="width:12px;height:12px;border-radius:50%;background:#0f172a;border:2.5px solid ${isSelected ? '#34d399' : '#c084fc'};box-shadow:0 0 8px rgba(${isSelected ? '52,211,153' : '168,85,247'},0.8);"></div>
+            <div style="width:12px;height:12px;border-radius:50%;background:#0f172a;border:2.5px solid ${isSelected ? '#34d399' : hasOverlap ? '#f59e0b' : '#c084fc'};box-shadow:0 0 8px rgba(${isSelected ? '52,211,153' : '168,85,247'},0.8);"></div>
           </div>`;
 
         const icon = L.divIcon({
           className: `retailer-marker-${shop.id}`,
           html: markerHtml,
-          iconSize: [200, 70],
-          iconAnchor: [100, 70],
+          iconSize: [220, 70],
+          iconAnchor: [110, 70],
         });
 
         let existing = markersRef.current.get(shop.id);
         if (existing) {
-          existing.setLatLng([lat, lng]);
+          existing.setLatLng([displayLat, displayLng]);
           existing.setIcon(icon);
         } else {
           if (cancelled || !isMapAlive(map)) return;
-          existing = L.marker([lat, lng], { icon }).addTo(map);
+          existing = L.marker([displayLat, displayLng], { icon }).addTo(map);
+          setupMarkerHoverElevation(existing);
           existing.on('click', () => onShopMarkerClick(shop));
           markersRef.current.set(shop.id, existing);
         }

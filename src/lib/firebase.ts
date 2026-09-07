@@ -2802,6 +2802,7 @@ class FallbackStore {
     const shopToSave: Shop = {
       ...shop,
       status: shop.status || 'Approved',
+      canReceiveOrders: shop.canReceiveOrders !== undefined ? shop.canReceiveOrders : true,
     };
     this.shops.set(shopToSave.id, shopToSave);
     this.notify();
@@ -3004,6 +3005,7 @@ class FallbackStore {
       updatedAt: new Date().toISOString(),
       commissionPercent: existing.commissionPercent,
       status: 'Approved',
+      canReceiveOrders: true,
     };
     this.shops.set(shopId, shop);
 

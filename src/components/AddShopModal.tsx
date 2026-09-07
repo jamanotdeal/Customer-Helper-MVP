@@ -48,6 +48,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
   const [commissionPercent, setCommissionPercent] = useState(
     shopToEdit?.commissionPercent !== undefined ? String(shopToEdit.commissionPercent) : ''
   );
+  const [canReceiveOrders, setCanReceiveOrders] = useState<boolean>(
+    shopToEdit?.canReceiveOrders !== undefined ? shopToEdit.canReceiveOrders : true
+  );
   const [storeDescription, setStoreDescription] = useState(shopToEdit?.description || '');
   const [location, setLocation] = useState<LocationData>(
     shopToEdit?.location || { address: '', lat: 23.8103, lng: 90.4125 }
@@ -264,6 +267,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         updatedAt: new Date().toISOString(),
         photoUrl: photoUrl.trim() || undefined,
         commissionPercent: commPercent,
+        canReceiveOrders,
       };
 
       await fallbackStore.saveShop(shopData);
@@ -403,6 +407,33 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                 <span className="absolute right-4 top-3.5 text-sm font-black text-gray-400">%</span>
               </div>
               <p className="text-[10px] text-gray-400">সর্বনিম্ন ২% কমিশন প্রয়োজন।</p>
+            </div>
+
+            {/* 5b. Order Receiving Capability Toggle */}
+            <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-extrabold text-purple-950 block">অর্ডার গ্রহণ করার ক্ষমতা (Receive Order)</span>
+                  <span className="text-[10px] font-semibold text-purple-800 block">
+                    {canReceiveOrders ? 'হ্যাঁ - স্টোর অ্যাপের মাধ্যমে সরাসরি অর্ডার প্রসেস করতে পারবে' : 'না - এডমিন দ্বারা যুক্ত, হেলপার ম্যানুয়ালি স্ট্যাটাস ও প্রাইস পরিবর্তন করবে'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={canReceiveOrders}
+                  onClick={() => setCanReceiveOrders(!canReceiveOrders)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${
+                    canReceiveOrders ? 'bg-purple-700' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200 ${
+                      canReceiveOrders ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             {/* 6. পণ্য/সেবা */}

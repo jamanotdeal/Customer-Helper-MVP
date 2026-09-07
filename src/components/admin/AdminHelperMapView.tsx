@@ -23,6 +23,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { DraggableTabsContainer } from './DraggableTabsContainer';
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 interface AdminHelperMapViewProps {
   users: UserProfile[];
@@ -279,44 +280,48 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
 
 
 
-      for (const helper of filteredHelpers) {
+      const spiderfiedHelpers = getSpiderfiedCoordinates(
+        filteredHelpers,
+        (h) => {
+          if (typeof h.helperLocation?.lat === 'number') return h.helperLocation.lat;
+          const active = orders.filter((o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED');
+          if (active[0]?.deliveryLocation?.lat) return active[0].deliveryLocation.lat;
+          return 23.8759 + getDeterministicOffset(h.uid, 1);
+        },
+        (h) => {
+          if (typeof h.helperLocation?.lng === 'number') return h.helperLocation.lng;
+          const active = orders.filter((o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED');
+          if (active[0]?.deliveryLocation?.lng) return active[0].deliveryLocation.lng;
+          return 90.3795 + getDeterministicOffset(h.uid, 2);
+        }
+      );
+
+      for (const entry of spiderfiedHelpers) {
+        const { item: helper, originalLat: lat, originalLng: lng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
         const isDedicated = helper.helperType === 'dedicated';
         const activeAssigned = orders.filter(
           (o) => o.helperId === helper.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
         );
         const isOnDuty = activeAssigned.length > 0;
-
-        // Coordinates resolution: explicit location -> active order location -> fallback offset
-        let lat = helper.helperLocation?.lat;
-        let lng = helper.helperLocation?.lng;
-
-        if (typeof lat !== 'number' || typeof lng !== 'number') {
-          if (isOnDuty && activeAssigned[0].deliveryLocation?.lat && activeAssigned[0].deliveryLocation?.lng) {
-            lat = activeAssigned[0].deliveryLocation.lat;
-            lng = activeAssigned[0].deliveryLocation.lng;
-          } else {
-            // Default center offset near campus/Dhaka
-            lat = 23.8759 + getDeterministicOffset(helper.uid, 1);
-            lng = 90.3795 + getDeterministicOffset(helper.uid, 2);
-          }
-        }
+        const hasOverlap = overlapCount > 1;
 
         allPoints.push([lat, lng]);
 
-        // Theme colors
-        // Dedicated Helper: Amber/Gold/Emerald gradient with ⚡ Rider badge
-        // Commuter Helper: Purple/Indigo gradient with 🚲 Commuter badge
         const badgeBg = isDedicated
           ? 'linear-gradient(135deg, #f59e0b, #d97706)'
           : 'linear-gradient(135deg, #6366f1, #4f46e5)';
         const borderGlow = isDedicated ? '#f59e0b' : '#818cf8';
         const typeLabel = isDedicated ? '⚡ Dedicated Rider' : '🚲 Commuter Helper';
 
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
+          : '';
+
         const markerHtml = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 170px; height: 75px;">
-            <div style="background: ${badgeBg}; color: white; padding: 5px 10px; border-radius: 14px; border: 2px solid white; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 155px; text-align: center;">
-              <div style="font-size: 11px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; line-height: 1.2;">
-                ${helper.displayName || 'Helper'}
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 180px; height: 75px;">
+            <div style="background: ${badgeBg}; color: white; padding: 5px 10px; border-radius: 14px; border: 2px solid ${hasOverlap ? '#f59e0b' : 'white'}; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 165px; text-align: center;">
+              <div style="font-size: 11px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; line-height: 1.2; display: flex; align-items: center; justify-content: center;">
+                ${helper.displayName || 'Helper'} ${overlapBadgeHtml}
               </div>
               <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 8px; font-size: 9.5px; font-weight: 800; margin-top: 2px;">
                 <span>${typeLabel}</span>
@@ -334,18 +339,19 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
         const customIcon = L.divIcon({
           className: `admin-helper-marker-${helper.uid}`,
           html: markerHtml,
-          iconSize: [170, 75],
-          iconAnchor: [85, 75],
+          iconSize: [180, 75],
+          iconAnchor: [90, 75],
           popupAnchor: [0, -75],
         });
 
         let existingMarker = markersRef.current.get(helper.uid);
         if (existingMarker) {
-          existingMarker.setLatLng([lat, lng]);
+          existingMarker.setLatLng([displayLat, displayLng]);
           existingMarker.setIcon(customIcon);
         } else {
           if (isCancelled || !isMapAlive(map)) return;
-          existingMarker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+          existingMarker = L.marker([displayLat, displayLng], { icon: customIcon }).addTo(map);
+          setupMarkerHoverElevation(existingMarker);
           existingMarker.on('click', () => {
             setSelectedHelperId(helper.uid);
           });

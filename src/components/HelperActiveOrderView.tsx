@@ -437,8 +437,20 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       setOrderTextError('অর্ডার বিস্তারিত লিখুন।');
       return;
     }
+    const isManualStore = placeOrderShop.canReceiveOrders === false;
+    const initialPrice = isManualStore ? (placeOrderShop as any)._tempPrice : undefined;
+
+    if (isManualStore && (initialPrice === undefined || initialPrice === null || isNaN(initialPrice) || initialPrice < 0)) {
+      setOrderTextError('পণ্যের মূল্য/প্রাইস (৳) নির্ধারণ করা আবশ্যক।');
+      return;
+    }
+
     setIsSubmittingOrder(true);
     try {
+      const initialStatus = isManualStore
+        ? ((placeOrderShop as any)._tempStatus || 'ACCEPTED')
+        : 'PENDING';
+
       const newShopOrder: ShopOrder = {
         id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         parentOrderId: order.id,
@@ -447,10 +459,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         helperId: order.helperId || '',
         helperName: order.helperName || 'Helper',
         requestText: orderText.trim(),
-        status: 'PENDING',
+        status: initialStatus as any,
+        price: initialPrice,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+        statusHistory: [{ status: initialStatus as any, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
       };
       await fallbackStore.addShopOrder(newShopOrder);
       setPlaceOrderShop(null);
@@ -2421,8 +2434,19 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </div>
 
             <form onSubmit={handlePlaceShopOrder} className="space-y-3">
+              {placeOrderShop.canReceiveOrders === false ? (
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-1">
+                  <div className="flex items-center gap-1.5 font-extrabold text-xs">
+                    <span>⚠️ নোট (Note):</span>
+                  </div>
+                  <p className="text-[11px] font-semibold leading-relaxed">
+                    এই স্টোরটি এডমিন দ্বারা ম্যানুয়ালি সংযুক্ত করা হয়েছে। স্টোর সরাসরি অ্যাপ্লিকেশন থেকে অর্ডার গ্রহণ করবে না। হেলপার হিসেবে আপনি নিচে দোকান থেকে কেনার পণ্যের প্রাইস ও নোট যুক্ত করে নিজেই স্ট্যাটাস পরিবর্তন বা সংরক্ষণ করতে পারবেন।
+                  </p>
+                </div>
+              ) : null}
+
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Request Details</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Request Details / Note *</label>
                 <textarea
                   value={orderText}
                   onChange={(e) => {
@@ -2434,6 +2458,43 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   required
                 />
               </div>
+
+              {placeOrderShop.canReceiveOrders === false && (
+                <>
+                  <div>
+                    <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost / Price (৳) *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="যেমন: ২৫০"
+                      required
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        (placeOrderShop as any)._tempPrice = isNaN(val) ? undefined : val;
+                        if (!isNaN(val) && val >= 0) setOrderTextError('');
+                      }}
+                      className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-bold outline-none focus:border-purple-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-755 block mb-1">Status (স্ট্যাটাস)</label>
+                    <select
+                      onChange={(e) => {
+                        (placeOrderShop as any)._tempStatus = e.target.value;
+                      }}
+                      className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-bold outline-none focus:border-purple-500 bg-white"
+                      defaultValue="ACCEPTED"
+                    >
+                      <option value="ACCEPTED">ACCEPTED (গৃহীত)</option>
+                      <option value="PREPARING">PREPARING (প্রস্তুত করা হচ্ছে)</option>
+                      <option value="READY">READY (রেডি)</option>
+                      <option value="HANDOVER">HANDOVER (হস্তান্তরিত)</option>
+                      <option value="DELIVERED">DELIVERED (সম্পন্ন)</option>
+                    </select>
+                  </div>
+                </>
+              )}
 
               {orderTextError && (
                 <p className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded-xl border border-red-100">
@@ -2454,7 +2515,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   disabled={isSubmittingOrder}
                   className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:bg-gray-200"
                 >
-                  {isSubmittingOrder ? 'অনুরোধ পাঠানো হচ্ছে...' : 'send request'}
+                  {isSubmittingOrder ? 'সংরক্ষণ করা হচ্ছে...' : (placeOrderShop.canReceiveOrders === false ? 'Save Request' : 'send request')}
                 </button>
               </div>
             </form>

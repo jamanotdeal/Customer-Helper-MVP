@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Map, X, Navigation } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder } from '@/types';
 import { fetchRoadRoute } from '@/lib/routeUtils';
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 interface HelperOrderMapModalProps {
   isOpen: boolean;
@@ -378,10 +379,15 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             return distToPickup <= shopRadiusKm || distToDelivery <= shopRadiusKm;
           });
 
-          shopsToShow.forEach((shop) => {
-            if (!shop.location?.lat || !shop.location?.lng) return;
-            const sLat = shop.location.lat;
-            const sLng = shop.location.lng;
+          const spiderfiedShops = getSpiderfiedCoordinates(
+            shopsToShow,
+            (s) => s.location?.lat,
+            (s) => s.location?.lng
+          );
+
+          spiderfiedShops.forEach((entry) => {
+            const { item: shop, displayLat: sLat, displayLng: sLng, overlapCount, overlapIndex } = entry;
+            const hasOverlap = overlapCount > 1;
 
             // Draw a thin line (2.5px) connecting the pickup point to the requested shop
             if (hasPickup && pLat && pLng && requestedShopIds.has(shop.id)) {
@@ -395,14 +401,18 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               layersRef.current.push(line);
             }
 
+            const overlapBadgeHtml = hasOverlap
+              ? `<span style="background:#f59e0b;color:#000;font-size:8.5px;font-weight:900;padding:1px 3px;border-radius:6px;margin-left:2px;">${overlapIndex}/${overlapCount}</span>`
+              : '';
+
             const shopHtml = `
-              <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 140px; height: 55px; box-sizing: border-box; cursor: pointer;">
-                <div style="height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; background: #f3e8ff; color: #6b21a8; border: 2.5px solid #8b5cf6; padding: 4px 8px; border-radius: 8px; font-family: sans-serif; font-size: 11px; font-weight: 800; box-shadow: 0 2px 6px rgba(0,0,0,0.25); white-space: nowrap; line-height: 1; box-sizing: border-box;">
+              <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 145px; height: 55px; box-sizing: border-box; cursor: pointer;">
+                <div style="height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; background: #f3e8ff; color: #6b21a8; border: 2.5px solid ${hasOverlap ? '#f59e0b' : '#8b5cf6'}; padding: 4px 8px; border-radius: 8px; font-family: sans-serif; font-size: 11px; font-weight: 800; box-shadow: 0 2px 6px rgba(0,0,0,0.25); white-space: nowrap; line-height: 1; box-sizing: border-box;">
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-                  <span>${shop.name}</span>
+                  <span>${shop.name} ${overlapBadgeHtml}</span>
                 </div>
-                <div style="width: 2px; height: 16px; background: #8b5cf6;"></div>
-                <div style="width: 10px; height: 10px; border-radius: 50%; background: #a78bfa; border: 2px solid #8b5cf6; margin-top: -6px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); box-sizing: border-box;"></div>
+                <div style="width: 2px; height: 16px; background: ${hasOverlap ? '#f59e0b' : '#8b5cf6'};"></div>
+                <div style="width: 10px; height: 10px; border-radius: 50%; background: #a78bfa; border: 2px solid ${hasOverlap ? '#f59e0b' : '#8b5cf6'}; margin-top: -6px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); box-sizing: border-box;"></div>
               </div>
             `;
 
@@ -410,10 +420,12 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               icon: L.divIcon({
                 className: `custom-shop-marker-${shop.id}`,
                 html: shopHtml,
-                iconSize: [140, 55],
-                iconAnchor: [70, 47],
+                iconSize: [145, 55],
+                iconAnchor: [72, 47],
               }),
             });
+
+            setupMarkerHoverElevation(shopMarker);
 
             shopMarker.on('click', () => {
               if (order.status === 'DELIVERED' || order.status === 'CANCELED') {
