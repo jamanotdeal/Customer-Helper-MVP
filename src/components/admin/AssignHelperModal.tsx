@@ -5,6 +5,7 @@ import { Order, HelperApplication, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
 import { X, Search, Bike, CheckCircle2, User, Phone } from 'lucide-react';
+import { AsyncButton } from '../ui/AsyncButton';
 
 interface AssignHelperModalProps {
   order: Order;
@@ -19,15 +20,31 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
 }) => {
   const { showAlert } = useModal();
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 8;
 
-  // Collect approved helpers
+  // Collect approved helpers and active helper users
   const allApplications = Array.from(fallbackStore.helperApplications.values());
   const approvedApps = allApplications.filter((a) => a.status === 'APPROVED');
   const allUsers = Array.from(fallbackStore.users.values());
   const helperUsers = allUsers.filter((u) => u.isHelper || u.role === 'helper');
 
-  // Merge helper data
-  const helpersList = approvedApps.map((app) => {
+  // Deduplicated Helper Map keyed by userId
+  const helperMap = new Map<string, {
+    userId: string;
+    name: string;
+    phone: string;
+    email: string;
+    nid: string;
+    hasCycle?: boolean;
+    hasBike?: boolean;
+    activeJobs: number;
+    completedJobs: number;
+  }>();
+
+  // First seed from approved applications
+  approvedApps.forEach((app) => {
+    if (!app.userId) return;
     const matchedUser = helperUsers.find((u) => u.uid === app.userId);
     const assignedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
       (o) => o.helperId === app.userId && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
@@ -36,19 +53,42 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
       (o) => o.helperId === app.userId && o.status === 'DELIVERED'
     ).length;
 
-    return {
+    helperMap.set(app.userId, {
       userId: app.userId,
-      name: app.legalName || app.userName,
-      // Prefer the WhatsApp from the application form, fallback to profile's alternativePhone
+      name: app.legalName || app.userName || matchedUser?.displayName || 'Helper',
       phone: app.whatsapp || matchedUser?.alternativePhone || 'N/A',
       email: app.email,
-      nid: app.nid,
+      nid: app.nid || 'N/A',
       hasCycle: app.hasCycle,
       hasBike: app.hasBike,
       activeJobs: assignedOrdersCount,
       completedJobs: completedOrdersCount,
-    };
+    });
   });
+
+  // Also include helper users who might not have a separate helper application entry
+  helperUsers.forEach((u) => {
+    if (!helperMap.has(u.uid)) {
+      const assignedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
+        (o) => o.helperId === u.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
+      ).length;
+      const completedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
+        (o) => o.helperId === u.uid && o.status === 'DELIVERED'
+      ).length;
+
+      helperMap.set(u.uid, {
+        userId: u.uid,
+        name: u.displayName || 'Helper',
+        phone: u.alternativePhone || 'N/A',
+        email: u.email || '',
+        nid: 'N/A',
+        activeJobs: assignedOrdersCount,
+        completedJobs: completedOrdersCount,
+      });
+    }
+  });
+
+  const helpersList = Array.from(helperMap.values());
 
   // Filter helpers by query
   const filteredHelpers = helpersList.filter(
@@ -57,6 +97,17 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
       h.phone.includes(searchQuery) ||
       h.nid.includes(searchQuery)
   );
+
+  // Sort helpers: lowest active orders to highest active orders first, then completed jobs descending
+  filteredHelpers.sort((a, b) => {
+    if (a.activeJobs !== b.activeJobs) {
+      return a.activeJobs - b.activeJobs;
+    }
+    return b.completedJobs - a.completedJobs;
+  });
+
+  const totalPages = Math.ceil(filteredHelpers.length / pageSize) || 1;
+  const paginatedHelpers = filteredHelpers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const handleAssign = (helper: (typeof helpersList)[0]) => {
     fallbackStore.updateOrder(order.id, (o) => {
@@ -133,7 +184,10 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
               type="text"
               placeholder="Search helper by name, phone, NID..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-2xl text-xs font-semibold focus:outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
             />
           </div>
@@ -141,14 +195,14 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
 
         {/* Helpers List */}
         <div className="p-4 overflow-y-auto space-y-3 flex-1">
-          {filteredHelpers.length === 0 ? (
+          {paginatedHelpers.length === 0 ? (
             <div className="py-12 text-center text-gray-500 space-y-2">
               <User className="w-12 h-12 text-gray-300 mx-auto" />
-              <p className="font-bold text-xs">No approved helpers found.</p>
+              <p className="font-bold text-xs">No active helpers found.</p>
               <p className="text-[11px] text-gray-400">Make sure helpers are approved in the Helper Applications tab.</p>
             </div>
           ) : (
-            filteredHelpers.map((h) => {
+            paginatedHelpers.map((h) => {
               const isCurrentlyAssigned = order.helperId === h.userId;
               return (
                 <div
@@ -179,7 +233,7 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
                     </div>
                   </div>
 
-                  <button
+                  <AsyncButton
                     onClick={() => handleAssign(h)}
                     disabled={isCurrentlyAssigned}
                     className={`py-2 px-4 rounded-xl font-extrabold text-xs transition-all ${
@@ -188,19 +242,45 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
                         : 'bg-purple-900 hover:bg-purple-950 text-white shadow-md'
                     }`}
                   >
-                    {isCurrentlyAssigned ? 'Assigned' : 'Assign Helper'}
-                  </button>
+                    <span>{isCurrentlyAssigned ? 'Assigned' : 'Assign Helper'}</span>
+                  </AsyncButton>
                 </div>
               );
             })
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+        {/* Modal Footer & Pagination */}
+        <div className="p-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
+          {totalPages > 1 ? (
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="py-1.5 px-3 rounded-xl bg-white border border-gray-200 font-bold text-xs text-gray-700 disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <span className="text-xs font-bold text-gray-600">
+                Page {currentPage} of {totalPages} ({filteredHelpers.length} total)
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="py-1.5 px-3 rounded-xl bg-white border border-gray-200 font-bold text-xs text-gray-700 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          ) : (
+            <span className="text-xs font-bold text-gray-500">
+              Showing {filteredHelpers.length} active helper{filteredHelpers.length !== 1 ? 's' : ''}
+            </span>
+          )}
+
           <button
             onClick={onClose}
-            className="py-2.5 px-5 rounded-2xl bg-gray-200 hover:bg-gray-300 font-extrabold text-xs text-gray-800 transition-colors"
+            className="py-2 px-5 rounded-2xl bg-gray-200 hover:bg-gray-300 font-extrabold text-xs text-gray-800 transition-colors"
           >
             Close
           </button>

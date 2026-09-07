@@ -38,6 +38,66 @@ export function formatTimeOnly(dateStr: string): string {
   return `${formattedHours}:${minutes}${ampm}`;
 }
 
+export function formatDurationMinutes(totalMins: number): string {
+  if (isNaN(totalMins) || totalMins <= 0) return '0m';
+  const mins = Math.round(totalMins);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+}
+
+export interface OrderTimeInfo {
+  createdAt: string;
+  status?: string;
+  deliveredAt?: string;
+  cancelledAt?: string;
+  updatedAt?: string;
+  needDeliveryBack?: boolean;
+  deliveryBackTime?: string;
+  deliveryBackSetAt?: string;
+  statusHistory?: { status: string; timestamp: string }[];
+}
+
+export function getOrderEffectiveElapsedMs(order: OrderTimeInfo, targetEndMs?: number): number {
+  if (!order || !order.createdAt) return 0;
+  const start = new Date(order.createdAt).getTime();
+  if (isNaN(start)) return 0;
+
+  let end = targetEndMs;
+  if (end === undefined) {
+    if (order.status === 'DELIVERED' && order.deliveredAt) {
+      end = new Date(order.deliveredAt).getTime();
+    } else if (order.status === 'CANCELED' || order.status === 'CANCELLED') {
+      const cancelHist = order.statusHistory?.find((h) => h.status === 'CANCELED' || h.status === 'CANCELLED')?.timestamp;
+      const cancelTimeStr = order.cancelledAt || cancelHist || order.updatedAt;
+      end = cancelTimeStr ? new Date(cancelTimeStr).getTime() : Date.now();
+    } else {
+      end = Date.now();
+    }
+  }
+
+  if (isNaN(end)) end = Date.now();
+  let diffMs = Math.max(0, end - start);
+
+  // Subtract paused window for Two-Way scheduled return
+  if (order.needDeliveryBack && order.deliveryBackTime) {
+    const pauseStartStr = order.deliveryBackSetAt || order.updatedAt;
+    const pauseStartMs = pauseStartStr ? new Date(pauseStartStr).getTime() : NaN;
+    const pauseEndMs = new Date(order.deliveryBackTime).getTime();
+
+    if (!isNaN(pauseStartMs) && !isNaN(pauseEndMs) && pauseEndMs > pauseStartMs) {
+      const overlapStart = Math.max(start, pauseStartMs);
+      const overlapEnd = Math.min(end, pauseEndMs);
+      if (overlapEnd > overlapStart) {
+        diffMs -= (overlapEnd - overlapStart);
+      }
+    }
+  }
+
+  return Math.max(0, diffMs);
+}
+
 export function formatMinSecText(createdAtStr: string, endedAtStr?: string): string {
   if (!createdAtStr) return '00:00min';
   const start = new Date(createdAtStr).getTime();
@@ -53,32 +113,61 @@ export function formatMinSecText(createdAtStr: string, endedAtStr?: string): str
   const secs = totalSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}min`;
+    return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
   }
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}min`;
 }
 
-export function getElapsedTime(createdAtStr: string, endAtStr?: string): string {
-  return formatMinSecText(createdAtStr, endAtStr);
+export function getElapsedTime(createdAtStrOrOrder: string | OrderTimeInfo, endAtStr?: string): string {
+  if (typeof createdAtStrOrOrder === 'object') {
+    const diffMs = getOrderEffectiveElapsedMs(createdAtStrOrOrder);
+    const totalSeconds = Math.floor(diffMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    }
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}min`;
+  }
+  return formatMinSecText(createdAtStrOrOrder, endAtStr);
 }
 
-export function getDeliveryDurationText(createdAtStr: string, endedAtStr?: string): string {
-  if (!createdAtStr || !endedAtStr) return '';
-  const start = new Date(createdAtStr).getTime();
-  const end = new Date(endedAtStr).getTime();
+export function getDeliveryDurationText(createdAtStrOrOrder: string | OrderTimeInfo, endedAtStr?: string): string {
+  if (typeof createdAtStrOrOrder === 'object') {
+    const diffMs = getOrderEffectiveElapsedMs(createdAtStrOrOrder);
+    const totalMins = Math.round(diffMs / 60000);
+    if (totalMins >= 60) {
+      return formatDurationMinutes(totalMins);
+    }
+    if (totalMins > 0) {
+      return `${totalMins}mins`;
+    }
+    return getElapsedTime(createdAtStrOrOrder);
+  }
+
+  if (!createdAtStrOrOrder) return '';
+  const start = new Date(createdAtStrOrOrder).getTime();
+  const end = endedAtStr ? new Date(endedAtStr).getTime() : Date.now();
   if (isNaN(start) || isNaN(end)) return '';
 
   const diffMs = Math.max(0, end - start);
   const totalMins = Math.round(diffMs / 60000);
+  if (totalMins >= 60) {
+    return formatDurationMinutes(totalMins);
+  }
   if (totalMins > 0) {
     return `${totalMins}mins`;
   }
-  return formatMinSecText(createdAtStr, endedAtStr);
+  return formatMinSecText(createdAtStrOrOrder, endedAtStr);
 }
 
-export function getElapsedMinutes(createdAtStr: string, endedAtStr?: string): number {
-  if (!createdAtStr) return 0;
-  const start = new Date(createdAtStr).getTime();
+export function getElapsedMinutes(createdAtStrOrOrder: string | OrderTimeInfo, endedAtStr?: string): number {
+  if (typeof createdAtStrOrOrder === 'object') {
+    return getOrderEffectiveElapsedMs(createdAtStrOrOrder) / (1000 * 60);
+  }
+  if (!createdAtStrOrOrder) return 0;
+  const start = new Date(createdAtStrOrOrder).getTime();
   if (isNaN(start)) return 0;
   const end = endedAtStr ? new Date(endedAtStr).getTime() : Date.now();
   if (isNaN(end)) return 0;

@@ -27,6 +27,13 @@ export interface LocationData {
   name?: string;
 }
 
+export interface AllowedAreaPolygon {
+  id: string;
+  name: string; // e.g. "Uttara 18", "Ashulia Model Town"
+  country?: string; // e.g. "Bangladesh"
+  coordinates: { lat: number; lng: number }[]; // Outer ring polygon coordinates
+}
+
 export interface FeeAdjustment {
   amount: number;
   reason: string;
@@ -114,6 +121,7 @@ export interface Order {
   helperNote?: string;
   needDeliveryBack?: boolean;
   deliveryBackTime?: string;
+  deliveryBackSetAt?: string;
   needReturnItems?: boolean;
   weightKg?: number;
   selectedShopIds?: string[];
@@ -204,6 +212,7 @@ export interface Shop {
   photoUrl?: string;          // Admin-uploaded photo URL or base64
   commissionPercent?: number; // e.g. 5 means 5% of product cost
   commissionNote?: string;    // Optional description of commission deal
+  status?: 'Approved' | 'Pending' | 'Rejected' | 'APPROVED' | 'PENDING' | 'REJECTED';
 }
 
 export interface OrderFeedback {
@@ -332,6 +341,7 @@ export interface WithdrawalRequest {
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   paymentMethod?: string;
   accountNumber?: string;
+  userType?: 'helper' | 'store';
   createdAt: string;
   processedAt?: string;
 }
@@ -393,6 +403,10 @@ export interface PricingSettings {
   mapPickerDeliveryGuideText?: string;   // Guide text specific to delivery location modal
   mapPickerGuideOkText?: string;         // OK button label (default: "ঠিক আছে")
   mapPickerGuideShowCount?: number;      // How many times to show guide per modal (default: 5)
+  // Map picker input placeholders (admin configurable)
+  mapPickerPlaceholder?: string;         // Fallback input box placeholder for map picker
+  mapPickerPickupPlaceholder?: string;   // Input box placeholder for pickup location map modal
+  mapPickerDeliveryPlaceholder?: string; // Input box placeholder for delivery location map modal
   // Per-category pickup location saving
   noSavePickupLocationServices?: string[]; // Service names whose pickup address should NOT be saved
   // Helper Center contact info (admin updatable)
@@ -424,9 +438,14 @@ export interface PricingSettings {
   allowedAdminTabs?: string[];
   // Admin Accepted status timer: minutes before showing "Admin Accepted" to customer when no helper assigned
   adminAcceptedDelayMinutes?: number; // Default: 5
+  
+  // Geofencing: Specific serving area polygons defined by admin
+  allowedDeliveryAreasEnabled?: boolean; // Toggle to enforce geofence restriction
+  allowedDeliveryAreas?: AllowedAreaPolygon[]; // Multiple drawn polygons
+  outOfServiceAreaMessage?: string; // Admin configured custom message when user selects outside area
 }
 
-export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'CANCELED';
+export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';
 
 export interface ShopOrderStatusHistoryItem {
   status: ShopOrderStatus;
@@ -446,6 +465,7 @@ export interface ShopOrder {
   status: ShopOrderStatus;
   price?: number;            // Set by store
   note?: string;             // Store's note to helper
+  viewedByStore?: boolean;   // Set to true when store clicks "দেখতেছি" or views the order
   createdAt: string;
   updatedAt: string;
   statusHistory: ShopOrderStatusHistoryItem[];
@@ -478,4 +498,3 @@ export interface AppNotification {
   targetRole?: UserRole;
   type?: string;
 }
-

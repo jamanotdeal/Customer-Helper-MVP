@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState } from 'react';
 import { AlertCircle, CheckCircle, Info, AlertTriangle, X } from 'lucide-react';
+import { AsyncButton } from './ui/AsyncButton';
 
 export type ModalType = 'info' | 'success' | 'warning' | 'error' | 'confirm' | 'permission';
 
@@ -150,7 +151,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <ModalContext.Provider value={{ showAlert, showConfirm, showPermissionModal }}>
       {children}
       {modalState && (
-        <div className="fixed inset-0 z-[20000] bg-black/65 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[999999] bg-black/65 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 relative animate-in zoom-in-95 duration-200 border border-emerald-100">
             {/* Close Button */}
             <button
@@ -197,30 +198,26 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             {/* Action Buttons */}
             <div className="flex flex-col space-y-2 pt-2">
               {modalState.type === 'permission' ? (
-                <button
+                <AsyncButton
                   type="button"
                   onClick={handleAllowPermission}
-                  disabled={isAllowing}
+                  isLoading={isAllowing}
                   className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs shadow-lg shadow-emerald-600/30 flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
                 >
-                  {isAllowing ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <span>{modalState.allowText || (modalState.permissionType === 'location' ? 'Allow Location' : 'Allow Notification')}</span>
-                  )}
-                </button>
+                  <span>{modalState.allowText || (modalState.permissionType === 'location' ? 'Allow Location' : 'Allow Notification')}</span>
+                </AsyncButton>
               ) : (
                 <div className="flex space-x-2 pt-1">
                   {modalState.type === 'confirm' && (
-                    <button
+                    <AsyncButton
                       type="button"
                       onClick={handleCancel}
                       className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
                     >
                       {modalState.cancelText || 'বাতিল'}
-                    </button>
+                    </AsyncButton>
                   )}
-                  <button
+                  <AsyncButton
                     type="button"
                     onClick={handleConfirm}
                     className={`flex-1 py-3.5 rounded-2xl font-extrabold text-xs shadow-md transition-all text-white ${
@@ -232,7 +229,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     }`}
                   >
                     {modalState.confirmText || 'ঠিক আছে'}
-                  </button>
+                  </AsyncButton>
                 </div>
               )}
             </div>

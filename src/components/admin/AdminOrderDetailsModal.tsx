@@ -27,6 +27,8 @@ import {
   Ban,
   Trash2,
   Calculator,
+  Repeat,
+  CalendarClock,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 
@@ -50,6 +52,196 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const [adminFeeReason, setAdminFeeReason] = useState('');
   const [showAdminCostModal, setShowAdminCostModal] = useState(false);
   const [adminCostInput, setAdminCostInput] = useState('');
+  const [showAdminItemsModal, setShowAdminItemsModal] = useState(false);
+  const [editItemsInput, setEditItemsInput] = useState('');
+
+  // Admin Two-Way Delivery state
+  const [showAdminTwoWayModal, setShowAdminTwoWayModal] = useState(false);
+  const [adminTwoWayEnabled, setAdminTwoWayEnabled] = useState(false);
+  const [adminReturnWhen, setAdminReturnWhen] = useState<'now' | 'schedule'>('now');
+  const [adminDeliveryBackTimeInput, setAdminDeliveryBackTimeInput] = useState('');
+
+  const openTwoWayModal = () => {
+    const currentOrder = fallbackStore.orders.get(orderId);
+    const isTwoWay = !!currentOrder?.needDeliveryBack;
+    setAdminTwoWayEnabled(isTwoWay);
+    setAdminReturnWhen(currentOrder?.deliveryBackTime ? 'schedule' : 'now');
+    setAdminDeliveryBackTimeInput(
+      currentOrder?.deliveryBackTime
+        ? currentOrder.deliveryBackTime.substring(0, 16)
+        : (() => {
+            const d = new Date();
+            d.setDate(d.getDate() + 1);
+            d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+            return d.toISOString().substring(0, 16);
+          })()
+    );
+    setShowAdminTwoWayModal(true);
+  };
+
+  const handleAdminSaveTwoWay = (e: React.FormEvent) => {
+    e.preventDefault();
+    const currentOrder = fallbackStore.orders.get(orderId);
+    if (!currentOrder) return;
+
+    if (adminTwoWayEnabled && adminReturnWhen === 'schedule' && !adminDeliveryBackTimeInput) {
+      showAlert('সময় দিন', 'শিডিউল রিটার্নের জন্য তারিখ ও সময় নির্বাচন করুন।', 'warning');
+      return;
+    }
+
+    const newDeliveryBackTime = adminTwoWayEnabled && adminReturnWhen === 'schedule' && adminDeliveryBackTimeInput
+      ? new Date(adminDeliveryBackTimeInput).toISOString()
+      : undefined;
+
+    // Calculate updated delivery fee based on two-way status change
+    let updatedFee = currentOrder.deliveryFee;
+    const rawDist = (() => {
+      const p = currentOrder.pickupLocation;
+      const d = currentOrder.deliveryLocation;
+      if (p?.lat && p?.lng && d?.lat && d?.lng) {
+        const R = 6371;
+        const dLat = ((d.lat - p.lat) * Math.PI) / 180;
+        const dLon = ((d.lng - p.lng) * Math.PI) / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos((p.lat * Math.PI) / 180) * Math.cos((d.lat * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 10) / 10;
+      }
+      return 0;
+    })();
+
+    const estd = calculateEstimatedFee({
+      distanceKm: Math.ceil(rawDist),
+      weightKg: Math.ceil(currentOrder.weightKg || 0),
+      isReturnRequested: adminTwoWayEnabled,
+      productPrice: currentOrder.productCost || 0,
+    }, fallbackStore.pricingSettings);
+
+    if (adminTwoWayEnabled !== !!currentOrder.needDeliveryBack) {
+      updatedFee = estd.totalFee;
+    }
+
+    const oldModeText = currentOrder.needDeliveryBack
+      ? (currentOrder.deliveryBackTime ? `Scheduled (${new Date(currentOrder.deliveryBackTime).toLocaleString()})` : 'Return Now')
+      : 'One-Way (No Return)';
+    const newModeText = adminTwoWayEnabled
+      ? (newDeliveryBackTime ? `Scheduled (${new Date(newDeliveryBackTime).toLocaleString()})` : 'Return Now')
+      : 'One-Way (No Return)';
+
+    fallbackStore.updateOrder(orderId, (o) => ({
+      ...o,
+      needDeliveryBack: adminTwoWayEnabled,
+      needReturnItems: adminTwoWayEnabled,
+      deliveryBackTime: newDeliveryBackTime,
+      deliveryFee: updatedFee,
+      originalDeliveryFee: updatedFee,
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: 'Admin',
+          changes: [
+            {
+              field: 'Two-Way Delivery',
+              oldValue: oldModeText,
+              newValue: newModeText,
+            },
+          ],
+        },
+      ],
+      statusHistory: [
+        ...(o.statusHistory || []),
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: adminTwoWayEnabled
+            ? `Two-Way delivery set by Admin (${newDeliveryBackTime ? `Scheduled: ${new Date(newDeliveryBackTime).toLocaleString()}` : 'Return Now'})`
+            : 'Order changed to One-Way by Admin',
+        },
+      ],
+    }));
+
+    setShowAdminTwoWayModal(false);
+    showAlert(
+      'টু-ওয়ে সার্ভিস আপডেট সম্পন্ন',
+      adminTwoWayEnabled
+        ? `অর্ডারটি সফলভাবে টু-ওয়ে (${newDeliveryBackTime ? 'শিডিউলড রিটার্ন' : 'তাত্ক্ষণিক ফেরত'}) এ রূপান্তর করা হয়েছে।`
+        : 'অর্ডারটি ওয়ান-ওয়ে (একমুখী) ডেলিভারিতে রূপান্তর করা হয়েছে।',
+      'success'
+    );
+  };
+
+  const handleAdminSaveItems = (e: React.FormEvent) => {
+    e.preventDefault();
+    const lines = editItemsInput
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    if (lines.length === 0) return;
+
+    const newItems = lines.map((line, idx) => {
+      // Check for (x2) or x2 at the end
+      const match = line.match(/\(x(\d+)\)$/i) || line.match(/x(\d+)$/i);
+      let qty = '1';
+      let name = line;
+      if (match) {
+        qty = match[1];
+        name = line.replace(/\(x\d+\)$/i, '').replace(/x\d+$/i, '').trim();
+      }
+      return {
+        id: `item-${Date.now()}-${idx}`,
+        name: name || line,
+        qty,
+      };
+    });
+
+    const currentOrder = fallbackStore.orders.get(orderId);
+    if (!currentOrder) return;
+    const oldItemsText = (currentOrder.items || []).map((it) => `${it.name}${it.qty ? ` (x${it.qty})` : ''}`).join(', ') || 'Empty';
+    const newItemsText = newItems.map((it) => `${it.name}${it.qty ? ` (x${it.qty})` : ''}`).join(', ');
+
+    fallbackStore.updateOrder(orderId, (o) => ({
+      ...o,
+      items: newItems,
+      title: newItems[0]?.name || o.title,
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: 'Admin',
+          changes: [
+            {
+              field: 'Order Items',
+              oldValue: oldItemsText,
+              newValue: newItemsText,
+            },
+          ],
+        },
+      ],
+      statusHistory: [
+        ...(o.statusHistory || []),
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: `Order items updated by Admin to: ${newItemsText}`,
+        },
+      ],
+    }));
+
+    setShowAdminItemsModal(false);
+    showAlert('অর্ডার আইটেম আপডেট সম্পন্ন', 'অর্ডারের আইটেম বিস্তারিত সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
+  };
   
   const [activeMapPicker, setActiveMapPicker] = useState<'pickup' | 'delivery' | null>(null);
 
@@ -110,10 +302,9 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   }
 
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
-  const endTimestamp = order.deliveredAt || order.cancelledAt || order.updatedAt;
   const durationText = isDone
-    ? getDeliveryDurationText(order.createdAt, endTimestamp)
-    : getElapsedTime(order.createdAt);
+    ? getDeliveryDurationText(order)
+    : getElapsedTime(order);
 
   // Customer statistics
   const customerOrdersCount = Array.from(fallbackStore.orders.values()).filter(
@@ -125,8 +316,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
   // Commission calculation
   const pricingSettings = fallbackStore.pricingSettings;
-  const helperCommissionAmount = calculateHelperCommission(order.deliveryFee, pricingSettings);
-  const platformRevenue = order.deliveryFee - helperCommissionAmount;
+  const minFee = pricingSettings.feeCalculatorMinFee ?? 20;
+  const effectiveFee = Math.max(order.deliveryFee || 0, minFee);
+  const helperCommissionAmount = calculateHelperCommission(effectiveFee, pricingSettings);
+  const platformRevenue = effectiveFee - helperCommissionAmount;
 
   // Timeline steps
   const steps: { status: OrderStatus; label: string }[] = [
@@ -371,7 +564,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   )}
                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white text-[10px] font-bold flex items-center space-x-1">
                     <Clock className="w-3 h-3 text-purple-300" />
-                    <span>{order.status === 'DELIVERED' && order.deliveredAt ? `delivered in: ${getDeliveryDurationText(order.createdAt, order.deliveredAt)}` : `Running: ${getElapsedTime(order.createdAt)}`}</span>
+                    <span>{order.status === 'DELIVERED' ? `delivered in: ${getDeliveryDurationText(order)}` : order.status === 'CANCELED' ? `cancelled in: ${getDeliveryDurationText(order)}` : `Running: ${getElapsedTime(order)}`}</span>
                   </span>
                 </div>
                 <p className="text-xs text-purple-200 font-medium mt-0.5">
@@ -477,7 +670,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <span>No Helper Assigned Yet</span>
                     </div>
                     <p className="text-[11px]">Click "Assign Helper" above to assign an active helper anytime.</p>
-                    <p className="text-[10px] text-amber-800 font-bold mt-1">Elapsed: {getElapsedTime(order.createdAt)}</p>
+                    <p className="text-[10px] text-amber-800 font-bold mt-1">Elapsed: {getElapsedTime(order)}</p>
                   </div>
                 )}
               </div>
@@ -492,11 +685,27 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <p className="font-black text-sm text-gray-900">{`Order-#${order.id}`}</p>
               
               <div className="space-y-1.5">
-                <span className="text-gray-500 font-bold block text-[11px]">Requested Items List:</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-bold block text-[11px]">Requested Items List:</span>
+                  <button
+                    onClick={() => {
+                      setEditItemsInput(
+                        (order.items || []).map((it) => `${it.name}${it.qty ? ` (x${it.qty})` : ''}`).join('\n')
+                      );
+                      setShowAdminItemsModal(true);
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-[10px] flex items-center space-x-1 transition-all"
+                    title="Edit Customer Order Items"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                    <span>Edit Order Items</span>
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {(order.items || []).map((it) => (
                     <div key={it.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 border border-gray-100 font-medium">
                       <span className="text-gray-800 font-bold">{it.name}</span>
+                      {it.qty && <span className="text-xs text-gray-500 font-bold">Qty: {it.qty}</span>}
                     </div>
                   ))}
                 </div>
@@ -520,15 +729,13 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                         <MapPin className="w-3.5 h-3.5 text-amber-600" />
                         <span>Pickup Location:</span>
                       </span>
-                      {!isDone && (
-                        <button
-                          onClick={() => setActiveMapPicker('pickup')}
-                          className="p-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors shrink-0"
-                          title="Edit Pickup Location"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setActiveMapPicker('pickup')}
+                        className="p-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors shrink-0"
+                        title="Edit Pickup Location"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
                     </div>
                     <p className="text-gray-900 font-medium leading-relaxed">{order.pickupLocation.address}</p>
                   </div>
@@ -539,15 +746,13 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <MapPin className="w-3.5 h-3.5 text-emerald-600" />
                       <span>Delivery Location:</span>
                     </span>
-                    {!isDone && (
-                      <button
-                        onClick={() => setActiveMapPicker('delivery')}
-                        className="p-1 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-800 transition-colors shrink-0"
-                        title="Edit Delivery Location"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                    )}
+                    <button
+                      onClick={() => setActiveMapPicker('delivery')}
+                      className="p-1 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-800 transition-colors shrink-0"
+                      title="Edit Delivery Location"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
                   </div>
                   <p className="text-gray-900 font-medium leading-relaxed">{order.deliveryLocation?.address || 'N/A'}</p>
                 </div>
@@ -570,30 +775,55 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 </div>
               )}
 
-              {order.needDeliveryBack && (
-                <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-300 text-indigo-950 font-medium space-y-1.5">
-                  <span className="font-black text-indigo-900 block flex items-center space-x-1.5">
-                    <span className="text-base">🔁</span>
-                    <span>Need Delivery Back (Return Required)</span>
-                  </span>
-                  {order.deliveryBackTime ? (
-                    <p className="text-xs font-bold text-indigo-800">
-                      Scheduled Return by:{' '}
-                      <strong className="text-indigo-950">
-                        {new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' })}
-                      </strong>
-                    </p>
-                  ) : (
-                    <p className="text-xs text-indigo-700">Return time not yet set.</p>
-                  )}
-                  <p className="text-[11px] text-indigo-700 font-medium">
-                    Delivery fee doubled: <strong className="text-indigo-950">৳{order.deliveryFee}</strong>
-                    {order.originalDeliveryFee && order.originalDeliveryFee !== order.deliveryFee && (
-                      <span className="ml-1 text-indigo-500">(original: ৳{order.originalDeliveryFee})</span>
-                    )}
-                  </p>
+              {/* Two-Way / Return Delivery Settings Card */}
+              <div className={`p-4 rounded-2xl border transition-all ${
+                order.needDeliveryBack
+                  ? 'bg-indigo-50/90 border-indigo-300 text-indigo-950 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 text-slate-800'
+              }`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`p-2.5 rounded-xl ${order.needDeliveryBack ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                      <Repeat className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <h4 className="font-extrabold text-xs">Two-Way / Return Service (দ্বিমুখী ডেলিভারি)</h4>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                          order.needDeliveryBack ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {order.needDeliveryBack ? '🔁 Two-Way' : 'One-Way'}
+                        </span>
+                      </div>
+                      {order.needDeliveryBack ? (
+                        <p className="text-xs font-bold text-indigo-900 mt-0.5">
+                          Return Option:{' '}
+                          <strong className="text-indigo-950">
+                            {order.deliveryBackTime
+                              ? `⏰ Scheduled Return (${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' })})`
+                              : '⚡ Return Now (তাত্ক্ষণিক ফেরত)'}
+                          </strong>
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                          Standard single delivery. Click button to convert this order into a 2-Way return order.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={openTwoWayModal}
+                    className={`py-2 px-3.5 rounded-xl font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 ${
+                      order.needDeliveryBack
+                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                        : 'bg-purple-900 hover:bg-purple-950 text-white'
+                    }`}
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>{order.needDeliveryBack ? 'Edit Two-Way / Option & Times' : 'Make Two-Way Order'}</span>
+                  </button>
                 </div>
-              )}
+              </div>
             {/* 2b. Helper Shop Orders (Store Requests) */}
             {(() => {
               const shopOrders = fallbackStore.getShopOrdersForOrder(order.id);
@@ -901,73 +1131,71 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 Admin Override & Edit Actions:
               </span>
 
-              {/* Status Progression Buttons — always visible so admin can revert any status */}
-              {order.status !== 'CANCELED' && (
-                <div>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Force Status Change:</p>
-                  <div className="flex flex-wrap gap-2">
+              {/* Status Progression Buttons — available for ALL orders including CANCELED */}
+              <div>
+                <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Force Status Change:</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setShowAssignModal(true)}
+                    className="py-2 px-3 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>Assign / Reassign Helper</span>
+                  </button>
+                  {order.status !== 'PENDING' && (
                     <button
-                      onClick={() => setShowAssignModal(true)}
-                      className="py-2 px-3 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      onClick={() => handleForceStatusChange('PENDING')}
+                      className="py-2 px-3 rounded-xl bg-gray-500 hover:bg-gray-600 text-white font-extrabold text-xs shadow-sm transition-all"
                     >
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>Assign / Reassign Helper</span>
+                      ← PENDING
                     </button>
-                    {order.status !== 'PENDING' && (
-                      <button
-                        onClick={() => handleForceStatusChange('PENDING')}
-                        className="py-2 px-3 rounded-xl bg-gray-500 hover:bg-gray-600 text-white font-extrabold text-xs shadow-sm transition-all"
-                      >
-                        ← PENDING
-                      </button>
-                    )}
-                    {order.status !== 'ACCEPTED' && (
-                      <button
-                        onClick={() => handleForceStatusChange('ACCEPTED')}
-                        className="py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow-sm transition-all"
-                      >
-                        → ACCEPTED
-                      </button>
-                    )}
-                    {order.status !== 'PURCHASED_EXECUTED' && (
-                      <button
-                        onClick={() => handleForceStatusChange('PURCHASED_EXECUTED')}
-                        className="py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                      >
-                        <PackageCheck className="w-3.5 h-3.5" />
-                        <span>→ PURCHASED</span>
-                      </button>
-                    )}
-                    {order.status !== 'ON_THE_WAY' && (
-                      <button
-                        onClick={() => handleForceStatusChange('ON_THE_WAY')}
-                        className="py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                      >
-                        <Truck className="w-3.5 h-3.5" />
-                        <span>→ ON THE WAY</span>
-                      </button>
-                    )}
-                    {order.status !== 'ARRIVED' && (
-                      <button
-                        onClick={() => handleForceStatusChange('ARRIVED')}
-                        className="py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                      >
-                        <MapPin className="w-3.5 h-3.5" />
-                        <span>→ ARRIVED</span>
-                      </button>
-                    )}
-                    {order.status !== 'DELIVERED' && (
-                      <button
-                        onClick={() => handleForceStatusChange('DELIVERED')}
-                        className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>→ DELIVERED</span>
-                      </button>
-                    )}
-                  </div>
+                  )}
+                  {order.status !== 'ACCEPTED' && (
+                    <button
+                      onClick={() => handleForceStatusChange('ACCEPTED')}
+                      className="py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                    >
+                      → ACCEPTED
+                    </button>
+                  )}
+                  {order.status !== 'PURCHASED_EXECUTED' && (
+                    <button
+                      onClick={() => handleForceStatusChange('PURCHASED_EXECUTED')}
+                      className="py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <PackageCheck className="w-3.5 h-3.5" />
+                      <span>→ PURCHASED</span>
+                    </button>
+                  )}
+                  {order.status !== 'ON_THE_WAY' && (
+                    <button
+                      onClick={() => handleForceStatusChange('ON_THE_WAY')}
+                      className="py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <Truck className="w-3.5 h-3.5" />
+                      <span>→ ON THE WAY</span>
+                    </button>
+                  )}
+                  {order.status !== 'ARRIVED' && (
+                    <button
+                      onClick={() => handleForceStatusChange('ARRIVED')}
+                      className="py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>→ ARRIVED</span>
+                    </button>
+                  )}
+                  {order.status !== 'DELIVERED' && (
+                    <button
+                      onClick={() => handleForceStatusChange('DELIVERED')}
+                      className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>→ DELIVERED</span>
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
 
               {/* Edit Fee & Budget */}
               <div>
@@ -1138,6 +1366,152 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           </div>
         </div>
       )}
+
+      {/* Admin: Edit Order Items Modal */}
+      {showAdminItemsModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <Edit2 className="w-5 h-5 text-purple-600" />
+                <span>Admin: Edit Order Items</span>
+              </h3>
+              <button onClick={() => setShowAdminItemsModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Enter items (one per line). Format example: <strong>চাল (x2 kg)</strong> or <strong>দুধ (x1 L)</strong>.
+            </p>
+            <form onSubmit={handleAdminSaveItems} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Items List (One item per line)</label>
+                <textarea
+                  rows={5}
+                  value={editItemsInput}
+                  onChange={(e) => setEditItemsInput(e.target.value)}
+                  placeholder="Item 1 (x2)&#10;Item 2"
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-500 leading-relaxed"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="flex space-x-2 pt-1">
+                <button type="button" onClick={() => setShowAdminItemsModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-bold text-xs shadow-md">Save Items</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Admin: Two-Way / Return Delivery Settings Modal */}
+      {showAdminTwoWayModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <Repeat className="w-5 h-5 text-indigo-600" />
+                <span>Admin: Two-Way Delivery & Return Options</span>
+              </h3>
+              <button onClick={() => setShowAdminTwoWayModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Configure whether this order requires a return trip (Two-Way) and specify the return selection option or scheduled timing.
+            </p>
+
+            <form onSubmit={handleAdminSaveTwoWay} className="space-y-4">
+              {/* Toggle Switch */}
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-black text-indigo-950 block">Two-Way Delivery (দ্বিমুখী অর্ডার)</span>
+                  <span className="text-[11px] text-indigo-700 font-medium">হেলপার পার্সেল নিয়ে ফেরত আসবেন</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={adminTwoWayEnabled}
+                  onClick={() => setAdminTwoWayEnabled(!adminTwoWayEnabled)}
+                  className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${
+                    adminTwoWayEnabled ? 'bg-indigo-600' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-200 ${
+                      adminTwoWayEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Two Way Options & Time Picker */}
+              {adminTwoWayEnabled && (
+                <div className="space-y-3 p-3.5 rounded-2xl bg-gray-50 border border-gray-200 animate-in fade-in duration-150">
+                  <label className="text-xs font-extrabold text-gray-800 block">Return Selection Option (ফেরতের সময়সূচী অপশন)</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdminReturnWhen('now')}
+                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                        adminReturnWhen === 'now'
+                          ? 'bg-indigo-600 border-indigo-600 text-white font-extrabold shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 font-bold hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className="text-xs flex items-center gap-1">⚡ Return Now</span>
+                      <span className={`text-[10px] mt-1 ${adminReturnWhen === 'now' ? 'text-indigo-100' : 'text-gray-400'}`}>
+                        তাত্ক্ষণিক ফেরত আসবেন
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAdminReturnWhen('schedule')}
+                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                        adminReturnWhen === 'schedule'
+                          ? 'bg-indigo-600 border-indigo-600 text-white font-extrabold shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 font-bold hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className="text-xs flex items-center gap-1">⏰ Scheduled Return</span>
+                      <span className={`text-[10px] mt-1 ${adminReturnWhen === 'schedule' ? 'text-indigo-100' : 'text-gray-400'}`}>
+                        নির্দিষ্ট সময়ে ফেরত
+                      </span>
+                    </button>
+                  </div>
+
+                  {adminReturnWhen === 'schedule' && (
+                    <div className="space-y-1.5 pt-1 animate-in fade-in duration-150">
+                      <label className="text-xs font-bold text-gray-700 flex items-center space-x-1">
+                        <CalendarClock className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Scheduled Return Date & Time (ফেরতের তারিখ ও সময়)</span>
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={adminDeliveryBackTimeInput}
+                        onChange={(e) => setAdminDeliveryBackTimeInput(e.target.value)}
+                        className="w-full p-3 rounded-xl border border-gray-200 font-bold text-xs outline-none focus:border-indigo-600 bg-white"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex space-x-2 pt-1">
+                <button type="button" onClick={() => setShowAdminTwoWayModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">
+                  Cancel
+                </button>
+                <button type="submit" className="flex-1 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md">
+                  Save Two-Way Settings
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Admin: Address Edit Map Picker Modal */}
       {activeMapPicker && (
         <MapPickerModal

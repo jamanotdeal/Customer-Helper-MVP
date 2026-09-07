@@ -31,6 +31,13 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   onDeleted,
 }) => {
   const { showConfirm, showAlert } = useModal();
+  const [currentStatus, setCurrentStatus] = React.useState<'Approved' | 'Pending' | 'Rejected'>(
+    shop.status === 'Pending' || shop.status === 'PENDING'
+      ? 'Pending'
+      : shop.status === 'Rejected' || shop.status === 'REJECTED'
+      ? 'Rejected'
+      : 'Approved'
+  );
 
   const formattedWhatsApp = shop.whatsapp
     ? shop.whatsapp.replace(/[^0-9]/g, '')
@@ -49,6 +56,70 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
     typeof shop.location?.lat === 'number' && typeof shop.location?.lng === 'number'
       ? `https://www.google.com/maps/search/?api=1&query=${shop.location.lat},${shop.location.lng}`
       : null;
+
+  // Compute Order Statistics for this Shop
+  const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.shopId === shop.id);
+  const allOrders = Array.from(fallbackStore.orders.values());
+  const mainOrders = allOrders.filter((o) => o.selectedShopIds?.includes(shop.id));
+
+  let completedOrders = 0;
+  let rejectedOrders = 0;
+  let runningOrders = 0;
+  let totalSales = 0;
+
+  if (shopOrders.length > 0) {
+    const seenParentIds = new Set<string>();
+    shopOrders.forEach((so) => {
+      seenParentIds.add(so.parentOrderId);
+      const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
+      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
+
+      if (isCanceled) {
+        rejectedOrders++;
+      } else if (isCompleted) {
+        completedOrders++;
+        totalSales += (so.price || parentOrder?.productCost || 0);
+      } else {
+        runningOrders++;
+        totalSales += (so.price || 0);
+      }
+    });
+
+    mainOrders.forEach((mo) => {
+      if (!seenParentIds.has(mo.id)) {
+        if (mo.status === 'CANCELED') {
+          rejectedOrders++;
+        } else if (mo.status === 'DELIVERED') {
+          completedOrders++;
+          totalSales += (mo.productCost || 0);
+        } else {
+          runningOrders++;
+          totalSales += (mo.productCost || 0);
+        }
+      }
+    });
+  } else {
+    mainOrders.forEach((mo) => {
+      if (mo.status === 'CANCELED') {
+        rejectedOrders++;
+      } else if (mo.status === 'DELIVERED') {
+        completedOrders++;
+        totalSales += (mo.productCost || 0);
+      } else {
+        runningOrders++;
+        totalSales += (mo.productCost || 0);
+      }
+    });
+  }
+
+  const commission = Math.round(totalSales * ((shop.commissionPercent || 0) / 100));
+
+  const handleStatusChange = async (newStatus: 'Approved' | 'Pending' | 'Rejected') => {
+    setCurrentStatus(newStatus);
+    await fallbackStore.updateShopStatus(shop.id, newStatus);
+    showAlert('সফল', `দোকানের স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
+  };
 
   const handleDelete = async () => {
     const confirmed = await showConfirm(
@@ -92,10 +163,27 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center shrink-0 shadow-inner">
               <Store className="w-6 h-6 text-purple-200" />
             </div>
-            <div className="min-w-0">
-              <span className="inline-block px-2.5 py-0.5 rounded-full bg-purple-500/30 border border-purple-300/30 text-purple-200 text-[10px] font-extrabold uppercase tracking-wider mb-1">
-                {shop.type}
-              </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="inline-block px-2.5 py-0.5 rounded-full bg-purple-500/30 border border-purple-300/30 text-purple-200 text-[10px] font-extrabold uppercase tracking-wider">
+                  {shop.type}
+                </span>
+                <select
+                  value={currentStatus}
+                  onChange={(e) => handleStatusChange(e.target.value as any)}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border cursor-pointer outline-none ${
+                    currentStatus === 'Approved'
+                      ? 'bg-emerald-500 text-white border-emerald-400'
+                      : currentStatus === 'Pending'
+                      ? 'bg-amber-500 text-white border-amber-400'
+                      : 'bg-red-500 text-white border-red-400'
+                  }`}
+                >
+                  <option value="Approved" className="bg-white text-gray-900 font-bold">Approved</option>
+                  <option value="Pending" className="bg-white text-gray-900 font-bold">Pending</option>
+                  <option value="Rejected" className="bg-white text-gray-900 font-bold">Rejected</option>
+                </select>
+              </div>
               <h3 className="text-xl font-black text-white leading-tight">{shop.name}</h3>
               <p className="text-xs text-purple-200 font-medium mt-0.5">
                 ID: <span className="font-mono text-purple-300">{shop.id}</span>
@@ -119,6 +207,42 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+          {/* Order Metrics Section */}
+          <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-4 shadow-md space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                📊 Order Statistics & Revenue
+              </span>
+              <span className="text-[10px] font-bold text-slate-400">Realtime Summary</span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-white/10 rounded-xl p-2 backdrop-blur-xs">
+                <span className="text-[9px] font-extrabold text-emerald-400 uppercase block">Completed</span>
+                <span className="text-lg font-black text-white">{completedOrders}</span>
+              </div>
+              <div className="bg-white/10 rounded-xl p-2 backdrop-blur-xs">
+                <span className="text-[9px] font-extrabold text-amber-400 uppercase block">Running</span>
+                <span className="text-lg font-black text-white">{runningOrders}</span>
+              </div>
+              <div className="bg-white/10 rounded-xl p-2 backdrop-blur-xs">
+                <span className="text-[9px] font-extrabold text-rose-400 uppercase block">Rejected</span>
+                <span className="text-lg font-black text-white">{rejectedOrders}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/10">
+              <div className="bg-emerald-950/60 border border-emerald-500/20 rounded-xl p-2.5">
+                <span className="text-[10px] font-bold text-emerald-300 block">Total Sales</span>
+                <span className="text-base font-black text-emerald-400">৳{totalSales.toLocaleString()}</span>
+              </div>
+              <div className="bg-purple-950/60 border border-purple-500/20 rounded-xl p-2.5">
+                <span className="text-[10px] font-bold text-purple-300 block">Commission ({shop.commissionPercent || 0}%)</span>
+                <span className="text-base font-black text-purple-300">৳{commission.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
 
           {/* Store Description / Products-Services */}
           {shop.description && (

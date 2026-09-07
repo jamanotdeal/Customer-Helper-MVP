@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
 import { Clock, Sparkles, MapPin, Edit2 } from 'lucide-react';
-import { getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
+import { getDeliveryDurationText, getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { getOrderMinDistanceKm } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
 
@@ -27,15 +27,21 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   helperLocation,
 }) => {
   const isCapReached = activeOrdersCount >= activeOrderLimit;
-  const [elapsed, setElapsed] = useState(() => getElapsedTime(order.createdAt));
-  const urgency = getHelperUrgencyBgClass(order.createdAt, false);
+  const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
+  const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
+  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   useEffect(() => {
+    if (isDone) {
+      setElapsed(getDeliveryDurationText(order));
+      return;
+    }
+    setElapsed(getElapsedTime(order));
     const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order.createdAt));
+      setElapsed(getElapsedTime(order));
     }, 1000);
     return () => clearInterval(timer);
-  }, [order.createdAt]);
+  }, [order, isDone]);
 
   const itemsSummary = order.items?.length
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
@@ -115,11 +121,10 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
         <button
           onClick={() => onAccept(order.id)}
           disabled={isCapReached}
-          className={`flex-1 py-2.5 rounded-2xl font-extrabold text-xs shadow-md transition-all ${
-            isCapReached
+          className={`flex-1 py-2.5 rounded-2xl font-extrabold text-xs shadow-md transition-all ${isCapReached
               ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
               : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98'
-          }`}
+            }`}
         >
           {isCapReached ? `Limit (${activeOrderLimit})` : 'Accept Request'}
         </button>

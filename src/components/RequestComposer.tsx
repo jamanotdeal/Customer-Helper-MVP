@@ -5,12 +5,13 @@ import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
-import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
+import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { MapPickerModal } from './MapPickerModal';
 import { SavedAddressPicker } from './SavedAddressPicker';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -264,6 +265,18 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       qty: '1',
     };
 
+    // Calculate initial estimated delivery fee
+    const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
+      ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
+      : 0;
+    const estdFee = calculateEstimatedFee({
+      distanceKm: Math.ceil(distKm),
+      weightKg: 0,
+      isReturnRequested: false,
+      productPrice: 0,
+    }, fallbackStore.pricingSettings).totalFee;
+    const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
+
     // Generate zero-padded 5-digit order ID
     const orderNum = Math.floor(Math.random() * 90000) + 10000;
     const newOrder: Order = {
@@ -282,8 +295,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       deliveryLocation: finalDelivLoc,
       additionalNote: undefined,
       status: 'PENDING',
-      deliveryFee: 0,
-      originalDeliveryFee: 0,
+      deliveryFee: initialFee,
+      originalDeliveryFee: initialFee,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       statusHistory: [
@@ -413,24 +426,16 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">কোথা থেকে আনতে হবে বা করতে হবে?</label>
                   <div className="relative group">
-                    <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
+                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
                     <input
                       type="text"
                       value={pickupNote}
                       onChange={(e) => setPickupNote(e.target.value)}
                       onClick={handlePickupAddressClick}
                       placeholder="কোথা থেকে নিতে হবে? (ক্লিক করে সিলেক্ট করুন)"
-                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
+                      className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
                       readOnly
                     />
-                    <button
-                      type="button"
-                      onClick={handlePickupAddressClick}
-                      title="ম্যাপ থেকে স্থান নির্বাচন করুন"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                    >
-                      <MapPin className="w-4 h-4" />
-                    </button>
                   </div>
                 </div>
 
@@ -438,27 +443,18 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">ডেলিভারি ঠিকানা *</label>
                   <div className="relative group">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
+                    <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
                     <input
                       type="text"
                       value={deliveryAddress}
                       onChange={(e) => setDeliveryAddress(e.target.value)}
                       onClick={handleDeliveryAddressClick}
                       placeholder="ডেলিভারি ঠিকানা (ক্লিক করে সিলেক্ট করুন) *"
-                      className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
+                      className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
                       required
                       readOnly
                     />
-                    <button
-                      type="button"
-                      onClick={handleDeliveryAddressClick}
-                      title="ঠিকানা নির্বাচন করুন"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                    >
-                      <MapPin className="w-4 h-4" />
-                    </button>
                   </div>
-
                 </div>
 
                 {/* WhatsApp Number */}
@@ -478,30 +474,24 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
             {/* CTA / Submit Button */}
             {!isExpanded ? (
-              <button
+              <AsyncButton
                 type="button"
                 onClick={handleInputInteract}
                 className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2"
               >
                 <span>Submit Your Request</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </AsyncButton>
             ) : (
-              <button
+              <AsyncButton
                 type={user ? 'submit' : 'button'}
                 onClick={!user ? handleInputInteract : undefined}
-                disabled={submitting}
+                isLoading={submitting}
                 className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-2 disabled:opacity-60"
               >
-                {submitting ? (
-                  <span>Submitting...</span>
-                ) : (
-                  <>
-                    <span>{user ? 'Submit' : 'Login to Submit'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
+                <span>{user ? 'Submit' : 'Login to Submit'}</span>
+                {!submitting && <ArrowRight className="w-4 h-4 ml-2" />}
+              </AsyncButton>
             )}
           </form>
         </>
@@ -512,9 +502,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         isOpen={showPickupAddressPicker}
         onClose={() => setShowPickupAddressPicker(false)}
         savedAddresses={savedPickupAddresses}
+        selectedAddress={{ address: pickupNote, lat: pickupLat, lng: pickupLng }}
         title="সেভ করা স্থান"
-        subtitle="এই সার্ভিসে আগে ব্যবহার করা স্থান"
-        openMapLabel="অন্য স্থান (ম্যাপ থেকে নিন)"
+        subtitle="লোকেশন  সিলেক্ট করুন, না হলে নিচের বাটনে ক্লিক করে নতুন Address সেট করুন।"
+        openMapLabel="No, অন্য ঠিকানা হবে!"
         onSelectAddress={(loc) => {
           setPickupNote(loc.address);
           if (loc.lat) setPickupLat(loc.lat);
@@ -528,6 +519,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         isOpen={showSavedAddressPicker}
         onClose={() => setShowSavedAddressPicker(false)}
         savedAddresses={savedAddresses}
+        selectedAddress={{ address: deliveryAddress, lat: deliveryLat, lng: deliveryLng }}
         onSelectAddress={(loc) => {
           setDeliveryAddress(loc.address);
           if (loc.lat) setDeliveryLat(loc.lat);

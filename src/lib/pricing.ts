@@ -112,12 +112,15 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   bankInstructions: 'Bank Account: Transfer due commission to Bank Name, Account: XXXX-XXXX-XXXX, Branch: XXX, and write Reference.',
   cashInstructions: 'Cash Payment: Pay directly at the Jamanot office desk and get a receipt.',
   storeTypes: DEFAULT_STORE_TYPES,
-  // Map picker guide overlay
+  // Map picker guide overlay & placeholders
   mapPickerGuideText: 'যে location select করতে চান, সেখান পিন (icon) টি নিয়ে বসান, বা ওই place-এ click করুন। তারপর specific ভাবে building, market-এর নাম add করুন map-এর নিচের যে input box টি আছে সেখানে।',
   mapPickerPickupGuideText: 'যে দোকান বা স্থান থেকে আনতে বা কাজ করতে হবে, সেই স্থানে ম্যাপের পিন সরিয়ে নিয়ে যান অথবা ক্লিক করুন। দোকানের নাম বা বিস্তারিত ঠিকানা নিচের input box-এ লিখুন।',
   mapPickerDeliveryGuideText: 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন। ডেলিভারি ঠিকানা নির্ভুল হলে হেল্পার ঠিক সময়ে পৌঁছাতে পারবেন। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।',
   mapPickerGuideOkText: 'ঠিক আছে',
   mapPickerGuideShowCount: 5,
+  mapPickerPlaceholder: 'আপনার নির্দিষ্ট ঠিকানার বিবরণ ম্যানুয়ালি লিখুন...',
+  mapPickerPickupPlaceholder: 'যেমন: আরিফ স্টোর, আশুলিয়া বাজার.',
+  mapPickerDeliveryPlaceholder: 'যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.',
   // Fee Details Estimation Calculator & Company Description Defaults
   feeCalculatorBasePrice: 0,
   feeCalculatorPerKmRate: 10,

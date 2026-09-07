@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
 import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
+import { AsyncButton } from './ui/AsyncButton';
 
 interface OrderCardProps {
   order: Order;
@@ -113,22 +114,25 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const accent = getCardAccent(order.status);
   const BadgeIcon = badge.icon;
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
-  const endTimestamp = order.deliveredAt || order.cancelledAt || order.updatedAt;
   const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
-      ? getDeliveryDurationText(order.createdAt, endTimestamp)
-      : getElapsedTime(order.createdAt)
+      ? getDeliveryDurationText(order)
+      : getElapsedTime(order)
   );
 
   useEffect(() => {
-    if (isDone) return;
+    if (isDone) {
+      setElapsed(getDeliveryDurationText(order));
+      return;
+    }
+    setElapsed(getElapsedTime(order));
     const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order.createdAt));
+      setElapsed(getElapsedTime(order));
     }, 1000);
     return () => clearInterval(timer);
-  }, [order.createdAt, isDone]);
+  }, [order, isDone]);
 
   // Brief items summary (truncated via CSS)
   const itemsSummary = order.items?.length
@@ -214,6 +218,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             {order.service || order.title || 'Service Needed'}
           </h3>
 
+          {/* Completed time chip — only for DELIVERED orders */}
+          {order.status === 'DELIVERED' && order.deliveredAt && (
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl w-fit">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+              <span>Completed: {formatPlacedDateTime(order.deliveredAt)}</span>
+            </div>
+          )}
+
           {/* Helper Private Note Tag if present */}
           {order.helperNote && (
             <div className="flex items-center space-x-1 text-[11px] font-bold text-purple-900 bg-purple-100/90 border border-purple-200 px-2.5 py-1 rounded-xl truncate">
@@ -223,7 +235,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           )}
 
           {/* View Details action */}
-          <button
+          <AsyncButton
             onClick={(e) => {
               e.stopPropagation();
               onClick();
@@ -231,8 +243,8 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-extrabold text-xs flex items-center justify-center space-x-2 transition-all shadow-sm"
           >
             <span>View Details</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
+            <ArrowRight className="w-3.5 h-3.5 ml-1" />
+          </AsyncButton>
         </div>
       </div>
     );
@@ -271,7 +283,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             )}
           </div>
 
-          <button
+          <AsyncButton
             onClick={(e) => {
               e.stopPropagation();
               onClick();
@@ -279,8 +291,8 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-extrabold text-sm flex items-center justify-center space-x-2 transition-all shadow-sm"
           >
             <span>View Details</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+            <ArrowRight className="w-4 h-4 ml-1" />
+          </AsyncButton>
         </div>
       </div>
     );

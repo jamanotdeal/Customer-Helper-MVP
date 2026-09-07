@@ -33,9 +33,8 @@ export const StoreWallet: React.FC = () => {
   const [accountNumber, setAccountNumber] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Pagination for Wallet Ledger
-  const [ledgerPage, setLedgerPage] = useState(1);
-  const ledgerPageSize = 10;
+  // Pagination / Day-by-Day history for Wallet Ledger
+  const [daysToLoad, setDaysToLoad] = useState<number>(1);
 
   const storeId = user?.storeId;
 
@@ -191,15 +190,16 @@ export const StoreWallet: React.FC = () => {
   useEffect(() => {
     const syncWallet = () => {
       if (user && storeId) {
-        const w = fallbackStore.getStoreWallet(user.uid, storeId);
+        const w = fallbackStore.getStoreWallet(user.uid, storeId, completedParentOrders);
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
         
-        // Filter shop orders belonging to this store where parent order is delivered or shop order is canceled
+        // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
         const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => {
           if (so.shopId !== storeId) return false;
           if (so.status === 'CANCELED') return true;
+          if (so.status === 'HANDOVER') return true;
           const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
-          return parentOrder?.status === 'DELIVERED';
+          return parentOrder?.status === 'DELIVERED' || parentOrder?.status === 'CANCELED';
         });
 
         setWallet({ ...w });
@@ -236,9 +236,11 @@ export const StoreWallet: React.FC = () => {
     const list: { id: string; type: 'EARNING' | 'PAYBACK' | 'CANCELED'; amount: number; description: string; createdAt: string }[] = [];
 
     combinedShopOrdersList.forEach((so) => {
-      const sales = so.price ?? 0;
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
-      if (so.status === 'CANCELED') {
+      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
+
+      if (isCanceled) {
         list.push({
           id: `order-cancel-${so.id}`,
           type: 'CANCELED',
@@ -284,15 +286,36 @@ export const StoreWallet: React.FC = () => {
     });
   }, [ledgerTransactions, startDate, endDate]);
 
-  const totalLedgerPages = Math.ceil(filteredTransactions.length / ledgerPageSize) || 1;
-  const paginatedTransactions = useMemo(() => {
-    return filteredTransactions.slice((ledgerPage - 1) * ledgerPageSize, ledgerPage * ledgerPageSize);
-  }, [filteredTransactions, ledgerPage]);
-
-  // Reset ledger page on transactions change
-  useEffect(() => {
-    setLedgerPage(1);
+  // Group filtered transactions by local date (YYYY-MM-DD) sorted descending
+  const groupedTransactionsByDay = useMemo(() => {
+    const map = new Map<string, typeof ledgerTransactions>();
+    filteredTransactions.forEach((tx) => {
+      const d = new Date(tx.createdAt);
+      const dateKey = isNaN(d.getTime()) ? 'Unknown' : getLocalYYYYMMDD(d);
+      if (!map.has(dateKey)) {
+        map.set(dateKey, []);
+      }
+      map.get(dateKey)!.push(tx);
+    });
+    // Distinct sorted dates (newest first)
+    const sortedDates = Array.from(map.keys()).sort((a, b) => (a < b ? 1 : -1));
+    return { map, sortedDates };
   }, [filteredTransactions]);
+
+  const visibleDates = useMemo(() => {
+    return groupedTransactionsByDay.sortedDates.slice(0, daysToLoad);
+  }, [groupedTransactionsByDay, daysToLoad]);
+
+  const visibleTransactions = useMemo(() => {
+    const list: typeof ledgerTransactions = [];
+    visibleDates.forEach((dateKey) => {
+      const dayTxs = groupedTransactionsByDay.map.get(dateKey) || [];
+      list.push(...dayTxs);
+    });
+    return list;
+  }, [visibleDates, groupedTransactionsByDay]);
+
+  const hasMoreDays = daysToLoad < groupedTransactionsByDay.sortedDates.length;
 
   const filteredWithdrawals = useMemo(() => {
     return withdrawals.filter((w) => {
@@ -328,9 +351,12 @@ export const StoreWallet: React.FC = () => {
     let canceledAmount = 0;
 
     filteredShopOrders.forEach((so) => {
-      const sales = so.price ?? 0;
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
+      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
+
       totalSales += sales;
-      if (so.status === 'CANCELED') {
+      if (isCanceled) {
         canceledAmount += sales;
       } else {
         commissionDue += Math.round(sales * (commissionRate / 100));
@@ -382,7 +408,7 @@ export const StoreWallet: React.FC = () => {
     }
 
     setSubmitting(true);
-    await fallbackStore.submitWithdrawalRequest(user.uid, user.displayName, amt, paymentMethod, accountNumber);
+    await fallbackStore.submitWithdrawalRequest(user.uid, user.displayName, amt, paymentMethod, accountNumber, 'store');
     setSubmitting(false);
     setShowWithdrawModal(false);
     await showAlert('অনুরোধ সফল', 'কমিশন পরিশোধের তথ্য ভেরিফিকেশনের জন্য অ্যাডমিনের কাছে পাঠানো হয়েছে।', 'success');
@@ -421,7 +447,7 @@ export const StoreWallet: React.FC = () => {
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
               <WalletIcon className="w-5 h-5 text-emerald-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Store Sales & Commission</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-100">Earnings</span>
           </div>
 
           {/* Filter Dropdown */}
@@ -512,9 +538,7 @@ export const StoreWallet: React.FC = () => {
                 Cancelled Amount
               </span>
               <span className="text-lg font-black text-rose-300 block truncate">
-                ৳{activePreset === 'ALL_TIME'
-                  ? storeShopOrders.filter(so => so.status === 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)
-                  : rangeMetrics.canceledAmount}
+                ৳{rangeMetrics.canceledAmount}
               </span>
             </div>
           </div>
@@ -624,12 +648,12 @@ export const StoreWallet: React.FC = () => {
             Wallet Ledger ({filteredTransactions.length})
           </h3>
         </div>
-        {filteredTransactions.length === 0 ? (
+        {visibleTransactions.length === 0 ? (
           <p className="text-xs text-gray-400 text-center py-4">কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</p>
         ) : (
           <>
             <div className="space-y-2.5">
-              {paginatedTransactions.map((tx) => (
+              {visibleTransactions.map((tx) => (
                 <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50/70 border border-gray-100 text-xs">
                   <div className="flex items-center space-x-3">
                     <div
@@ -662,31 +686,20 @@ export const StoreWallet: React.FC = () => {
                 </div>
               ))}
             </div>
-            {filteredTransactions.length > ledgerPageSize && (
-              <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={() => setLedgerPage((p) => Math.max(p - 1, 1))}
-                  disabled={ledgerPage === 1}
-                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
-                >
-                  Prev
-                </button>
-                <span className="text-xs font-black text-slate-800">
-                  Page {ledgerPage} of {totalLedgerPages}
-                </span>
+            {(hasMoreDays || completedHasMore) && (
+              <div className="pt-3 border-t border-gray-100 text-center">
                 <button
                   type="button"
                   onClick={async () => {
-                    if (ledgerPage === totalLedgerPages && completedHasMore) {
+                    if (!hasMoreDays && completedHasMore) {
                       await fetchCompletedPage(false);
                     }
-                    setLedgerPage((p) => p + 1);
+                    setDaysToLoad((prev) => prev + 1);
                   }}
-                  disabled={ledgerPage === totalLedgerPages && !completedHasMore}
-                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-250 text-gray-800 rounded-xl text-xs font-black disabled:opacity-40 transition-all select-none"
+                  disabled={completedLoading}
+                  className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 active:scale-98 text-gray-800 rounded-2xl text-xs font-black transition-all select-none shadow-xs disabled:opacity-50"
                 >
-                  {completedLoading ? '...' : 'Next'}
+                  {completedLoading ? 'লোড হচ্ছে...' : 'পূর্ববর্তী ১ দিনের ইতিহাস দেখুন (Load Previous Day)'}
                 </button>
               </div>
             )}
@@ -743,14 +756,13 @@ export const StoreWallet: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">মোবাইল নম্বর / ট্রানজেকশন আইডি (TxID)</label>
-                <input
-                  type="text"
+                <label className="text-xs font-bold text-gray-700 block mb-1">Note (optional)</label>
+                <textarea
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
-                  placeholder="মোবাইল বা TxID লিখুন..."
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none"
-                  required
+                  placeholder="Transaction id or anything for clearification"
+                  rows={3}
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none resize-none"
                 />
               </div>
 
@@ -765,9 +777,16 @@ export const StoreWallet: React.FC = () => {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700"
+                  className="flex-1 py-3.5 rounded-2xl bg-emerald-600 text-white font-extrabold text-xs shadow-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
-                  নম্বর / TxID জমা দিন
+                  {submitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>জমা হচ্ছে...</span>
+                    </>
+                  ) : (
+                    <span>তথ্য জমা দিন</span>
+                  )}
                 </button>
               </div>
             </form>
