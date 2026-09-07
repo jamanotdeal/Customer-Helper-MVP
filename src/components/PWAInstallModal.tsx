@@ -16,12 +16,15 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Utility function to check if app is running as standalone PWA
+// Utility function to check if app is running as standalone PWA or Native App / WebView / TWA
 export const isPwaInstalled = (): boolean => {
   if (typeof window === 'undefined') return false;
-  const isStandaloneMatch = window.matchMedia('(display-mode: standalone)').matches;
+  const isStandaloneMatch = window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: twa)').matches;
   const isNavigatorStandalone = (window.navigator as any).standalone === true;
-  return isStandaloneMatch || isNavigatorStandalone;
+  const isTwaOrAndroidApp = document.referrer.startsWith('android-app://');
+  const isCapacitorOrCordova = !!(window as any).Capacitor || !!(window as any).Cordova || !!(window as any).AndroidInterface;
+  const isWebView = /wv|Android.*Version\/[0-9]\.[0-9]/i.test(window.navigator.userAgent) && !/Safari/i.test(window.navigator.userAgent);
+  return isStandaloneMatch || isNavigatorStandalone || isTwaOrAndroidApp || isCapacitorOrCordova || isWebView;
 };
 
 // Utility function to check if device is iOS (Safari)
