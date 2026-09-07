@@ -214,6 +214,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Open edit modal pre-filled with current order data
   const openEditModal = () => {
+    if (order.status === 'ARRIVED' || order.status === 'DELIVERED' || order.status === 'CANCELED') return;
     setEditService(order.service || order.title || '');
     // The description is stored in items[0].name (single-item format used by the order form)
     setEditDescription(order.items[0]?.name || '');
@@ -306,7 +307,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   };
 
   const canCancel = (order.status === 'PENDING' || order.status === 'ACCEPTED') && user?.uid === order.customerId;
-  const canEdit = order.status === 'PENDING' || order.status === 'ACCEPTED';
+  const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && order.status !== 'CANCELED';
   const isDelivered = order.status === 'DELIVERED';
   const isCanceled = order.status === 'CANCELED';
   const totalPayable = (order.productCost || 0) + (order.deliveryFee || 0);
@@ -398,7 +399,41 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           )}
         </div>
 
-        {/* ── CANCELED NOTICE ── */}
+        {/* ── CUSTOMER EDIT ALERT BANNER (HELPER / ADMIN ONLY - MINIMALIST YELLOW THEME) ── */}
+        {order.updatedByCustomer && (user?.role === 'helper' || user?.lastActiveMode === 'helper' || user?.isAdmin) && (
+          <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-950 shadow-sm space-y-2 animate-in slide-in-from-top duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-1.5">
+                <Edit2 className="w-4 h-4 text-amber-600 shrink-0" />
+                <span className="font-extrabold text-xs text-amber-950">গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
+              </div>
+              <button
+                onClick={() => {
+                  fallbackStore.updateOrder(order.id, (o) => ({ ...o, updatedByCustomer: false }));
+                }}
+                className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/80 transition-all active:scale-95 shrink-0"
+              >
+                ঠিক আছে (Dismiss)
+              </button>
+            </div>
+
+            {order.editHistory && order.editHistory.length > 0 && (
+              <div className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
+                {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
+                  <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                    <span className="font-bold text-amber-900">{c.field}:</span>
+                    <div className="font-medium text-right">
+                      <span className="line-through text-amber-700/60 mr-1.5 text-[10px]">{c.oldValue || 'None'}</span>
+                      <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
+                        {c.newValue}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {isCanceled && (
           <div className="p-4 rounded-3xl bg-red-50 border border-red-200 flex items-center space-x-3">
             <XCircle className="w-8 h-8 text-red-500 shrink-0" />
@@ -551,6 +586,45 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             </div>
           )}
         </div>
+
+        {/* ── MINIMALIST ORDER EDIT HISTORY LOG ── */}
+        {order.editHistory && order.editHistory.length > 0 && (
+          <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
+                <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Order Update History</span>
+              </h3>
+              <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+                {order.editHistory.length} edit{order.editHistory.length > 1 ? 's' : ''}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {order.editHistory.slice().reverse().map((historyItem) => (
+                <div key={historyItem.id} className="p-3 rounded-2xl bg-gray-50/80 border border-gray-100 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] text-gray-500 font-semibold border-b border-gray-200/60 pb-1">
+                    <span>Updated on {formatPlacedDateTime(historyItem.timestamp)}</span>
+                    <span className="font-bold text-gray-700">{historyItem.editedByName || historyItem.editedBy}</span>
+                  </div>
+                  <div className="space-y-1 pt-0.5">
+                    {historyItem.changes.map((c, idx) => (
+                      <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                        <span className="font-semibold text-gray-600">{c.field}:</span>
+                        <div className="text-right font-medium">
+                          <span className="line-through text-gray-400 text-[10px] mr-1.5">{c.oldValue || 'None'}</span>
+                          <span className="text-gray-900 font-bold bg-white border border-gray-200 px-2 py-0.5 rounded-lg inline-block text-[11px]">
+                            {c.newValue}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── CALCULATION SUMMARY ── */}
         {estdPricing && (

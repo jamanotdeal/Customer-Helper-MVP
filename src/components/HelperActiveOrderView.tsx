@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
-import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
+import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
 import { MapPickerModal } from './MapPickerModal';
 import { HelperOrderMapModal } from './HelperOrderMapModal';
@@ -971,35 +971,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           </div>
         )}
 
-        {/* CUSTOMER EDIT ALERT BANNER */}
+        {/* CUSTOMER EDIT ALERT BANNER (MINIMALIST YELLOW THEME) */}
         {order.updatedByCustomer && (
-          <div className="p-4 rounded-3xl bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-lg space-y-2.5 animate-in slide-in-from-top duration-300">
-            <div className="flex items-center justify-between font-black text-xs">
+          <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-950 shadow-sm space-y-2 animate-in slide-in-from-top duration-200">
+            <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1.5">
-                <FileEdit className="w-4 h-4 text-amber-100" />
-                <span>গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
+                <FileEdit className="w-4 h-4 text-amber-600 shrink-0" />
+                <span className="font-extrabold text-xs text-amber-950">গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
               </div>
               <button
                 onClick={() => {
                   fallbackStore.updateOrder(order.id, (o) => ({ ...o, updatedByCustomer: false }));
                 }}
-                className="px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-full text-[10px] font-extrabold transition-all"
+                className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/80 transition-all active:scale-95 shrink-0"
               >
-                ঠিক আছে
+                ঠিক আছে (Dismiss)
               </button>
             </div>
-            <p className="text-[11px] text-amber-100 font-medium leading-relaxed">
-              কাস্টমার অর্ডারের তথ্য/বিবরণ আপডেট করেছেন। নিচে পরিবর্তিত বিষয়গুলো দেখুন:
-            </p>
+
             {order.editHistory && order.editHistory.length > 0 && (
-              <div className="bg-black/15 rounded-2xl p-3 text-[11px] space-y-1 border border-white/20">
+              <div className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
                 {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
-                  <div key={idx} className="flex flex-wrap justify-between gap-1 text-white">
-                    <span className="font-bold text-amber-100">{c.field}:</span>
-                    <span className="font-semibold text-right">
-                      <span className="line-through text-white/60 mr-1">{c.oldValue}</span>
-                      <strong className="text-white bg-white/20 px-1.5 py-0.5 rounded">{c.newValue}</strong>
-                    </span>
+                  <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                    <span className="font-bold text-amber-900">{c.field}:</span>
+                    <div className="font-medium text-right">
+                      <span className="line-through text-amber-700/60 mr-1.5 text-[10px]">{c.oldValue || 'None'}</span>
+                      <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
+                        {c.newValue}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1043,6 +1043,46 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Customer Edit History Log for Pending Order */}
+              {order.editHistory && order.editHistory.length > 0 && (
+                <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
+                      <FileEdit className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Customer Edit History ({order.editHistory.length})</span>
+                    </span>
+                    {order.lastEditedAt && (
+                      <span className="text-[9px] font-bold text-amber-800">
+                        Last: {formatPlacedDateTime(order.lastEditedAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2 pt-1">
+                    {order.editHistory.slice().reverse().map((historyItem) => (
+                      <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 border-b border-amber-100 pb-1">
+                          <span>Edited by: {historyItem.editedByName || historyItem.editedBy}</span>
+                          <span>{formatPlacedDateTime(historyItem.timestamp)}</span>
+                        </div>
+                        <div className="space-y-1 pt-0.5">
+                          {historyItem.changes.map((c, idx) => (
+                            <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                              <span className="font-extrabold text-amber-950">{c.field}:</span>
+                              <div className="font-semibold text-right">
+                                <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
+                                <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
+                                  {c.newValue}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Addresses & Visual Map before Customer Details */}
               <div className="pt-2 border-t border-gray-100">
@@ -1185,6 +1225,46 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {/* Customer Edit History Log for Active Order */}
+            {order.editHistory && order.editHistory.length > 0 && (
+              <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
+                    <FileEdit className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Customer Edit History ({order.editHistory.length})</span>
+                  </span>
+                  {order.lastEditedAt && (
+                    <span className="text-[9px] font-bold text-amber-800">
+                      Last: {formatPlacedDateTime(order.lastEditedAt)}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-2 pt-1">
+                  {order.editHistory.slice().reverse().map((historyItem) => (
+                    <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 border-b border-amber-100 pb-1">
+                        <span>Edited by: {historyItem.editedByName || historyItem.editedBy}</span>
+                        <span>{formatPlacedDateTime(historyItem.timestamp)}</span>
+                      </div>
+                      <div className="space-y-1 pt-0.5">
+                        {historyItem.changes.map((c, idx) => (
+                          <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                            <span className="font-extrabold text-amber-950">{c.field}:</span>
+                            <div className="font-semibold text-right">
+                              <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
+                              <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
+                                {c.newValue}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
