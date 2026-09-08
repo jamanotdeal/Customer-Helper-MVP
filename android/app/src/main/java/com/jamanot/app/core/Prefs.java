@@ -161,8 +161,15 @@ public final class Prefs {
      * Persisted so a service restart doesn't re-alert on notifications the user
      * has already seen. Insertion-ordered and trimmed from the front, giving a
      * cheap LRU without pulling in a real cache.
+     *
+     * <p>Synchronized because the three callers run on different threads — the
+     * duty service's Firestore callback and the WebView plugin on main,
+     * {@code onMessageReceived} on an FCM worker. This is a read-modify-write
+     * over one SharedPreferences key, so without the lock two paths carrying
+     * the same notification could each read "not seen" and both post it, which
+     * is precisely the duplicate this set exists to prevent.
      */
-    public static boolean markSeen(Context c, String id) {
+    public static synchronized boolean markSeen(Context c, String id) {
         if (id == null || id.isEmpty()) return false;
         SharedPreferences p = sp(c);
         Set<String> stored = p.getStringSet(K_SEEN, null);

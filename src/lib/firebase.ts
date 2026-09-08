@@ -246,6 +246,34 @@ function canonicalNotifId(id: string, createdAt?: string): string {
   return suffix ? `notif-${ms}-${suffix}` : `notif-${ms}`;
 }
 
+/**
+ * How long two writes of the "same" notification are treated as one event.
+ */
+const NOTIF_COALESCE_WINDOW_MS = 2 * 60 * 1000;
+
+/**
+ * Id for a notification whose trigger can fire in a burst.
+ *
+ * Anything driven by an edit is written once per keystroke: nudging a quantity
+ * stepper wrote productCost nine times in thirty-one seconds on order 41396,
+ * and because each id carried its own `Date.now()`, the customer got nine
+ * separate documents — nine pushes, nine tray entries — for one edit.
+ *
+ * Rounding the clock into a window makes every write inside that window resolve
+ * to the SAME document id. The first one creates it, so the push Cloud Function
+ * (which triggers only on create) fires once and the de-dup sets see one id;
+ * the rest overwrite it in place with the newer wording. A genuinely later
+ * change lands in the next window and announces itself normally.
+ *
+ * `key` scopes it to the thing being edited — the order or shop order — so two
+ * orders edited at once never collapse into each other.
+ */
+function coalescedNotifId(kind: string, key: string, at: number = Date.now()): string {
+  const bucket = Math.floor(at / NOTIF_COALESCE_WINDOW_MS) * NOTIF_COALESCE_WINDOW_MS;
+  const safeKey = String(key).replace(/[^a-zA-Z0-9_-]/g, '');
+  return `notif-${bucket}-${kind}-${safeKey}`;
+}
+
 // Helper to recursively strip undefined properties before saving to Firestore
 function cleanForFirestore<T>(data: T): T {
   if (data === undefined || data === null) return data;
@@ -450,6 +478,9 @@ class FallbackStore {
   // handled. That snapshot is the existing window, not news — see below.
   private _notifSnapshotPrimed = false;
 
+  /** Orders this device has already routed to dedicated riders — see checkDedicatedRouting. */
+  private _dedicatedRouted: Set<string> = new Set();
+
   // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
   // on every Firestore event. See scheduleLocalStoreSave.
   private _saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -581,10 +612,14 @@ class FallbackStore {
     });
 
     for (const notif of toProcess) {
-      // Dispatch notification
+      // Dispatch notification. The id is derived from the slot that came due,
+      // not from the clock, so a second open tab (or an app relaunch that
+      // re-reads the same pending schedule) writes over the same document
+      // instead of sending the announcement twice.
+      const dispatchMs = new Date(notif.scheduledAt as string).getTime();
       const dispatchNotif: AppNotification = {
         ...notif,
-        id: `notif-disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: `notif-${Number.isFinite(dispatchMs) ? dispatchMs : now}-sched-${notif.id.replace(/[^a-zA-Z0-9]/g, '')}`,
         createdAt: new Date().toISOString(),
         isScheduled: false,
       };
@@ -607,32 +642,78 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Every signed-in client runs this sweep on its own 30 s timer, and a pending
+   * order sits in the cache of all of them at once (helpers subscribe to every
+   * PENDING order, the customer to their own, admin to the newest 100). So the
+   * moment the delay elapses, N devices reach this code within the same second.
+   *
+   * Two things keep that from becoming N notifications, which is exactly the
+   * duplicate storm users were seeing in their tray:
+   *
+   *  1. The document id is derived from the order, not from {@code Date.now()},
+   *     so every racing client writes the SAME `notifications/{id}` document.
+   *     Firestore collapses them into one, the push Cloud Function fires only
+   *     on the create, and both de-dup sets (web `_knownNotifIds`, native
+   *     `Prefs.markSeen`) see a single id.
+   *  2. The routing flag is persisted. It used to be set on the in-memory order
+   *     only, so it was lost on every reload and never reached other devices —
+   *     which also meant HelperDashboard, which filters dedicated riders on
+   *     `routedToDedicated` coming back from Firestore, never actually showed
+   *     them the order this notification was announcing.
+   */
   private async checkDedicatedRouting() {
     const delayMins = this.pricingSettings.dedicatedHelperDelayMinutes || 7;
     const now = Date.now();
     const thresholdMs = delayMins * 60 * 1000;
 
+    const due: Order[] = [];
     this.orders.forEach((order) => {
-      if (order.status === 'PENDING' && !order.routedToDedicated) {
-        const createdMs = new Date(order.createdAt).getTime();
-        if (now - createdMs >= thresholdMs) {
-          order.routedToDedicated = true;
-          order.dedicatedNotifiedAt = new Date().toISOString();
-          this.orders.set(order.id, order);
-
-          const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
-          this.addNotification({
-            id: `notif-ded-${Date.now()}-${order.id}`,
-            userId: 'all-dedicated-helpers',
-            title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
-            body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
-            orderId: order.id,
-            read: false,
-            createdAt: new Date().toISOString(),
-          });
-        }
-      }
+      if (order.status !== 'PENDING' || order.routedToDedicated) return;
+      // Local guard for the window between deciding to route and our own write
+      // landing back through the snapshot listener, during which the next tick
+      // would otherwise see routedToDedicated still false and fire again.
+      if (this._dedicatedRouted.has(order.id)) return;
+      const createdMs = new Date(order.createdAt).getTime();
+      if (!Number.isFinite(createdMs) || now - createdMs < thresholdMs) return;
+      due.push(order);
     });
+
+    for (const order of due) {
+      this._dedicatedRouted.add(order.id);
+      const routedAt = new Date().toISOString();
+      this.orders.set(order.id, { ...order, routedToDedicated: true, dedicatedNotifiedAt: routedAt });
+
+      const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
+      await this.addNotification({
+        // Deterministic, and already in canonicalNotifId's `notif-<13 digits>`
+        // shape so it is stored verbatim. Seeded from the order's createdAt
+        // rather than the routing moment: two devices whose clocks differ by a
+        // second must still agree on the id.
+        id: `notif-${new Date(order.createdAt).getTime()}-ded-${order.id}`,
+        userId: 'all-dedicated-helpers',
+        title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
+        body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
+        orderId: order.id,
+        read: false,
+        createdAt: routedAt,
+      });
+
+      try {
+        await setDoc(
+          doc(db, 'orders', order.id),
+          { routedToDedicated: true, dedicatedNotifiedAt: routedAt },
+          { merge: true }
+        );
+      } catch (e: any) {
+        console.warn('[Firestore] dedicated routing note (kept locally):', e?.message || e);
+      }
+    }
+
+    if (due.length > 0) {
+      this.notify();
+      this.scheduleLocalStoreSave();
+    }
   }
 
   private safeParse<T>(key: string): T | null {
@@ -1873,7 +1954,8 @@ class FallbackStore {
 
     // Dynamic notification to helpers with Service Name/Title & Description
     this.addNotification({
-      id: `notif-${Date.now()}`,
+      // Tied to the order, so a retry of addOrder cannot announce it twice.
+      id: `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`,
       userId: targetGroup,
       title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
       body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation.address})`,
@@ -1939,7 +2021,7 @@ class FallbackStore {
 
       if (notifTitle && updated.customerId) {
         this.addNotification({
-          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          id: coalescedNotifId(`status-${updated.status}`, updated.id),
           userId: updated.customerId,
           title: notifTitle,
           body: notifBody,
@@ -1961,7 +2043,7 @@ class FallbackStore {
           : `অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করা হয়েছে।`;
 
         this.addNotification({
-          id: `notif-cancel-hlp-${Date.now()}`,
+          id: coalescedNotifId('cancel-hlp', updated.id),
           userId: helperTarget,
           title: notifTitle,
           body: notifBody,
@@ -1979,7 +2061,7 @@ class FallbackStore {
           const ownerId = shop?.ownerUserId || (so.shopId.startsWith('store-') ? so.shopId.replace('store-', '') : null);
           if (ownerId) {
             this.addNotification({
-              id: `notif-store-canc-${Date.now()}-${so.id}`,
+              id: coalescedNotifId('store-canc', so.id),
               userId: ownerId,
               title: 'অর্ডার বাতিল হয়েছে!',
               body: `মূল অর্ডার #${updated.id.slice(-6).toUpperCase()} বাতিল হওয়ায় আপনার স্টোরের অর্ডারটি বাতিল করা হয়েছে।`,
@@ -2000,7 +2082,7 @@ class FallbackStore {
           const shopOwnerId = await this.resolveShopOwnerId(so.shopId);
           if (shopOwnerId) {
             this.addNotification({
-              id: `notif-store-comp-${Date.now()}-${so.id}`,
+              id: coalescedNotifId('store-comp', so.id),
               userId: shopOwnerId,
               title: 'অর্ডার সম্পন্ন হয়েছে!',
               body: `আপনার স্টোরের অর্ডার #${updated.id.slice(-6).toUpperCase()} সফলভাবে সম্পন্ন এবং ডেলিভারি হয়েছে।`,
@@ -2047,10 +2129,10 @@ class FallbackStore {
       updated.customerId
     ) {
       this.addNotification({
-        id: `notif-${Date.now()}-cost`,
+        id: coalescedNotifId('cost', updated.id),
         userId: updated.customerId,
         title: 'পণ্যের খরচ যোগ/আপডেট করা হয়েছে',
-        body: `আপনার অর্ডার #${updated.id} এর পণ্যের মোট খরচ ৳${updated.productCost} টাকা ধরা হয়েছে।`,
+        body: `আপনার অর্ডার #${updated.id} এর পণ্যের খরচ যোগ/আপডেট করা হয়েছে।`,
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
@@ -2066,10 +2148,10 @@ class FallbackStore {
       updated.customerId
     ) {
       this.addNotification({
-        id: `notif-${Date.now()}-fee-change`,
+        id: coalescedNotifId('fee-change', updated.id),
         userId: updated.customerId,
         title: 'ডেলিভারি ফি আপডেট করা হয়েছে',
-        body: `আপনার অর্ডার #${updated.id} এর ডেলিভারি চার্জ ৳${updated.deliveryFee} টাকা করা হয়েছে।`,
+        body: `আপনার অর্ডার #${updated.id} এর ডেলিভারি চার্জ আপডেট করা হয়েছে।`,
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
@@ -2085,7 +2167,7 @@ class FallbackStore {
     ) {
       const helperTarget = updated.helperId || 'all-helpers';
       this.addNotification({
-        id: `notif-${Date.now()}-cust-edit`,
+        id: coalescedNotifId('cust-edit', updated.id),
         userId: helperTarget,
         title: 'অর্ডার পরিবর্তন (Order Updated)',
         body: `গ্রাহক অর্ডার #${updated.id} এর তথ্য/বিবরণ আপডেট করেছেন।`,
@@ -2116,7 +2198,7 @@ class FallbackStore {
       }
 
       this.addNotification({
-        id: `notif-${Date.now()}-addr-edit`,
+        id: coalescedNotifId('addr-edit', updated.id),
         userId: updated.customerId,
         title: 'ঠিকানা পরিবর্তন করা হয়েছে (Address Updated)',
         body: `${editorName} অর্ডার #${updated.id} এর ${changeText} আপডেট করেছেন।`,
@@ -2139,7 +2221,7 @@ class FallbackStore {
     ) {
       const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
       this.addNotification({
-        id: `notif-${Date.now()}-general-edit`,
+        id: coalescedNotifId('general-edit', updated.id),
         userId: updated.customerId,
         title: 'অর্ডার আপডেট করা হয়েছে (Order Updated)',
         body: `${editorName} আপনার অর্ডার #${updated.id} এর বিবরণ বা পণ্য তালিকা পরিবর্তন করেছেন।`,
@@ -2160,14 +2242,14 @@ class FallbackStore {
       if (helperTarget) {
         let changes = [];
         if (existing.status !== updated.status) changes.push(`অবস্থা (স্ট্যাটাস: ${updated.status})`);
-        if (existing.productCost !== updated.productCost) changes.push(`পণ্যের দাম (৳${updated.productCost || 0})`);
-        if (existing.deliveryFee !== updated.deliveryFee) changes.push(`ডেলিভারি ফি (৳${updated.deliveryFee || 0})`);
+        if (existing.productCost !== updated.productCost) changes.push('পণ্যের দাম');
+        if (existing.deliveryFee !== updated.deliveryFee) changes.push('ডেলিভারি ফি');
         if (JSON.stringify(existing.items) !== JSON.stringify(updated.items)) changes.push('পণ্য তালিকা');
         if (existing.deliveryLocation.address !== updated.deliveryLocation.address || existing.pickupLocation?.address !== updated.pickupLocation?.address) changes.push('ঠিকানা');
         
         const changeDesc = changes.length > 0 ? changes.join(', ') + ' পরিবর্তন করা হয়েছে।' : 'তথ্য পরিবর্তন করা হয়েছে।';
         this.addNotification({
-          id: `notif-${Date.now()}-admin-change`,
+          id: coalescedNotifId('admin-change', updated.id),
           userId: helperTarget,
           title: 'এডমিন অর্ডার পরিবর্তন করেছেন',
           body: `এডমিন অর্ডার #${updated.id} এর ${changeDesc}`,
@@ -2183,10 +2265,10 @@ class FallbackStore {
     // Fee adjustment notification to customer
     if (updated.feeAdjustment && updated.feeAdjustment.status === 'PENDING' && existing.feeAdjustment?.status !== 'PENDING') {
       this.addNotification({
-        id: `notif-${Date.now()}-fee`,
+        id: coalescedNotifId('fee-adjust', updated.id),
         userId: updated.customerId,
         title: 'ডেলিভারি ফি সমন্বয় অনুরোধ',
-        body: `হেলপার ডেলিভারি ফি ৳${updated.feeAdjustment.amount} টাকা করার অনুরোধ করেছেন।`,
+        body: `হেলপার ডেলিভারি ফি সমন্বয়ের অনুরোধ করেছেন।`,
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
@@ -2241,7 +2323,7 @@ class FallbackStore {
     const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
     if (ownerUserId) {
       this.addNotification({
-        id: `notif-shop-order-${Date.now()}`,
+        id: coalescedNotifId('shop-order', shopOrder.id),
         userId: ownerUserId,
         title: `নতুন অর্ডার: ${shopOrder.helperName}`,
         body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
@@ -2293,19 +2375,16 @@ class FallbackStore {
         CANCELED: 'দুঃখিত, দোকান অর্ডারটি বাতিল করেছে।',
       };
       const itemText = (updated.requestText || '').trim().substring(0, 60);
-      const priceText =
-        typeof updated.price === 'number' && updated.price > 0 ? `মূল্য: ৳${updated.price}` : '';
       const statusBody = [
         statusBodies[updated.status],
         itemText ? `“${itemText}”` : '',
-        priceText,
         (updated.note || '').trim(),
       ]
         .filter(Boolean)
         .join(' · ');
 
       this.addNotification({
-        id: `notif-shop-status-${Date.now()}`,
+        id: coalescedNotifId(`shop-status-${updated.status}`, shopOrderId),
         userId: updated.helperId,
         title: `${updated.shopName}: অর্ডার ${statusLabels[updated.status]}`,
         body: statusBody,
@@ -2320,12 +2399,12 @@ class FallbackStore {
     // 2. Notify helper when store sets/updates price
     if (updated.price !== existing.price && updated.helperId && actorRole === 'store') {
       this.addNotification({
-        id: `notif-shop-price-${Date.now()}`,
+        id: coalescedNotifId('shop-price', shopOrderId),
         userId: updated.helperId,
         title: `${updated.shopName}: মূল্য নির্ধারণ করা হয়েছে`,
         body:
           updated.price !== undefined
-            ? [`দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন: ৳${updated.price}`, (updated.requestText || '').trim().substring(0, 60)]
+            ? [`দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন।`, (updated.requestText || '').trim().substring(0, 60)]
                 .filter(Boolean)
                 .join(' · ')
             : `দোকানদার মূল্য পরিবর্তন করেছেন।`,
@@ -2345,10 +2424,10 @@ class FallbackStore {
           : null;
       if (editOwnerId) {
         this.addNotification({
-          id: `notif-shop-order-edit-${Date.now()}`,
+          id: coalescedNotifId('shop-order-edit', shopOrderId),
           userId: editOwnerId,
           title: `অর্ডার এডিট করা হয়েছে: ${updated.helperName}`,
-          body: `হেলপার অর্ডার এডিট করেছেন: ${updated.requestText.substring(0, 80)}${updated.price !== existing.price ? ` (নতুন মূল্য: ৳${updated.price || 0})` : ''}`,
+          body: `হেলপার অর্ডার এডিট করেছেন: ${updated.requestText.substring(0, 80)}${updated.price !== existing.price ? ' (মূল্য পরিবর্তন করা হয়েছে)' : ''}`,
           orderId: updated.parentOrderId,
           read: false,
           createdAt: new Date().toISOString(),
@@ -2375,7 +2454,7 @@ class FallbackStore {
       const deleteOwnerId = await this.resolveShopOwnerId(existing.shopId);
       if (deleteOwnerId) {
         this.addNotification({
-          id: `notif-shop-order-delete-${Date.now()}`,
+          id: coalescedNotifId('shop-order-delete', shopOrderId),
           userId: deleteOwnerId,
           title: `অর্ডার মুছে ফেলা হয়েছে: ${existing.helperName}`,
           body: `হেলপার অর্ডারটি মুছে ফেলেছেন: ${existing.requestText.substring(0, 80)}`,
@@ -3469,7 +3548,7 @@ class FallbackStore {
 
     // Notify store owner that application was approved (Requirement 4)
     this.addNotification({
-      id: `notif-store-approve-${Date.now()}`,
+      id: coalescedNotifId('store-approve', appId),
       userId: existing.userId,
       title: 'আপনার স্টোর অ্যাপ্লিকেশন অনুমোদন করা হয়েছে!',
       body: `অভিনন্দন! আপনার স্টোর "${existing.storeName}" এডমিন দ্বারা অনুমোদিত হয়েছে। এখন আপনি অর্ডার পেতে পারেন।`,
@@ -3499,7 +3578,7 @@ class FallbackStore {
 
     // Notify store owner that application was rejected (Requirement 4)
     this.addNotification({
-      id: `notif-store-reject-${Date.now()}`,
+      id: coalescedNotifId('store-reject', appId),
       userId: existing.userId,
       title: 'আপনার স্টোর অ্যাপ্লিকেশন বাতিল করা হয়েছে',
       body: `দুঃখিত, আপনার স্টোর "${existing.storeName}" এর অ্যাপ্লিকেশনটি বাতিল করা হয়েছে। ${reviewNote ? 'কারণ: ' + reviewNote : ''}`,
