@@ -12,7 +12,7 @@ import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter } from 'lucide-react';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter, AlertTriangle } from 'lucide-react';
 
 interface HelperDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -41,6 +41,18 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     if (initialSelectedOrderId) {
       const order = fallbackStore.orders.get(initialSelectedOrderId);
       if (order) {
+        if (order.helperId && order.helperId !== user?.uid && order.customerId !== user?.uid && !user?.isAdmin) {
+          showAlert(
+            'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+            'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+            'warning'
+          );
+          if (onClearInitialOrder) {
+            onClearInitialOrder();
+          }
+          return;
+        }
+
         if (order.status === 'PENDING') {
           setActiveTab('NEW');
         } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
@@ -54,7 +66,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         onClearInitialOrder();
       }
     }
-  }, [initialSelectedOrderId, onClearInitialOrder]);
+  }, [initialSelectedOrderId, onClearInitialOrder, user]);
   const [firstOrderIds, setFirstOrderIds] = useState<Set<string>>(new Set());
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
@@ -390,6 +402,16 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   };
 
   const handleViewOrderDetails = (orderId: string) => {
+    const freshOrder = fallbackStore.orders.get(orderId);
+    if (freshOrder && freshOrder.helperId && freshOrder.helperId !== user?.uid && freshOrder.customerId !== user?.uid && !user?.isAdmin) {
+      showAlert(
+        'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+        'warning'
+      );
+      return;
+    }
+
     setSeenOrderIds((prev) => {
       const updated = new Set(prev);
       updated.add(orderId);
@@ -405,6 +427,16 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   // Mark an active order as viewed and open the detail view
   const handleActiveOrderClick = (orderId: string) => {
+    const freshOrder = fallbackStore.orders.get(orderId);
+    if (freshOrder && freshOrder.helperId && freshOrder.helperId !== user?.uid && freshOrder.customerId !== user?.uid && !user?.isAdmin) {
+      showAlert(
+        'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+        'warning'
+      );
+      return;
+    }
+
     setViewedActiveOrderIds((prev) => {
       const updated = new Set(prev);
       updated.add(orderId);
@@ -565,6 +597,27 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       availableOrders.find((o) => o.id === selectedOrderId);
 
     if (targetOrder) {
+      // Check if someone else accepted this order!
+      if (targetOrder.helperId && targetOrder.helperId !== user?.uid && targetOrder.customerId !== user?.uid && !user?.isAdmin) {
+        return (
+          <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-gray-100 shadow-sm my-4">
+            <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <h3 className="font-extrabold text-gray-800 text-base">অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে</h3>
+            <p className="text-sm text-gray-500 max-w-xs">
+              দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।
+            </p>
+            <button
+              onClick={() => setSelectedOrderId(null)}
+              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-sm transition-all active:scale-95"
+            >
+              ঠিক আছে, ফিরে যান
+            </button>
+          </div>
+        );
+      }
+
       return (
         <HelperActiveOrderView
           order={targetOrder}

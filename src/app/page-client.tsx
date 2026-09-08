@@ -28,17 +28,33 @@ import { StoreDashboard } from '@/components/StoreDashboard';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
-  const { showPermissionModal } = useModal();
+  const { showAlert, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
 
   const handleSelectOrder = (orderId: string) => {
-    setInitialSelectedOrderId(orderId);
-    
     // Switch view modes/tabs based on order and user profile
     const order = fallbackStore.orders.get(orderId);
+
+    if (user && order) {
+      const isCustomer = order.customerId === user.uid;
+      const isAdmin = user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel';
+      const isAssignedHelper = order.helperId === user.uid;
+
+      // Requirement 1: If someone else accepted the order, helper should never be able to see order details
+      if (!isAdmin && !isCustomer && order.helperId && !isAssignedHelper) {
+        showAlert(
+          'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+          'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+          'warning'
+        );
+        return;
+      }
+    }
+
+    setInitialSelectedOrderId(orderId);
     if (user) {
       if (user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel') {
         setActiveTab('admin_panel');
