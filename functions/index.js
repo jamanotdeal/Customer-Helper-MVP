@@ -37,6 +37,7 @@
  */
 
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
@@ -61,6 +62,15 @@ const TTL_MS = 60 * 60 * 1000;
 
 /** sendEachForMulticast's per-call cap. */
 const BATCH_SIZE = 500;
+
+/** Pseudo-target every dedicated-routing announcement is addressed to. */
+const DEDICATED_TARGET = 'all-dedicated-helpers';
+
+/** Matches DEFAULT_PRICING_SETTINGS.dedicatedHelperDelayMinutes in src/lib/pricing.ts. */
+const DEFAULT_DEDICATED_DELAY_MIN = 7;
+
+/** Most orders the sweep will route in one pass; a bigger backlog waits for the next minute. */
+const SWEEP_MAX_ORDERS = 25;
 
 const EARTH_RADIUS_KM = 6371.0;
 
@@ -167,6 +177,233 @@ async function applyGeofence(db, recipients, notif) {
   return recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
 }
 
+// ── Dedicated routing ─────────────────────────────────────────────
+
+/**
+ * An order nobody accepted within `dedicatedHelperDelayMinutes` is announced to
+ * dedicated riders. That decision used to be made by every signed-in client on
+ * its own 30-second timer, and a pending order sits in the cache of all of them
+ * at once — so N devices announced it N times. One order in production
+ * accumulated 25 separate notifications this way.
+ *
+ * The sweep below makes the server the authoritative router. Clients keep a
+ * fallback copy (see checkDedicatedRouting in src/lib/firebase.ts) that waits an
+ * extra grace period, so routing still happens if this function is undeployed or
+ * failing — it just never wins the race in normal operation.
+ *
+ * Two independent guards make a duplicate impossible rather than unlikely:
+ *
+ *  1. The claim below is a transaction on the order. Whoever writes
+ *     `dedicatedNotifId` first owns the announcement; everyone else reads it and
+ *     stops.
+ *  2. The id is derived from the order, never from a clock, so even two writers
+ *     racing past guard 1 address the same document.
+ */
+
+/** settings/pricing changes rarely; one read per warm instance per minute is plenty. */
+let _pricingCache = { at: 0, data: null };
+
+async function readPricing(db) {
+  if (Date.now() - _pricingCache.at < 60 * 1000 && _pricingCache.data) {
+    return _pricingCache.data;
+  }
+  try {
+    const snap = await db.doc('settings/pricing').get();
+    _pricingCache = { at: Date.now(), data: snap.exists ? snap.data() : {} };
+  } catch (e) {
+    logger.warn('pricing unreadable, using defaults', { error: e.message });
+    _pricingCache = { at: Date.now(), data: _pricingCache.data || {} };
+  }
+  return _pricingCache.data;
+}
+
+/**
+ * The one id an order's dedicated announcement can ever have.
+ *
+ * Identical to the expression in checkDedicatedRouting, and already in
+ * canonicalNotifId's `notif-<13 digits>` shape so the client stores it verbatim.
+ * Seeded from the order's own createdAt rather than the routing moment: two
+ * writers whose clocks differ must still agree.
+ */
+function dedicatedNotifId(orderId, createdAtMs) {
+  return `notif-${createdAtMs}-ded-${orderId}`;
+}
+
+function dedicatedDelayMinutes(pricing) {
+  const v = pricing && pricing.dedicatedHelperDelayMinutes;
+  return typeof v === 'number' && v > 0 ? v : DEFAULT_DEDICATED_DELAY_MIN;
+}
+
+/**
+ * Claims the announcement for one order and writes it, atomically.
+ *
+ * @returns the notification id if this call created it, null if it was already
+ *          claimed or the order stopped being eligible.
+ */
+async function claimAndAnnounce(db, orderId, delayMins) {
+  const orderRef = db.doc(`orders/${orderId}`);
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists) return null;
+    const order = snap.data() || {};
+
+    // Re-checked inside the transaction: the order may have been accepted or
+    // routed between the query and here.
+    if (order.status !== 'PENDING') return null;
+    if (order.dedicatedNotifId || order.routedToDedicated) return null;
+
+    const createdAtMs = new Date(order.createdAt).getTime();
+    if (!Number.isFinite(createdAtMs)) return null;
+
+    const notifId = dedicatedNotifId(orderId, createdAtMs);
+    const routedAt = new Date().toISOString();
+    const items = Array.isArray(order.items) ? order.items : [];
+    const itemDesc = items.map((i) => i && i.name).filter(Boolean).join(', ') || order.title || '';
+
+    tx.set(db.doc(`notifications/${notifId}`), {
+      id: notifId,
+      userId: DEDICATED_TARGET,
+      title: '[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!',
+      body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
+      orderId,
+      read: false,
+      createdAt: routedAt,
+    });
+
+    tx.set(
+      orderRef,
+      { routedToDedicated: true, dedicatedNotifiedAt: routedAt, dedicatedNotifId: notifId },
+      { merge: true }
+    );
+
+    return notifId;
+  });
+}
+
+exports.dedicatedRoutingSweep = onSchedule(
+  {
+    schedule: 'every 1 minutes',
+    region: REGION,
+    memory: '256MiB',
+    // One writer at a time. Not required for correctness — the transaction
+    // handles that — but it keeps the read volume flat and predictable.
+    maxInstances: 1,
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const db = getFirestore();
+    const pricing = await readPricing(db);
+    const delayMins = dedicatedDelayMinutes(pricing);
+    const cutoff = new Date(Date.now() - delayMins * 60 * 1000).toISOString();
+
+    // createdAt is an ISO-8601 UTC string on every order the app writes, so it
+    // orders lexicographically and this range scan is exact.
+    let due;
+    try {
+      due = await db
+        .collection('orders')
+        .where('status', '==', 'PENDING')
+        .where('createdAt', '<=', cutoff)
+        .orderBy('createdAt', 'asc')
+        .limit(SWEEP_MAX_ORDERS)
+        .get();
+    } catch (e) {
+      // Almost always the (status, createdAt) composite index not being
+      // deployed yet. Log and return rather than throw: the client fallback
+      // in checkDedicatedRouting still routes, 90 s later than this would.
+      logger.error('dedicated sweep query failed — deploy firestore.indexes.json', {
+        error: e.message,
+      });
+      return;
+    }
+
+    if (due.empty) return;
+
+    let announced = 0;
+    for (const doc of due.docs) {
+      const order = doc.data() || {};
+      if (order.dedicatedNotifId || order.routedToDedicated) continue;
+      try {
+        const notifId = await claimAndAnnounce(db, doc.id, delayMins);
+        if (notifId) {
+          announced++;
+          logger.info('dedicated routing announced', { orderId: doc.id, notifId });
+        }
+      } catch (e) {
+        logger.warn('dedicated routing failed for order', { orderId: doc.id, error: e.message });
+      }
+    }
+
+    logger.info('dedicated routing sweep complete', {
+      candidates: due.size,
+      announced,
+      delayMins,
+    });
+  }
+);
+
+/**
+ * Suppresses a dedicated announcement written by a client that does not have the
+ * deterministic-id fix — an old APK or a stale web session. Such a client stamps
+ * its own clock into the id, so it lands as a *new* document that no de-dup set
+ * can recognise.
+ *
+ * The order carries the id of the announcement that won. Anything else for the
+ * same order is a duplicate: it is deleted and never pushed. This is what makes
+ * the guarantee hold across app versions rather than only within the fixed one.
+ *
+ * @returns true when the caller should stop (duplicate handled).
+ */
+async function suppressDuplicateDedicated(db, notifId, notif) {
+  if (notif.userId !== DEDICATED_TARGET || !notif.orderId) return false;
+
+  const orderRef = db.doc(`orders/${notif.orderId}`);
+  let owner;
+  try {
+    owner = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(orderRef);
+      if (!snap.exists) return notifId; // Cannot verify — let it through.
+      const existing = (snap.data() || {}).dedicatedNotifId;
+      if (existing) return existing;
+      // routedToDedicated is set alongside the claim because a client without
+      // the fix gates only on that field — it has never heard of
+      // dedicatedNotifId. Stamping both here is what stops an old app from
+      // announcing the same order again on its next tick.
+      tx.set(
+        orderRef,
+        {
+          dedicatedNotifId: notifId,
+          routedToDedicated: true,
+          dedicatedNotifiedAt: (snap.data() || {}).dedicatedNotifiedAt || new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      return notifId;
+    });
+  } catch (e) {
+    logger.warn('dedicated claim check failed, delivering anyway', {
+      notifId,
+      error: e.message,
+    });
+    return false;
+  }
+
+  if (owner === notifId) return false;
+
+  try {
+    await db.doc(`notifications/${notifId}`).delete();
+  } catch (e) {
+    logger.warn('duplicate cleanup failed', { notifId, error: e.message });
+  }
+  logger.info('suppressed duplicate dedicated announcement', {
+    notifId,
+    orderId: notif.orderId,
+    keptInstead: owner,
+  });
+  return true;
+}
+
 // ── Send ─────────────────────────────────────────────────────────────────────
 
 /** FCM data values must all be strings; undefined keys are dropped. */
@@ -220,6 +457,10 @@ exports.pushOnNotificationCreate = onDocumentCreated(
     }
 
     const db = getFirestore();
+
+    // A duplicate written by a client without the deterministic-id fix is
+    // removed here, before it can become a push or a tray entry.
+    if (await suppressDuplicateDedicated(db, notifId, notif)) return;
 
     let recipients = await resolveRecipients(db, notif.userId);
     recipients = await applyGeofence(db, recipients, notif);
@@ -291,4 +532,11 @@ exports.pushOnNotificationCreate = onDocumentCreated(
 
 // Exported for the offline test harness only; nothing in the deployed function
 // reads this. See functions/test/logic.test.js.
-exports._internals = { withinRadius, resolveRecipients, applyGeofence, buildData };
+exports._internals = {
+  withinRadius,
+  resolveRecipients,
+  applyGeofence,
+  buildData,
+  dedicatedNotifId,
+  dedicatedDelayMinutes,
+};

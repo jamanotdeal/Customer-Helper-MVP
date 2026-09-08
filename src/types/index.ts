@@ -101,6 +101,10 @@ export interface Order {
   
   routedToDedicated?: boolean;
   dedicatedNotifiedAt?: string;
+  /** Id of the one dedicated-routing announcement this order may have.
+   *  Written by dedicatedRoutingSweep (functions/index.js); anything else
+   *  addressed to all-dedicated-helpers for this order is a duplicate. */
+  dedicatedNotifId?: string;
 
   updatedByCustomer?: boolean;
   lastEditedAt?: string;

@@ -481,6 +481,16 @@ class FallbackStore {
   /** Orders this device has already routed to dedicated riders — see checkDedicatedRouting. */
   private _dedicatedRouted: Set<string> = new Set();
 
+  /**
+   * How long past the routing threshold this client waits before stepping in.
+   *
+   * dedicatedRoutingSweep (functions/index.js) is the authoritative router and
+   * runs every minute. This sweep exists only for the case where that function
+   * is undeployed or failing, so it hangs back far enough to never race it —
+   * long enough for a scheduled run plus its claim transaction to land.
+   */
+  private _DEDICATED_FALLBACK_GRACE_MS = 90 * 1000;
+
   // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
   // on every Firestore event. See scheduleLocalStoreSave.
   private _saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -670,12 +680,15 @@ class FallbackStore {
     const due: Order[] = [];
     this.orders.forEach((order) => {
       if (order.status !== 'PENDING' || order.routedToDedicated) return;
+      // The server already owns this order's announcement.
+      if (order.dedicatedNotifId) return;
       // Local guard for the window between deciding to route and our own write
       // landing back through the snapshot listener, during which the next tick
       // would otherwise see routedToDedicated still false and fire again.
       if (this._dedicatedRouted.has(order.id)) return;
       const createdMs = new Date(order.createdAt).getTime();
-      if (!Number.isFinite(createdMs) || now - createdMs < thresholdMs) return;
+      if (!Number.isFinite(createdMs)) return;
+      if (now - createdMs < thresholdMs + this._DEDICATED_FALLBACK_GRACE_MS) return;
       due.push(order);
     });
 
@@ -685,12 +698,14 @@ class FallbackStore {
       this.orders.set(order.id, { ...order, routedToDedicated: true, dedicatedNotifiedAt: routedAt });
 
       const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
+      // Deterministic, and already in canonicalNotifId's `notif-<13 digits>`
+      // shape so it is stored verbatim. Seeded from the order's createdAt rather
+      // than the routing moment: two writers whose clocks differ by a second
+      // must still agree on the id. dedicatedNotifId() in functions/index.js
+      // builds the identical string.
+      const notifId = `notif-${new Date(order.createdAt).getTime()}-ded-${order.id}`;
       await this.addNotification({
-        // Deterministic, and already in canonicalNotifId's `notif-<13 digits>`
-        // shape so it is stored verbatim. Seeded from the order's createdAt
-        // rather than the routing moment: two devices whose clocks differ by a
-        // second must still agree on the id.
-        id: `notif-${new Date(order.createdAt).getTime()}-ded-${order.id}`,
+        id: notifId,
         userId: 'all-dedicated-helpers',
         title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
         body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
@@ -702,7 +717,7 @@ class FallbackStore {
       try {
         await setDoc(
           doc(db, 'orders', order.id),
-          { routedToDedicated: true, dedicatedNotifiedAt: routedAt },
+          { routedToDedicated: true, dedicatedNotifiedAt: routedAt, dedicatedNotifId: notifId },
           { merge: true }
         );
       } catch (e: any) {

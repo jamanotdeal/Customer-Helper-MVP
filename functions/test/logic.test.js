@@ -14,7 +14,14 @@ process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: 'test' });
 process.env.GCLOUD_PROJECT = 'test';
 
 const assert = require('node:assert');
-const { withinRadius, resolveRecipients, applyGeofence, buildData } = require('../index.js')._internals;
+const {
+  withinRadius,
+  resolveRecipients,
+  applyGeofence,
+  buildData,
+  dedicatedNotifId,
+  dedicatedDelayMinutes,
+} = require('../index.js')._internals;
 
 let passed = 0;
 function test(name, fn) {
@@ -213,6 +220,45 @@ console.log('recipient resolution');
     const data = buildData('notif-2', { title: 'T', body: 'B', userId: 'u1' });
     assert.ok(!('orderId' in data));
     assert.strictEqual(data.type, 'order_update');
+  });
+
+  console.log('dedicated routing');
+
+  test('the announcement id is derived from the order, never from a clock', () => {
+    const created = Date.parse('2026-09-08T14:13:10.924Z');
+    const a = dedicatedNotifId('90431', created);
+    const b = dedicatedNotifId('90431', created);
+    assert.strictEqual(a, b, 'two callers must agree on the id');
+    assert.strictEqual(a, 'notif-1788876790924-ded-90431');
+  });
+
+  test('the id keeps canonicalNotifId\'s notif-<13 digits> shape', () => {
+    // Anything else and the client rewrites it on the way in, which would
+    // reintroduce a clock and with it the duplicates.
+    assert.match(dedicatedNotifId('90431', Date.parse('2026-09-08T14:13:10.924Z')), /^notif-\d{13}-ded-/);
+  });
+
+  test('different orders never share an announcement', () => {
+    const t = Date.parse('2026-09-08T14:13:10.924Z');
+    assert.notStrictEqual(dedicatedNotifId('90431', t), dedicatedNotifId('70255', t));
+  });
+
+  test('the delay falls back to 7 minutes when unset or nonsense', () => {
+    assert.strictEqual(dedicatedDelayMinutes({ dedicatedHelperDelayMinutes: 1 }), 1);
+    assert.strictEqual(dedicatedDelayMinutes({}), 7);
+    assert.strictEqual(dedicatedDelayMinutes(null), 7);
+    assert.strictEqual(dedicatedDelayMinutes({ dedicatedHelperDelayMinutes: 0 }), 7);
+    assert.strictEqual(dedicatedDelayMinutes({ dedicatedHelperDelayMinutes: 'soon' }), 7);
+  });
+
+  test('the id matches what production actually wrote', () => {
+    // Order 90431 was routed by a client carrying the fix; these are the real
+    // values from that write. The server must produce the same string, or the
+    // two paths would each create their own document.
+    assert.strictEqual(
+      dedicatedNotifId('90431', Date.parse('2026-09-08T14:13:10.924Z')),
+      'notif-1788876790924-ded-90431'
+    );
   });
 
   console.log('\n' + passed + ' passed');
