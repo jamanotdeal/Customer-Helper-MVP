@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
+
 interface AdminShopMapViewProps {
   shops: Shop[];
   onSelectShop: (shop: Shop) => void;
@@ -219,22 +221,30 @@ export const AdminShopMapView: React.FC<AdminShopMapViewProps> = ({
         }
       });
 
-      for (const shop of filteredShops) {
-        if (!shop.location?.lat || !shop.location?.lng) continue;
+      const spiderfiedShops = getSpiderfiedCoordinates(
+        filteredShops,
+        (s) => s.location?.lat,
+        (s) => s.location?.lng
+      );
 
-        const lat = shop.location.lat;
-        const lng = shop.location.lng;
-        allPoints.push([lat, lng]);
+      for (const entry of spiderfiedShops) {
+        const { item: shop, originalLat, originalLng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
+        allPoints.push([originalLat, originalLng]);
+
+        const hasOverlap = overlapCount > 1;
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 5px;border-radius:10px;margin-left:4px;box-shadow:0 1px 4px rgba(0,0,0,0.3);">${overlapIndex}/${overlapCount}</span>`
+          : '';
 
         /**
-         * Custom Marker Design as specified:
-         * - Purple color box containing: Store name, type + retail icon
+         * Custom Marker Design:
+         * - Purple color box containing: Store name, type + retail icon (+ overlap badge if clustered)
          * - A dark line connecting the purple box to the exact address point on map
          */
         const markerHtml = `
           <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; transform: translate(0, 0);">
             <!-- Purple Color Box (Store name, type + retail icon) -->
-            <div style="background: linear-gradient(135deg, #6b21a8, #4c1d95); color: white; padding: 7px 12px; border-radius: 14px; border: 2.5px solid #c084fc; box-shadow: 0 8px 24px rgba(107, 33, 168, 0.6); display: flex; align-items: center; gap: 8px; font-family: sans-serif; white-space: nowrap; max-width: 220px; transition: transform 0.2s ease;">
+            <div style="background: linear-gradient(135deg, #6b21a8, #4c1d95); color: white; padding: 7px 12px; border-radius: 14px; border: 2.5px solid ${hasOverlap ? '#f59e0b' : '#c084fc'}; box-shadow: 0 8px 24px rgba(107, 33, 168, 0.6); display: flex; align-items: center; gap: 8px; font-family: sans-serif; white-space: nowrap; max-width: 240px; transition: transform 0.2s ease;">
               <!-- Retail Icon -->
               <div style="width: 28px; height: 28px; border-radius: 9px; background: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); display: flex; align-items: center; justify-content: center; shrink: 0; color: #f3e8ff;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -244,8 +254,8 @@ export const AdminShopMapView: React.FC<AdminShopMapViewProps> = ({
               </div>
               <!-- Store Details -->
               <div style="display: flex; flex-direction: column; min-width: 0; text-align: left;">
-                <div style="font-size: 12px; font-weight: 900; color: #ffffff; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; line-height: 1.2;">
-                  ${shop.name}
+                <div style="font-size: 12px; font-weight: 900; color: #ffffff; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; line-height: 1.2; display: flex; align-items: center;">
+                  ${shop.name} ${overlapBadgeHtml}
                 </div>
                 <div style="font-size: 10px; font-weight: 700; color: #e9d5ff; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; margin-top: 1px;">
                   ${shop.type}
@@ -258,8 +268,8 @@ export const AdminShopMapView: React.FC<AdminShopMapViewProps> = ({
 
             <!-- Pin Point Dot on Exact Location -->
             <div style="position: relative; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; margin-top: -1px;">
-              <div style="position: absolute; inset: -3px; border-radius: 50%; background: #a855f7; opacity: 0.5; animation: pulse 1.8s infinite;"></div>
-              <div style="width: 12px; height: 12px; border-radius: 50%; background: #0f172a; border: 2.5px solid #c084fc; box-shadow: 0 0 8px rgba(168, 85, 247, 0.8);"></div>
+              <div style="position: absolute; inset: -3px; border-radius: 50%; background: ${hasOverlap ? '#f59e0b' : '#a855f7'}; opacity: 0.5; animation: pulse 1.8s infinite;"></div>
+              <div style="width: 12px; height: 12px; border-radius: 50%; background: #0f172a; border: 2.5px solid ${hasOverlap ? '#f59e0b' : '#c084fc'}; box-shadow: 0 0 8px rgba(168, 85, 247, 0.8);"></div>
             </div>
           </div>
         `;
@@ -267,18 +277,20 @@ export const AdminShopMapView: React.FC<AdminShopMapViewProps> = ({
         const shopIcon = L.divIcon({
           className: `admin-shop-marker-${shop.id}`,
           html: markerHtml,
-          iconSize: [220, 75],
-          iconAnchor: [110, 75],
+          iconSize: [240, 75],
+          iconAnchor: [120, 75],
           popupAnchor: [0, -75],
         });
 
         let existingMarker = markersRef.current.get(shop.id);
         if (existingMarker) {
-          existingMarker.setLatLng([lat, lng]);
+          existingMarker.setLatLng([displayLat, displayLng]);
           existingMarker.setIcon(shopIcon);
         } else {
           if (isCancelled || !isMapAlive(map)) return;
-          existingMarker = L.marker([lat, lng], { icon: shopIcon }).addTo(map);
+          existingMarker = L.marker([displayLat, displayLng], { icon: shopIcon }).addTo(map);
+
+          setupMarkerHoverElevation(existingMarker);
 
           // Click on marker opens shop details modal
           existingMarker.on('click', () => {

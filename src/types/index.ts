@@ -213,6 +213,7 @@ export interface Shop {
   commissionPercent?: number; // e.g. 5 means 5% of product cost
   commissionNote?: string;    // Optional description of commission deal
   status?: 'Approved' | 'Pending' | 'Rejected' | 'APPROVED' | 'PENDING' | 'REJECTED';
+  canReceiveOrders?: boolean; // If false, store cannot receive/accept order requests directly in app; helper enters note, price & status manually. Default is true.
 }
 
 export interface OrderFeedback {

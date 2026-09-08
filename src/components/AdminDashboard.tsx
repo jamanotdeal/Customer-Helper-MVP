@@ -6062,7 +6062,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <Store className="w-4 h-4 text-purple-600 shrink-0" />
                                 <span>{s.name}</span>
                               </div>
-                              <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
                                 <select
                                   value={sStatus}
                                   onChange={async (e) => {
@@ -6083,6 +6083,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <option value="Pending">Pending</option>
                                   <option value="Rejected">Rejected</option>
                                 </select>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const currentVal = s.canReceiveOrders !== undefined ? s.canReceiveOrders : true;
+                                    const updated = { ...s, canReceiveOrders: !currentVal };
+                                    await fallbackStore.saveShop(updated);
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    showAlert(
+                                      'Order Receive Status Updated',
+                                      `"${s.name}" এর জন্য Order Receive স্ট্যাটাস ${!currentVal ? 'সক্রিয় (Can Receive)' : 'নিষ্ক্রিয় (Manual Status/Price Only)'} করা হয়েছে।`,
+                                      'success'
+                                    );
+                                  }}
+                                  title="Click to toggle whether this store can accept order requests directly"
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
+                                    (s.canReceiveOrders !== false)
+                                      ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200'
+                                      : 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  {(s.canReceiveOrders !== false) ? '⚡ Accepts Orders' : '🚫 Admin Manual Only'}
+                                </button>
                               </div>
                             </td>
                             <td className="py-4 px-4">

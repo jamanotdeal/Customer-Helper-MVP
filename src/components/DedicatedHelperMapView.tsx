@@ -7,6 +7,7 @@ import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime } from '@/lib/timeUtils';
 import { fallbackStore } from '@/lib/firebase';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
+import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 interface DedicatedHelperMapViewProps {
   orders: Order[];
@@ -286,13 +287,25 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         }
       });
 
-      for (const shop of registeredShops) {
-        if (!shop.location?.lat || !shop.location?.lng) continue;
+      const spiderfiedShops = getSpiderfiedCoordinates(
+        registeredShops,
+        (s) => s.location?.lat,
+        (s) => s.location?.lng
+      );
+
+      for (const entry of spiderfiedShops) {
+        const { item: shop, displayLat, displayLng, overlapCount, overlapIndex } = entry;
         const shopMarkerKey = `shop-${shop.id}`;
         const shortName = shop.name.length > 14 ? shop.name.slice(0, 12) + '…' : shop.name;
         const shortType = shop.type.length > 14 ? shop.type.slice(0, 12) + '…' : shop.type;
+        const hasOverlap = overlapCount > 1;
+
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:8.5px;font-weight:900;padding:1px 3px;border-radius:6px;margin-left:2px;">${overlapIndex}/${overlapCount}</span>`
+          : '';
+
         const shopIconHtml = `
-          <div style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; background: rgba(15, 23, 42, 0.92); border: 1.5px solid #c084fc; border-radius: 10px; padding: 4px 7px 4px 4px; box-shadow: 0 4px 14px rgba(147,51,234,0.55); white-space: nowrap;">
+          <div style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; background: rgba(15, 23, 42, 0.92); border: 1.5px solid ${hasOverlap ? '#f59e0b' : '#c084fc'}; border-radius: 10px; padding: 4px 7px 4px 4px; box-shadow: 0 4px 14px rgba(147,51,234,0.55); white-space: nowrap;">
             <div style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #9333ea, #6b21a8); border: 2px solid white; display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -300,7 +313,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
               </svg>
             </div>
             <div style="display: flex; flex-direction: column; line-height: 1.2;">
-              <span style="color: #e9d5ff; font-size: 10px; font-weight: 800;">${shortName}</span>
+              <span style="color: #e9d5ff; font-size: 10px; font-weight: 800; display: flex; align-items: center;">${shortName} ${overlapBadgeHtml}</span>
               <span style="color: #a78bfa; font-size: 8.5px; font-weight: 600;">${shortType}</span>
             </div>
           </div>
@@ -308,16 +321,17 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const shopIcon = L.divIcon({
           className: `shop-marker-${shop.id}`,
           html: shopIconHtml,
-          iconSize: [120, 36],
-          iconAnchor: [60, 36],
+          iconSize: [130, 36],
+          iconAnchor: [65, 36],
           popupAnchor: [0, -36],
         });
         let sMarker = markersRef.current.get(shopMarkerKey);
         if (sMarker) {
-          sMarker.setLatLng([shop.location.lat, shop.location.lng]);
+          sMarker.setLatLng([displayLat, displayLng]);
           sMarker.setIcon(shopIcon);
         } else {
-          sMarker = L.marker([shop.location.lat, shop.location.lng], { icon: shopIcon }).addTo(map);
+          sMarker = L.marker([displayLat, displayLng], { icon: shopIcon }).addTo(map);
+          setupMarkerHoverElevation(sMarker);
           // Click opens the Store Details Modal (React state), not just a Leaflet popup
           sMarker.on('click', () => {
             setSelectedShop(shop);
@@ -354,27 +368,35 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         }
       });
 
+      // Spiderfy visible orders
+      const spiderfiedOrders = getSpiderfiedCoordinates(
+        visibleOrders,
+        (o) => o.deliveryLocation?.lat || helperLat + getDeterministicOffset(o.id, 1),
+        (o) => o.deliveryLocation?.lng || helperLng + getDeterministicOffset(o.id, 2)
+      );
+
       // 2. Process each visible active order
-      for (const order of visibleOrders) {
+      for (const entry of spiderfiedOrders) {
+        const { item: order, originalLat: deliveryLat, originalLng: deliveryLng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
         const orderTitle = order.service || order.title || `অর্ডার #${order.id.slice(-4)}`;
         const elapsedStr = getElapsedTime(order.createdAt);
-
-        const deliveryLat =
-          order.deliveryLocation?.lat || helperLat + getDeterministicOffset(order.id, 1);
-        const deliveryLng =
-          order.deliveryLocation?.lng || helperLng + getDeterministicOffset(order.id, 2);
         const deliveryPoint = { lat: deliveryLat, lng: deliveryLng };
         allBoundsPoints.push([deliveryLat, deliveryLng]);
 
         const isPending = order.status === 'PENDING';
         const badgeColor = isPending ? '#f59e0b' : '#2563eb';
         const badgeBorderColor = isPending ? '#d97706' : '#1d4ed8';
+        const hasOverlap = overlapCount > 1;
+
+        const overlapBadgeHtml = hasOverlap
+          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
+          : '';
 
         const orderIconHtml = `
           <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 210px; height: 120px;">
-            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid white; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center;">
-              <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; line-height: 1.2;">
-                ${orderTitle}
+            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid ${hasOverlap ? '#f59e0b' : 'white'}; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center;">
+              <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; line-height: 1.2; display: flex; align-items: center; justify-content: center;">
+                ${orderTitle} ${overlapBadgeHtml}
               </div>
               <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 800; margin-top: 3px; color: #ef4444; justify-content: center; width: fit-content;">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
@@ -413,11 +435,12 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
         let existingMarker = markersRef.current.get(order.id);
         if (existingMarker) {
-          existingMarker.setLatLng([deliveryLat, deliveryLng]);
+          existingMarker.setLatLng([displayLat, displayLng]);
           existingMarker.setIcon(orderIcon);
         } else {
           if (isCancelled || !isMapAlive(map)) return;
-          existingMarker = L.marker([deliveryLat, deliveryLng], { icon: orderIcon }).addTo(map);
+          existingMarker = L.marker([displayLat, displayLng], { icon: orderIcon }).addTo(map);
+          setupMarkerHoverElevation(existingMarker);
           existingMarker.on('click', () => {
             setSelectedOrderState(order);
             setSelectedShop(null); // close shop modal if open
