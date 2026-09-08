@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { UserProfile, ActiveMode, HelperApplication, StoreApplication } from '@/types';
 import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses, saveFcmToken } from '@/lib/firebase';
 import {
@@ -22,6 +22,7 @@ import {
   stopDutyService,
   getNativeFcmToken,
 } from '@/lib/native';
+import { calculateDistanceKm } from '@/lib/pricing';
 
 
 interface AuthContextType {
@@ -38,13 +39,27 @@ interface AuthContextType {
   submitStoreApplication: (appData: Omit<StoreApplication, 'id' | 'userId' | 'userName' | 'userEmail' | 'status' | 'createdAt'>) => Promise<void>;
   cancelStoreApplication: (appId: string) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
-  updateHelperLocation: (loc: { lat: number; lng: number; address?: string }) => void;
+  // `force` bypasses the movement/interval throttling below — pass it for a fix
+  // the user asked for (mode switch, permission grant, first mount), never for a
+  // periodic poll.
+  updateHelperLocation: (
+    loc: { lat: number; lng: number; address?: string },
+    options?: { force?: boolean }
+  ) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const ADMIN_EMAILS = ['ajnasim72@gmail.com', 'contact.jamanot@gmail.com'];
 const SUPER_ADMIN_EMAILS = ['ajnasim72@gmail.com'];
+
+// ─── Helper-location throttling (see updateHelperLocation) ──────────────────
+/** Below this, a new fix is GPS drift: it changes nothing on screen and no radius verdict. */
+const LOCAL_MIN_MOVE_M = 25;
+/** Mirrors MIN_DISPLACEMENT_M in LocationTracker.java. */
+const WRITE_MIN_MOVE_M = 100;
+/** Mirrors WRITE_THROTTLE_MS in LocationTracker.java, so a parked helper still refreshes. */
+const WRITE_MIN_INTERVAL_MS = 3 * 60 * 1000;
 
 const isUserAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
@@ -156,6 +171,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const [activeMode, setActiveModeState] = useState<ActiveMode>('customer');
 
+  // Last position accepted into React state, and last one mirrored to Firestore.
+  // Refs, not state: they gate renders and must never cause one.
+  const lastLocalLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastLocationWriteRef = useRef<{ lat: number; lng: number; at: number } | null>(null);
+
   const buildProfile = (fbUser: import('firebase/auth').User, savedMode: ActiveMode): UserProfile => {
     const isAdmin = isUserAdminEmail(fbUser.email);
     const isSuperAdmin = isUserSuperAdminEmail(fbUser.email);
@@ -260,7 +280,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser((prevUser) => {
         if (!prevUser) return null;
         const updatedUser = fallbackStore.users.get(prevUser.uid);
-        return updatedUser ? { ...updatedUser } : prevUser;
+        if (!updatedUser) return prevUser;
+        // The store notifies on every snapshot it receives — an order status
+        // change five kilometres away included. Rebuilding the profile object
+        // each time handed React a new identity and re-rendered every consumer
+        // of this context, which is most of the app. A profile is small, so
+        // comparing it is far cheaper than the render it avoids.
+        if (JSON.stringify(prevUser) === JSON.stringify(updatedUser)) return prevUser;
+        return { ...updatedUser };
       });
     });
 
@@ -457,7 +484,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (mode === 'helper') {
         getNativePosition({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
           .then((pos) => {
-            updateHelperLocation({ lat: pos.lat, lng: pos.lng });
+            // Explicit mode switch: mirror it immediately, never throttled.
+            updateHelperLocation({ lat: pos.lat, lng: pos.lng }, { force: true });
           })
           .catch((err) => console.warn('[AuthContext] Helper mode location note:', err?.message));
       }
@@ -697,8 +725,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fallbackStore.saveUser(updated);
   };
 
-  const updateHelperLocation = (loc: { lat: number; lng: number; address?: string }) => {
+  const updateHelperLocation = (
+    loc: { lat: number; lng: number; address?: string },
+    options?: { force?: boolean }
+  ) => {
     if (!user) return;
+    const force = options?.force === true;
+
+    // A position is offered far more often than it meaningfully changes, and
+    // every accepted one costs a re-render of the whole tree plus — until this
+    // throttle — a full-profile Firestore write. Two independent gates:
+    //
+    //  1. Drift below LOCAL_MIN_MOVE_M cannot change a km-scale radius decision
+    //     or anything the user can see, so it is dropped before it touches
+    //     React state at all.
+    //  2. The Firestore mirror (users/{uid}.helperLocation, read by other
+    //     devices and by the push fan-out geofence in functions/index.js) is
+    //     written on the same cadence LocationTracker.java already uses in the
+    //     background, so foreground and background agree on how fresh a
+    //     helper's position needs to be.
+    const prevLocal = lastLocalLocationRef.current;
+    const movedM = prevLocal
+      ? calculateDistanceKm(prevLocal.lat, prevLocal.lng, loc.lat, loc.lng) * 1000
+      : Infinity;
+    const addressChanged = !!loc.address && loc.address !== user.helperLocation?.address;
+
+    if (!force && !addressChanged && user.helperLocation && movedM < LOCAL_MIN_MOVE_M) {
+      return;
+    }
+
     const helperLoc = {
       ...loc,
       address: loc.address || user.helperLocation?.address || 'Current Position',
@@ -708,12 +763,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...user,
       helperLocation: helperLoc,
     };
+    lastLocalLocationRef.current = { lat: loc.lat, lng: loc.lng };
     setUser(updated);
-    fallbackStore.saveUser(updated);
     // While the app is open the WebView has the better fix; hand it to Java so
     // the two agree if the app is backgrounded a moment later.
     if (isNativeApp()) {
       syncNativeUserState({ lat: helperLoc.lat, lng: helperLoc.lng }).catch(() => {});
+    }
+
+    const lastWrite = lastLocationWriteRef.current;
+    const movedSinceWriteM = lastWrite
+      ? calculateDistanceKm(lastWrite.lat, lastWrite.lng, loc.lat, loc.lng) * 1000
+      : Infinity;
+    const dueForWrite =
+      force ||
+      !lastWrite ||
+      movedSinceWriteM >= WRITE_MIN_MOVE_M ||
+      Date.now() - lastWrite.at >= WRITE_MIN_INTERVAL_MS;
+
+    if (dueForWrite) {
+      lastLocationWriteRef.current = { lat: loc.lat, lng: loc.lng, at: Date.now() };
+      fallbackStore.saveUser(updated);
+    } else {
+      // Keep the store's copy in step without a network round trip: the
+      // subscription above rebuilds `user` from this map on every notify(), so
+      // skipping it would revert the position we just accepted.
+      fallbackStore.cacheUser(updated);
     }
   };
 

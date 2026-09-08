@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
 import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import { AsyncButton } from './ui/AsyncButton';
 
 interface OrderCardProps {
@@ -122,17 +123,13 @@ export const OrderCard: React.FC<OrderCardProps> = ({
       : getElapsedTime(order)
   );
 
+  // One shared clock for every card on screen, paused while the app is hidden,
+  // instead of one interval per card ticking behind a dark screen.
+  const tick = useSecondTick(!isDone);
+
   useEffect(() => {
-    if (isDone) {
-      setElapsed(getDeliveryDurationText(order));
-      return;
-    }
-    setElapsed(getElapsedTime(order));
-    const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [order, isDone]);
+    setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
+  }, [order, isDone, tick]);
 
   // Brief items summary (truncated via CSS)
   const itemsSummary = order.items?.length

@@ -3,6 +3,7 @@ import { Order } from '@/types';
 import { Clock, Sparkles, MapPin, Edit2 } from 'lucide-react';
 import { getDeliveryDurationText, getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { getOrderMinDistanceKm } from '@/lib/pricing';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import { fallbackStore } from '@/lib/firebase';
 
 interface HelperRequestCardProps {
@@ -31,17 +32,12 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
+  // Shared 1-second clock — see useSecondTick.
+  const tick = useSecondTick(!isDone);
+
   useEffect(() => {
-    if (isDone) {
-      setElapsed(getDeliveryDurationText(order));
-      return;
-    }
-    setElapsed(getElapsedTime(order));
-    const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [order, isDone]);
+    setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
+  }, [order, isDone, tick]);
 
   const itemsSummary = order.items?.length
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')

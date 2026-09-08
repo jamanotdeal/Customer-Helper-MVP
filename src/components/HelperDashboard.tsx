@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
+import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -76,10 +77,16 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             setLocationPermissionDenied(false);
-            updateHelperLocation({
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-            });
+            updateHelperLocation(
+              {
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+              },
+              // A high-accuracy request is one the user (or the mount) asked
+              // for, so it is mirrored to Firestore immediately. Periodic polls
+              // go through the movement/interval throttle instead.
+              { force: highAccuracy }
+            );
             resolve(true);
           },
           (err) => {
@@ -105,9 +112,45 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     // First capture on mount: use high accuracy so the initial position is precise.
     captureHelperLocation(true);
 
-    // Periodic update every 12 seconds using low-accuracy (battery-friendly).
-    const intervalId = setInterval(() => captureHelperLocation(false), 12000);
-    return () => clearInterval(intervalId);
+    // Periodic refresh while the dashboard is actually on screen.
+    //
+    // This used to run every 12 seconds and never stop, which cost an idle
+    // helper roughly 300 location reads, 300 full-profile Firestore writes and
+    // 300 whole-app re-renders an hour — with the screen off included, because
+    // the duty foreground service keeps this WebView alive. A minute is well
+    // inside the tolerance of the km-scale radius filter this feeds, and while
+    // the app is in the background LocationTracker.java is already keeping
+    // users/{uid}.helperLocation fresh, so there is nothing for this to do.
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (intervalId === null) {
+        intervalId = setInterval(() => captureHelperLocation(false), 60000);
+      }
+    };
+    const stopPolling = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const unsubscribeVisibility = subscribeAppVisibility((visible) => {
+      if (!visible) {
+        stopPolling();
+        return;
+      }
+      // Refresh on the way back in, so the first list the helper sees is
+      // filtered against where they are now rather than where they were.
+      captureHelperLocation(false);
+      startPolling();
+    });
+
+    if (isAppVisible()) startPolling();
+
+    return () => {
+      stopPolling();
+      unsubscribeVisibility();
+    };
   }, [user?.uid, user?.isHelper]);
 
   // Track new available orders (not yet seen when they first appeared)

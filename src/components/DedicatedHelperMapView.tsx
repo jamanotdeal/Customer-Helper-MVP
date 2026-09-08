@@ -5,6 +5,7 @@ import { Order, LocationData, Shop } from '@/types';
 import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink } from 'lucide-react';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime } from '@/lib/timeUtils';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import { fallbackStore } from '@/lib/firebase';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
@@ -64,7 +65,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
-  const [timerTick, setTimerTick] = useState(0);
+  // Live elapsed-time clock, shared with every other card and map on
+  // screen and paused while the app is hidden — see useSecondTick.
+  const timerTick = useSecondTick();
   // CSS-based fullscreen state (no native fullscreen API — avoids mobile browser lock)
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -82,14 +85,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     syncShops();
     const unsub = fallbackStore.subscribe(syncShops);
     return () => unsub();
-  }, []);
-
-  // Live timer tick every second for real-time countdown/elapsed time
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimerTick((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
   }, []);
 
   // ResizeObserver & staggered size invalidation for smooth, exact Leaflet map resizing

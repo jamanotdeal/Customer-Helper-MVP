@@ -6,6 +6,7 @@ import { Order, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { getOrderMinDistanceKm, calculateDistanceKm } from '@/lib/pricing';
 import { getElapsedTime } from '@/lib/timeUtils';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { useModal } from './CustomModal';
@@ -23,7 +24,9 @@ export const ExploreHelperView: React.FC = () => {
   const [unacceptedOrders, setUnacceptedOrders] = useState<Order[]>([]);
   const [activeOrdersCount, setActiveOrdersCount] = useState(0);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [timerTick, setTimerTick] = useState(0);
+  // Live elapsed-time clock, shared with every other card and map on
+  // screen and paused while the app is hidden — see useSecondTick.
+  const timerTick = useSecondTick();
   const [mapVersion, setMapVersion] = useState(0);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -33,14 +36,6 @@ export const ExploreHelperView: React.FC = () => {
   const hasFittedBoundsRef = useRef(false);
 
   const activeOrderLimit = fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5;
-
-  // Live timer tick for real-time countdown / elapsed time
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimerTick((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Sync unaccepted orders (PENDING status, no helperId)
   useEffect(() => {

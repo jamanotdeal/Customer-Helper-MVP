@@ -5,6 +5,7 @@ import { UserProfile, Order, HelperApplication, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime } from '@/lib/timeUtils';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import {
   Bike,
   Zap,
@@ -80,15 +81,9 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   const [mapReady, setMapReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'COMMUTER' | 'DEDICATED' | 'ON_DUTY'>('ALL');
-  const [timerTick, setTimerTick] = useState(0);
-
-  // Live timer tick every second
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimerTick((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+  // Live elapsed-time clock, shared with every other card and map on
+  // screen and paused while the app is hidden — see useSecondTick.
+  const timerTick = useSecondTick();
 
   // Listen to fullscreen changes
   useEffect(() => {
@@ -280,9 +275,6 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
         } catch (e) {}
       });
       routePolylinesRef.current = [];
-
-
-
 
       const spiderfiedHelpers = getSpiderfiedCoordinates(
         filteredHelpers,

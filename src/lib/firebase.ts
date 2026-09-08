@@ -43,6 +43,7 @@ import {
   ShopOrderStatus,
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
+import { isAppVisible, subscribeAppVisibility } from './appVisibility';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -388,6 +389,16 @@ function getSharedAudioCtx(): AudioContext | null {
   }
 }
 
+/**
+ * How long a notify() waits to gather the rest of its burst. Long enough to
+ * catch the several listeners one server push wakes, far below the ~100 ms a
+ * person perceives as instant.
+ */
+const NOTIFY_COALESCE_MS = 50;
+
+/** Debounce on serialising the whole cache to localStorage. */
+const SAVE_DEBOUNCE_MS = 5000;
+
 class FallbackStore {
   private listeners: Set<Listener> = new Set();
 
@@ -440,8 +451,13 @@ class FallbackStore {
   private _notifSnapshotPrimed = false;
 
   // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
-  // on every Firestore event. Store is written at most every 2 seconds.
+  // on every Firestore event. See scheduleLocalStoreSave.
   private _saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // A save fell due while the app was hidden; run it when we come back (or on
+  // the way out, whichever happens first).
+  private _saveDeferredWhileHidden = false;
+  // A coalesced notify() pass is already queued — see notify().
+  private _notifyScheduled = false;
 
   // ─── Role-Scoped Listener Management ─────────────────────────────────────
   // Stores active unsubscribe callbacks; torn down on role/user switch.
@@ -458,6 +474,27 @@ class FallbackStore {
     // AuthContext calls initListenersForRole() after login so we know the user's role.
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
+    this.watchVisibilityForPersistence();
+  }
+
+  /**
+   * Cache persistence follows the app in and out of the foreground: flush what
+   * is pending as it leaves (including a kill from the Recents screen, which
+   * only fires pagehide), and settle up when it comes back.
+   */
+  private watchVisibilityForPersistence() {
+    if (typeof document === 'undefined') return;
+
+    subscribeAppVisibility((visible) => {
+      if (!visible) {
+        this.flushLocalStoreSave();
+      } else if (this._saveDeferredWhileHidden) {
+        this._saveDeferredWhileHidden = false;
+        this.scheduleLocalStoreSave();
+      }
+    });
+
+    window.addEventListener('pagehide', () => this.flushLocalStoreSave());
   }
 
   // ─── localStorage helpers for the known / read notification sets ──────────
@@ -512,9 +549,12 @@ class FallbackStore {
 
   private startRoutingTimer() {
     if (typeof window === 'undefined') return;
+    // The threshold this enforces (dedicatedHelperDelayMinutes, default 7) is in
+    // minutes, so checking twice a minute is as timely as checking four times —
+    // at half the wake-ups on a timer that runs for the life of the process.
     setInterval(() => {
       this.checkDedicatedRouting();
-    }, 15000);
+    }, 30000);
   }
 
   private startScheduledNotificationTimer() {
@@ -525,6 +565,10 @@ class FallbackStore {
   }
 
   private async checkScheduledNotifications() {
+    // Nothing scheduled is the overwhelmingly common case; leave before doing
+    // any work rather than walking an empty map every ten seconds.
+    if (this.scheduledNotifications.size === 0) return;
+
     const now = Date.now();
     const toProcess: AppNotification[] = [];
     this.scheduledNotifications.forEach((notif) => {
@@ -1539,15 +1583,53 @@ class FallbackStore {
   }
 
   public notify() {
-    // Fix 1: Debounce localStorage saves. Notify all React subscribers immediately
-    // (so the UI stays snappy), but only persist to localStorage at most every 2s.
-    // This prevents blocking the main thread on every Firestore snapshot.
-    this.listeners.forEach((l) => l());
+    // Two separate costs are paced here.
+    //
+    // Renders: one server push routinely wakes several listeners at once (an
+    // order write touches the platform-wide query, the helper's own query and
+    // its notification), and each one used to re-render all 23 subscribers.
+    // Coalescing collapses a burst into a single pass; NOTIFY_COALESCE_MS is
+    // short enough to stay invisible — and alerts do not come through here
+    // anyway, they are raised inside the notification snapshot handler.
+    //
+    // Persistence: saveLocalStore serialises thirteen collections, so it stays
+    // debounced behind the coalesced pass rather than running per snapshot.
+    if (this._notifyScheduled) return;
+    this._notifyScheduled = true;
+    setTimeout(() => {
+      this._notifyScheduled = false;
+      this.listeners.forEach((l) => l());
+      this.scheduleLocalStoreSave();
+    }, NOTIFY_COALESCE_MS);
+  }
+
+  /**
+   * Persists the cache on a debounce, and not at all while the app is hidden —
+   * a backgrounded helper still receives snapshots, and serialising the whole
+   * store for each one was pure battery cost with nobody looking. The pending
+   * work is flushed on the way out (see the visibility handler in the
+   * constructor), so a cold start still finds a warm cache.
+   */
+  private scheduleLocalStoreSave() {
+    if (typeof document !== 'undefined' && !isAppVisible()) {
+      this._saveDeferredWhileHidden = true;
+      return;
+    }
     if (this._saveDebounceTimer) clearTimeout(this._saveDebounceTimer);
     this._saveDebounceTimer = setTimeout(() => {
-      this.saveLocalStore();
       this._saveDebounceTimer = null;
-    }, 2000);
+      this.saveLocalStore();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** Writes any debounced or deferred cache save out immediately. */
+  private flushLocalStoreSave() {
+    if (this._saveDebounceTimer) {
+      clearTimeout(this._saveDebounceTimer);
+      this._saveDebounceTimer = null;
+    }
+    this._saveDeferredWhileHidden = false;
+    this.saveLocalStore();
   }
 
   // --- Actions with Firebase Persistence & Dynamic Notifications ---
@@ -1689,6 +1771,20 @@ class FallbackStore {
       console.warn('[Firestore] fetchUserFromFirestore error:', e?.message || e);
     }
     return null;
+  }
+
+  /**
+   * Updates the cached copy of a profile without a Firestore write and without
+   * a notify().
+   *
+   * Used by the throttled helper-location path in AuthContext: the caller has
+   * already put the new position into React state, and the store subscription
+   * rebuilds `user` from this map, so the cache has to agree — but the change
+   * is not worth a network round trip or a render pass of its own. The next
+   * real write (or any other notify) persists it.
+   */
+  public cacheUser(user: UserProfile) {
+    this.users.set(user.uid, user);
   }
 
   public async saveUser(user: UserProfile) {

@@ -6,6 +6,7 @@ import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee }
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
+import { useSecondTick } from '@/hooks/useSecondTick';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from './CustomModal';
 import { MapPickerModal } from './MapPickerModal';
@@ -527,17 +528,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       : getElapsedTime(order)
   );
 
+  // Shared 1-second clock — see useSecondTick.
+  const tick = useSecondTick(!isDone);
+
   useEffect(() => {
-    if (isDone) {
-      setElapsed(getDeliveryDurationText(order));
-      return;
-    }
-    setElapsed(getElapsedTime(order));
-    const timer = setInterval(() => {
-      setElapsed(getElapsedTime(order));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [order, isDone]);
+    setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
+  }, [order, isDone, tick]);
 
   const handleUpdateStatus = (newStatus: OrderStatus, note?: string) => {
     fallbackStore.updateOrder(order.id, (o) => {
