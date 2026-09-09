@@ -1,11 +1,14 @@
 package com.jamanot.app;
 
+import android.app.KeyguardManager;
 import android.content.Intent;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.WebView;
 
 import androidx.annotation.Nullable;
@@ -23,6 +26,16 @@ public class MainActivity extends BridgeActivity {
 
     /** Hard ceiling on the pull-to-refresh spinner if JS never answers. */
     private static final long REFRESH_WATCHDOG_MS = 6000L;
+
+    /**
+     * Set by {@link com.jamanot.app.core.AutoOpen} so this launch knows it was
+     * triggered by an order alert rather than by the user tapping the icon —
+     * only then do we take over the keyguard.
+     */
+    public static final String EXTRA_FROM_ALERT = "fromOrderAlert";
+
+    /** True between an alert-driven launch and the activity next going hidden. */
+    private boolean showingOverLockScreen = false;
 
     private SwipeRefreshLayout swipeLayout;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -57,7 +70,39 @@ public class MainActivity extends BridgeActivity {
         if (root != null) root.setBackgroundColor(Color.WHITE);
 
         setupPullToRefresh();
+        showOverLockScreenIfAlert(getIntent());
         handleAlertIntent(getIntent());
+    }
+
+    /**
+     * An auto-opened alert has to be visible on a locked, sleeping phone —
+     * otherwise the app "opens" behind the keyguard and the user sees nothing
+     * until they unlock. Applied per-launch instead of via the manifest so a
+     * normal icon tap keeps ordinary lock-screen behaviour.
+     */
+    private void showOverLockScreenIfAlert(@Nullable Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_FROM_ALERT, false)) return;
+        intent.removeExtra(EXTRA_FROM_ALERT);
+        showingOverLockScreen = true;
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true);
+                setTurnScreenOn(true);
+                KeyguardManager km = getSystemService(KeyguardManager.class);
+                // Dismisses only an insecure keyguard; a PIN/pattern stays put
+                // and the activity shows above it, which is the correct trade.
+                if (km != null) km.requestDismissKeyguard(this, null);
+            } else {
+                //noinspection deprecation
+                getWindow().addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+            }
+        } catch (Exception ignored) {
+            // Never let a keyguard quirk stop the app from opening.
+        }
     }
 
     // ── Pull to refresh ─────────────────────────────────────────────────────
@@ -125,6 +170,7 @@ public class MainActivity extends BridgeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        showOverLockScreenIfAlert(intent);
         handleAlertIntent(intent);
     }
 
@@ -158,6 +204,33 @@ public class MainActivity extends BridgeActivity {
     public void onPause() {
         activityResumed = false;
         super.onPause();
+    }
+
+    /**
+     * Undo the keyguard takeover once the alert has been seen and the activity
+     * is hidden again. Without this the flags persist for the life of the
+     * activity, so every later lock would put the app — customer names, phone
+     * numbers, addresses — on top of the lock screen for anyone holding it.
+     */
+    @Override
+    public void onStop() {
+        super.onStop();
+        if (!showingOverLockScreen) return;
+        showingOverLockScreen = false;
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(false);
+                setTurnScreenOn(false);
+            } else {
+                //noinspection deprecation
+                getWindow().clearFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Override

@@ -9,6 +9,7 @@ import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 import com.jamanot.app.MainActivity;
+import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderMatcher;
 import com.jamanot.app.core.Prefs;
@@ -88,6 +89,20 @@ public class JamanotMessagingService extends FirebaseMessagingService {
 
         if ("new_order".equals(type)) {
             NotificationHelper.postOrderAlert(this, notifId, title, body, orderId);
+
+            // Bring the app up on the order itself. This is the whole point of
+            // the FCM path: when an OEM battery manager has killed the process,
+            // DutyForegroundService's listener is gone and this is the only code
+            // that runs, so the escalation has to live here too — it used to
+            // exist only in that service, which meant the killed-process case
+            // (the one users actually hit) never auto-opened at all.
+            //
+            // Gated on duty because the two paths see different audiences: the
+            // service only ran while on duty, whereas the server fans new_order
+            // out to every helper in radius. Without this an off-duty helper
+            // would have the app thrown in their face.
+            if (Prefs.onDuty(this)) AutoOpen.launch(this, orderId);
+
             // Resurrection: if the user is on duty but our process was killed,
             // this push is the opportunity to bring the service back.
             if (Prefs.onDuty(this) && Prefs.isDutyRole(this) && !DutyForegroundService.isRunning()) {

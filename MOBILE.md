@@ -26,15 +26,24 @@ pseudo-target (`all-commuter-helpers` and friends), so the Java service simply
 Customer submits an order (any device)
   └→ addOrder() → notifications/{id}  { userId: 'all-commuter-helpers', type: 'new_order', orderId }
        ├→ app open    → existing JS onSnapshot → in-app UI              (unchanged)
-       └→ app closed  → DutyForegroundService's own Java listener
-                          ├→ radius check against SharedPreferences location
-                          ├→ role from SharedPreferences  (no JS involved)
-                          ├→ helper|store → alert    customer|admin → notification only
-                          └→ heads-up notification, and if the user opted in
-                             and granted overlay: OrderAlertActivity → MainActivity
+       ├→ app closed  → DutyForegroundService's own Java listener
+       │                  ├→ radius check against SharedPreferences location
+       │                  ├→ role from SharedPreferences  (no JS involved)
+       │                  ├→ helper|store → alert    customer|admin → notification only
+       │                  └→ heads-up notification, then AutoOpen
+       └→ process killed → pushOnNotificationCreate → FCM data message
+                          → JamanotMessagingService
+                             └→ heads-up notification, then AutoOpen (if on duty)
+
+AutoOpen (core/AutoOpen.java), when overlay is granted:
+  wake the screen → MainActivity + orderId → PendingAlerts/plugin event
+    → handleSelectOrder() → the order's alert modal, already open
 ```
 
-No FCM send path, no server, no key in the APK.
+Both wake paths share `AutoOpen`, deliberately. They used to differ — only the
+foreground service escalated — which meant the case the feature exists for (an
+OEM battery manager killed the process, so FCM is the *only* code that runs)
+never opened the app at all.
 
 ---
 
@@ -53,8 +62,11 @@ No FCM send path, no server, no key in the APK.
   service keeps the Firestore listener alive.
 - **Android, app brings itself to the foreground:** works *only* if the user
   grants "Display over other apps". That permission is the documented exemption
-  to Android 10+'s ban on background activity starts. It is opt-in and off by
-  default; without it the user still gets a heads-up notification.
+  to Android 10+'s ban on background activity starts. Granting it *is* the
+  opt-in — auto-open follows the permission unless explicitly switched off — and
+  without it the user still gets a heads-up notification. The app opens straight
+  onto the order's alert modal; there is no intermediate native screen to tap
+  through.
 - **Android, user force-stops the app:** nothing runs, by OS design. No app can
   work around this.
 - **Aggressive OEMs (Xiaomi/Oppo/Vivo/Huawei):** their battery managers kill
@@ -83,7 +95,7 @@ No FCM send path, no server, no key in the APK.
 | `service/DutyForegroundService.java` | The core. Foreground service + native Firestore listener. |
 | `service/LocationTracker.java` | Fused location at a battery-sane cadence. |
 | `service/JamanotMessagingService.java` | FCM receiver — secondary wake path. |
-| `ui/OrderAlertActivity.java` | Full-screen new-order takeover. |
+| `core/AutoOpen.java` | Brings the app to the front on an order, gated on the overlay permission. |
 | `receiver/BootReceiver.java` | Restores duty after reboot **and after an app update**. |
 | `receiver/RestartServiceReceiver.java` | Restart alarm + the "Go off duty" action. |
 | `work/DutyWatchdogWorker.java` | 15-minute WorkManager check against OEM kills. |

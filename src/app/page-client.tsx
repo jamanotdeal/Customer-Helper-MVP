@@ -221,6 +221,30 @@ export default function PageClient() {
     // it helped, and reliability without it is acceptable on non-aggressive OEMs.
     const OPTIONAL: PermissionStep[] = ['overlay', 'autostart'];
     const skipKey = (step: PermissionStep) => `permission_skipped_${step}`;
+
+    // Overlay is what lets a new order bring the app to the foreground, so one
+    // dismissal should not disable that for good — a user who taps away the
+    // first time is usually not refusing forever. It re-asks on later launches
+    // up to this many dismissals, then stops nagging. Every other optional step
+    // keeps the original ask-once behaviour.
+    const MAX_OVERLAY_ASKS = 3;
+    const dismissKey = (step: PermissionStep) => `permission_dismissals_${step}`;
+
+    const shouldAsk = (step: PermissionStep) => {
+      if (typeof localStorage === 'undefined') return true;
+      if (step !== 'overlay') return localStorage.getItem(skipKey(step)) !== 'true';
+      return Number(localStorage.getItem(dismissKey(step)) || 0) < MAX_OVERLAY_ASKS;
+    };
+
+    const recordDismissal = (step: PermissionStep) => {
+      if (typeof localStorage === 'undefined') return;
+      if (step !== 'overlay') {
+        localStorage.setItem(skipKey(step), 'true');
+        return;
+      }
+      const n = Number(localStorage.getItem(dismissKey(step)) || 0);
+      localStorage.setItem(dismissKey(step), String(n + 1));
+    };
     const p = fallbackStore.pricingSettings;
 
     const modalTypeFor = (step: PermissionStep): 'notification' | 'location' | 'overlay' | 'battery' | 'autostart' =>
@@ -278,7 +302,7 @@ export default function PageClient() {
     // Optional steps: ask once. If the user closes the modal we remember it
     // and don't re-prompt on subsequent launches.
     for (const step of OPTIONAL) {
-      if (typeof localStorage !== 'undefined' && localStorage.getItem(skipKey(step)) === 'true') continue;
+      if (!shouldAsk(step)) continue;
 
       const report = await getReadiness();
       if (!report.missingOptional.includes(step)) continue;
@@ -292,9 +316,7 @@ export default function PageClient() {
         onAllow: () => requestStep(step),
       });
 
-      if (typeof localStorage !== 'undefined' && !accepted) {
-        localStorage.setItem(skipKey(step), 'true');
-      }
+      if (!accepted) recordDismissal(step);
     }
   };
 

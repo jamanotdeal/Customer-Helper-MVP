@@ -25,11 +25,11 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.MetadataChanges;
 import com.google.firebase.firestore.Query;
 import com.jamanot.app.MainActivity;
+import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderMatcher;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.receiver.RestartServiceReceiver;
-import com.jamanot.app.ui.OrderAlertActivity;
 
 import java.util.Date;
 import java.util.List;
@@ -376,21 +376,12 @@ public class DutyForegroundService extends Service {
         // 2. Baseline everyone gets: heads-up notification, no special permission.
         NotificationHelper.postOrderAlert(this, notifId, title, detail, orderId);
 
-        // 3. Opt-in escalation: actually bring the app to the front. Requires the
-        //    user to have granted "Display over other apps", which is the
-        //    documented exemption to the Android 10+ background-activity-start ban.
-        if (Prefs.autoOpenEnabled(this) && canDrawOverlays()) {
-            try {
-                OrderAlertActivity.launch(this, orderId, title, detail);
-            } catch (Exception e) {
-                Log.w(TAG, "Auto-open refused: " + e.getMessage());
-            }
-        }
-    }
-
-    private boolean canDrawOverlays() {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                || android.provider.Settings.canDrawOverlays(this);
+        // 3. Escalation: bring the app itself to the front on this order, so the
+        //    user lands on the alert modal rather than a native screen with a
+        //    "View" button to tap. Requires "Display over other apps", the
+        //    documented exemption to the Android 10+ background-activity-start
+        //    ban; without it this is a no-op and rung 2 stands.
+        AutoOpen.launch(this, orderId);
     }
 
     // ── Location ────────────────────────────────────────────────────────────

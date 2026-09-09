@@ -28,22 +28,6 @@
 
         </activity>
 
-        <!--
-            Full-screen new-order alert for Helper / Store.
-            excludeFromRecents + empty taskAffinity keep it out of the app's own
-            back stack, so dismissing it never leaves a stray Recents entry.
-        -->
-        <activity
-            android:name=".ui.OrderAlertActivity"
-            android:exported="false"
-            android:launchMode="singleInstance"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:showOnLockScreen="true"
-            android:turnScreenOn="true"
-            android:showWhenLocked="true"
-            android:theme="@style/Theme.OrderAlert" />
-
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

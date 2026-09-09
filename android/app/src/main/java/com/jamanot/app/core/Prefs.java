@@ -2,6 +2,7 @@ package com.jamanot.app.core;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -91,10 +92,27 @@ public final class Prefs {
         sp(c).edit().putBoolean(K_ON_DUTY, v).apply();
     }
 
+    /**
+     * Whether the app may bring itself to the foreground on a new order.
+     *
+     * <p>Defaults to <b>whatever the overlay permission is</b> rather than to
+     * false. The old plain {@code getBoolean(K_AUTO_OPEN, false)} was a latch
+     * that almost never armed: the only writer is the overlay permission prompt,
+     * so a user who granted "Display over other apps" from system settings, or
+     * who dismissed that prompt once and granted it later, held the permission
+     * while the feature stayed off forever. Granting the permission is the
+     * user's opt-in; the stored flag now only records an explicit opt-<i>out</i>.
+     */
     public static boolean autoOpenEnabled(Context c) {
-        // Opt-in by design: the app only brings itself to the foreground if the
-        // user asked it to. Everyone else gets a heads-up notification.
-        return sp(c).getBoolean(K_AUTO_OPEN, false);
+        SharedPreferences p = sp(c);
+        if (!p.contains(K_AUTO_OPEN)) return canDrawOverlays(c);
+        return p.getBoolean(K_AUTO_OPEN, false);
+    }
+
+    /** "Display over other apps" — the exemption that permits a background activity start. */
+    public static boolean canDrawOverlays(Context c) {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || android.provider.Settings.canDrawOverlays(c);
     }
 
     public static void setAutoOpenEnabled(Context c, boolean v) {

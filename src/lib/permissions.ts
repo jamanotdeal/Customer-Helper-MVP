@@ -110,10 +110,12 @@ export async function requestStep(step: PermissionStep): Promise<boolean> {
 
     case 'overlay': {
       const granted = await requestOverlayPermission();
-      // Only arm auto-open once the permission that makes it possible exists —
-      // otherwise the service would try to launch an activity and be silently
-      // blocked by the OS.
-      await setAutoOpenEnabled(granted);
+      // Arm on grant only. Writing `false` here on a decline used to persist an
+      // explicit opt-out, so a user who granted "Display over other apps" later
+      // — from system settings, or on a second pass through this prompt — kept
+      // the permission with auto-open still switched off. Native now defaults
+      // auto-open to the permission itself, so a decline needs no write at all.
+      if (granted) await setAutoOpenEnabled(true);
       return granted;
     }
 

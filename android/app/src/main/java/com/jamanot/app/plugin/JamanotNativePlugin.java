@@ -190,8 +190,9 @@ public class JamanotNativePlugin extends Plugin {
 
     // ── Overlay ("Display over other apps") ─────────────────────────────────
 
+    /** Delegates so the status reported to JS and the check AutoOpen makes cannot drift apart. */
     private static boolean canDrawOverlays(Context c) {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(c);
+        return Prefs.canDrawOverlays(c);
     }
 
     @PluginMethod
