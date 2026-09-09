@@ -9,6 +9,7 @@ import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
+import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { MapPickerModal } from './MapPickerModal';
 import { SavedAddressPicker } from './SavedAddressPicker';
 import { AsyncButton } from './ui/AsyncButton';
@@ -140,7 +141,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
       const savedLoc = getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
       if (savedLoc?.address) {
-        setDeliveryAddress(savedLoc.address);
+        setDeliveryAddress(formatShortAddress(savedLoc.address));
         if (savedLoc.lat) setDeliveryLat(savedLoc.lat);
         if (savedLoc.lng) setDeliveryLng(savedLoc.lng);
       }
@@ -509,7 +510,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         subtitle="লোকেশন  সিলেক্ট করুন, না হলে নিচের বাটনে ক্লিক করে নতুন Address সেট করুন।"
         openMapLabel="No, অন্য ঠিকানা হবে!"
         onSelectAddress={(loc) => {
-          setPickupNote(loc.address);
+          const cleanAddr = formatShortAddress(loc.address);
+          setPickupNote(cleanAddr);
           if (loc.lat) setPickupLat(loc.lat);
           if (loc.lng) setPickupLng(loc.lng);
         }}
@@ -523,7 +525,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         savedAddresses={savedAddresses}
         selectedAddress={{ address: deliveryAddress, lat: deliveryLat, lng: deliveryLng }}
         onSelectAddress={(loc) => {
-          setDeliveryAddress(loc.address);
+          const cleanAddr = formatShortAddress(loc.address);
+          setDeliveryAddress(cleanAddr);
           if (loc.lat) setDeliveryLat(loc.lat);
           if (loc.lng) setDeliveryLng(loc.lng);
         }}
@@ -545,12 +548,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         addressPlaceholder="Arif store, Ashulia bazar."
         onMapError={() => setMapHasError(true)}
         onSelectLocation={(loc) => {
-          setPickupNote(loc.address);
+          const cleanAddr = formatShortAddress(loc.address);
+          setPickupNote(cleanAddr);
           if (loc.lat) setPickupLat(loc.lat);
           if (loc.lng) setPickupLng(loc.lng);
           // Save per-category if service is not in no-save list
           if (service && !isNoSavePickupService(service)) {
-            saveServicePickupLocation(service, loc);
+            saveServicePickupLocation(service, { ...loc, address: cleanAddr });
           }
         }}
       />
@@ -569,15 +573,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         addressPlaceholder="4A, Rahman vila, Model town."
         onMapError={() => setMapHasError(true)}
         onSelectLocation={(loc) => {
-          setDeliveryAddress(loc.address);
+          const cleanAddr = formatShortAddress(loc.address);
+          setDeliveryAddress(cleanAddr);
           if (loc.lat) setDeliveryLat(loc.lat);
           if (loc.lng) setDeliveryLng(loc.lng);
           // Auto-save new delivery address to localStorage + Firestore
-          if (user && loc.address.trim()) {
-            const updated = addSavedDeliveryAddress(user.uid, loc);
+          if (user && cleanAddr.trim()) {
+            const locToSave = { ...loc, address: cleanAddr };
+            const updated = addSavedDeliveryAddress(user.uid, locToSave);
             setSavedAddresses(updated);
             // Push to Firestore in background (non-blocking)
-            saveCustomerSavedAddressToFirestore(user.uid, loc).catch(() => {});
+            saveCustomerSavedAddressToFirestore(user.uid, locToSave).catch(() => {});
           }
         }}
       />

@@ -408,6 +408,7 @@ export interface PricingSettings {
   mapPickerPlaceholder?: string;         // Fallback input box placeholder for map picker
   mapPickerPickupPlaceholder?: string;   // Input box placeholder for pickup location map modal
   mapPickerDeliveryPlaceholder?: string; // Input box placeholder for delivery location map modal
+  mapPickerAddressRequiredMessage?: string; // Floating error text when manual address field is left blank
   // Per-category pickup location saving
   noSavePickupLocationServices?: string[]; // Service names whose pickup address should NOT be saved
   // Helper Center contact info (admin updatable)

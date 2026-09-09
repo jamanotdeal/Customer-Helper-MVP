@@ -119,3 +119,47 @@ export function setupMarkerHoverElevation(marker: any) {
     // Ignore error if marker destroyed
   }
 }
+
+/**
+ * Formats a raw reverse geocoded display address string into a clean, concise local address.
+ * Removes redundant trailing administrative components like country, division, district, and postal code.
+ */
+export function formatShortAddress(displayName: string): string {
+  if (!displayName) return '';
+
+  const parts = displayName
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const filteredParts = parts.filter((part) => {
+    const lower = part.toLowerCase();
+
+    // Remove country
+    if (lower === 'bangladesh' || lower === 'বাংলাদেশ') return false;
+
+    // Remove 4 to 6 digit postal code
+    if (/^\d{4,6}$/.test(part)) return false;
+
+    // Remove division / state
+    if (
+      lower.includes('বিভাগ') ||
+      lower.endsWith(' division') ||
+      lower === 'division'
+    ) return false;
+
+    // Remove district (e.g. "ঢাকা জেলা", "Dhaka District")
+    if (
+      lower.includes('জেলা') ||
+      lower.endsWith(' district') ||
+      lower === 'district'
+    ) return false;
+
+    return true;
+  });
+
+  if (filteredParts.length === 0) return displayName;
+
+  return filteredParts.join(', ');
+}
+

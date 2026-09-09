@@ -9,6 +9,7 @@ import { MapPin, X, Navigation, Check, Search, AlertTriangle } from 'lucide-reac
 import { useModal } from '@/components/CustomModal';
 import { getMapGuideShowCount, incrementMapGuideShowCount } from '@/lib/storage';
 import { isLocationInAllowedAreas } from '@/lib/geofenceUtils';
+import { formatShortAddress } from '@/utils/mapMarkerUtils';
 
 interface MapPickerModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   const mapInstanceRef = useRef<any>(null);
   const leafletRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
+  const detailInputRef = useRef<HTMLInputElement>(null);
 
   const [lat, setLat] = useState<number | undefined>(initialLocation?.lat);
   const [lng, setLng] = useState<number | undefined>(initialLocation?.lng);
@@ -47,6 +49,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
   const [mapAddress, setMapAddress] = useState<string>('');
   const [detailAddress, setDetailAddress] = useState<string>('');
+  const [showDetailAddressError, setShowDetailAddressError] = useState<boolean>(false);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -111,10 +114,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     setLat(initialLocation?.lat);
     setLng(initialLocation?.lng);
     setHasSelected(hasInitCoords);
-    setDetailAddress(initialLocation?.address || '');
+    setDetailAddress(formatShortAddress(initialLocation?.address || ''));
     setMapAddress('');
     setSearchQuery('');
     setMapError(false);
+    setShowDetailAddressError(false);
 
     // Determine if guide overlay should be shown
     const p = fallbackStore.pricingSettings;
@@ -257,7 +261,8 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           const data = JSON.parse(text);
           const displayName = data.display_name || '';
           if (displayName) {
-            setMapAddress(displayName);
+            const shortAddr = formatShortAddress(displayName);
+            setMapAddress(shortAddr);
           }
         }
       }
@@ -373,9 +378,12 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     const finalMap = mapAddress.trim();
 
     if (!finalDetail) {
-      showAlert('ঠিকানা আবশ্যক!', 'অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।', 'warning');
+      setShowDetailAddressError(true);
+      detailInputRef.current?.focus();
       return;
     }
+
+    setShowDetailAddressError(false);
 
     let combinedAddress = '';
     if (finalDetail && finalMap) {
@@ -385,8 +393,10 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         combinedAddress = `${finalDetail}, ${finalMap}`;
       }
     } else {
-      combinedAddress = finalDetail;
+      combinedAddress = finalDetail || finalMap;
     }
+
+    const cleanCombinedAddress = formatShortAddress(combinedAddress);
 
     // Validate location against allowed serving area polygons if enabled
     const pSettings = fallbackStore.pricingSettings;
@@ -409,7 +419,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     }
 
     onSelectLocation({
-      address: combinedAddress,
+      address: cleanCombinedAddress,
       lat: mapError ? undefined : lat,
       lng: mapError ? undefined : lng,
     });
@@ -511,12 +521,43 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
               {/* Map Canvas */}
               <div ref={mapContainerRef} className="w-full h-full z-10 cursor-pointer" />
 
+              {/* Floating error message badge when address is left blank on confirm */}
+              {showDetailAddressError && (
+                <div className="absolute bottom-[68px] left-3 right-3 z-30 flex flex-col items-start pointer-events-none transition-all duration-300">
+                  <div className="w-full bg-red-600 text-white font-extrabold text-xs sm:text-sm leading-snug px-4 py-3 rounded-2xl shadow-2xl flex items-start gap-2.5 border-2 border-red-400">
+                    <AlertTriangle className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
+                    <span className="flex-1 text-left">
+                      {p.mapPickerAddressRequiredMessage || 'অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।'}
+                    </span>
+                  </div>
+                  {/* Prominent High-Visibility Downward Arrow Pointer */}
+                  <div className="ml-8 -mt-[2px] z-40">
+                    <svg width="24" height="14" viewBox="0 0 24 14" fill="none" xmlns="http://www.w3.org/2000/svg" className="drop-shadow-md">
+                      <path d="M12 14L0 0H24L12 14Z" fill="#dc2626" />
+                      <path d="M12 12.5L1.8 1H22.2L12 12.5Z" stroke="#f87171" strokeWidth="1.5" />
+                    </svg>
+                  </div>
+                </div>
+              )}
+
               {/* Detail Address Overlay - bottom of the map */}
-              <div className="absolute bottom-[3px] left-0 right-0 z-20 flex items-center py-3.5 px-3 bg-white rounded-t-2xl shadow-xl border-t border-emerald-100">
+              <div
+                className={`absolute bottom-[3px] left-0 right-0 z-20 flex items-center py-3.5 px-3 bg-white rounded-t-2xl shadow-xl transition-all ${
+                  showDetailAddressError
+                    ? 'border-2 border-red-500 bg-red-50/90 ring-4 ring-red-500/20'
+                    : 'border-t border-emerald-100'
+                }`}
+              >
                 <input
+                  ref={detailInputRef}
                   type="text"
                   value={detailAddress}
-                  onChange={(e) => setDetailAddress(e.target.value)}
+                  onChange={(e) => {
+                    setDetailAddress(e.target.value);
+                    if (showDetailAddressError && e.target.value.trim()) {
+                      setShowDetailAddressError(false);
+                    }
+                  }}
                   placeholder={inputPlaceholder}
                   className="w-full bg-transparent outline-none text-xs text-gray-900 placeholder-gray-400 font-semibold px-1"
                   required

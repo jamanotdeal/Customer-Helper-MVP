@@ -4,6 +4,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { LocationData } from '@/types';
 import { MapPin, X, Map, Clock } from 'lucide-react';
+import { formatShortAddress } from '@/utils/mapMarkerUtils';
 
 interface SavedAddressPickerProps {
   isOpen: boolean;
@@ -34,7 +35,10 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
   if (!isOpen || typeof document === 'undefined') return null;
 
   const handleSelect = (loc: LocationData) => {
-    onSelectAddress(loc);
+    onSelectAddress({
+      ...loc,
+      address: formatShortAddress(loc.address),
+    });
     onClose();
   };
 
@@ -125,7 +129,7 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-900 leading-snug line-clamp-2">{addr.address}</p>
+                    <p className="text-xs font-bold text-gray-900 leading-snug line-clamp-2">{formatShortAddress(addr.address)}</p>
                     {idx === 0 && (
                       <span className="inline-block mt-1 text-[9px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                         সর্বশেষ ব্যবহৃত
