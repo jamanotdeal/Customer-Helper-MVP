@@ -164,7 +164,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   // Handle focus / click on main input (Guard unauthenticated users & ask location permission)
   const handleInputInteract = () => {
-    if (!user) {
+    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+      showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
       loginWithGoogle();
       return;
     }
@@ -197,7 +198,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!user) {
+    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+      await showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
       loginWithGoogle();
       return;
     }

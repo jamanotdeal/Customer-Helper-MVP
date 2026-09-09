@@ -143,12 +143,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   {user.photoURL ? (
                     <img
                       src={user.photoURL}
-                      alt={user.displayName}
+                      alt={user.displayName || 'User'}
                       className="w-8 h-8 rounded-xl object-cover"
                     />
                   ) : (
                     <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-sm">
-                      {user.displayName.charAt(0)}
+                      {(user.displayName && user.displayName !== '?' ? user.displayName : user.email ? user.email.split('@')[0] : 'User').charAt(0).toUpperCase()}
                     </div>
                   )}
                 </button>
@@ -188,12 +188,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                 {user.photoURL ? (
                   <img
                     src={user.photoURL}
-                    alt={user.displayName}
+                    alt={user.displayName || 'User'}
                     className="w-12 h-12 rounded-2xl object-cover ring-2 ring-emerald-500/20"
                   />
                 ) : (
                   <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-lg">
-                    {user.displayName.charAt(0)}
+                    {(user.displayName && user.displayName !== '?' ? user.displayName : user.email ? user.email.split('@')[0] : 'User').charAt(0).toUpperCase()}
                   </div>
                 )}
                 <div>

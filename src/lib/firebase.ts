@@ -1556,9 +1556,15 @@ class FallbackStore {
     if (!existing) return;
 
     const previousStatus = existing.status;
+    const previousHelperId = existing.helperId;
     const updated = updater(existing);
     updated.updatedAt = new Date().toISOString();
     this.orders.set(orderId, updated);
+
+    // If helper changed (e.g. reassigned or assigned to a new helper), reassign existing shopOrders to the new helper
+    if (updated.helperId && updated.helperId !== previousHelperId) {
+      this.reassignShopOrdersForOrder(orderId, updated.helperId, updated.helperName || 'Helper');
+    }
 
     // Dynamic Notifications based on Order Status changes
     if (updated.status !== previousStatus) {
@@ -2017,6 +2023,97 @@ class FallbackStore {
     return Array.from(this.shopOrders.values()).filter(
       (so) => so.parentOrderId === parentOrderId
     );
+  }
+
+  public async reassignShopOrdersForOrder(parentOrderId: string, newHelperId: string, newHelperName: string) {
+    try {
+      const toUpdate: ShopOrder[] = [];
+
+      // Update in-memory shopOrders
+      this.shopOrders.forEach((so) => {
+        if (so.parentOrderId === parentOrderId && so.helperId !== newHelperId) {
+          const updatedSo: ShopOrder = {
+            ...so,
+            helperId: newHelperId,
+            helperName: newHelperName,
+            updatedAt: new Date().toISOString(),
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          toUpdate.push(updatedSo);
+        }
+      });
+
+      // Fetch from Firestore by parentOrderId to catch any shopOrders not yet loaded in memory
+      const snap = await getDocs(
+        query(collection(db, 'shopOrders'), where('parentOrderId', '==', parentOrderId))
+      );
+
+      snap.forEach((docSnap) => {
+        const so = docSnap.data() as ShopOrder;
+        if (so && so.id && so.helperId !== newHelperId) {
+          const updatedSo: ShopOrder = {
+            ...so,
+            helperId: newHelperId,
+            helperName: newHelperName,
+            updatedAt: new Date().toISOString(),
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          if (!toUpdate.some((u) => u.id === so.id)) {
+            toUpdate.push(updatedSo);
+          }
+        }
+      });
+
+      // Persist all updated shopOrders to Firestore
+      for (const updatedSo of toUpdate) {
+        await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+      }
+
+      if (toUpdate.length > 0) {
+        this.notify();
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] reassignShopOrdersForOrder note:', e?.message || e);
+    }
+  }
+
+  public async fetchShopOrdersForOrder(parentOrderId: string, currentHelperId?: string, currentHelperName?: string): Promise<ShopOrder[]> {
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'shopOrders'), where('parentOrderId', '==', parentOrderId))
+      );
+      const fetched: ShopOrder[] = [];
+      const updatesToPersist: ShopOrder[] = [];
+
+      snap.forEach((docSnap) => {
+        let so = docSnap.data() as ShopOrder;
+        if (so && so.id) {
+          if (currentHelperId && so.helperId !== currentHelperId) {
+            so = {
+              ...so,
+              helperId: currentHelperId,
+              helperName: currentHelperName || so.helperName || 'Helper',
+              updatedAt: new Date().toISOString(),
+            };
+            updatesToPersist.push(so);
+          }
+          this.shopOrders.set(so.id, so);
+          fetched.push(so);
+        }
+      });
+
+      for (const updatedSo of updatesToPersist) {
+        await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+      }
+
+      if (snap.size > 0) {
+        this.notify();
+      }
+      return fetched.length > 0 ? fetched : this.getShopOrdersForOrder(parentOrderId);
+    } catch (e: any) {
+      console.warn('[Firestore] fetchShopOrdersForOrder note:', e?.message || e);
+      return this.getShopOrdersForOrder(parentOrderId);
+    }
   }
 
   public getShopOrdersForStore(shopId: string): ShopOrder[] {

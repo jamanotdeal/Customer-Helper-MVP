@@ -2,9 +2,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Order, LocationData, Shop } from '@/types';
-import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink } from 'lucide-react';
+import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink, Route, ChevronDown, ChevronUp, Zap, Sparkles, Layers } from 'lucide-react';
 import { fetchRoadRoute } from '@/lib/routeUtils';
-import { getElapsedTime } from '@/lib/timeUtils';
+import { getElapsedTime, getOrderEffectiveElapsedMs } from '@/lib/timeUtils';
 import { fallbackStore } from '@/lib/firebase';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
@@ -339,10 +339,19 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
       const allBoundsPoints: [number, number][] = [[helperLat, helperLng]];
 
+      // Sort active running orders by elapsed duration (longest wait / highest duration order first)
+      const sortedOrders = [...visibleOrders].sort((a, b) => {
+        return getOrderEffectiveElapsedMs(b) - getOrderEffectiveElapsedMs(a);
+      });
+
+      const orderRankMap = new Map<string, number>();
+      sortedOrders.forEach((ord, idx) => {
+        orderRankMap.set(ord.id, idx + 1);
+      });
+
       // Hash route data to decide if route lines need to be re-fetched
-      const routesHash = visibleOrders
+      const routesHash = sortedOrders
         .map((o) => `${o.id}:${o.deliveryLocation?.lat},${o.deliveryLocation?.lng}`)
-        .sort()
         .join(';') + `;${helperLat},${helperLng}`;
 
       const routesChanged = routesHash !== lastOrdersHashRef.current;
@@ -376,25 +385,42 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const { item: order, originalLat: deliveryLat, originalLng: deliveryLng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
         const orderTitle = order.service || order.title || `অর্ডার #${order.id.slice(-4)}`;
         const elapsedStr = getElapsedTime(order.createdAt);
-        const deliveryPoint = { lat: deliveryLat, lng: deliveryLng };
+        const rank = orderRankMap.get(order.id) || 1;
+        const isHighestDuration = rank === 1;
+        
         allBoundsPoints.push([deliveryLat, deliveryLng]);
 
         const isPending = order.status === 'PENDING';
-        const badgeColor = isPending ? '#f59e0b' : '#2563eb';
-        const badgeBorderColor = isPending ? '#d97706' : '#1d4ed8';
+        
+        // Rank-based badge colors for priority sequence
+        const rankHeaderBg = isHighestDuration
+          ? 'linear-gradient(135deg, #ef4444, #dc2626)'
+          : rank === 2
+          ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+          : 'linear-gradient(135deg, #2563eb, #1d4ed8)';
+          
+        const badgeColor = isHighestDuration ? '#ef4444' : isPending ? '#f59e0b' : '#2563eb';
+        const badgeBorderColor = isHighestDuration ? '#dc2626' : isPending ? '#d97706' : '#1d4ed8';
         const hasOverlap = overlapCount > 1;
 
         const overlapBadgeHtml = hasOverlap
           ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
           : '';
 
+        const rankBadgeHtml = `
+          <div style="position: absolute; top: -14px; left: 50%; transform: translateX(-50%); z-index: 20; background: ${rankHeaderBg}; color: white; border: 2px solid white; border-radius: 9999px; padding: 2px 10px; font-weight: 950; font-size: 10.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); white-space: nowrap; display: flex; align-items: center; gap: 4px;">
+            <span>${isHighestDuration ? '🥇 ১ম ডেলিভারি (সর্বোচ্চ সময়)' : `স্টপ #${rank}`}</span>
+          </div>
+        `;
+
         const orderIconHtml = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 210px; height: 120px;">
-            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 6px 10px; border-radius: 14px; border: 2px solid ${hasOverlap ? '#f59e0b' : 'white'}; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center;">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 210px; height: 130px; margin-top: 10px;">
+            ${rankBadgeHtml}
+            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 10px 10px 6px 10px; border-radius: 14px; border: 2.5px solid ${isHighestDuration ? '#fca5a5' : hasOverlap ? '#f59e0b' : 'white'}; box-shadow: 0 8px 24px ${isHighestDuration ? 'rgba(239,68,68,0.7)' : 'rgba(0,0,0,0.6)'}; display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center; margin-top: 6px;">
               <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; line-height: 1.2; display: flex; align-items: center; justify-content: center;">
                 ${orderTitle} ${overlapBadgeHtml}
               </div>
-              <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.45); padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 800; margin-top: 3px; color: #ef4444; justify-content: center; width: fit-content;">
+              <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.55); padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 800; margin-top: 4px; color: ${isHighestDuration ? '#fca5a5' : '#ef4444'}; justify-content: center; width: fit-content;">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                   <circle cx="12" cy="12" r="10"></circle>
                   <polyline points="12 6 12 12 16 14"></polyline>
@@ -424,9 +450,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const orderIcon = L.divIcon({
           className: `order-marker-${order.id}`,
           html: orderIconHtml,
-          iconSize: [210, 120],
-          iconAnchor: [105, 120],
-          popupAnchor: [0, -120],
+          iconSize: [210, 130],
+          iconAnchor: [105, 130],
+          popupAnchor: [0, -130],
         });
 
         let existingMarker = markersRef.current.get(order.id);
@@ -444,65 +470,97 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           });
           markersRef.current.set(order.id, existingMarker);
         }
+      }
 
-        // Draw green road polylines only when order structure or coordinates change
-        if (routesChanged) {
-          // Draw thin lines connecting order to selected shops/stores
+      // Draw high-visibility sequential delivery route lines following order duration priority
+      if (routesChanged) {
+        // Build ordered route waypoints sequence: Helper -> Stop 1 (Shop(s) then Delivery) -> Stop 2 -> Stop 3...
+        const waypointsSequence: { lat: number; lng: number; label: string; orderId?: string }[] = [
+          { lat: helperLat, lng: helperLng, label: 'Helper Location', orderId: 'helper' },
+        ];
+
+        for (const order of sortedOrders) {
+          // If order has connected stores/shops
           if (order.selectedShopIds && order.selectedShopIds.length > 0) {
             order.selectedShopIds.forEach((shopId) => {
               const shop = fallbackStore.shops.get(shopId);
               if (shop && shop.location?.lat && shop.location?.lng) {
-                const connectionLine = L.polyline([[deliveryLat, deliveryLng], [shop.location.lat, shop.location.lng]], {
-                  color: '#c084fc', // sleek purple color for store connection
-                  weight: 2.5,
-                  opacity: 0.8,
-                  dashArray: '5, 8', // dashed pattern
-                }).addTo(map);
-                routePolylinesRef.current.push(connectionLine);
+                waypointsSequence.push({
+                  lat: shop.location.lat,
+                  lng: shop.location.lng,
+                  label: `Store: ${shop.name}`,
+                  orderId: order.id,
+                });
               }
             });
           }
 
-          let deliveryRouteCoords = await fetchRoadRoute([helperPoint, deliveryPoint]);
+          if (order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
+            waypointsSequence.push({
+              lat: order.deliveryLocation.lat,
+              lng: order.deliveryLocation.lng,
+              label: `Delivery: ${order.customerName}`,
+              orderId: order.id,
+            });
+          }
+        }
+
+        // Draw individual route legs with distinct glowing colors for each leg of the journey
+        for (let i = 0; i < waypointsSequence.length - 1; i++) {
+          const startPt = waypointsSequence[i];
+          const endPt = waypointsSequence[i + 1];
+          const legRank = i + 1;
+
+          // Leg color scheme: Stop 1 = Red/Orange, Stop 2 = Amber, Stop 3+ = Cyan/Blue
+          const glowColor = legRank === 1 ? '#ef4444' : legRank === 2 ? '#f59e0b' : '#06b6d4';
+          const mainColor = legRank === 1 ? '#f97316' : legRank === 2 ? '#eab308' : '#3b82f6';
+
+          let legRouteCoords = await fetchRoadRoute([
+            { lat: startPt.lat, lng: startPt.lng },
+            { lat: endPt.lat, lng: endPt.lng },
+          ]);
 
           if (isCancelled || !isMapAlive(map)) return;
 
-          if (deliveryRouteCoords.length > 0) {
-            const firstPt = deliveryRouteCoords[0];
-            const lastPt = deliveryRouteCoords[deliveryRouteCoords.length - 1];
-
-            if (firstPt[0] !== helperLat || firstPt[1] !== helperLng) {
-              deliveryRouteCoords = [[helperLat, helperLng], ...deliveryRouteCoords];
-            }
-            if (lastPt[0] !== deliveryLat || lastPt[1] !== deliveryLng) {
-              deliveryRouteCoords = [...deliveryRouteCoords, [deliveryLat, deliveryLng]];
-            }
-
-            const glowPolyline = L.polyline(deliveryRouteCoords, {
-              color: '#15803d',
-              weight: 8,
-              opacity: 0.4,
+          if (legRouteCoords.length > 0) {
+            // High visibility glowing polyline
+            const glowPolyline = L.polyline(legRouteCoords, {
+              color: glowColor,
+              weight: 10,
+              opacity: 0.45,
               lineCap: 'round',
               lineJoin: 'round',
             }).addTo(map);
 
-            const roadPolyline = L.polyline(deliveryRouteCoords, {
-              color: '#22c55e',
-              weight: 4,
+            // Solid inner main road polyline
+            const mainPolyline = L.polyline(legRouteCoords, {
+              color: mainColor,
+              weight: 5,
               opacity: 0.95,
               lineCap: 'round',
               lineJoin: 'round',
             }).addTo(map);
 
-            const destCircle = L.circleMarker([deliveryLat, deliveryLng], {
-              radius: 8,
+            // Dashed direction indicator line
+            const dashPolyline = L.polyline(legRouteCoords, {
               color: '#ffffff',
               weight: 2,
-              fillColor: '#22c55e',
-              fillOpacity: 0.9,
+              opacity: 0.9,
+              dashArray: '6, 12',
+              lineCap: 'round',
+              lineJoin: 'round',
             }).addTo(map);
 
-            routePolylinesRef.current.push(glowPolyline, roadPolyline, destCircle);
+            // Step Waypoint Circle Indicator on Destination
+            const destCircle = L.circleMarker([endPt.lat, endPt.lng], {
+              radius: 9,
+              color: '#ffffff',
+              weight: 2.5,
+              fillColor: mainColor,
+              fillOpacity: 1,
+            }).addTo(map);
+
+            routePolylinesRef.current.push(glowPolyline, mainPolyline, dashPolyline, destCircle);
           }
         }
       }
@@ -716,6 +774,22 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     );
   }
 
+  const [isRouteGuideOpen, setIsRouteGuideOpen] = useState(true);
+
+  const sortedActiveOrders = [...visibleOrders].sort((a, b) => {
+    return getOrderEffectiveElapsedMs(b) - getOrderEffectiveElapsedMs(a);
+  });
+
+  const handleFocusStop = (order: Order) => {
+    setSelectedOrderState(order);
+    setSelectedShop(null);
+    if (isMapAlive(mapInstanceRef.current) && order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
+      mapInstanceRef.current.setView([order.deliveryLocation.lat, order.deliveryLocation.lng], 16, {
+        animate: true,
+      });
+    }
+  };
+
   return (
     <div
       className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${isFullscreen
@@ -728,6 +802,96 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           : undefined
       }
     >
+      {/* Top Left Smart Delivery Route Guide Drawer */}
+      {visibleOrders.length > 0 && (
+        <div className="absolute top-4 left-4 z-[10001] max-w-[280px] sm:max-w-xs pointer-events-auto bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-700/80 shadow-2xl text-white overflow-hidden transition-all duration-300">
+          <div
+            onClick={() => setIsRouteGuideOpen((prev) => !prev)}
+            className="flex items-center justify-between p-3 bg-slate-800/90 cursor-pointer hover:bg-slate-800 transition-colors border-b border-slate-700/70"
+          >
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-cyan-500/20 text-cyan-400 rounded-xl border border-cyan-500/30">
+                <Route className="w-4 h-4 animate-pulse" />
+              </div>
+              <div>
+                <div className="text-xs font-black text-white flex items-center gap-1.5">
+                  <span>স্মার্ট ডেলিভারি রুট</span>
+                  <span className="bg-cyan-500/30 text-cyan-300 text-[10px] px-1.5 py-0.2 rounded-md font-bold">
+                    {visibleOrders.length}টি
+                  </span>
+                </div>
+                <div className="text-[9.5px] text-amber-300 font-bold flex items-center gap-1">
+                  <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+                  <span>সর্বোচ্চ সময় ধরে চলা অর্ডার আগে</span>
+                </div>
+              </div>
+            </div>
+            <button type="button" className="p-1 text-slate-400 hover:text-white">
+              {isRouteGuideOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+          </div>
+
+          {isRouteGuideOpen && (
+            <div className="p-2.5 space-y-2 max-h-[260px] overflow-y-auto custom-scrollbar">
+              {sortedActiveOrders.map((ord, idx) => {
+                const rank = idx + 1;
+                const isFirst = rank === 1;
+                const elapsedStr = getElapsedTime(ord.createdAt);
+                const isSelected = selectedOrder?.id === ord.id;
+
+                return (
+                  <div
+                    key={ord.id}
+                    onClick={() => handleFocusStop(ord)}
+                    className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
+                      isSelected
+                        ? 'bg-slate-800 border-cyan-500 shadow-md ring-1 ring-cyan-500/50'
+                        : isFirst
+                        ? 'bg-red-950/40 border-red-500/60 hover:bg-red-950/60'
+                        : 'bg-slate-800/60 border-slate-700/80 hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                            isFirst
+                              ? 'bg-red-600 text-white shadow-sm animate-pulse'
+                              : rank === 2
+                              ? 'bg-amber-500 text-slate-950 font-extrabold'
+                              : 'bg-blue-600 text-white'
+                          }`}
+                        >
+                          {isFirst ? '🥇 #1 ১ম' : `#${rank}`}
+                        </span>
+                        <span className="font-extrabold text-xs text-slate-100 line-clamp-1">
+                          {ord.service || ord.title || 'অর্ডার'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-extrabold text-red-400 bg-red-950/70 border border-red-500/40 px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1">
+                        <Clock className="w-2.5 h-2.5 text-red-400" />
+                        <span>{elapsedStr}</span>
+                      </span>
+                    </div>
+
+                    <div className="text-[10px] text-slate-300 space-y-0.5 pl-0.5">
+                      <div className="flex items-center gap-1 text-slate-400">
+                        <User className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span className="font-bold text-slate-200">{ord.customerName}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-slate-400 line-clamp-1">
+                        <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <span>{ord.deliveryLocation?.address}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top Right Controls */}
       <div className="absolute top-4 right-4 z-[10001] pointer-events-auto flex items-center gap-2">
         {/* Fullscreen / Close Button */}

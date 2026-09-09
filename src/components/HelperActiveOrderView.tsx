@@ -31,7 +31,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   activeOrdersCount,
   activeOrderLimit,
 }) => {
-  const { user } = useAuth();
+  const { user, loginWithGoogle } = useAuth();
   const isAcceptedByThisHelper = order.status !== 'PENDING' && !!order.helperId && user?.uid === order.helperId;
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
@@ -312,8 +312,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   useEffect(() => {
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(order.id));
+    sync();
+
+    if (order.id) {
+      fallbackStore.fetchShopOrdersForOrder(order.id, order.helperId, order.helperName);
+    }
+
     return fallbackStore.subscribe(sync);
-  }, [order.id]);
+  }, [order.id, order.helperId, order.helperName]);
 
   useEffect(() => {
     // Only auto-update productCost if it has not been set manually (0)
@@ -980,6 +986,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   </React.Fragment>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* ORDER CANCELLED BANNER */}
+        {(order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') && (
+          <div className="p-4 rounded-2xl bg-red-50 border-2 border-red-300 text-red-950 shadow-md space-y-1.5 animate-in slide-in-from-top duration-200">
+            <div className="flex items-center space-x-2">
+              <div className="p-2 rounded-xl bg-red-100 text-red-600 shrink-0">
+                <AlertOctagon className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-xs text-red-900">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h4>
+                <p className="text-[11px] text-red-700 font-medium">
+                  এই অর্ডারটি কাস্টমার বা এডমিন কর্তৃক বাতিল করা হয়েছে। এটি আর রানিং অর্ডারে গণনীয় নয়।
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -1825,7 +1848,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {order.status === 'PENDING' && onAccept && !order.helperId && (
               <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 space-y-3 shadow-sm animate-in fade-in duration-200">
                 <button
-                  onClick={() => onAccept(order.id)}
+                  onClick={() => {
+                    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+                      showAlert('লগইন আবশ্যক', 'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
+                      loginWithGoogle();
+                      return;
+                    }
+                    onAccept(order.id);
+                  }}
                   disabled={activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit}
                   className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
                 >

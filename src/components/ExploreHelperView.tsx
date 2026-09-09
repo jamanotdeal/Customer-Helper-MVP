@@ -47,11 +47,13 @@ export const ExploreHelperView: React.FC = () => {
         // Unaccepted (pending, unassigned) orders
         const pending = all.filter((o) => o.status === 'PENDING' && !o.helperId);
         
-        // Active orders count for the helper
+        // Active orders count for the helper (excluding cancelled)
         const activeCount = all.filter(
           (o) =>
             o.helperId === user.uid &&
-            ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status)
+            ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status) &&
+            o.status !== 'CANCELED' &&
+            o.cancellationRequest?.status !== 'APPROVED'
         ).length;
 
         // Sort: nearby to far + oldest to recent
@@ -78,8 +80,18 @@ export const ExploreHelperView: React.FC = () => {
     return () => unsub();
   }, [user]);
 
+  const { loginWithGoogle } = useAuth();
+
   const handleAcceptOrder = async (orderId: string) => {
-    if (!user) return;
+    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+      await showAlert(
+        'লগইন আবশ্যক',
+        'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
+        'warning'
+      );
+      loginWithGoogle();
+      return;
+    }
     
     // Check if the order is still pending/unassigned
     const freshOrder = fallbackStore.orders.get(orderId);

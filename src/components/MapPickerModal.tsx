@@ -36,9 +36,15 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const leafletRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
 
-  const [lat, setLat] = useState<number>(initialLocation?.lat || 23.9013);
-  const [lng, setLng] = useState<number>(initialLocation?.lng || 90.2699);
+  const [lat, setLat] = useState<number | undefined>(initialLocation?.lat);
+  const [lng, setLng] = useState<number | undefined>(initialLocation?.lng);
+  const [hasSelected, setHasSelected] = useState<boolean>(
+    typeof initialLocation?.lat === 'number' && typeof initialLocation?.lng === 'number'
+  );
+
   const [mapAddress, setMapAddress] = useState<string>('');
   const [detailAddress, setDetailAddress] = useState<string>('');
   const [isLocating, setIsLocating] = useState<boolean>(false);
@@ -49,6 +55,50 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   // Guide overlay state
   const [showGuide, setShowGuide] = useState<boolean>(false);
 
+  // Helper to place/update pin marker and option to zoom
+  const setLocationAndPin = (targetLat: number, targetLng: number, zoomLevel?: number) => {
+    setLat(targetLat);
+    setLng(targetLng);
+    setHasSelected(true);
+
+    const map = mapInstanceRef.current;
+    const L = leafletRef.current;
+
+    if (map && L) {
+      const pinIcon = L.divIcon({
+        className: 'custom-map-picker-pin',
+        html: `
+          <div style="display:flex; flex-direction:column; align-items:center; transform: translate(-50%, -100%); cursor:pointer;">
+            <div style="background:#000; color:#a3e635; padding:2px 8px; border-radius:9999px; font-size:10px; font-weight:800; white-space:nowrap; margin-bottom:4px; box-shadow:0 0 8px 2px rgba(163,230,53,0.7); border:1px solid rgba(163,230,53,0.6);">
+              সিলেক্ট করা লোকেশন
+            </div>
+            <div style="width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:3px solid #000; background:linear-gradient(135deg, #a3e635 0%, #65a30d 100%); box-shadow:0 0 12px 4px rgba(163,230,53,0.8), 0 6px 20px rgba(0,0,0,0.6);">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="#d9f99d" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                <circle cx="12" cy="10" r="3"/>
+              </svg>
+            </div>
+            <div style="width:5px; height:12px; background:linear-gradient(to bottom, #1a1a1a, #000000); border-bottom-left-radius:9999px; border-bottom-right-radius:9999px;"></div>
+          </div>
+        `,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+      });
+
+      if (markerRef.current) {
+        markerRef.current.setLatLng([targetLat, targetLng]);
+      } else {
+        markerRef.current = L.marker([targetLat, targetLng], { icon: pinIcon }).addTo(map);
+      }
+
+      if (zoomLevel) {
+        map.setView([targetLat, targetLng], zoomLevel, { animate: true });
+      }
+    }
+
+    reverseGeocode(targetLat, targetLng);
+  };
+
   // Load Leaflet dynamically & initialize map when modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -56,8 +106,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
     // Reset or initialize values when modal opens
     const initialLat = initialLocation?.lat || 23.9013;
     const initialLng = initialLocation?.lng || 90.2699;
-    setLat(initialLat);
-    setLng(initialLng);
+    const hasInitCoords = typeof initialLocation?.lat === 'number' && typeof initialLocation?.lng === 'number';
+
+    setLat(initialLocation?.lat);
+    setLng(initialLocation?.lng);
+    setHasSelected(hasInitCoords);
     setDetailAddress(initialLocation?.address || '');
     setMapAddress('');
     setSearchQuery('');
@@ -74,14 +127,13 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
       setShowGuide(false);
     }
 
-    let L: any = null;
-
     const initMap = async () => {
       try {
         if (!mapContainerRef.current) return;
 
         // Import Leaflet dynamically to avoid SSR issues
-        L = await import('leaflet');
+        const L = await import('leaflet');
+        leafletRef.current = L;
 
         // Inject Leaflet CSS if not present
         if (!document.getElementById('leaflet-css-picker')) {
@@ -96,6 +148,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         if (mapInstanceRef.current) {
           mapInstanceRef.current.remove();
           mapInstanceRef.current = null;
+          markerRef.current = null;
         }
 
         const map = L.map(mapContainerRef.current, {
@@ -104,7 +157,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           doubleClickZoom: true,
           scrollWheelZoom: true,
           zoomControl: false,
-        }).setView([initialLat, initialLng], 15);
+        }).setView([initialLat, initialLng], hasInitCoords ? 18 : 15);
         mapInstanceRef.current = map;
 
         // Earth / Satellite Hybrid Tile Layer (Google Maps style)
@@ -113,54 +166,40 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           maxZoom: 20,
         }).addTo(map);
 
-        // Handle map drag/pan stop
-        map.on('dragend', () => {
-          const center = map.getCenter();
-          setLat(center.lat);
-          setLng(center.lng);
-          map.setView(center, 19, { animate: true });
-          map.once('moveend', () => {
-            const finalCenter = map.getCenter();
-            reverseGeocode(finalCenter.lat, finalCenter.lng);
+        // Pre-place pin if initialLocation had valid coordinates
+        if (hasInitCoords && initialLocation?.lat && initialLocation?.lng) {
+          const pinIcon = L.divIcon({
+            className: 'custom-map-picker-pin',
+            html: `
+              <div style="display:flex; flex-direction:column; align-items:center; transform: translate(-50%, -100%); cursor:pointer;">
+                <div style="background:#000; color:#a3e635; padding:2px 8px; border-radius:9999px; font-size:10px; font-weight:800; white-space:nowrap; margin-bottom:4px; box-shadow:0 0 8px 2px rgba(163,230,53,0.7); border:1px solid rgba(163,230,53,0.6);">
+                  সিলেক্ট করা লোকেশন
+                </div>
+                <div style="width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:3px solid #000; background:linear-gradient(135deg, #a3e635 0%, #65a30d 100%); box-shadow:0 0 12px 4px rgba(163,230,53,0.8), 0 6px 20px rgba(0,0,0,0.6);">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="#d9f99d" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                    <circle cx="12" cy="10" r="3"/>
+                  </svg>
+                </div>
+                <div style="width:5px; height:12px; background:linear-gradient(to bottom, #1a1a1a, #000000); border-bottom-left-radius:9999px; border-bottom-right-radius:9999px;"></div>
+              </div>
+            `,
+            iconSize: [0, 0],
+            iconAnchor: [0, 0],
           });
-        });
-
-        // Handle map click
-        map.on('click', (e: any) => {
-          const { lat: clickLat, lng: clickLng } = e.latlng;
-          setLat(clickLat);
-          setLng(clickLng);
-          map.setView([clickLat, clickLng], 19, { animate: true });
-          map.once('moveend', () => {
-            reverseGeocode(clickLat, clickLng);
-          });
-        });
-
-        // Trigger initial reverse geocode for the starting position
-        reverseGeocode(initialLat, initialLng);
-
-        // Calculate allowed serving area bounds for initial view fitting (without drawing visual polygon graphics)
-        const pSettings = fallbackStore.pricingSettings;
-        if (pSettings.allowedDeliveryAreasEnabled && pSettings.allowedDeliveryAreas && pSettings.allowedDeliveryAreas.length > 0) {
-          const allPoints: [number, number][] = [];
-
-          pSettings.allowedDeliveryAreas.forEach((area) => {
-            if (area.coordinates && area.coordinates.length >= 3) {
-              area.coordinates.forEach((c) => allPoints.push([c.lat, c.lng]));
-            }
-          });
-
-          if (allPoints.length >= 3) {
-            // Fit initial map view to service area
-            const bounds = L.latLngBounds(allPoints);
-            map.fitBounds(bounds, { padding: [30, 30] });
-          }
+          markerRef.current = L.marker([initialLocation.lat, initialLocation.lng], { icon: pinIcon }).addTo(map);
+          reverseGeocode(initialLocation.lat, initialLocation.lng);
         }
 
-        // Auto-locate to user's GPS position whenever the map opens — even if an
-        // initialLocation was provided. This ensures the map is centered on customer position
-        // if inside allowed service area.
-        if (navigator.geolocation) {
+        // Handle map click: place pin, set selected location, and zoom in
+        map.on('click', (e: any) => {
+          const { lat: clickLat, lng: clickLng } = e.latlng;
+          setLocationAndPin(clickLat, clickLng, 18);
+        });
+
+        // Auto-locate to user's GPS position whenever the map opens
+        // Centers map at user location initially (without auto-zooming or selecting unless clicked)
+        if (navigator.geolocation && !hasInitCoords) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const userLat = pos.coords.latitude;
@@ -171,21 +210,14 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
                 pSet.allowedDeliveryAreasEnabled,
                 pSet.allowedDeliveryAreas
               );
-              if (!isAllowed) return; // Keep centered within allowed service area
+              if (!isAllowed) return;
 
-              setLat(userLat);
-              setLng(userLng);
               if (mapInstanceRef.current) {
-                mapInstanceRef.current.setView([userLat, userLng], 17, { animate: true });
-                mapInstanceRef.current.once('moveend', () => {
-                  if (!initialLocation?.address) {
-                    reverseGeocode(userLat, userLng);
-                  }
-                });
+                mapInstanceRef.current.setView([userLat, userLng], 15, { animate: true });
               }
             },
             () => {
-              // GPS denied/unavailable — fall back to initialLocation already loaded above
+              // GPS denied/unavailable — keep fallback initial view
             },
             { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
           );
@@ -207,6 +239,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
+        markerRef.current = null;
       }
     };
   }, [isOpen]);
@@ -247,7 +280,6 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
     setIsGeocoding(true);
 
-    // Read location preference from admin settings (default BD / Bangladesh)
     const mapPref = fallbackStore.pricingSettings.mapLocationPreference || 'BD';
     const customCode = fallbackStore.pricingSettings.customCountryCode || 'bd';
 
@@ -269,18 +301,8 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           if (data && data.length > 0) {
             const newLat = parseFloat(data[0].lat);
             const newLng = parseFloat(data[0].lon);
-            const displayName = data[0].display_name || searchQuery;
 
-            setLat(newLat);
-            setLng(newLng);
-            setMapAddress(displayName);
-
-            if (mapInstanceRef.current) {
-              mapInstanceRef.current.setView([newLat, newLng], 19, { animate: true });
-              mapInstanceRef.current.once('moveend', () => {
-                reverseGeocode(newLat, newLng);
-              });
-            }
+            setLocationAndPin(newLat, newLng, 18);
           } else {
             showAlert('কোনো স্থান পাওয়া যায়নি', 'কোনো স্থান খুঁজে পাওয়া যায়নি। দয়া করে আবার চেষ্টা করুন।', 'warning');
           }
@@ -295,7 +317,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
   const { showPermissionModal, showAlert } = useModal();
 
-  // Device GPS Location with robust high-accuracy fallback
+  // Device GPS Location
   const handleCurrentLocation = () => {
     if (!navigator.geolocation) {
       showAlert('লোকেশন অসমর্থিত', 'আপনার ব্রাউজার জিপিএস লোকেশন সাপোর্ট করে না।', 'error');
@@ -307,24 +329,14 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
       const userLat = pos.coords.latitude;
       const userLng = pos.coords.longitude;
 
-      setLat(userLat);
-      setLng(userLng);
-
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.setView([userLat, userLng], 19, { animate: true });
-        mapInstanceRef.current.once('moveend', () => {
-          reverseGeocode(userLat, userLng);
-        });
-      }
-
+      setLocationAndPin(userLat, userLng, 18);
       setIsLocating(false);
     };
 
-    // First attempt high accuracy with 8 sec timeout
     navigator.geolocation.getCurrentPosition(
       applyPosition,
       (err) => {
-        console.warn('[MapPicker] High accuracy geolocation error, attempting low-accuracy fallback:', err);
+        console.warn('[MapPicker] Geolocation error:', err);
         if (err.code === err.PERMISSION_DENIED) {
           setIsLocating(false);
           const p = fallbackStore.pricingSettings;
@@ -337,12 +349,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           });
           return;
         }
-        // Fallback: low accuracy (IP/Wi-Fi positioning), longer timeout
         navigator.geolocation.getCurrentPosition(
           applyPosition,
           (fallbackErr) => {
             console.warn('[MapPicker] Fallback geolocation error:', fallbackErr);
-            showAlert('লোকেশন পাওয়া যায়নি', 'জিপিএস লোকেশন পাওয়া যায়নি। অনুগ্রহ করে ম্যাপে স্থানটি সিলেক্ট করুন।', 'warning');
+            showAlert('লোকেশন পাওয়া যায়নি', 'জিপিএস লোকেশন পাওয়া যায়নি। অনুগ্রহ করে ম্যাপে ক্লিক করে স্থানটি সিলেক্ট করুন।', 'warning');
             setIsLocating(false);
           },
           { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
@@ -353,6 +364,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   };
 
   const handleConfirm = () => {
+    if (!hasSelected || typeof lat !== 'number' || typeof lng !== 'number') {
+      showAlert('লোকেশন সিলেক্ট করুন', 'অনুগ্রহ করে ম্যাপে নির্দিষ্ট ঠিকানার ওপর ক্লিক করে লোকেশন পিনটি সিলেক্ট করুন।', 'warning');
+      return;
+    }
+
     const finalDetail = detailAddress.trim();
     const finalMap = mapAddress.trim();
 
@@ -381,54 +397,11 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
         pSettings.allowedDeliveryAreas
       );
       if (!allowed) {
-        // Calculate center or valid point inside allowed area
-        let insideLat: number | undefined;
-        let insideLng: number | undefined;
-
-        if (pSettings.allowedDeliveryAreas && pSettings.allowedDeliveryAreas.length > 0) {
-          const allPts: { lat: number; lng: number }[] = [];
-          pSettings.allowedDeliveryAreas.forEach((area) => {
-            if (area.coordinates && area.coordinates.length > 0) {
-              area.coordinates.forEach((pt) => allPts.push(pt));
-            }
-          });
-
-          if (allPts.length > 0) {
-            const sumLat = allPts.reduce((acc, pt) => acc + pt.lat, 0);
-            const sumLng = allPts.reduce((acc, pt) => acc + pt.lng, 0);
-            const avgLat = sumLat / allPts.length;
-            const avgLng = sumLng / allPts.length;
-
-            if (isLocationInAllowedAreas({ lat: avgLat, lng: avgLng }, true, pSettings.allowedDeliveryAreas)) {
-              insideLat = avgLat;
-              insideLng = avgLng;
-            } else {
-              const firstPt = pSettings.allowedDeliveryAreas[0].coordinates[0];
-              if (firstPt) {
-                insideLat = firstPt.lat;
-                insideLng = firstPt.lng;
-              }
-            }
-          }
-        }
-
-        // Move map automatically inside allowed area
-        if (typeof insideLat === 'number' && typeof insideLng === 'number' && mapInstanceRef.current) {
-          const targetLat = insideLat;
-          const targetLng = insideLng;
-          setLat(targetLat);
-          setLng(targetLng);
-          mapInstanceRef.current.setView([targetLat, targetLng], 17, { animate: true });
-          mapInstanceRef.current.once('moveend', () => {
-            reverseGeocode(targetLat, targetLng);
-          });
-        }
-
         const areaNames = (pSettings.allowedDeliveryAreas || []).map((a) => a.name).join(', ');
         const customMsg = pSettings.outOfServiceAreaMessage?.trim();
         const alertBody = customMsg
-          ? `${customMsg}\n\n📍 অনুমোদিত সেবা এলাকা: ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}\n\nপয়েন্টটি সার্ভিস এরিয়ার ভেতরে আনা হয়েছে।`
-          : `দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। আমরা বর্তমানে শুধুমাত্র নিম্নোক্ত এলাকায় সার্ভিস প্রদান করছি:\n\n📍 ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}\n\nম্যাপটি স্বয়ংক্রিয়ভাবে সার্ভিস এরিয়ার ভেতরে সরানো হয়েছে। অনুগ্রহ করে সার্ভিস এরিয়ার ভেতরে লোকেশন নির্বাচন করুন।`;
+          ? `${customMsg}\n\n📍 অনুমোদিত সেবা এলাকা: ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}`
+          : `দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। আমরা বর্তমানে শুধুমাত্র নিম্নোক্ত এলাকায় সার্ভিস প্রদান করছি:\n\n📍 ${areaNames || 'নির্দিষ্ট সার্ভিস এলাকা'}\n\nঅনুগ্রহ করে সার্ভিস এরিয়ার ভেতরে লোকেশন নির্বাচন করুন।`;
 
         showAlert('সার্ভিস এরিয়ার বাইরে!', alertBody, 'warning');
         return;
@@ -447,8 +420,8 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
   const p = fallbackStore.pricingSettings;
   const guideText = modalType === 'delivery'
-    ? (p.mapPickerDeliveryGuideText || p.mapPickerGuideText || 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।')
-    : (p.mapPickerPickupGuideText || p.mapPickerGuideText || 'যে দোকান বা স্থান থেকে আনতে হবে, সেই স্থানে পিন সরিয়ে নিয়ে যান অথবা ক্লিক করুন। দোকানের নাম বা বিস্তারিত ঠিকানা নিচের input box-এ লিখুন।');
+    ? (p.mapPickerDeliveryGuideText || p.mapPickerGuideText || 'আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে ম্যাপে ক্লিক করে পিন বসান। নিচের box-এ বাসার নাম বা ফ্ল্যাট নম্বর যোগ করুন।')
+    : (p.mapPickerPickupGuideText || p.mapPickerGuideText || 'যে দোকান বা স্থান থেকে আনতে হবে, সেই স্থানে ম্যাপে ক্লিক করে পিন বসান। দোকানের নাম বা বিস্তারিত ঠিকানা নিচের input box-এ লিখুন।');
   const guideOkText = p.mapPickerGuideOkText || 'ঠিক আছে';
 
   const inputPlaceholder = modalType === 'delivery'
@@ -527,32 +500,16 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
                 </button>
               </form>
 
-              {/* Map Canvas */}
-              <div ref={mapContainerRef} className="w-full h-full z-10" />
+              {/* Floating hint pill when no location selected yet */}
+              {!hasSelected && (
+                <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-black/85 backdrop-blur-md text-lime-300 border border-lime-400/50 text-[11px] font-extrabold px-3 py-1.5 rounded-full shadow-xl flex items-center gap-1.5 animate-pulse max-w-[90%] text-center">
+                  <MapPin className="w-3.5 h-3.5 text-lime-400 shrink-0" />
+                  <span>ম্যাপে যেকোনো স্থানে ক্লিক করে লোকেশন সিলেক্ট করুন</span>
+                </div>
+              )}
 
-              {/* Central Pointer - static, overlayed on top of the map container in the dead center */}
-              <div
-                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[calc(100%-6px)] z-20 pointer-events-none flex flex-col items-center"
-                style={{ marginTop: '-20px' }}
-              >
-                <div className="bg-black text-lime-300 px-2.5 py-0.5 rounded-full text-[9px] font-extrabold whitespace-nowrap mb-1 animate-bounce" style={{ boxShadow: '0 0 8px 2px rgba(163,230,53,0.7), 0 0 2px 1px rgba(163,230,53,0.9)', border: '1px solid rgba(163,230,53,0.6)' }}>
-                  এখানে পিন করুন
-                </div>
-                {/* Lime Green Pin Icon - highlighted with dark neon glow */}
-                <div
-                  className="w-11 h-11 rounded-full flex items-center justify-center border-[3px] border-black"
-                  style={{ background: 'linear-gradient(135deg, #a3e635 0%, #65a30d 100%)', boxShadow: '0 0 0 3px rgba(0,0,0,0.8), 0 0 12px 4px rgba(163,230,53,0.8), 0 0 24px 8px rgba(101,163,13,0.5), 0 6px 20px rgba(0,0,0,0.6)' }}
-                >
-                  <MapPin className="w-6 h-6 text-black fill-lime-200" />
-                </div>
-                {/* Pointer stem - dark */}
-                <div
-                  className="w-1.5 h-5 rounded-b-full"
-                  style={{ background: 'linear-gradient(to bottom, #1a1a1a, #000000)' }}
-                />
-                {/* Ground dot shadow */}
-                <div className="w-4 h-2 rounded-full blur-[2px]" style={{ background: 'rgba(163,230,53,0.45)' }} />
-              </div>
+              {/* Map Canvas */}
+              <div ref={mapContainerRef} className="w-full h-full z-10 cursor-pointer" />
 
               {/* Detail Address Overlay - bottom of the map */}
               <div className="absolute bottom-[3px] left-0 right-0 z-20 flex items-center py-3.5 px-3 bg-white rounded-t-2xl shadow-xl border-t border-emerald-100">

@@ -13,6 +13,11 @@ import { getSavedActiveMode, saveActiveMode, getSavedDeliveryAddresses, saveSave
 import { getNativePosition } from '@/lib/native';
 
 
+export const isUserAuthenticated = (user: UserProfile | null): boolean => {
+  if (!user || !user.uid) return false;
+  return Boolean(user.email || (user.displayName && user.displayName !== '?'));
+};
+
 interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
@@ -28,6 +33,7 @@ interface AuthContextType {
   cancelStoreApplication: (appId: string) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
   updateHelperLocation: (loc: { lat: number; lng: number; address?: string }) => void;
+  isUserAuthenticated: (userOverride?: UserProfile | null) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -92,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile = {
           ...existingByEmail,
           uid: fbUser.uid,
-          displayName: fbUser.displayName || existingByEmail.displayName,
+          displayName: fbUser.displayName && fbUser.displayName !== '?' ? fbUser.displayName : existingByEmail.displayName,
           photoURL: fbUser.photoURL || existingByEmail.photoURL,
         };
         // Migrate all associated orders, wallets, apps, and feedbacks from oldUid to new UID
@@ -101,11 +107,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
+    const fallbackDisplayName = fbUser.displayName && fbUser.displayName !== '?' 
+      ? fbUser.displayName 
+      : (fbUser.email ? fbUser.email.split('@')[0] : 'Customer User');
+
     if (!profile) {
       profile = {
         uid: fbUser.uid,
         email: fbUser.email || '',
-        displayName: fbUser.displayName || 'Customer User',
+        displayName: fallbackDisplayName,
         photoURL: fbUser.photoURL || undefined,
         role: isAdmin ? 'admin' : 'customer',
         isHelper: false,
@@ -119,6 +129,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(profile);
     } else {
       let needsSave = false;
+      if (profile.displayName === '?' || !profile.displayName) {
+        profile = { ...profile, displayName: fallbackDisplayName };
+        needsSave = true;
+      }
       if (isAdmin && (!profile.isAdmin || profile.role !== 'admin' || (isSuperAdmin && !profile.isSuperAdmin))) {
         profile = {
           ...profile,
@@ -560,6 +574,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cancelStoreApplication,
         updateCustomerPreferences,
         updateHelperLocation,
+        isUserAuthenticated: (u) => isUserAuthenticated(u !== undefined ? u : user),
       }}
     >
       {children}

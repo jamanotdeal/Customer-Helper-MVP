@@ -85,9 +85,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   useEffect(() => {
     setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+    if (orderId) {
+      fallbackStore.fetchShopOrdersForOrder(orderId, order?.helperId, order?.helperName);
+    }
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
     return fallbackStore.subscribe(sync);
-  }, [orderId]);
+  }, [orderId, order?.helperId, order?.helperName]);
 
   const distanceKm = (order?.pickupLocation?.lat && order?.pickupLocation?.lng && order?.deliveryLocation?.lat && order?.deliveryLocation?.lng)
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
