@@ -24,7 +24,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
 }) => {
-  const { user, updateHelperLocation } = useAuth();
+  const { user, updateHelperLocation, loginWithGoogle } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'SCHEDULED' | 'COMPLETED'>('NEW');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACCEPTED' | 'PURCHASED_EXECUTED' | 'ON_THE_WAY' | 'ARRIVED'>('ALL');
@@ -320,7 +320,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         const act = all.filter(
           (o) =>
             o.helperId === user.uid &&
-            ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status)
+            ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status) &&
+            o.status !== 'CANCELED' &&
+            o.cancellationRequest?.status !== 'APPROVED'
         );
         // Completed: delivered orders by current helper, sorted recent to old
         const comp = all
@@ -381,7 +383,15 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   }, [user]);
 
   const handleAcceptOrder = async (orderId: string) => {
-    if (!user) return;
+    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+      await showAlert(
+        'লগইন আবশ্যক',
+        'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
+        'warning'
+      );
+      loginWithGoogle();
+      return;
+    }
     if (activeOrders.length >= activeOrderLimit) {
       await showAlert(
         'অর্ডার সীমা পূর্ণ',
@@ -549,7 +559,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     : activeOrders.filter(o => o.status === statusFilter);
 
   // Filter scheduled orders (active orders where needDeliveryBack and deliveryBackTime is set)
-  const scheduledOrders = activeOrders.filter(o => o.needDeliveryBack && o.deliveryBackTime);
+  const scheduledOrders = activeOrders.filter(o => o.needDeliveryBack && o.deliveryBackTime && o.status !== 'CANCELED' && o.cancellationRequest?.status !== 'APPROVED');
   const filteredScheduledOrders = statusFilter === 'ALL'
     ? scheduledOrders
     : scheduledOrders.filter(o => o.status === statusFilter);

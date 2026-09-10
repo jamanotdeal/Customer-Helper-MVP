@@ -187,6 +187,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [mapPickerGuideShowCount, setMapPickerGuideShowCount] = useState<number>(5);
   const [mapPickerPickupPlaceholder, setMapPickerPickupPlaceholder] = useState<string>('যেমন: আরিফ স্টোর, আশুলিয়া বাজার.');
   const [mapPickerDeliveryPlaceholder, setMapPickerDeliveryPlaceholder] = useState<string>('যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.');
+  const [mapPickerAddressRequiredMessage, setMapPickerAddressRequiredMessage] = useState<string>('অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।');
   const [noSavePickupServicesText, setNoSavePickupServicesText] = useState<string>('মিক্স কিছু কাজ করে দিন\nনা, অন্য একটা কাজ করে দিন\nআমার একটা জিনিস দিয়ে আসুন');
 
   // Helper Center contact info
@@ -528,6 +529,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setMapPickerGuideShowCount(settings.mapPickerGuideShowCount ?? 5);
       setMapPickerPickupPlaceholder(settings.mapPickerPickupPlaceholder || 'যেমন: আরিফ স্টোর, আশুলিয়া বাজার.');
       setMapPickerDeliveryPlaceholder(settings.mapPickerDeliveryPlaceholder || 'যেমন: ৪এ, রহমান ভিলা, মডেল টাউন.');
+      setMapPickerAddressRequiredMessage(settings.mapPickerAddressRequiredMessage || 'অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।');
       setNoSavePickupServicesText((settings.noSavePickupLocationServices || [
         'মিক্স কিছু কাজ করে দিন',
         'না, অন্য একটা কাজ করে দিন',
@@ -1255,6 +1257,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       mapPickerGuideShowCount: Number(mapPickerGuideShowCount) || 5,
       mapPickerPickupPlaceholder: mapPickerPickupPlaceholder.trim() || undefined,
       mapPickerDeliveryPlaceholder: mapPickerDeliveryPlaceholder.trim() || undefined,
+      mapPickerAddressRequiredMessage: mapPickerAddressRequiredMessage.trim() || undefined,
       noSavePickupLocationServices: noSavePickupServicesText.split('\n').map(s => s.trim()).filter(Boolean),
       // Helper center settings
       helperCenterEnabled: helperCenterEnabled,
@@ -5447,6 +5450,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                ঠিকানা খালি থাকলে সতর্কবার্তা (Blank Address Floating Error Message):
+              </label>
+              <input
+                type="text"
+                value={mapPickerAddressRequiredMessage}
+                onChange={(e) => setMapPickerAddressRequiredMessage(e.target.value)}
+                placeholder="যেমন: অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।"
+                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                গ্রাহক ম্যাপে ঠিকানা ম্যানুয়ালি না লিখে কনফার্ম বাটনে ক্লিক করলে লাল বর্ডারসহ এই ফ্লোটিং বার্তাটি দেখাবে।
+              </p>
             </div>
             <div>
               <label className="text-xs font-bold text-gray-700 block mb-1.5">

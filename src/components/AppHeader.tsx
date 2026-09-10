@@ -29,8 +29,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [avatarFailed, setAvatarFailed] = useState(false);
   useEffect(() => { setAvatarFailed(false); }, [user?.photoURL]);
 
-  // Guard against an empty displayName, which would render an empty circle.
-  const initial = (user?.displayName?.trim()?.charAt(0) || user?.email?.trim()?.charAt(0) || '?').toUpperCase();
+  // Guard against an empty (or placeholder '?') displayName, which would render
+  // an empty circle.
+  const displayNameTrimmed = user?.displayName?.trim();
+  const initial = (
+    (displayNameTrimmed && displayNameTrimmed !== '?' ? displayNameTrimmed.charAt(0) : '') ||
+    user?.email?.trim()?.charAt(0) ||
+    '?'
+  ).toUpperCase();
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -153,7 +159,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   {user.photoURL && !avatarFailed ? (
                     <img
                       src={user.photoURL}
-                      alt={user.displayName}
+                      alt={user.displayName || 'User'}
                       onError={() => setAvatarFailed(true)}
                       className="w-8 h-8 rounded-xl object-cover"
                     />
@@ -203,7 +209,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                 {user.photoURL && !avatarFailed ? (
                   <img
                     src={user.photoURL}
-                    alt={user.displayName}
+                    alt={user.displayName || 'User'}
                     onError={() => setAvatarFailed(true)}
                     className="w-12 h-12 rounded-2xl object-cover ring-2 ring-emerald-500/20"
                   />
