@@ -271,8 +271,8 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                 <option value="MULTIPLE_ORDERS">Ordered Multiple Times (2+ orders)</option>
                 <option value="WEEKLY_2_ORDERS">Frequent: Weekly 2+ Orders</option>
                 <option value="WEEKLY_1_ORDERS">Frequent: Weekly 1+ Orders</option>
-                <option value="RARE_ORDERS_WEEK">Rare: &lt;1 order/week</option>
-                <option value="RARE_ORDERS_MONTH">Rare: &lt;1 order/month</option>
+                <option value="RARE_ORDERS_WEEK">Low Frequency: &lt;1 order/week</option>
+                <option value="RARE_ORDERS_MONTH">Low Frequency: &lt;1 order/month</option>
                 <option value="INACTIVE_1_WEEK">Inactive: No order since 1 week</option>
                 <option value="INACTIVE_2_WEEKS">Inactive: No order since 2 weeks</option>
                 <option value="NEVER_ORDERED">Never Ordered (0 orders)</option>

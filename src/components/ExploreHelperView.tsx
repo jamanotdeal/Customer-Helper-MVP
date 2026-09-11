@@ -80,7 +80,7 @@ export const ExploreHelperView: React.FC = () => {
     return () => unsub();
   }, [user]);
 
-  const { loginWithGoogle } = useAuth();
+  const { openAuthModal } = useAuth();
 
   const handleAcceptOrder = async (orderId: string) => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
@@ -89,7 +89,7 @@ export const ExploreHelperView: React.FC = () => {
         'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
         'warning'
       );
-      loginWithGoogle();
+      openAuthModal();
       return;
     }
     
@@ -493,9 +493,20 @@ export const ExploreHelperView: React.FC = () => {
                     </div>
                   </div>
 
-                  <h4 className="font-extrabold text-gray-900 text-sm leading-snug">
-                    {order.service || order.title || 'Errand'}
-                  </h4>
+                  <div>
+                    <h4 className="font-extrabold text-gray-900 text-sm leading-snug">
+                      {order.service || order.title || 'Errand'}
+                    </h4>
+                    {order.customerName && (
+                      <p className="text-[11px] font-bold text-gray-600 mt-0.5">
+                        Customer: <span className="text-gray-900">{order.customerName}</span>
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 font-semibold truncate mt-0.5" title={order.deliveryLocation?.address || 'N/A'}>
+                      <span className="font-extrabold text-emerald-800">Delivery: </span>
+                      <span>{order.deliveryLocation?.address || 'N/A'}</span>
+                    </p>
+                  </div>
 
                   <div className="pt-1 flex space-x-2">
                     <button

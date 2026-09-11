@@ -169,6 +169,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     commissionPercent: '',
   });
   const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
+  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(true);
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -476,6 +477,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAllowedDeliveryAreasEnabled(settings.allowedDeliveryAreasEnabled || false);
       setAllowedDeliveryAreas(settings.allowedDeliveryAreas || []);
       setOutOfServiceAreaMessage(settings.outOfServiceAreaMessage || '');
+      setManualAuthEnabled(settings.manualAuthEnabled !== false);
       setPwaInstallPromptEnabled(settings.pwaInstallPromptEnabled !== false);
       setPwaInstallPromptTitle(settings.pwaInstallPromptTitle || 'Install Jamanot App');
       setPwaInstallPromptDescription(
@@ -575,10 +577,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
 
-  // Server-side fetching effects - always fetches full orders list when on ORDERS tab
+  // Server-side fetching effects - fetches full orders list when on ORDERS, USERS_LIST, CUSTOMERS, or HELPERS tabs
   useEffect(() => {
     const fetchOrders = async () => {
-      if (activeTab !== 'ORDERS') return;
+      if (activeTab !== 'ORDERS' && activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
       // Always fetch all orders from server to support full pagination & filtering
       if (serverOrders !== null) return; // already fetched
 
@@ -1223,6 +1225,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
       allowedDeliveryAreas: allowedDeliveryAreas,
       outOfServiceAreaMessage: outOfServiceAreaMessage.trim() || undefined,
+      manualAuthEnabled: manualAuthEnabled,
       pwaInstallPromptEnabled: pwaInstallPromptEnabled,
       pwaInstallPromptTitle: pwaInstallPromptTitle.trim() || undefined,
       pwaInstallPromptDescription: pwaInstallPromptDescription.trim() || undefined,
@@ -1600,19 +1603,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 4. Unified Users List with Live Running States
   const getProcessedUsersList = () => {
     const usersList = serverUsers !== null ? serverUsers : users;
+    const ordersSource = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
+
     let list = usersList.map((u) => {
-      const activeReq = orders.find(
-        (o) => (o.customerId === u.uid || (u.alternativePhone && o.customerPhone === u.alternativePhone)) &&
+      const activeReq = ordersSource.find(
+        (o) => (o.customerId === u.uid || (u.phoneNumber && o.customerPhone === u.phoneNumber) || (u.alternativePhone && o.customerPhone === u.alternativePhone)) &&
           o.status !== 'DELIVERED' &&
           o.status !== 'CANCELED'
       );
-      const activeDel = orders.find(
+      const activeDel = ordersSource.find(
         (o) => o.helperId === u.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
       );
 
-      const userOrders = orders.filter((o) => o.customerId === u.uid);
+      const userOrders = ordersSource.filter((o) =>
+        o.customerId === u.uid ||
+        (u.phoneNumber && o.customerPhone === u.phoneNumber) ||
+        (u.alternativePhone && o.customerPhone === u.alternativePhone)
+      );
       const customerOrdersCount = userOrders.length;
-      const helperOrdersCount = orders.filter((o) => o.helperId === u.uid).length;
+      const helperOrdersCount = ordersSource.filter((o) => o.helperId === u.uid).length;
 
       const registrationDate = u.createdAt ? new Date(u.createdAt) : new Date();
       const now = new Date();
@@ -1639,6 +1648,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       if (customerOrdersCount === 0) {
         segments.push('NEVER_ORDERED');
+        if (diffDays >= 14) {
+          segments.push('INACTIVE_2_WEEKS');
+          segments.push('INACTIVE_1_WEEK');
+        } else if (diffDays >= 7) {
+          segments.push('INACTIVE_1_WEEK');
+        }
       } else {
         if (customerOrdersCount >= 2) {
           segments.push('MULTIPLE_ORDERS');
@@ -1654,10 +1669,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           segments.push('RARE_ORDERS_MONTH');
         }
         if (daysSinceLastOrder !== null) {
+          if (daysSinceLastOrder >= 7) {
+            segments.push('INACTIVE_1_WEEK');
+          }
           if (daysSinceLastOrder >= 14) {
             segments.push('INACTIVE_2_WEEKS');
-          } else if (daysSinceLastOrder >= 7) {
-            segments.push('INACTIVE_1_WEEK');
           }
         }
       }
@@ -1667,6 +1683,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         activeReq,
         activeDel,
         customerOrdersCount,
+        helperOrdersCount,
         weeklyOrderRate,
         monthlyOrderRate,
         daysSinceLastOrder,
@@ -2366,8 +2383,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <option value="MULTIPLE_ORDERS">Ordered Multiple Times (2+ orders)</option>
                     <option value="WEEKLY_2_ORDERS">Frequent: Weekly 2+ Orders</option>
                     <option value="WEEKLY_1_ORDERS">Frequent: Weekly 1+ Orders</option>
-                    <option value="RARE_ORDERS_WEEK">Rare: &lt;1 order/week</option>
-                    <option value="RARE_ORDERS_MONTH">Rare: &lt;1 order/month</option>
+                    <option value="RARE_ORDERS_WEEK">Low Frequency: &lt;1 order/week</option>
+                    <option value="RARE_ORDERS_MONTH">Low Frequency: &lt;1 order/month</option>
                     <option value="INACTIVE_1_WEEK">Inactive: No order since 1 week</option>
                     <option value="INACTIVE_2_WEEKS">Inactive: No order since 2 weeks</option>
                     <option value="NEVER_ORDERED">Never Ordered (0 orders)</option>
@@ -3426,23 +3443,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
 
                         <td className="py-4 px-5 font-bold">
-                          <div className="text-gray-900 font-extrabold text-[11px]">
-                            Placed: <span className="text-purple-700">{item.customerOrdersCount} orders</span>
-                          </div>
-                          {item.customerOrdersCount > 0 && (
-                            <div className="text-gray-500 font-bold text-[10px] space-y-0.5 mt-1">
-                              <div>Weekly: {item.weeklyOrderRate.toFixed(2)}/wk</div>
-                              <div>Monthly: {item.monthlyOrderRate.toFixed(2)}/mo</div>
-                              {item.daysSinceLastOrder !== null && (
-                                <div className={item.daysSinceLastOrder >= 7 ? "text-amber-600 font-black" : ""}>
-                                  Last Order: {item.daysSinceLastOrder}d ago
-                                </div>
+                          <div className="space-y-1">
+                            {/* Total Orders Placed */}
+                            <div className="text-gray-900 font-extrabold text-[11px] flex items-center gap-1 flex-wrap">
+                              <span>Total Placed:</span>
+                              <span className="text-purple-900 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200">
+                                {item.customerOrdersCount} {item.customerOrdersCount === 1 ? 'order' : 'orders'}
+                              </span>
+                              {u.isHelper && item.helperOrdersCount > 0 && (
+                                <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md text-[10px] font-extrabold border border-emerald-200">
+                                  ({item.helperOrdersCount} as helper)
+                                </span>
                               )}
                             </div>
-                          )}
-                          {item.customerOrdersCount === 0 && (
-                            <span className="text-gray-400 italic text-[10px]">No orders</span>
-                          )}
+
+                            {/* When Last Order Placed */}
+                            <div className="text-[11px] font-semibold text-gray-600 flex items-center gap-1">
+                              <span className="text-gray-500">Last Order:</span>
+                              {item.customerOrdersCount > 0 && item.daysSinceLastOrder !== null ? (
+                                <span className={item.daysSinceLastOrder >= 7 ? "text-amber-700 font-extrabold" : "text-gray-900 font-bold"}>
+                                  {item.daysSinceLastOrder === 0 ? 'Today' : item.daysSinceLastOrder === 1 ? 'Yesterday' : `${item.daysSinceLastOrder} days ago`}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 italic">Never</span>
+                              )}
+                            </div>
+
+                            {/* Weekly Order Status */}
+                            <div className="text-[11px] font-semibold text-gray-600 flex items-center gap-1">
+                              <span className="text-gray-500">Weekly Order:</span>
+                              {item.customerOrdersCount === 0 ? (
+                                <span className="text-gray-400 font-medium">No (0 orders)</span>
+                              ) : item.weeklyOrderRate >= 1 ? (
+                                <span className="text-emerald-700 font-extrabold bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-200">
+                                  Yes (~{item.weeklyOrderRate.toFixed(1)}/wk)
+                                </span>
+                              ) : (
+                                <span className="text-amber-800 font-semibold bg-amber-50 px-1.5 py-0.5 rounded text-[10px] border border-amber-200">
+                                  No / Low (~{item.weeklyOrderRate.toFixed(1)}/wk)
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </td>
 
                         <td className="py-4 px-5">
@@ -3467,8 +3509,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               if (seg === 'MULTIPLE_ORDERS') { label = 'Ordered 2+ Times'; color = 'bg-emerald-50 text-emerald-700 border border-emerald-200'; }
                               else if (seg === 'WEEKLY_2_ORDERS') { label = 'Weekly 2+ Orders'; color = 'bg-purple-150 text-purple-800 font-black'; }
                               else if (seg === 'WEEKLY_1_ORDERS') { label = 'Weekly 1+ Order'; color = 'bg-indigo-50 text-indigo-700'; }
-                              else if (seg === 'RARE_ORDERS_WEEK') { label = 'Rare (<1/wk)'; color = 'bg-yellow-50 text-yellow-800 border border-yellow-200'; }
-                              else if (seg === 'RARE_ORDERS_MONTH') { label = 'Rare (<1/mo)'; color = 'bg-amber-150 text-amber-800'; }
+                              else if (seg === 'RARE_ORDERS_WEEK') { label = 'Low Frequency (<1/wk)'; color = 'bg-yellow-50 text-yellow-800 border border-yellow-200'; }
+                              else if (seg === 'RARE_ORDERS_MONTH') { label = 'Low Frequency (<1/mo)'; color = 'bg-amber-150 text-amber-800'; }
                               else if (seg === 'INACTIVE_1_WEEK') { label = 'Inactive 1wk'; color = 'bg-red-50 text-red-650 border border-red-200 font-bold'; }
                               else if (seg === 'INACTIVE_2_WEEKS') { label = 'Inactive 2wk+'; color = 'bg-red-100 text-red-800 font-extrabold'; }
                               else if (seg === 'NEVER_ORDERED') { label = 'Never Ordered'; color = 'bg-gray-100 text-gray-550 border border-gray-200'; }
@@ -4982,6 +5024,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <p className="text-[10px] text-gray-500 mt-1">
                 গ্রাহক সার্ভিস এরিয়ার বাইরের অবস্থান বাছাই করে &ldquo;ঠিকানা নিশ্চিত করুন&rdquo; বাটনে ক্লিক করলে এই বার্তাটি পপআপে দেখানো হবে এবং ম্যাপটি স্বয়ংক্রিয়ভাবে সার্ভিস এরিয়ার ভেতরে চলে আসবে।
               </p>
+            </div>
+          </div>
+
+          {/* Manual Auth (Email/Password Login & Register) Settings */}
+          <div className="p-5 rounded-3xl bg-amber-50/80 border border-amber-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
+              <User className="w-5 h-5 text-amber-700" />
+              <span>ম্যানুয়াল লগইন ও রেজিস্ট্রেশন নিয়ন্ত্রণ (Manual Auth Controls)</span>
+            </h4>
+            <p className="text-[11px] text-amber-900 font-medium">
+              এখানে ম্যানুয়াল (Email & Password) লগইন ও সাইন-আপ অপশন চালু বা বন্ধ রাখতে পারবেন। বন্ধ রাখলে ব্যবহারকারীর সাইন-ইন মডালে শুধুমাত্র Google Sign-In দৃশ্যমান থাকবে।
+            </p>
+
+            <div className="flex items-center space-x-3 p-3.5 bg-white rounded-2xl border border-amber-200 shadow-sm">
+              <input
+                type="checkbox"
+                id="manualAuthEnabled"
+                checked={manualAuthEnabled}
+                onChange={(e) => setManualAuthEnabled(e.target.checked)}
+                className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300"
+              />
+              <label htmlFor="manualAuthEnabled" className="text-xs font-bold text-gray-900 cursor-pointer select-none">
+                ম্যানুয়াল ইমেইল ও পাসওয়ার্ড দিয়ে লগইন ও রেজিস্ট্রেশন চালু রাখুন (Enable Manual Email/Password Authentication)
+              </label>
             </div>
           </div>
 

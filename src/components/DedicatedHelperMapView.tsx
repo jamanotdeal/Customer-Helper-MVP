@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Order, LocationData, Shop } from '@/types';
-import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink, Route, ChevronDown, ChevronUp, Zap, Sparkles, Layers } from 'lucide-react';
+import { MapPin, Navigation, Clock, Package, Eye, CheckCircle, Globe, X, Store, Phone, User, ExternalLink } from 'lucide-react';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime, getOrderEffectiveElapsedMs } from '@/lib/timeUtils';
 import { fallbackStore } from '@/lib/firebase';
@@ -382,66 +382,97 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
       // 2. Process each visible active order
       for (const entry of spiderfiedOrders) {
-        const { item: order, originalLat: deliveryLat, originalLng: deliveryLng, displayLat, displayLng, overlapCount, overlapIndex } = entry;
-        const orderTitle = order.service || order.title || `অর্ডার #${order.id.slice(-4)}`;
+        const { item: order, displayLat, displayLng, overlapCount, overlapIndex } = entry;
+        if (displayLat && displayLng) {
+          allBoundsPoints.push([displayLat, displayLng]);
+        }
+
         const elapsedStr = getElapsedTime(order.createdAt);
+        const orderTitle = order.title || order.service || 'অর্ডার';
+
+        const totalOrders = sortedOrders.length;
         const rank = orderRankMap.get(order.id) || 1;
-        const isHighestDuration = rank === 1;
-        
-        allBoundsPoints.push([deliveryLat, deliveryLng]);
 
-        const isPending = order.status === 'PENDING';
+        // Color coding based on duration priority rank:
+        // Rank 1 (Most duration) -> Red
+        // Rank 2 (or middle range) -> Yellow
+        // Rank 3+ (Low / new) -> Soft Green
+        const isRed = rank === 1;
+        const isYellow = rank === 2 || (totalOrders >= 4 && rank <= Math.floor(totalOrders / 2));
         
-        // Rank-based badge colors for priority sequence
-        const rankHeaderBg = isHighestDuration
+        const badgeColor = isRed ? '#ef4444' : isYellow ? '#eab308' : '#10b981';
+        const badgeGradient = isRed
           ? 'linear-gradient(135deg, #ef4444, #dc2626)'
-          : rank === 2
-          ? 'linear-gradient(135deg, #f59e0b, #d97706)'
-          : 'linear-gradient(135deg, #2563eb, #1d4ed8)';
-          
-        const badgeColor = isHighestDuration ? '#ef4444' : isPending ? '#f59e0b' : '#2563eb';
-        const badgeBorderColor = isHighestDuration ? '#dc2626' : isPending ? '#d97706' : '#1d4ed8';
-        const hasOverlap = overlapCount > 1;
+          : isYellow
+          ? 'linear-gradient(135deg, #eab308, #ca8a04)'
+          : 'linear-gradient(135deg, #10b981, #059669)';
+        const badgeBorder = isRed ? '#fca5a5' : isYellow ? '#fef08a' : '#a7f3d0';
 
+        const hasOverlap = overlapCount > 1;
         const overlapBadgeHtml = hasOverlap
-          ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
+          ? `<span style="background:#ffffff;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
           : '';
 
-        const rankBadgeHtml = `
-          <div style="position: absolute; top: -14px; left: 50%; transform: translateX(-50%); z-index: 20; background: ${rankHeaderBg}; color: white; border: 2px solid white; border-radius: 9999px; padding: 2px 10px; font-weight: 950; font-size: 10.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); white-space: nowrap; display: flex; align-items: center; gap: 4px;">
-            <span>${isHighestDuration ? '🥇 ১ম ডেলিভারি (সর্বোচ্চ সময়)' : `স্টপ #${rank}`}</span>
-          </div>
-        `;
+        // Collect connected stores for this order (both via selectedShopIds and pickupLocation)
+        const connectedShops: { id?: string; name: string; lat: number; lng: number }[] = [];
+        if (order.selectedShopIds && order.selectedShopIds.length > 0) {
+          order.selectedShopIds.forEach((shopId) => {
+            const shop = fallbackStore.shops.get(shopId);
+            if (shop && shop.location?.lat && shop.location?.lng) {
+              connectedShops.push({
+                id: shop.id,
+                name: shop.name,
+                lat: shop.location.lat,
+                lng: shop.location.lng,
+              });
+            }
+          });
+        }
+        if (connectedShops.length === 0 && order.pickupLocation?.lat && order.pickupLocation?.lng) {
+          connectedShops.push({
+            name: order.pickupLocation.name || order.pickupLocation.address || 'পিকআপ স্টোর',
+            lat: order.pickupLocation.lat,
+            lng: order.pickupLocation.lng,
+          });
+        }
+
+        const connectedShopNamesStr = connectedShops.map((s) => s.name).join(', ');
+        const hasConnectedShops = connectedShops.length > 0;
+        const iconHeight = hasConnectedShops ? 96 : 80;
 
         const orderIconHtml = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 210px; height: 130px; margin-top: 10px;">
-            ${rankBadgeHtml}
-            <div style="background: linear-gradient(135deg, ${badgeColor}, ${badgeBorderColor}); color: white; padding: 10px 10px 6px 10px; border-radius: 14px; border: 2.5px solid ${isHighestDuration ? '#fca5a5' : hasOverlap ? '#f59e0b' : 'white'}; box-shadow: 0 8px 24px ${isHighestDuration ? 'rgba(239,68,68,0.7)' : 'rgba(0,0,0,0.6)'}; display: flex; flex-direction: column; align-items: center; width: 190px; text-align: center; margin-top: 6px;">
-              <div style="font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; line-height: 1.2; display: flex; align-items: center; justify-content: center;">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; width: 165px; height: ${iconHeight}px;">
+            <div style="background: ${badgeGradient}; color: white; padding: 6px 9px 5px 9px; border-radius: 13px; border: 2px solid ${badgeBorder}; box-shadow: 0 6px 20px ${isRed ? 'rgba(239,68,68,0.5)' : isYellow ? 'rgba(234,179,8,0.5)' : 'rgba(16,185,129,0.5)'}; display: flex; flex-direction: column; width: 155px; text-align: left;">
+              <!-- Single Line: Order ID & Timer -->
+              <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 900; font-family: monospace; border-bottom: 1px dashed rgba(255,255,255,0.4); padding-bottom: 3px; margin-bottom: 3px;">
+                <span>#${order.id.slice(-6).toUpperCase()}</span>
+                <span style="display: flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 800; background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 4px; color: #ffffff;">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                  ${elapsedStr}
+                </span>
+              </div>
+              <!-- Customer Name -->
+              <div style="font-size: 11px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; color: #ffffff;">
+                ${order.customerName || 'গ্রাহক'}
+              </div>
+              <!-- Service Request Type -->
+              <div style="font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; color: rgba(255,255,255,0.9); margin-top: 1px;">
                 ${orderTitle} ${overlapBadgeHtml}
               </div>
-              <div style="display: flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.55); padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 800; margin-top: 4px; color: ${isHighestDuration ? '#fca5a5' : '#ef4444'}; justify-content: center; width: fit-content;">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <polyline points="12 6 12 12 16 14"></polyline>
-                </svg>
-                <span>${elapsedStr}</span>
-              </div>
-              <div style="font-size: 9.5px; font-weight: 700; opacity: 0.95; margin-top: 4px; border-top: 1.5px dashed rgba(255,255,255,0.3); padding-top: 4px; width: 100%;">
-                ID: #${order.id.slice(-6).toUpperCase()}
-              </div>
-              <div style="font-size: 9.5px; font-weight: 700; opacity: 0.95; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;">
-                Cust: ${order.customerName}
-              </div>
-              <div style="font-size: 9px; font-weight: 700; opacity: 0.95; margin-top: 1px; font-family: monospace;">
-                Ph: ${order.customerPhone || order.alternativePhone || 'N/A'}
-              </div>
+              ${hasConnectedShops ? `
+                <div style="font-size: 9px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; color: #f3e8ff; background: rgba(147, 51, 234, 0.55); padding: 2px 5px; border-radius: 5px; margin-top: 3px; border: 1px solid rgba(192, 132, 252, 0.6); display: flex; align-items: center; gap: 3px;">
+                  <span>🏬</span> ${connectedShopNamesStr}
+                </div>
+              ` : ''}
             </div>
-            <div style="width: 3px; height: 16px; background: ${badgeColor}; border-left: 1px solid rgba(255,255,255,0.9); border-right: 1px solid rgba(255,255,255,0.9); margin-top: -1px;"></div>
-            <div style="position: relative; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; margin-top: -1px;">
-              <div style="position: absolute; inset: -4px; border-radius: 50%; background: ${badgeColor}; opacity: 0.5; animation: pulse 1.5s infinite;"></div>
-              <div style="position: relative; width: 16px; height: 16px; border-radius: 50%; background: ${badgeColor}; border: 2.5px solid white; box-shadow: 0 0 10px ${badgeColor}, 0 4px 12px rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center;">
-                <div style="width: 4px; height: 4px; border-radius: 50%; background: white;"></div>
+            <div style="width: 2.5px; height: 8px; background: ${badgeColor}; margin-top: -1px;"></div>
+            <div style="position: relative; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; margin-top: -1px;">
+              <div style="position: absolute; inset: -3px; border-radius: 50%; background: ${badgeColor}; opacity: 0.5; animation: pulse 1.5s infinite;"></div>
+              <div style="position: relative; width: 12px; height: 12px; border-radius: 50%; background: ${badgeColor}; border: 2px solid white; box-shadow: 0 0 8px ${badgeColor}; display: flex; align-items: center; justify-content: center;">
+                <div style="width: 3px; height: 3px; border-radius: 50%; background: white;"></div>
               </div>
             </div>
           </div>
@@ -450,9 +481,9 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         const orderIcon = L.divIcon({
           className: `order-marker-${order.id}`,
           html: orderIconHtml,
-          iconSize: [210, 130],
-          iconAnchor: [105, 130],
-          popupAnchor: [0, -130],
+          iconSize: [165, iconHeight],
+          iconAnchor: [82, iconHeight],
+          popupAnchor: [0, -iconHeight],
         });
 
         let existingMarker = markersRef.current.get(order.id);
@@ -505,15 +536,14 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           }
         }
 
-        // Draw individual route legs with distinct glowing colors for each leg of the journey
+        // 1. Draw individual route legs with green color highlighted path
         for (let i = 0; i < waypointsSequence.length - 1; i++) {
           const startPt = waypointsSequence[i];
           const endPt = waypointsSequence[i + 1];
-          const legRank = i + 1;
 
-          // Leg color scheme: Stop 1 = Red/Orange, Stop 2 = Amber, Stop 3+ = Cyan/Blue
-          const glowColor = legRank === 1 ? '#ef4444' : legRank === 2 ? '#f59e0b' : '#06b6d4';
-          const mainColor = legRank === 1 ? '#f97316' : legRank === 2 ? '#eab308' : '#3b82f6';
+          // Highlighted green route path scheme
+          const glowColor = '#22c55e';
+          const mainColor = '#16a34a';
 
           let legRouteCoords = await fetchRoadRoute([
             { lat: startPt.lat, lng: startPt.lng },
@@ -523,11 +553,11 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           if (isCancelled || !isMapAlive(map)) return;
 
           if (legRouteCoords.length > 0) {
-            // High visibility glowing polyline
+            // High visibility glowing green polyline
             const glowPolyline = L.polyline(legRouteCoords, {
               color: glowColor,
               weight: 10,
-              opacity: 0.45,
+              opacity: 0.5,
               lineCap: 'round',
               lineJoin: 'round',
             }).addTo(map);
@@ -553,7 +583,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
 
             // Step Waypoint Circle Indicator on Destination
             const destCircle = L.circleMarker([endPt.lat, endPt.lng], {
-              radius: 9,
+              radius: 8,
               color: '#ffffff',
               weight: 2.5,
               fillColor: mainColor,
@@ -561,6 +591,74 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
             }).addTo(map);
 
             routePolylinesRef.current.push(glowPolyline, mainPolyline, dashPolyline, destCircle);
+          }
+        }
+
+        // 2. Draw explicit Store-to-Order direct connection lines (in purple/violet scheme)
+        for (const order of sortedOrders) {
+          if (!order.deliveryLocation?.lat || !order.deliveryLocation?.lng) continue;
+          const delLat = order.deliveryLocation.lat;
+          const delLng = order.deliveryLocation.lng;
+
+          const orderShops: { name: string; lat: number; lng: number }[] = [];
+          if (order.selectedShopIds && order.selectedShopIds.length > 0) {
+            order.selectedShopIds.forEach((sId) => {
+              const shop = fallbackStore.shops.get(sId);
+              if (shop && shop.location?.lat && shop.location?.lng) {
+                orderShops.push({ name: shop.name, lat: shop.location.lat, lng: shop.location.lng });
+              }
+            });
+          }
+          if (orderShops.length === 0 && order.pickupLocation?.lat && order.pickupLocation?.lng) {
+            orderShops.push({
+              name: order.pickupLocation.name || order.pickupLocation.address || 'পিকআপ স্টোর',
+              lat: order.pickupLocation.lat,
+              lng: order.pickupLocation.lng,
+            });
+          }
+
+          for (const shopLoc of orderShops) {
+            let shopOrderRouteCoords = await fetchRoadRoute([
+              { lat: shopLoc.lat, lng: shopLoc.lng },
+              { lat: delLat, lng: delLng },
+            ]);
+
+            if (isCancelled || !isMapAlive(map)) return;
+
+            if (shopOrderRouteCoords.length > 0) {
+              // High-visibility glowing purple store connection line
+              const storeGlowPoly = L.polyline(shopOrderRouteCoords, {
+                color: '#c084fc',
+                weight: 8,
+                opacity: 0.65,
+                lineCap: 'round',
+                lineJoin: 'round',
+              }).addTo(map);
+
+              const storeMainPoly = L.polyline(shopOrderRouteCoords, {
+                color: '#9333ea',
+                weight: 4,
+                opacity: 0.95,
+                lineCap: 'round',
+                lineJoin: 'round',
+              }).addTo(map);
+
+              const storeDashPoly = L.polyline(shopOrderRouteCoords, {
+                color: '#f3e8ff',
+                weight: 2,
+                opacity: 1,
+                dashArray: '5, 10',
+                lineCap: 'round',
+                lineJoin: 'round',
+              }).addTo(map);
+
+              // Popup on store-order connection line explaining the link
+              const connectionPopupText = `<div style="font-size:11px;font-weight:800;font-family:sans-serif;color:#6b21a8;padding:2px;">🏬 <b>${shopLoc.name}</b> ➔ 📦 <b>অর্ডার #${order.id.slice(-6).toUpperCase()}</b> (${order.customerName})</div>`;
+              storeGlowPoly.bindPopup(connectionPopupText);
+              storeMainPoly.bindPopup(connectionPopupText);
+
+              routePolylinesRef.current.push(storeGlowPoly, storeMainPoly, storeDashPoly);
+            }
           }
         }
       }
@@ -774,22 +872,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     );
   }
 
-  const [isRouteGuideOpen, setIsRouteGuideOpen] = useState(true);
-
-  const sortedActiveOrders = [...visibleOrders].sort((a, b) => {
-    return getOrderEffectiveElapsedMs(b) - getOrderEffectiveElapsedMs(a);
-  });
-
-  const handleFocusStop = (order: Order) => {
-    setSelectedOrderState(order);
-    setSelectedShop(null);
-    if (isMapAlive(mapInstanceRef.current) && order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
-      mapInstanceRef.current.setView([order.deliveryLocation.lat, order.deliveryLocation.lng], 16, {
-        animate: true,
-      });
-    }
-  };
-
   return (
     <div
       className={`relative w-full bg-slate-900 transition-all duration-300 flex flex-col ${isFullscreen
@@ -802,95 +884,6 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           : undefined
       }
     >
-      {/* Top Left Smart Delivery Route Guide Drawer */}
-      {visibleOrders.length > 0 && (
-        <div className="absolute top-4 left-4 z-[10001] max-w-[280px] sm:max-w-xs pointer-events-auto bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-700/80 shadow-2xl text-white overflow-hidden transition-all duration-300">
-          <div
-            onClick={() => setIsRouteGuideOpen((prev) => !prev)}
-            className="flex items-center justify-between p-3 bg-slate-800/90 cursor-pointer hover:bg-slate-800 transition-colors border-b border-slate-700/70"
-          >
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 bg-cyan-500/20 text-cyan-400 rounded-xl border border-cyan-500/30">
-                <Route className="w-4 h-4 animate-pulse" />
-              </div>
-              <div>
-                <div className="text-xs font-black text-white flex items-center gap-1.5">
-                  <span>স্মার্ট ডেলিভারি রুট</span>
-                  <span className="bg-cyan-500/30 text-cyan-300 text-[10px] px-1.5 py-0.2 rounded-md font-bold">
-                    {visibleOrders.length}টি
-                  </span>
-                </div>
-                <div className="text-[9.5px] text-amber-300 font-bold flex items-center gap-1">
-                  <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
-                  <span>সর্বোচ্চ সময় ধরে চলা অর্ডার আগে</span>
-                </div>
-              </div>
-            </div>
-            <button type="button" className="p-1 text-slate-400 hover:text-white">
-              {isRouteGuideOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
-          </div>
-
-          {isRouteGuideOpen && (
-            <div className="p-2.5 space-y-2 max-h-[260px] overflow-y-auto custom-scrollbar">
-              {sortedActiveOrders.map((ord, idx) => {
-                const rank = idx + 1;
-                const isFirst = rank === 1;
-                const elapsedStr = getElapsedTime(ord.createdAt);
-                const isSelected = selectedOrder?.id === ord.id;
-
-                return (
-                  <div
-                    key={ord.id}
-                    onClick={() => handleFocusStop(ord)}
-                    className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
-                      isSelected
-                        ? 'bg-slate-800 border-cyan-500 shadow-md ring-1 ring-cyan-500/50'
-                        : isFirst
-                        ? 'bg-red-950/40 border-red-500/60 hover:bg-red-950/60'
-                        : 'bg-slate-800/60 border-slate-700/80 hover:bg-slate-800'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
-                            isFirst
-                              ? 'bg-red-600 text-white shadow-sm animate-pulse'
-                              : rank === 2
-                              ? 'bg-amber-500 text-slate-950 font-extrabold'
-                              : 'bg-blue-600 text-white'
-                          }`}
-                        >
-                          {isFirst ? '🥇 #1 ১ম' : `#${rank}`}
-                        </span>
-                        <span className="font-extrabold text-xs text-slate-100 line-clamp-1">
-                          {ord.service || ord.title || 'অর্ডার'}
-                        </span>
-                      </div>
-                      <span className="text-[10px] font-extrabold text-red-400 bg-red-950/70 border border-red-500/40 px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1">
-                        <Clock className="w-2.5 h-2.5 text-red-400" />
-                        <span>{elapsedStr}</span>
-                      </span>
-                    </div>
-
-                    <div className="text-[10px] text-slate-300 space-y-0.5 pl-0.5">
-                      <div className="flex items-center gap-1 text-slate-400">
-                        <User className="w-3 h-3 text-slate-400 shrink-0" />
-                        <span className="font-bold text-slate-200">{ord.customerName}</span>
-                      </div>
-                      <div className="flex items-center gap-1 text-slate-400 line-clamp-1">
-                        <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
-                        <span>{ord.deliveryLocation?.address}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Top Right Controls */}
       <div className="absolute top-4 right-4 z-[10001] pointer-events-auto flex items-center gap-2">
@@ -937,11 +930,23 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
         </button>
 
         {!selectedOrder && !selectedShop && (
-          <div className="flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-slate-700/80 shadow-xl">
-            <Globe className="w-4 h-4 text-cyan-400 animate-pulse" />
-            <span className="text-xs font-extrabold text-white">
-              রানিং লাইভ রুট ম্যাপ ({visibleOrders.length}টি অর্ডার)
-            </span>
+          <div className="flex flex-col gap-1.5 bg-slate-900/90 backdrop-blur-md px-3.5 py-2.5 rounded-2xl border border-slate-700/80 shadow-xl">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-cyan-400 animate-pulse" />
+              <span className="text-xs font-extrabold text-white">
+                রানিং লাইভ রুট ম্যাপ ({visibleOrders.length}টি অর্ডার)
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[10px] text-slate-300 font-bold border-t border-slate-700/60 pt-1.5">
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-emerald-300 inline-block"></span>
+                <span>ডেলিভারি রুট</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-purple-500 border border-purple-300 inline-block"></span>
+                <span>দোকান সংযোগ</span>
+              </span>
+            </div>
           </div>
         )}
       </div>

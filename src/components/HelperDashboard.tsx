@@ -23,7 +23,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
 }) => {
-  const { user, updateHelperLocation, loginWithGoogle } = useAuth();
+  const { user, updateHelperLocation, openAuthModal } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'SCHEDULED' | 'COMPLETED'>('NEW');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACCEPTED' | 'PURCHASED_EXECUTED' | 'ON_THE_WAY' | 'ARRIVED'>('ALL');
@@ -346,7 +346,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
         'warning'
       );
-      loginWithGoogle();
+      openAuthModal();
       return;
     }
     if (activeOrders.length >= activeOrderLimit) {

@@ -141,6 +141,7 @@ export interface UserProfile {
   isAdmin?: boolean;
   isSuperAdmin?: boolean;
   lastActiveMode: ActiveMode;
+  phoneNumber?: string;
   alternativePhone?: string;
   defaultDeliveryLocation?: LocationData;
   savedDeliveryAddresses?: LocationData[]; // Customer's saved delivery addresses (synced from Firestore on login)
@@ -445,6 +446,9 @@ export interface PricingSettings {
   allowedDeliveryAreasEnabled?: boolean; // Toggle to enforce geofence restriction
   allowedDeliveryAreas?: AllowedAreaPolygon[]; // Multiple drawn polygons
   outOfServiceAreaMessage?: string; // Admin configured custom message when user selects outside area
+  
+  // Manual authentication (email/password login & register) toggle
+  manualAuthEnabled?: boolean; // Default true
 }
 
 export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';
