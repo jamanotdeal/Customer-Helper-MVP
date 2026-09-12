@@ -1605,26 +1605,28 @@ class FallbackStore {
         });
       }
 
-      // If order canceled, notify assigned helper or all helpers
+      // If order canceled, notify assigned helper ONLY if the order was accepted (has helperId)
       if (updated.status === 'CANCELED') {
-        const helperTarget = updated.helperId || existing.helperId || 'all-helpers';
-        const isCustomerCancel = updated.cancellationRequest?.requestedBy === 'customer' || updated.statusHistory?.some(h => h.actor === 'Customer');
-        const notifTitle = isCustomerCancel ? 'কাস্টমার অর্ডার বাতিল করেছেন' : 'অর্ডার বাতিল করা হয়েছে';
-        const notifBody = isCustomerCancel
-          ? `কাস্টমার আপনার অ্যাসাইন করা অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করেছেন।`
-          : `অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করা হয়েছে।`;
+        const helperTarget = updated.helperId || existing.helperId;
+        if (helperTarget) {
+          const isCustomerCancel = updated.cancellationRequest?.requestedBy === 'customer' || updated.statusHistory?.some(h => h.actor === 'Customer');
+          const notifTitle = isCustomerCancel ? 'কাস্টমার অর্ডার বাতিল করেছেন' : 'অর্ডার বাতিল করা হয়েছে';
+          const notifBody = isCustomerCancel
+            ? `কাস্টমার আপনার অ্যাসাইন করা অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করেছেন।`
+            : `অর্ডার #${updated.id.slice(-6).toUpperCase() || updated.id} বাতিল করা হয়েছে।`;
 
-        this.addNotification({
-          id: `notif-cancel-hlp-${Date.now()}`,
-          userId: helperTarget,
-          title: notifTitle,
-          body: notifBody,
-          orderId: updated.id,
-          read: false,
-          createdAt: new Date().toISOString(),
-          targetRole: helperTarget === 'all-helpers' ? undefined : 'helper',
-          type: 'order_update',
-        });
+          this.addNotification({
+            id: `notif-cancel-hlp-${Date.now()}`,
+            userId: helperTarget,
+            title: notifTitle,
+            body: notifBody,
+            orderId: updated.id,
+            read: false,
+            createdAt: new Date().toISOString(),
+            targetRole: 'helper',
+            type: 'order_update',
+          });
+        }
 
         // Notify connected stores/shops involved in this order when main order is cancelled by anyone
         const relatedShopOrders = this.getShopOrdersForOrder(updated.id);

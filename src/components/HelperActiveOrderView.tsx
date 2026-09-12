@@ -850,6 +850,43 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setShowCompletionModal(true);
   };
 
+  if (order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') {
+    return (
+      <div className="w-full bg-white min-h-screen pb-20">
+        <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+          <button
+            onClick={onBack}
+            className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            <span className="text-xs font-bold">Back</span>
+          </button>
+          <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-1">
+            <span className="font-extrabold text-sm text-gray-800 truncate min-w-0">{order.service || order.title || 'Helper Order'}</span>
+            <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded-md border border-slate-200 shrink-0">#{order.id}</span>
+          </div>
+          <div className="w-8" />
+        </div>
+
+        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-red-100 shadow-sm my-6 max-w-md mx-auto">
+          <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-inner">
+            <X className="w-10 h-10" />
+          </div>
+          <h3 className="font-extrabold text-gray-900 text-lg">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h3>
+          <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
+            এই অর্ডারটি কাস্টমার অথবা অ্যাডমিন দ্বারা বাতিল করা হয়েছে। আপনি এই অর্ডারের বিবরণ দেখতে পারবেন না।
+          </p>
+          <button
+            onClick={onBack}
+            className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
+          >
+            ফিরে যান
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full bg-white min-h-screen pb-20 animate-in fade-in duration-200">
       {/* Top Bar */}
@@ -932,7 +969,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         </div>
 
         {/* Horizontal Status Tracker */}
-        {order.status !== 'CANCELED' && (
+        {(order.status as string) !== 'CANCELED' && (
           <div className="w-full bg-white rounded-2xl border border-gray-100 px-3 py-3 shadow-soft">
             <div className="flex items-start">
               {(['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'SCHEDULED', 'ARRIVED', 'DELIVERED'] as const).map((statusKey, idx, arr) => {
@@ -995,7 +1032,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         )}
 
         {/* ORDER CANCELLED BANNER */}
-        {(order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') && (
+        {((order.status as string) === 'CANCELED' || (order.cancellationRequest?.status as string) === 'APPROVED') && (
           <div className="p-4 rounded-2xl bg-red-50 border-2 border-red-300 text-red-950 shadow-md space-y-1.5 animate-in slide-in-from-top duration-200">
             <div className="flex items-center space-x-2">
               <div className="p-2 rounded-xl bg-red-100 text-red-600 shrink-0">
@@ -1852,7 +1889,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         )}
 
         {/* Status Progression Action Buttons */}
-        {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && (
+        {order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED' && (
           <div className="space-y-3">
             {/* PENDING → ACCEPTED */}
             {order.status === 'PENDING' && onAccept && !order.helperId && (
@@ -1954,7 +1991,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         )}
 
         {/* Request Cancellation Trigger */}
-        {order.status !== 'DELIVERED' && order.status !== 'CANCELED' && isAcceptedByThisHelper && (
+        {order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED' && isAcceptedByThisHelper && (
           <div className="pt-2">
             {order.cancellationRequest ? (
               <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold text-center">

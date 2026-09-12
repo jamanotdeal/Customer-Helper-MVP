@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { fallbackStore } from '@/lib/firebase';
 import { ShoppingBag, Bike, ShieldCheck, Wallet, Compass, HeartHandshake, Calculator } from 'lucide-react';
 import { hapticFeedback } from '@/lib/native';
 
@@ -10,6 +11,25 @@ interface BottomNavProps {
 
 export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab }) => {
   const { user, activeMode } = useAuth();
+  const [exploreCount, setExploreCount] = useState(0);
+
+  useEffect(() => {
+    const updateExploreCount = () => {
+      if (user && user.isHelper && activeMode === 'helper') {
+        const allOrders = Array.from(fallbackStore.orders.values());
+        const pendingCount = allOrders.filter(
+          (o) => o.status === 'PENDING' && !o.helperId
+        ).length;
+        setExploreCount(pendingCount);
+      } else {
+        setExploreCount(0);
+      }
+    };
+
+    updateExploreCount();
+    const unsub = fallbackStore.subscribe(updateExploreCount);
+    return () => unsub();
+  }, [user, activeMode]);
 
   if (!user) return null;
 
@@ -83,7 +103,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
             className={tabClass(activeTab === 'explore')}
             aria-label="Explore"
           >
-            <Compass className="w-5 h-5" />
+            <div className="relative">
+              <Compass className="w-5 h-5" />
+              {exploreCount > 0 && (
+                <span className="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse">
+                  {exploreCount > 99 ? '99+' : exploreCount}
+                </span>
+              )}
+            </div>
             <span className="text-[11px]">Explore</span>
             {activeTab === 'explore' && (
               <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
