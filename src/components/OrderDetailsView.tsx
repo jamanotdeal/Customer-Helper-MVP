@@ -130,6 +130,36 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     );
   }
 
+  if (order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
+        <button
+          onClick={onBack}
+          className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors py-2 font-bold text-sm"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>ফিরে যান (Back)</span>
+        </button>
+
+        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-red-100 shadow-sm my-4">
+          <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-inner">
+            <XCircle className="w-10 h-10" />
+          </div>
+          <h3 className="font-extrabold text-gray-900 text-lg">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h3>
+          <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
+            এই অর্ডারটি কাস্টমার অথবা অ্যাডমিন দ্বারা বাতিল করা হয়েছে। আপনি এই অর্ডারের বিবরণ দেখতে পারবেন না।
+          </p>
+          <button
+            onClick={onBack}
+            className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
+          >
+            ফিরে যান
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const badge = getStatusBadgeInfo(order.status);
   const BadgeIcon = badge.icon;
 
@@ -310,9 +340,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   };
 
   const canCancel = (order.status === 'PENDING' || order.status === 'ACCEPTED') && user?.uid === order.customerId;
-  const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && order.status !== 'CANCELED';
+  const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED';
   const isDelivered = order.status === 'DELIVERED';
-  const isCanceled = order.status === 'CANCELED';
+  const isCanceled = (order.status as string) === 'CANCELED';
   const totalPayable = (order.productCost || 0) + (order.deliveryFee || 0);
 
   return (
