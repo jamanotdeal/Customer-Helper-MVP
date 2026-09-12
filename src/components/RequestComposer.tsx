@@ -19,7 +19,7 @@ interface RequestComposerProps {
 }
 
 export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
-  const { user, loginWithGoogle, updateCustomerPreferences } = useAuth();
+  const { user, openAuthModal, updateCustomerPreferences } = useAuth();
   const { showAlert, showConfirm } = useModal();
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -167,7 +167,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const handleInputInteract = () => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
       showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
-      loginWithGoogle();
+      openAuthModal();
       return;
     }
     setIsExpanded(true);
@@ -201,7 +201,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
       await showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
-      loginWithGoogle();
+      openAuthModal();
       return;
     }
 

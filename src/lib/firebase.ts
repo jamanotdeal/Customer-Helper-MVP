@@ -2229,6 +2229,18 @@ class FallbackStore {
         targetRole: 'customer',
         type: 'order_update',
       });
+
+      // Save updated delivery address to customer's saved address history in localStorage & Firestore
+      if (isDeliveryChanged && updated.customerId && updated.deliveryLocation?.address) {
+        try {
+          import('./storage').then(({ addSavedDeliveryAddress }) => {
+            addSavedDeliveryAddress(updated.customerId, updated.deliveryLocation);
+          });
+          saveCustomerSavedAddressToFirestore(updated.customerId, updated.deliveryLocation).catch(() => {});
+        } catch (e) {
+          console.warn('[Firestore] Error saving updated address to customer history:', e);
+        }
+      }
     }
 
     // Helper/Admin items or general info edit notification to customer (Requirement 2)

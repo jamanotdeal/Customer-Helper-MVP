@@ -8,6 +8,7 @@ import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCi
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { StoreApplicationModal } from './StoreApplicationModal';
 import { EditStoreModal } from './EditStoreModal';
+import { AuthModal } from './AuthModal';
 import { fallbackStore } from '@/lib/firebase';
 
 import { useModal } from './CustomModal';
@@ -18,7 +19,7 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNavigate }) => {
-  const { user, loading, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, logout } = useAuth();
+  const { user, loading, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, openAuthModal, logout } = useAuth();
   const { showAlert, showPermissionModal, showConfirm } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
@@ -172,7 +173,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </>
             ) : (
               <button
-                onClick={() => loginWithGoogle()}
+                onClick={() => openAuthModal()}
                 className="flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs px-3 py-2 rounded-xl border border-gray-300 shadow-sm transition-all active:scale-95"
               >
                 {/* Official Google multicolour G logo */}
@@ -503,6 +504,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       {showEditStoreModal && storeInfo && (
         <EditStoreModal shop={storeInfo} onClose={() => setShowEditStoreModal(false)} />
       )}
+
+      {/* Auth Modal (Google Sign In & Optional Email/Password Login & Registration) */}
+      <AuthModal />
     </>
   );
 };

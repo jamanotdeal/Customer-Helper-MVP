@@ -22,7 +22,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
 }) => {
-  const { user, loginWithGoogle } = useAuth();
+  const { user, openAuthModal } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -111,7 +111,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
           if (!user) {
             setShowAuthRequiredModal(true);
           } else {
-            setCreatedOrderForSuccessModal(newOrder);
+            setSelectedOrderId(newOrder.id);
           }
         }}
       />
@@ -280,7 +280,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
             <button
               onClick={() => {
                 setShowAuthRequiredModal(false);
-                loginWithGoogle();
+                openAuthModal();
               }}
               className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-floating flex items-center justify-center space-x-2 transition-all"
             >

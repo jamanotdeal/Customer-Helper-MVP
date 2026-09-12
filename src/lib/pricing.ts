@@ -141,6 +141,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
 
 আপনার যেকোনো মতামত বা সার্ভিস ফি সংক্রান্ত পরামর্শ নিচে লিখে আমাদের জানাতে পারেন।`,
   allowedAdminTabs: [],
+  manualAuthEnabled: true,
 };
 
 /**

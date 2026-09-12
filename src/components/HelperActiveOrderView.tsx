@@ -32,7 +32,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   activeOrdersCount,
   activeOrderLimit,
 }) => {
-  const { user, loginWithGoogle } = useAuth();
+  const { user, openAuthModal } = useAuth();
   const isAcceptedByThisHelper = order.status !== 'PENDING' && !!order.helperId && user?.uid === order.helperId;
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
@@ -662,7 +662,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return;
     }
 
-    handleUpdateStatusWithCheck(targetStatus);
+    if (targetStatus === 'PURCHASED_EXECUTED') {
+      handleUpdateStatus('PURCHASED_EXECUTED');
+    } else {
+      handleUpdateStatusWithCheck(targetStatus);
+    }
   };
 
   const handleSaveProductCost = (e: React.FormEvent) => {
@@ -1079,10 +1083,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {/* Customer Edit History Log for Pending Order */}
               {order.editHistory && order.editHistory.length > 0 && (
                 <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                     <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
                       <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Customer Edit History ({order.editHistory.length})</span>
+                      <span>Edit histories ({order.editHistory.length})</span>
                     </span>
                     {order.lastEditedAt && (
                       <span className="text-[9px] font-bold text-amber-800">
@@ -1093,9 +1097,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <div className="space-y-2 pt-1">
                     {order.editHistory.slice().reverse().map((historyItem) => (
                       <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
-                        <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 border-b border-amber-100 pb-1">
-                          <span>Edited by: {historyItem.editedByName || historyItem.editedBy}</span>
-                          <span>{formatPlacedDateTime(historyItem.timestamp)}</span>
+                        <div className="border-b border-amber-100 pb-1">
+                          <div className="text-[10px] font-bold text-amber-900">
+                            Edited by: {historyItem.editedByName || historyItem.editedBy}
+                          </div>
+                          <div className="text-[9px] font-medium text-amber-700/80 mt-0.5">
+                            {formatPlacedDateTime(historyItem.timestamp)}
+                          </div>
                         </div>
                         <div className="space-y-1 pt-0.5">
                           {historyItem.changes.map((c, idx) => (
@@ -1123,12 +1131,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span>Addresses</span>
                 </h4>
                 <div className="space-y-1.5 text-xs">
-                  {order.pickupLocation?.address && (
-                    <p className="p-3 rounded-2xl bg-gray-50 text-gray-700 font-bold border border-gray-200">
-                      <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                      <span>{order.pickupLocation.address}</span>
-                    </p>
-                  )}
+                  <p className="p-3 rounded-2xl bg-gray-50 text-gray-700 font-bold border border-gray-200">
+                    <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                    <span>{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</span>
+                  </p>
                   <p className="p-3 rounded-2xl bg-emerald-50/50 text-emerald-950 font-bold border border-emerald-100">
                     <strong className="font-extrabold text-emerald-800">Delivery: </strong>
                     <span>{order.deliveryLocation?.address || 'N/A'}</span>
@@ -1264,10 +1270,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {/* Customer Edit History Log for Active Order */}
             {order.editHistory && order.editHistory.length > 0 && (
               <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
                     <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Customer Edit History ({order.editHistory.length})</span>
+                    <span>Edit histories ({order.editHistory.length})</span>
                   </span>
                   {order.lastEditedAt && (
                     <span className="text-[9px] font-bold text-amber-800">
@@ -1278,9 +1284,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <div className="space-y-2 pt-1">
                   {order.editHistory.slice().reverse().map((historyItem) => (
                     <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 border-b border-amber-100 pb-1">
-                        <span>Edited by: {historyItem.editedByName || historyItem.editedBy}</span>
-                        <span>{formatPlacedDateTime(historyItem.timestamp)}</span>
+                      <div className="border-b border-amber-100 pb-1">
+                        <div className="text-[10px] font-bold text-amber-900">
+                          Edited by: {historyItem.editedByName || historyItem.editedBy}
+                        </div>
+                        <div className="text-[9px] font-medium text-amber-700/80 mt-0.5">
+                          {formatPlacedDateTime(historyItem.timestamp)}
+                        </div>
                       </div>
                       <div className="space-y-1 pt-0.5">
                         {historyItem.changes.map((c, idx) => (
@@ -1524,23 +1534,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <span>Addresses</span>
             </h4>
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
-              {order.pickupLocation?.address && (
-                <div className="flex items-start justify-between gap-2 min-w-0">
-                  <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation.address}>
-                    <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                    <span>{order.pickupLocation.address}</span>
-                  </p>
-                  {!isDone && (
-                    <button
-                      onClick={() => setActiveMapPicker('pickup')}
-                      className="p-1.5 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors shrink-0"
-                      title="পিকআপ ঠিকানা পরিবর্তন"
-                    >
-                      <FileEdit className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              )}
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}>
+                  <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                  <span>{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</span>
+                </p>
+                {!isDone && (
+                  <button
+                    onClick={() => setActiveMapPicker('pickup')}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95"
+                    title="পিকআপ ঠিকানা পরিবর্তন"
+                  >
+                    <FileEdit className="w-3 h-3 text-gray-700" />
+                    <span>Edit</span>
+                  </button>
+                )}
+              </div>
               <div className="flex items-start justify-between gap-2 min-w-0">
                 <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
                   <strong className="font-extrabold text-emerald-800">Delivery: </strong>
@@ -1549,10 +1558,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {!isDone && (
                   <button
                     onClick={() => setActiveMapPicker('delivery')}
-                    className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors shrink-0 border border-emerald-100"
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95"
                     title="ডেলিভারি ঠিকানা পরিবর্তন"
                   >
-                    <FileEdit className="w-3 h-3" />
+                    <FileEdit className="w-3 h-3 text-emerald-700" />
+                    <span>Edit</span>
                   </button>
                 )}
               </div>
@@ -1847,7 +1857,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   onClick={() => {
                     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
                       showAlert('লগইন আবশ্যক', 'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
-                      loginWithGoogle();
+                      openAuthModal();
                       return;
                     }
                     onAccept(order.id);
@@ -1861,7 +1871,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
             )}
             {/* Fee/Cost Validation Warning Banner */}
-            {!hasCostAndFee && order.status === 'ACCEPTED' && (
+            {!hasCostAndFee && order.status === 'PURCHASED_EXECUTED' && (
               <div className="p-4 rounded-3xl bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 shadow-sm animate-in fade-in duration-200">
                 <div className="flex items-center justify-center space-x-2.5 py-1">
                   <AlertTriangle className="w-5 h-5 text-orange-600" />
@@ -1875,29 +1885,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="space-y-3">
                 {/* Main Action (Forward) */}
                 {order.status === 'ACCEPTED' && (
-                  hasCostAndFee ? (
-                    <button
-                      onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
-                      className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
-                    >
-                      <PackageCheck className="w-5 h-5" />
-                      <span>Mark as Purchased / Executed</span>
-                    </button>
-                  ) : (
-                    <button
-                      disabled
-                      onClick={() => showAlert('Product Cost Required', 'Please enter the product cost first to auto-calculate the delivery fee.', 'warning')}
-                      className="w-full py-3.5 rounded-2xl bg-gray-200 text-gray-400 font-extrabold text-sm cursor-not-allowed flex items-center justify-center space-x-2 border-2 border-dashed border-gray-300"
-                    >
-                      <PackageCheck className="w-5 h-5" />
-                      <span>Mark as Purchased / Executed</span>
-                    </button>
-                  )
+                  <button
+                    onClick={() => handleUpdateStatus('PURCHASED_EXECUTED')}
+                    className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
+                  >
+                    <PackageCheck className="w-5 h-5" />
+                    <span>Mark as Purchased / Executed</span>
+                  </button>
                 )}
 
                 {order.status === 'PURCHASED_EXECUTED' && (
                   <button
-                    onClick={() => handleUpdateStatus('ON_THE_WAY')}
+                    onClick={() => handleUpdateStatusWithCheck('ON_THE_WAY')}
                     className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2"
                   >
                     <Truck className="w-5 h-5" />

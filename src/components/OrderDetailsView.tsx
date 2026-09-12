@@ -765,15 +765,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
         {/* ── ADDRESSES AT THE END ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-          {order.pickupLocation?.address && (
-            <div>
-              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
-              <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-                <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-                <p className="text-sm font-bold text-gray-900">{order.pickupLocation.address}</p>
-              </div>
+          <div>
+            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
+            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
+              <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-gray-900">{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</p>
             </div>
-          )}
+          </div>
           <div>
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
             <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">

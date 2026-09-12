@@ -119,7 +119,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
     setLat(initialLocation?.lat);
     setLng(initialLocation?.lng);
-    setHasSelected(hasInitCoords);
+    setHasSelected(false);
     setDetailAddress(formatShortAddress(initialLocation?.address || ''));
     setMapAddress('');
     setSearchQuery('');
@@ -167,7 +167,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           doubleClickZoom: true,
           scrollWheelZoom: true,
           zoomControl: false,
-        }).setView([initialLat, initialLng], hasInitCoords ? 18 : 15);
+        }).setView([initialLat, initialLng], 15);
         mapInstanceRef.current = map;
 
         // Earth / Satellite Hybrid Tile Layer (Google Maps style)
@@ -175,31 +175,6 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           attribution: '&copy; Google Maps',
           maxZoom: 20,
         }).addTo(map);
-
-        // Pre-place pin if initialLocation had valid coordinates
-        if (hasInitCoords && initialLocation?.lat && initialLocation?.lng) {
-          const pinIcon = L.divIcon({
-            className: 'custom-map-picker-pin',
-            html: `
-              <div style="display:flex; flex-direction:column; align-items:center; transform: translate(-50%, -100%); cursor:pointer;">
-                <div style="background:#000; color:#a3e635; padding:2px 8px; border-radius:9999px; font-size:10px; font-weight:800; white-space:nowrap; margin-bottom:4px; box-shadow:0 0 8px 2px rgba(163,230,53,0.7); border:1px solid rgba(163,230,53,0.6);">
-                  সিলেক্ট করা লোকেশন
-                </div>
-                <div style="width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:3px solid #000; background:linear-gradient(135deg, #a3e635 0%, #65a30d 100%); box-shadow:0 0 12px 4px rgba(163,230,53,0.8), 0 6px 20px rgba(0,0,0,0.6);">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="#d9f99d" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-                    <circle cx="12" cy="10" r="3"/>
-                  </svg>
-                </div>
-                <div style="width:5px; height:12px; background:linear-gradient(to bottom, #1a1a1a, #000000); border-bottom-left-radius:9999px; border-bottom-right-radius:9999px;"></div>
-              </div>
-            `,
-            iconSize: [0, 0],
-            iconAnchor: [0, 0],
-          });
-          markerRef.current = L.marker([initialLocation.lat, initialLocation.lng], { icon: pinIcon }).addTo(map);
-          reverseGeocode(initialLocation.lat, initialLocation.lng);
-        }
 
         // Handle map click: place pin, set selected location, and zoom in
         map.on('click', (e: any) => {

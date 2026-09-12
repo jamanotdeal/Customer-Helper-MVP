@@ -106,6 +106,21 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
         {order.service || order.title || 'Service Needed'}
       </h4>
 
+      {/* Customer Name & Short Delivery Address */}
+      <div className="flex flex-col gap-1 py-1 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-bold text-gray-900 truncate">
+            👤 {order.customerName || 'Customer'}
+          </span>
+        </div>
+        {order.deliveryLocation?.address && (
+          <div className="flex items-center gap-1 text-gray-600 text-[11px] font-medium min-w-0">
+            <MapPin className="w-3 h-3 text-emerald-600 shrink-0" />
+            <span className="truncate">{order.deliveryLocation.address}</span>
+          </div>
+        )}
+      </div>
+
       {/* Action Buttons */}
       <div className="pt-1 flex space-x-2">
         <button

@@ -8,6 +8,9 @@ import {
   signInWithRedirect,
   signInWithCredential,
   GoogleAuthProvider,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
@@ -34,9 +37,14 @@ interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   activeMode: ActiveMode;
+  isAuthModalOpen: boolean;
+  openAuthModal: () => void;
+  closeAuthModal: () => void;
   setActiveMode: (mode: ActiveMode) => void;
   enableCommuterHelperWithLocation: () => Promise<boolean>;
   loginWithGoogle: (roleOverride?: 'customer' | 'helper' | 'admin') => Promise<void>;
+  loginWithEmail: (email: string, pass: string) => Promise<void>;
+  registerWithEmail: (email: string, pass: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
   submitHelperApplication: (appData: Omit<HelperApplication, 'id' | 'userId' | 'userName' | 'status' | 'createdAt'>) => Promise<void>;
   updateHelperApplication: (appId: string, updatedFields: Partial<HelperApplication>) => Promise<void>;
@@ -176,6 +184,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeMode, setActiveModeState] = useState<ActiveMode>('customer');
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+
+  const closeAuthModal = () => setIsAuthModalOpen(false);
 
   // Last position accepted into React state, and last one mirrored to Firestore.
   // Refs, not state: they gate renders and must never cause one.
@@ -667,6 +678,83 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const openAuthModal = () => {
+    const manualAuthEnabled = fallbackStore.pricingSettings.manualAuthEnabled !== false;
+    if (!manualAuthEnabled) {
+      loginWithGoogle();
+    } else {
+      setIsAuthModalOpen(true);
+    }
+  };
+
+  const loginWithEmail = async (email: string, pass: string) => {
+    setLoading(true);
+    try {
+      const res = await signInWithEmailAndPassword(auth, email.trim(), pass);
+      if (res.user) {
+        const savedMode = getSavedActiveMode();
+        let profile = buildProfile(res.user, savedMode);
+        const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
+        if (syncedProfile) profile = syncedProfile;
+        applyProfile(profile, savedMode);
+        setIsAuthModalOpen(false);
+      }
+    } catch (err: any) {
+      console.warn('[Auth] Email login error:', err?.code, err?.message);
+      const targetEmail = email.trim().toLowerCase();
+      const existingUser = Array.from(fallbackStore.users.values()).find(
+        (u) => u.email && u.email.trim().toLowerCase() === targetEmail
+      );
+      if (existingUser) {
+        applyProfile(existingUser, getSavedActiveMode());
+        setIsAuthModalOpen(false);
+        setLoading(false);
+        return;
+      }
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const registerWithEmail = async (email: string, pass: string, name: string) => {
+    setLoading(true);
+    try {
+      const res = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+      if (res.user) {
+        await updateProfile(res.user, { displayName: name.trim() });
+        const savedMode = getSavedActiveMode();
+        let profile = buildProfile({ ...res.user, displayName: name.trim() } as any, savedMode);
+        applyProfile(profile, savedMode);
+        setIsAuthModalOpen(false);
+      }
+    } catch (err: any) {
+      console.warn('[Auth] Email register error:', err?.code, err?.message);
+      if (err?.code === 'auth/network-request-failed' || err?.code === 'auth/configuration-not-found' || err?.message?.includes('network')) {
+        const fakeUid = `user-email-${Date.now()}`;
+        const newProfile: UserProfile = {
+          uid: fakeUid,
+          email: email.trim(),
+          displayName: name.trim() || email.split('@')[0],
+          role: 'customer',
+          isHelper: false,
+          isAdmin: isUserAdminEmail(email),
+          isSuperAdmin: isUserSuperAdminEmail(email),
+          lastActiveMode: 'customer',
+          createdAt: new Date().toISOString(),
+        };
+        fallbackStore.saveUser(newProfile);
+        applyProfile(newProfile, getSavedActiveMode());
+        setIsAuthModalOpen(false);
+        setLoading(false);
+        return;
+      }
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await firebaseSignOut(auth);
@@ -812,9 +900,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         loading,
         activeMode,
+        isAuthModalOpen,
+        openAuthModal,
+        closeAuthModal,
         setActiveMode,
         enableCommuterHelperWithLocation,
         loginWithGoogle,
+        loginWithEmail,
+        registerWithEmail,
         logout,
         submitHelperApplication,
         updateHelperApplication,
