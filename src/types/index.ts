@@ -130,6 +130,26 @@ export interface Order {
   weightKg?: number;
   selectedShopIds?: string[];
   mutuallyDiscussed?: boolean;
+  
+  // Due payment added to this completed order by helper or admin
+  duePayment?: OrderDuePayment;
+  // Previous due payment applied to this order's calculation summary
+  appliedDuePayment?: {
+    amount: number;
+    note: string;
+    sourceOrderIds?: string[];
+  };
+}
+
+export interface OrderDuePayment {
+  amount: number;
+  note: string;
+  addedBy: 'admin' | 'helper';
+  addedByName?: string;
+  addedAt: string;
+  updatedAt?: string;
+  status?: 'UNPAID' | 'PAID';
+  paidInOrderId?: string;
 }
 
 export interface UserProfile {
