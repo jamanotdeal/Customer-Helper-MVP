@@ -55,6 +55,58 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const [showAdminItemsModal, setShowAdminItemsModal] = useState(false);
   const [editItemsInput, setEditItemsInput] = useState('');
 
+  // Admin Due Payment state
+  const [showAdminDueModal, setShowAdminDueModal] = useState(false);
+  const [adminDueAmountInput, setAdminDueAmountInput] = useState('');
+  const [adminDueNoteInput, setAdminDueNoteInput] = useState('');
+
+  const handleAdminSaveDue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(adminDueAmountInput);
+    if (isNaN(amount) || amount <= 0) {
+      showAlert('সঠিক পরিমাণ লিখুন', 'অনুগ্রহ করে বাকি টাকার সঠিক পরিমাণ লিখুন।', 'warning');
+      return;
+    }
+    if (!adminDueNoteInput.trim()) {
+      showAlert('নোট প্রয়োজন', 'অনুগ্রহ করে কাস্টমারের জন্য বাকি পেমেন্টের কারণ লিখুন।', 'warning');
+      return;
+    }
+
+    await fallbackStore.updateOrder(orderId, (o) => ({
+      ...o,
+      duePayment: {
+        amount,
+        note: adminDueNoteInput.trim(),
+        addedBy: 'admin',
+        addedByName: currentUser?.displayName || 'Admin',
+        addedAt: o.duePayment?.addedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: o.duePayment?.status || 'UNPAID',
+      },
+    }));
+
+    setShowAdminDueModal(false);
+    showAlert('সফল', 'বাকি পেমেন্ট সংরক্ষণ করা হয়েছে। কাস্টমারের পরবর্তী অর্ডারে এটি যোগ হবে।', 'success');
+  };
+
+  const handleAdminRemoveDue = async () => {
+    const confirmed = await showConfirm(
+      'ডিলিট নিশ্চিতকরণ',
+      'আপনি কি নিশ্চিতভাবে এই বাকি পেমেন্ট রেকর্ডটি মুছে ফেলতে চান?',
+      'হ্যাঁ, মুছে ফেলুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    await fallbackStore.updateOrder(orderId, (o) => {
+      const copy = { ...o };
+      delete copy.duePayment;
+      return copy;
+    });
+
+    setShowAdminDueModal(false);
+  };
+
   // Admin Two-Way Delivery state
   const [showAdminTwoWayModal, setShowAdminTwoWayModal] = useState(false);
   const [adminTwoWayEnabled, setAdminTwoWayEnabled] = useState(false);
@@ -909,7 +961,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               const shopTotal = shopPrices.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price ?? 0), 0);
               const processingFeeValue = est.processingFee;
               const platformRevenueTotal = platformRevenue + processingFeeValue;
-              const totalCollectable = order.deliveryFee + productCost + processingFeeValue;
+              const appliedDueVal = order.appliedDuePayment?.amount || 0;
+              const totalCollectable = order.deliveryFee + productCost + processingFeeValue + appliedDueVal;
               const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
                 { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
                 ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
@@ -918,6 +971,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 { label: `Delivery Sub-total (min ৳${est.minFee})`, value: `৳${est.deliverySubtotal}`, sub: 'Distance + weight; min fee applied', color: 'text-slate-700' },
                 ...(isReturn ? [{ label: `Return/Two-Way Fee (+${est.returnPercent}%)`, value: `৳${est.returnFee}`, sub: 'Return delivery surcharge', color: 'text-indigo-700' }] : []),
                 ...(est.processingFee > 0 ? [{ label: `Processing Fee (${pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? pricingSettings.feeCalculatorProcessingFee + '%' : '৳' + pricingSettings.feeCalculatorProcessingFee})`, value: `৳${est.processingFee}`, sub: 'Applied when product cost is set', color: 'text-orange-700' }] : []),
+                ...(appliedDueVal > 0 ? [{ label: `Previous Order Due (পূর্বের বাকি)`, value: `+৳${appliedDueVal}`, sub: order.appliedDuePayment?.note || 'Carried over from previous completed order', color: 'text-red-600 font-extrabold' }] : []),
               ];
 
               return (
@@ -1215,6 +1269,17 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <DollarSign className="w-3.5 h-3.5" />
                     <span>Update Product Cost{order.productCost !== undefined ? ` (৳${order.productCost})` : ''}</span>
                   </button>
+                  <button
+                    onClick={() => {
+                      setAdminDueAmountInput(order.duePayment ? String(order.duePayment.amount) : '');
+                      setAdminDueNoteInput(order.duePayment?.note || '');
+                      setShowAdminDueModal(true);
+                    }}
+                    className="py-2 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>{order.duePayment ? `Edit Due Payment (৳${order.duePayment.amount})` : '+ Add Due Payment'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1506,6 +1571,65 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md">
                   Save Two-Way Settings
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Edit Due Payment Modal */}
+      {showAdminDueModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <DollarSign className="w-5 h-5 text-purple-700" />
+                <span>Admin: Manage Due Payment</span>
+              </h3>
+              <button onClick={() => setShowAdminDueModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              {order.duePayment ? 'Edit or remove due payment for this completed order.' : 'Add due payment for this completed order to carry over to customer\'s next order.'}
+            </p>
+            <form onSubmit={handleAdminSaveDue} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Due Amount (৳) *</label>
+                <input
+                  type="number"
+                  step="any"
+                  min="1"
+                  value={adminDueAmountInput}
+                  onChange={(e) => setAdminDueAmountInput(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-600"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer *</label>
+                <textarea
+                  value={adminDueNoteInput}
+                  onChange={(e) => setAdminDueNoteInput(e.target.value)}
+                  placeholder="e.g. Remaining item cost from shop..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-purple-600"
+                  required
+                />
+              </div>
+              <div className="flex space-x-2 pt-1">
+                {order.duePayment && (
+                  <button
+                    type="button"
+                    onClick={handleAdminRemoveDue}
+                    className="py-3 px-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs"
+                  >
+                    Delete
+                  </button>
+                )}
+                <button type="button" onClick={() => setShowAdminDueModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-md">Save Due</button>
               </div>
             </form>
           </div>

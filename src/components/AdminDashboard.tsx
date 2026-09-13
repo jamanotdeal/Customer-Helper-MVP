@@ -58,6 +58,7 @@ import { CustomerHistoryModal } from './admin/CustomerHistoryModal';
 import { HelperHistoryModal } from './admin/HelperHistoryModal';
 import { UserDetailsModal } from './admin/UserDetailsModal';
 import { RevenueAnalytics } from './admin/RevenueAnalytics';
+import { GrowthAnalytics } from './admin/GrowthAnalytics';
 import { AdminPushNotificationModal } from './admin/AdminPushNotificationModal';
 import { AdminHelperAppModal } from './admin/AdminHelperAppModal';
 import { TimePickerInput } from './admin/TimePickerInput';
@@ -83,7 +84,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
-    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'PRICING' | 'SETTINGS'
+    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'PRICING' | 'SETTINGS'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
@@ -2069,6 +2070,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         )}
 
+        {isTabAllowed('GROWTH') && (
+          <button
+            onClick={() => setActiveTab('GROWTH')}
+            data-active={activeTab === 'GROWTH'}
+            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'GROWTH'
+                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+          >
+            <BarChart2 className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>Growth & Everyday Rates</span>
+          </button>
+        )}
+
         {isTabAllowed('ORDERS') && (
           <button
             onClick={() => setActiveTab('ORDERS')}
@@ -2230,7 +2245,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </DraggableTabsContainer>
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
-      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (() => {
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && (() => {
         const getTabSearchStates = () => {
           switch (activeTab) {
             case 'ORDERS':
@@ -3605,9 +3620,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           orders={allOrders}
           pricing={pricing}
           shops={shops}
+          users={users}
+          feedbacks={feedbacks}
           serverTotalDeliveryFees={exactTotalDeliveryFees}
           serverTotalProductCosts={exactTotalProductCosts}
           serverTotalCollection={exactTotalCollection}
+        />
+      )}
+
+      {/* --- TAB: GROWTH & EVERYDAY RATES TAB --- */}
+      {activeTab === 'GROWTH' && isTabAllowed('GROWTH') && (
+        <GrowthAnalytics
+          orders={allOrders}
+          users={users}
+          feedbacks={feedbacks}
         />
       )}
 

@@ -412,6 +412,11 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             {order.items?.length ? `${order.items.length} item${order.items.length !== 1 ? 's' : ''}` : ''}
           </span>
           <div className="flex items-center space-x-2">
+            {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
+              <span className="text-[10px] bg-red-50 text-red-700 px-2 py-0.5 rounded-lg border border-red-200 font-extrabold flex items-center space-x-1">
+                <span>+৳{order.appliedDuePayment.amount} বাকি</span>
+              </span>
+            )}
             {order.feeAdjustment && order.feeAdjustment.status === 'PENDING' && (
               <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-lg border border-amber-200 font-bold flex items-center space-x-1">
                 <AlertCircle className="w-3 h-3" />

@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Order, PricingSettings, Shop } from '@/types';
+import { Order, PricingSettings, Shop, UserProfile, OrderFeedback } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
 import { PaginationControl } from './PaginationControl';
 import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
+import { GrowthAnalytics } from './GrowthAnalytics';
 import {
   DollarSign,
   Calendar,
@@ -19,12 +20,15 @@ import {
   Sparkles,
   Store,
   ArrowUpDown,
+  BarChart2,
 } from 'lucide-react';
 
 interface RevenueAnalyticsProps {
   orders: Order[];
   pricing: PricingSettings;
   shops?: Shop[];
+  users?: UserProfile[];
+  feedbacks?: OrderFeedback[];
   serverTotalDeliveryFees?: number | null;
   serverTotalProductCosts?: number | null;
   serverTotalCollection?: number | null;
@@ -34,10 +38,14 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
   orders,
   pricing,
   shops = [],
+  users = [],
+  feedbacks = [],
   serverTotalDeliveryFees = null,
   serverTotalProductCosts = null,
   serverTotalCollection = null,
 }) => {
+  const [analyticsSubView, setAnalyticsSubView] = useState<'FINANCIAL' | 'GROWTH'>('FINANCIAL');
+
   // Local Date Helper (YYYY-MM-DD in user's local timezone)
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {
     const year = d.getFullYear();
@@ -477,8 +485,39 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Date Range Selector Header Bar */}
-      <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-soft flex flex-col lg:flex-row items-center justify-between gap-4">
+      {/* Analytics View Selector Sub-Tabs */}
+      <div className="flex items-center space-x-2 bg-gray-100/80 p-1.5 rounded-2xl w-fit">
+        <button
+          onClick={() => setAnalyticsSubView('FINANCIAL')}
+          className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center space-x-2 ${
+            analyticsSubView === 'FINANCIAL'
+              ? 'bg-white text-purple-950 shadow-md'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <DollarSign className="w-4 h-4 text-emerald-600" />
+          <span>Financial & Revenue Ledger</span>
+        </button>
+
+        <button
+          onClick={() => setAnalyticsSubView('GROWTH')}
+          className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center space-x-2 ${
+            analyticsSubView === 'GROWTH'
+              ? 'bg-white text-purple-950 shadow-md'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
+          }`}
+        >
+          <BarChart2 className="w-4 h-4 text-indigo-600" />
+          <span>Everyday Growth Rates & Charts</span>
+        </button>
+      </div>
+
+      {analyticsSubView === 'GROWTH' ? (
+        <GrowthAnalytics orders={orders} users={users} feedbacks={feedbacks} />
+      ) : (
+        <>
+          {/* Date Range Selector Header Bar */}
+          <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-soft flex flex-col lg:flex-row items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <Calendar className="w-5 h-5 text-purple-700" />
@@ -1066,6 +1105,8 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
           onClose={() => setShowOutstandingModal(false)}
           totalOutstanding={analyticsData.totalOutstandingLiability}
         />
+      )}
+        </>
       )}
     </div>
   );

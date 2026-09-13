@@ -3,7 +3,7 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2 } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -52,6 +52,69 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   // Custom Celebratory Completion Modal state
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [earnedAmount, setEarnedAmount] = useState(0);
+
+  // Helper Due Payment state
+  const [showHelperDueModal, setShowHelperDueModal] = useState(false);
+  const [helperDueAmountInput, setHelperDueAmountInput] = useState('');
+  const [helperDueNoteInput, setHelperDueNoteInput] = useState('');
+
+  const openHelperDueModal = () => {
+    if (order.duePayment) {
+      setHelperDueAmountInput(order.duePayment.amount.toString());
+      setHelperDueNoteInput(order.duePayment.note || '');
+    } else {
+      setHelperDueAmountInput('');
+      setHelperDueNoteInput('');
+    }
+    setShowHelperDueModal(true);
+  };
+
+  const handleSaveHelperDue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(helperDueAmountInput);
+    if (isNaN(amount) || amount <= 0) {
+      showAlert('সঠিক টাকা পরিমাণ লিখুন', 'অনুগ্রহ করে বাকি টাকার সঠিক পরিমাণ লিখুন।', 'warning');
+      return;
+    }
+    if (!helperDueNoteInput.trim()) {
+      showAlert('নোট প্রয়োজন', 'অনুগ্রহ করে কাস্টমারের জন্য বাকি পেমেন্টের কারণ লিখুন।', 'warning');
+      return;
+    }
+
+    await fallbackStore.updateOrder(order.id, (prev) => ({
+      ...prev,
+      duePayment: {
+        amount,
+        note: helperDueNoteInput.trim(),
+        addedBy: 'helper',
+        addedByName: user?.displayName || 'Helper',
+        addedAt: prev.duePayment?.addedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: prev.duePayment?.status || 'UNPAID',
+      },
+    }));
+
+    setShowHelperDueModal(false);
+    showAlert('সংরক্ষণ সম্পন্ন', 'বাকি পেমেন্ট সংরক্ষণ করা হয়েছে। এটি কাস্টমারের পরবর্তী অর্ডারে যোগ হবে।', 'success');
+  };
+
+  const handleRemoveHelperDue = async () => {
+    const confirmed = await showConfirm(
+      'ডিলিট নিশ্চিতকরণ',
+      'আপনি কি নিশ্চিতভাবে এই বাকি পেমেন্ট রেকর্ডটি মুছে ফেলতে চান?',
+      'হ্যাঁ, মুছে ফেলুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    await fallbackStore.updateOrder(order.id, (prev) => {
+      const copy = { ...prev };
+      delete copy.duePayment;
+      return copy;
+    });
+
+    setShowHelperDueModal(false);
+  };
 
   // Delivery confirmation modal
   const [showDeliveryConfirmModal, setShowDeliveryConfirmModal] = useState(false);
@@ -1690,6 +1753,24 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               )}
 
+              {/* Previous Order Due Payment Line Item */}
+              {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
+                <div className="border-t border-amber-200 pt-2 space-y-1">
+                  <div className="flex items-center justify-between text-amber-950 font-bold">
+                    <span className="flex items-center space-x-1 text-amber-900">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>Previous Order Due (পূর্বের বাকি)</span>
+                    </span>
+                    <span className="font-extrabold text-sm text-red-600">+৳{order.appliedDuePayment.amount}</span>
+                  </div>
+                  {order.appliedDuePayment.note && (
+                    <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200/70 text-[11px] text-amber-950 font-medium leading-relaxed">
+                      <strong>বাকি নোট:</strong> {order.appliedDuePayment.note}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
                 <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
                 <div className="flex items-center space-x-1.5">
@@ -1713,7 +1794,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total to Collect (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                 </span>
               </div>
 
@@ -2829,6 +2910,89 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             setRetailerDetailsShop(null);
           }}
         />
+      )}
+      {/* Helper: Manage Due Payment Modal */}
+      {showHelperDueModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-gray-100 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center space-x-2">
+                <DollarSign className="w-5 h-5 text-purple-600" />
+                <h3 className="font-extrabold text-base text-gray-900">
+                  {order.duePayment ? 'বাকি পেমেন্ট এডিট করুন' : 'নতুন বাকি পেমেন্ট যোগ করুন'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowHelperDueModal(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveHelperDue} className="space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold text-gray-700 mb-1">
+                  বাকি টাকার পরিমাণ (৳) *
+                </label>
+                <input
+                  type="number"
+                  value={helperDueAmountInput}
+                  onChange={(e) => setHelperDueAmountInput(e.target.value)}
+                  placeholder="যেমন: ৫০"
+                  min="1"
+                  step="any"
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-bold text-gray-900"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-extrabold text-gray-700 mb-1">
+                  কারণ / নোট (Note for Customer) *
+                </label>
+                <textarea
+                  value={helperDueNoteInput}
+                  onChange={(e) => setHelperDueNoteInput(e.target.value)}
+                  placeholder="যেমন: পণ্য ক্রয়ে দোকানে ৫০ টাকা বাকি ছিলো..."
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-24"
+                  required
+                />
+              </div>
+
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                * এই বাকি পেমেন্টটি কাস্টমারের পরবর্তী যেকোনো নতুন অর্ডারের সাথে স্বয়ংক্রিয়ভাবে যোগ হবে এবং কাস্টমার বিলের সামারিতে এর নোট দেখতে পারবেন।
+              </p>
+
+              <div className="flex items-center space-x-3 pt-2">
+                {order.duePayment && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveHelperDue}
+                    className="px-4 py-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs transition-all flex items-center space-x-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>ডিলিট</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowHelperDueModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-all"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95"
+                >
+                  সংরক্ষণ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -7,7 +7,7 @@ import { OrderItem, LocationData, Order } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock } from 'lucide-react';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock, AlertTriangle } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { MapPickerModal } from './MapPickerModal';
@@ -55,6 +55,9 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   // Pickup saved-address picker state (service-scoped)
   const [showPickupAddressPicker, setShowPickupAddressPicker] = useState(false);
   const [savedPickupAddresses, setSavedPickupAddresses] = useState<LocationData[]>([]);
+
+  // Previous unpaid due payment state
+  const [unpaidDue, setUnpaidDue] = useState<{ totalAmount: number; notes: string[]; sourceOrderIds: string[] } | null>(null);
 
   // Service selection state
   const [service, setService] = useState('');
@@ -151,6 +154,21 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       setSavedAddresses(addresses);
     }
   }, [user]);
+
+  // Sync customer's unpaid due payments from previous completed orders
+  useEffect(() => {
+    if (!user?.uid) {
+      setUnpaidDue(null);
+      return;
+    }
+    const syncDue = () => {
+      const due = fallbackStore.getCustomerUnpaidDuePayments(user.uid);
+      setUnpaidDue(due);
+    };
+    syncDue();
+    const unsub = fallbackStore.subscribe(syncDue);
+    return () => unsub();
+  }, [user?.uid]);
 
   // Rotate placeholder every 2.8 s
   useEffect(() => {
@@ -300,6 +318,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       status: 'PENDING',
       deliveryFee: initialFee,
       originalDeliveryFee: initialFee,
+      appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
+        ? {
+            amount: unpaidDue.totalAmount,
+            note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
+            sourceOrderIds: unpaidDue.sourceOrderIds,
+          }
+        : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       statusHistory: [
@@ -472,6 +497,27 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     required
                   />
                 </div>
+
+                {/* Previous Unpaid Due Payment Card */}
+                {unpaidDue && unpaidDue.totalAmount > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-1 text-xs">
+                    <div className="flex items-center justify-between font-bold text-amber-900">
+                      <span className="flex items-center space-x-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>পূর্বের বাকি পেমেন্ট (Previous Due Payment)</span>
+                      </span>
+                      <span className="font-extrabold text-sm text-red-600">+৳{unpaidDue.totalAmount}</span>
+                    </div>
+                    {unpaidDue.notes.length > 0 && (
+                      <p className="text-[11px] text-amber-800 font-medium pl-5.5">
+                        <strong>নোট:</strong> {unpaidDue.notes.join('; ')}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-amber-700 italic pl-5.5 pt-0.5">
+                      * এই বাকি পরিমাণটি আপনার নতুন অর্ডারের মোট বিলে যুক্ত থাকবে।
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 

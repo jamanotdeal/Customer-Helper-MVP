@@ -1886,6 +1886,31 @@ class FallbackStore {
       }
     }
 
+    // Auto-settle previous due payments when an order with appliedDuePayment is DELIVERED
+    if (updated.status === 'DELIVERED' && updated.appliedDuePayment?.sourceOrderIds?.length) {
+      for (const srcId of updated.appliedDuePayment.sourceOrderIds) {
+        const srcOrder = this.orders.get(srcId);
+        if (srcOrder && srcOrder.duePayment && srcOrder.duePayment.status !== 'PAID') {
+          const updatedSrc: Order = {
+            ...srcOrder,
+            duePayment: {
+              ...srcOrder.duePayment,
+              status: 'PAID',
+              paidInOrderId: updated.id,
+              updatedAt: new Date().toISOString(),
+            },
+            updatedAt: new Date().toISOString(),
+          };
+          this.orders.set(srcId, updatedSrc);
+          try {
+            setDoc(doc(db, 'orders', srcId), cleanForFirestore(updatedSrc), { merge: true }).catch(() => {});
+          } catch (e) {
+            console.warn('[Firestore] error updating source due payment status:', e);
+          }
+        }
+      }
+    }
+
     this.notify();
 
     try {
@@ -1893,6 +1918,34 @@ class FallbackStore {
     } catch (e: any) {
       console.warn('[Firestore] updateOrder note (saved locally):', e?.message || e);
     }
+  }
+
+  public getCustomerUnpaidDuePayments(customerId: string): { totalAmount: number; notes: string[]; sourceOrderIds: string[] } {
+    let totalAmount = 0;
+    const notes: string[] = [];
+    const sourceOrderIds: string[] = [];
+
+    this.orders.forEach((ord) => {
+      if (
+        ord.customerId === customerId &&
+        ord.status === 'DELIVERED' &&
+        ord.duePayment &&
+        ord.duePayment.amount > 0 &&
+        ord.duePayment.status !== 'PAID'
+      ) {
+        totalAmount += ord.duePayment.amount;
+        if (ord.duePayment.note) {
+          notes.push(ord.duePayment.note);
+        }
+        sourceOrderIds.push(ord.id);
+      }
+    });
+
+    return {
+      totalAmount,
+      notes,
+      sourceOrderIds,
+    };
   }
 
   // ─── Shop Orders (Helper → Store ordering system) ──────────────────────────

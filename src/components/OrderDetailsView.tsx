@@ -8,7 +8,7 @@ import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
-  Star, Sparkles, FileText, ShieldCheck, DollarSign,
+  Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
@@ -70,6 +70,70 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelError, setCancelError] = useState('');
+
+  // Due Payment modal state
+  const [showDueModal, setShowDueModal] = useState(false);
+  const [dueAmountInput, setDueAmountInput] = useState('');
+  const [dueNoteInput, setDueNoteInput] = useState('');
+
+  const openDueModal = () => {
+    if (order?.duePayment) {
+      setDueAmountInput(order.duePayment.amount.toString());
+      setDueNoteInput(order.duePayment.note || '');
+    } else {
+      setDueAmountInput('');
+      setDueNoteInput('');
+    }
+    setShowDueModal(true);
+  };
+
+  const handleSaveDuePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!order) return;
+    const amount = parseFloat(dueAmountInput);
+    if (isNaN(amount) || amount <= 0) {
+      alert('সঠিক টাকা পরিমাণ লিখুন');
+      return;
+    }
+    if (!dueNoteInput.trim()) {
+      alert('বাকি পেমেন্টের কারণ বা নোট লিখুন');
+      return;
+    }
+
+    const isHelper = user?.role === 'helper' || user?.lastActiveMode === 'helper' || user?.isHelper;
+    const isAdmin = user?.role === 'admin' || user?.lastActiveMode === 'admin' || user?.isAdmin;
+
+    const addedByRole = isAdmin ? ('admin' as const) : ('helper' as const);
+    const addedByName = user?.displayName || (isAdmin ? 'Admin' : 'Helper');
+
+    await fallbackStore.updateOrder(order.id, (prev) => ({
+      ...prev,
+      duePayment: {
+        amount,
+        note: dueNoteInput.trim(),
+        addedBy: addedByRole,
+        addedByName,
+        addedAt: prev.duePayment?.addedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: prev.duePayment?.status || 'UNPAID',
+      },
+    }));
+
+    setShowDueModal(false);
+  };
+
+  const handleRemoveDuePayment = async () => {
+    if (!order) return;
+    if (!confirm('আপনি কি নিশ্চিতভাবে এই বাকি পেমেন্ট রেকর্ডটি মুছে ফেলতে চান?')) return;
+
+    await fallbackStore.updateOrder(order.id, (prev) => {
+      const next = { ...prev };
+      delete next.duePayment;
+      return next;
+    });
+
+    setShowDueModal(false);
+  };
 
   useEffect(() => {
     const syncOrder = () => {
@@ -700,6 +764,24 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 </div>
               )}
 
+              {/* Previous Order Due Payment Line Item */}
+              {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
+                <div className="border-t border-amber-200 pt-2 space-y-1">
+                  <div className="flex items-center justify-between text-amber-950 font-bold">
+                    <span className="flex items-center space-x-1 text-amber-900">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>Previous Order Due (পূর্বের বাকি)</span>
+                    </span>
+                    <span className="font-extrabold text-sm text-red-600">+৳{order.appliedDuePayment.amount}</span>
+                  </div>
+                  {order.appliedDuePayment.note && (
+                    <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200/70 text-[11px] text-amber-950 font-medium leading-relaxed">
+                      <strong>বাকি নোট:</strong> {order.appliedDuePayment.note}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
                 <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
                 <span className="text-base font-black text-emerald-850">৳{Math.max(order.deliveryFee, estdPricing.minFee)}</span>
@@ -708,10 +790,65 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total Payable Amount (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                 </span>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) ── */}
+        {isDelivered && (
+          <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <DollarSign className="w-5 h-5 text-purple-600" />
+                <div>
+                  <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট (Due Payment)</h3>
+                  <p className="text-[11px] text-gray-500 font-medium">
+                    পরবর্তী অর্ডারে যুক্ত করার জন্য কাস্টমারের বাকি পেমেন্ট রেকর্ড
+                  </p>
+                </div>
+              </div>
+              {(user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
+                <button
+                  onClick={openDueModal}
+                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1"
+                >
+                  <Edit2 className="w-3 h-3" />
+                  <span>{order.duePayment ? 'এডিট করুন' : '+ বাকি যোগ করুন'}</span>
+                </button>
+              )}
+            </div>
+
+            {order.duePayment ? (
+              <div className="p-3.5 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between font-bold">
+                  <span className="text-purple-900">বাকি পরিমাণ:</span>
+                  <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-600 font-semibold">স্ট্যাটাস:</span>
+                  <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                    {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত (PAID)' : '⚠️ বকেয়া (UNPAID)'}
+                  </span>
+                </div>
+                {order.duePayment.note && (
+                  <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
+                    <strong>কারণ/নোট:</strong> {order.duePayment.note}
+                  </div>
+                )}
+                {order.duePayment.addedByName && (
+                  <div className="text-[10px] text-gray-500 italic">
+                    যোগ করেছেন: {order.duePayment.addedByName} ({order.duePayment.addedBy})
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 font-medium italic bg-gray-50 p-3 rounded-2xl text-center">
+                এই অর্ডারে কোনো বাকি পেমেন্ট যোগ করা নেই।
+              </p>
+            )}
           </div>
         )}
 
@@ -1086,6 +1223,89 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           if (loc.lng) setEditDeliveryLng(loc.lng);
         }}
       />
+
+      {/* ── DUE PAYMENT ADD/EDIT MODAL ── */}
+      {showDueModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-gray-100">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center space-x-2">
+                <DollarSign className="w-5 h-5 text-purple-600" />
+                <h3 className="font-extrabold text-base text-gray-900">
+                  {order.duePayment ? 'বাকি পেমেন্ট এডিট করুন' : 'নতুন বাকি পেমেন্ট যোগ করুন'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowDueModal(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDuePayment} className="space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold text-gray-700 mb-1">
+                  বাকি টাকার পরিমাণ (৳) *
+                </label>
+                <input
+                  type="number"
+                  value={dueAmountInput}
+                  onChange={(e) => setDueAmountInput(e.target.value)}
+                  placeholder="যেমন: ৫০"
+                  min="1"
+                  step="any"
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-bold text-gray-900"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-extrabold text-gray-700 mb-1">
+                  কারণ / নোট (Note for Customer) *
+                </label>
+                <textarea
+                  value={dueNoteInput}
+                  onChange={(e) => setDueNoteInput(e.target.value)}
+                  placeholder="যেমন: পণ্য ক্রয়ে দোকানে ৫০ টাকা বাকি ছিলো..."
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-24"
+                  required
+                />
+              </div>
+
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                * এই বাকি পেমেন্টটি কাস্টমারের পরবর্তী যেকোনো নতুন অর্ডারের সাথে স্বয়ংক্রিয়ভাবে যোগ হবে এবং কাস্টমার বিলের সামারিতে এর বিস্তারিত নোট দেখতে পারবেন।
+              </p>
+
+              <div className="flex items-center space-x-3 pt-2">
+                {order.duePayment && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveDuePayment}
+                    className="px-4 py-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs transition-all flex items-center space-x-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>ডিলিট</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowDueModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-all"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95"
+                >
+                  সংরক্ষণ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showFeedbackModal && (
         <OrderFeedbackModal
