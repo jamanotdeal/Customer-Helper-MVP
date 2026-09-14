@@ -109,7 +109,7 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
+          className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
           aria-label="Close"
         >
           <X className="w-4 h-4" />

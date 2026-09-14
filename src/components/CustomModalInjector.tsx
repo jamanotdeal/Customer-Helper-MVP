@@ -169,7 +169,7 @@ export const CustomModalInjector: React.FC<CustomModalInjectorProps> = ({ curren
         <button
           type="button"
           onClick={handleClose}
-          className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-colors backdrop-blur-md"
+          className="absolute top-4 right-4 z-10 p-2 rounded-full bg-rose-600/80 text-white hover:bg-rose-700 transition-colors backdrop-blur-md shadow-md"
         >
           <X className="w-5 h-5" />
         </button>

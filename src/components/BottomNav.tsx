@@ -15,10 +15,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
 
   useEffect(() => {
     const updateExploreCount = () => {
-      if (user && user.isHelper && activeMode === 'helper') {
+      if (user && (user.isHelper || user.role === 'helper') && activeMode === 'helper') {
         const allOrders = Array.from(fallbackStore.orders.values());
         const pendingCount = allOrders.filter(
-          (o) => o.status === 'PENDING' && !o.helperId
+          (o) =>
+            o.status === 'PENDING' &&
+            (!o.helperId || o.helperId.trim() === '') &&
+            !['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(o.status) &&
+            o.cancellationRequest?.status !== 'APPROVED'
         ).length;
         setExploreCount(pendingCount);
       } else {
@@ -33,8 +37,13 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
 
   if (!user) return null;
 
-  const isDedicatedHelper = user.isHelper && activeMode === 'helper' && user.helperType === 'dedicated';
-  const isCustomerMode = activeMode === 'customer';
+  const isAdmin = Boolean(user.isAdmin || user.role === 'admin' || activeMode === 'admin');
+  if (isAdmin) return null;
+
+  const isStore = Boolean(user.isStoreApproved || user.role === 'store' || Boolean(user.storeId) || activeMode === 'store');
+  const isHelper = Boolean((user.isHelper || user.role === 'helper' || activeMode === 'helper') && !isStore);
+  const isDedicatedHelper = isHelper && user.helperType === 'dedicated';
+  const isCustomer = !isStore && !isHelper;
 
   const handleTabChange = (tab: string) => {
     if (tab === activeTab) return;
@@ -63,106 +72,146 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
       }}
     >
       <div className="content-container flex items-center justify-around px-2">
-        {/* Customer / Request Tab */}
-        <button
-          id="nav-tab-request"
-          onClick={() => handleTabChange('request')}
-          className={tabClass(activeTab === 'request')}
-          aria-label="Request"
-        >
-          <ShoppingBag className="w-5 h-5" />
-          <span className="text-[11px]">Request</span>
-          {activeTab === 'request' && (
-            <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
-          )}
-        </button>
-
-
-
-        {/* Helper Center — visible to customer mode users */}
-        {isCustomerMode && (
-          <button
-            id="nav-tab-helper-center"
-            onClick={() => handleTabChange('helper_center')}
-            className={tabClass(activeTab === 'helper_center')}
-            aria-label="Help Center"
-          >
-            <HeartHandshake className="w-5 h-5" />
-            <span className="text-[11px] whitespace-nowrap">Help Center</span>
-            {activeTab === 'helper_center' && (
-              <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
-            )}
-          </button>
-        )}
-
-        {/* Explore Tab (dedicated helpers only) */}
-        {isDedicatedHelper && (
-          <button
-            id="nav-tab-explore"
-            onClick={() => handleTabChange('explore')}
-            className={tabClass(activeTab === 'explore')}
-            aria-label="Explore"
-          >
-            <div className="relative">
-              <Compass className="w-5 h-5" />
-              {exploreCount > 0 && (
-                <span className="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse">
-                  {exploreCount > 99 ? '99+' : exploreCount}
-                </span>
+        {/* STORE USER NAVIGATION */}
+        {isStore && (
+          <>
+            <button
+              id="nav-tab-store-orders"
+              onClick={() => handleTabChange('request')}
+              className={tabClass(activeTab === 'request')}
+              aria-label="Store Orders"
+            >
+              <ShoppingBag className="w-5 h-5" />
+              <span className="text-[11px]">Orders</span>
+              {activeTab === 'request' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
               )}
-            </div>
-            <span className="text-[11px]">Explore</span>
-            {activeTab === 'explore' && (
-              <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
-            )}
-          </button>
+            </button>
+
+            <button
+              id="nav-tab-store-wallet"
+              onClick={() => handleTabChange('wallet')}
+              className={tabClass(activeTab === 'wallet')}
+              aria-label="Store Wallet"
+            >
+              <Wallet className="w-5 h-5" />
+              <span className="text-[11px]">Wallet</span>
+              {activeTab === 'wallet' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+          </>
         )}
 
-        {/* Wallet Tab (helpers and stores) */}
-        {((user.isHelper && activeMode === 'helper') || (user.isStoreApproved || activeMode === 'store')) && (
-          <button
-            id="nav-tab-wallet"
-            onClick={() => handleTabChange('wallet')}
-            className={tabClass(activeTab === 'wallet')}
-            aria-label="Wallet"
-          >
-            <Wallet className="w-5 h-5" />
-            <span className="text-[11px]">Wallet</span>
-            {activeTab === 'wallet' && (
-              <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+        {/* HELPER USER NAVIGATION */}
+        {isHelper && (
+          <>
+            <button
+              id="nav-tab-helper-tasks"
+              onClick={() => handleTabChange('helper_tasks')}
+              className={tabClass(activeTab === 'helper_tasks' || activeTab === 'request')}
+              aria-label="Tasks"
+            >
+              <Bike className="w-5 h-5" />
+              <span className="text-[11px]">Tasks</span>
+              {(activeTab === 'helper_tasks' || activeTab === 'request') && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+
+            {isDedicatedHelper && (
+              <button
+                id="nav-tab-explore"
+                onClick={() => handleTabChange('explore')}
+                className={tabClass(activeTab === 'explore')}
+                aria-label="Explore"
+              >
+                <div className="relative">
+                  <Compass className="w-5 h-5" />
+                  {exploreCount > 0 && (
+                    <span className="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse">
+                      {exploreCount > 99 ? '99+' : exploreCount}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px]">Explore</span>
+                {activeTab === 'explore' && (
+                  <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+                )}
+              </button>
             )}
-          </button>
+
+            <button
+              id="nav-tab-helper-wallet"
+              onClick={() => handleTabChange('wallet')}
+              className={tabClass(activeTab === 'wallet')}
+              aria-label="Wallet"
+            >
+              <Wallet className="w-5 h-5" />
+              <span className="text-[11px]">Wallet</span>
+              {activeTab === 'wallet' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+
+            <button
+              id="nav-tab-fee-details"
+              onClick={() => handleTabChange('fee_details')}
+              className={tabClass(activeTab === 'fee_details')}
+              aria-label="Fee Details"
+            >
+              <Calculator className="w-5 h-5" />
+              <span className="text-[11px] whitespace-nowrap">Fee Details</span>
+              {activeTab === 'fee_details' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+          </>
         )}
 
-        {/* Admin Tab (admin only) */}
-        {user.isAdmin && (
-          <button
-            id="nav-tab-admin"
-            onClick={() => handleTabChange('admin_panel')}
-            className={tabClass(activeTab === 'admin_panel', 'purple')}
-            aria-label="Admin"
-          >
-            <ShieldCheck className="w-5 h-5" />
-            <span className="text-[11px]">Admin</span>
-            {activeTab === 'admin_panel' && (
-              <span className="absolute bottom-0 w-1 h-1 rounded-full bg-purple-600" />
-            )}
-          </button>
-        )}
+        {/* CUSTOMER USER NAVIGATION */}
+        {isCustomer && (
+          <>
+            <button
+              id="nav-tab-request"
+              onClick={() => handleTabChange('request')}
+              className={tabClass(activeTab === 'request')}
+              aria-label="Request"
+            >
+              <ShoppingBag className="w-5 h-5" />
+              <span className="text-[11px]">Request</span>
+              {activeTab === 'request' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
 
-        {/* Fee Details Tab — Last (rightmost) */}
-        <button
-          id="nav-tab-fee-details"
-          onClick={() => handleTabChange('fee_details')}
-          className={tabClass(activeTab === 'fee_details')}
-          aria-label="Fee Details"
-        >
-          <Calculator className="w-5 h-5" />
-          <span className="text-[11px] whitespace-nowrap">Fee Details</span>
-          {activeTab === 'fee_details' && (
-            <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
-          )}
-        </button>
+            <button
+              id="nav-tab-helper-center"
+              onClick={() => handleTabChange('helper_center')}
+              className={tabClass(activeTab === 'helper_center')}
+              aria-label="Help Center"
+            >
+              <HeartHandshake className="w-5 h-5" />
+              <span className="text-[11px] whitespace-nowrap">Help Center</span>
+              {activeTab === 'helper_center' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+
+            <button
+              id="nav-tab-fee-details"
+              onClick={() => handleTabChange('fee_details')}
+              className={tabClass(activeTab === 'fee_details')}
+              aria-label="Fee Details"
+            >
+              <Calculator className="w-5 h-5" />
+              <span className="text-[11px] whitespace-nowrap">Fee Details</span>
+              {activeTab === 'fee_details' && (
+                <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
+              )}
+            </button>
+          </>
+        )}
       </div>
     </nav>
   );

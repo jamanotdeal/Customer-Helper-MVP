@@ -20,6 +20,8 @@ import { useModal } from '@/components/CustomModal';
 
 import { Order } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
+import { CoinRewardModal } from '@/components/CoinRewardModal';
+import { getCoinsForService } from '@/lib/pricing';
 import { CustomModalInjector } from '@/components/CustomModalInjector';
 
 import { HelperCenterPage } from '@/components/HelperCenterPage';
@@ -31,6 +33,7 @@ export default function PageClient() {
   const { showAlert, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
 
@@ -80,32 +83,60 @@ export default function PageClient() {
   // iOS "Add to Home Screen" install banner (only shown in browser, not in native app)
   const [showIosInstallBanner, setShowIosInstallBanner] = useState(false);
 
-  // Check for completed customer orders needing feedback (Only for customer mode)
+  // Check for completed customer orders needing Coin Reward Celebration first, then Feedback
   useEffect(() => {
     if (!user || (activeMode as string) !== 'customer') {
+      setCoinRewardOrder(null);
       setFeedbackOrder(null);
       return;
     }
 
-    const checkUnratedDeliveredOrder = () => {
+    const checkDeliveredOrderPopups = () => {
+      fallbackStore.reconcileCustomerCoins(user.uid);
+
       const userOrders = Array.from(fallbackStore.orders.values()).filter(
         (o) => o.customerId === user.uid && o.status === 'DELIVERED'
       );
 
+      // 1. Check for uncelebrated delivered order first (Coin Reward Modal)
+      const uncelebrated = userOrders.find((o) => {
+        const coinSeen = typeof localStorage !== 'undefined' && localStorage.getItem(`coin_reward_seen_${o.id}`);
+        if (coinSeen) return false;
+
+        const completionTimeStr = o.deliveredAt || o.updatedAt || o.createdAt;
+        if (!completionTimeStr) return false;
+        try {
+          const completionTime = new Date(completionTimeStr).getTime();
+          const now = Date.now();
+          const diffHours = (now - completionTime) / (1000 * 60 * 60);
+          return diffHours >= 0 && diffHours <= 8;
+        } catch (e) {
+          return false;
+        }
+      });
+
+      if (uncelebrated) {
+        setCoinRewardOrder(uncelebrated);
+        // Do not show feedback modal simultaneously; it will trigger immediately when coin reward modal closes
+        setFeedbackOrder(null);
+        return;
+      }
+
+      setCoinRewardOrder(null);
+
+      // 2. Check for unrated delivered order (Feedback Modal)
       const unrated = userOrders.find((o) => {
         if (o.feedback) return false;
         const dismissed = typeof localStorage !== 'undefined' && localStorage.getItem(`feedback_dismissed_${o.id}`);
         if (dismissed) return false;
 
-        // Only show review modal if order was completed within the last 8 hours
         const completionTimeStr = o.deliveredAt || o.updatedAt || o.createdAt;
         if (!completionTimeStr) return false;
-        
+
         try {
           const completionTime = new Date(completionTimeStr).getTime();
           const now = Date.now();
-          const diffMs = now - completionTime;
-          const diffHours = diffMs / (1000 * 60 * 60);
+          const diffHours = (now - completionTime) / (1000 * 60 * 60);
           return diffHours >= 0 && diffHours <= 8;
         } catch (e) {
           return false;
@@ -119,8 +150,8 @@ export default function PageClient() {
       }
     };
 
-    checkUnratedDeliveredOrder();
-    const unsub = fallbackStore.subscribe(checkUnratedDeliveredOrder);
+    checkDeliveredOrderPopups();
+    const unsub = fallbackStore.subscribe(checkDeliveredOrderPopups);
     return () => unsub();
   }, [user, activeMode]);
 
@@ -156,7 +187,7 @@ export default function PageClient() {
     return cleanup;
   }, [showNotifications]);
 
-  // Auto-register service worker & request push notification permission
+  // Auto-register service worker & request push notification permission (only for Helper or Store on load)
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker
@@ -168,7 +199,7 @@ export default function PageClient() {
         .catch((err) => console.warn('ServiceWorker registration note:', err));
     }
 
-    if (user) {
+    if (user && (user.isHelper || user.isStoreApproved || user.role === 'store' || user.role === 'helper' || Boolean(user.storeId))) {
       const alreadyGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
       const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
 
@@ -204,7 +235,7 @@ export default function PageClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // Listen for orderId query parameter changes (e.g. from notification clicks) to redirect/open that order (Requirement 1)
+  // Listen for orderId query parameter changes (e.g. from notification clicks) to redirect/open that order
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -234,32 +265,59 @@ export default function PageClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, activeMode, activeTab]);
 
-  // Reset activeTab when activeMode changes
+  const isAdminView = Boolean(
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
+  );
+
+  const isStoreUser = Boolean(
+    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId) || activeMode === 'store')
+  );
+
+  const isHelperUser = Boolean(
+    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
+  );
+
+  // Sync activeTab when user or activeMode changes
   useEffect(() => {
-    if (activeMode === 'customer' && activeTab !== 'fee_details' && activeTab !== 'helper_center') {
-      setActiveTab('request');
+    if (!user) {
+      if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
+        setActiveTab('request');
+      }
+      return;
     }
-  }, [activeMode]);
+
+    if (isAdminView) {
+      setActiveTab('admin_panel');
+    } else if (isStoreUser) {
+      if (activeTab !== 'wallet') {
+        setActiveTab('request');
+      }
+    } else if (isHelperUser) {
+      if (activeTab === 'request' || activeTab === 'admin_panel' || activeTab === 'helper_center') {
+        setActiveTab('helper_tasks');
+      }
+    } else {
+      if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
+        setActiveTab('request');
+      }
+    }
+  }, [user, activeMode, isAdminView, isStoreUser, isHelperUser]);
 
   // Strict role view guarding
   const renderCurrentView = () => {
-    // Fee Details view (available to guests and logged in users)
-    if (activeTab === 'fee_details') {
-      return <FeeDetailsPage onBack={() => setActiveTab('request')} />;
-    }
-
-    // Help Center view
-    if (activeTab === 'helper_center') {
-      return <HelperCenterPage onBack={() => setActiveTab('request')} />;
-    }
-
-    // If not logged in, user can only see CustomerHome (Request form + How it works)
+    // 1. If not logged in, user can only see CustomerHome or public fee/help pages
     if (!user) {
+      if (activeTab === 'fee_details') {
+        return <FeeDetailsPage onBack={() => setActiveTab('request')} />;
+      }
+      if (activeTab === 'helper_center') {
+        return <HelperCenterPage onBack={() => setActiveTab('request')} />;
+      }
       return <CustomerHome />;
     }
 
-    // Admin view check: by default, logged-in admin users see Admin Dashboard
-    if (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || activeTab === 'admin_panel') {
+    // 2. Admin view check: Admin type users ONLY see Admin Panel access
+    if (isAdminView) {
       return (
         <AdminDashboard
           initialSelectedOrderId={initialSelectedOrderId}
@@ -268,18 +326,21 @@ export default function PageClient() {
       );
     }
 
-    // Store mode: approved store users automatically see StoreDashboard after loading
-    if (user.isStoreApproved || user.role === 'store' || activeMode === 'store') {
+    // 3. Store view check: Store type users ONLY see Store views
+    if (isStoreUser) {
       return <StoreDashboard activeTab={activeTab} setActiveTab={(tab) => setActiveTab(tab as any)} />;
     }
 
-    // Helper views check: dedicated helpers and helper mode users see Helper view as primary
-    if (user.isHelper && activeMode === 'helper') {
+    // 4. Helper view check: Helper type users view Helper views
+    if (isHelperUser) {
       if (activeTab === 'wallet') {
         return <HelperWallet />;
       }
       if (activeTab === 'explore') {
         return <ExploreHelperView />;
+      }
+      if (activeTab === 'fee_details') {
+        return <FeeDetailsPage onBack={() => setActiveTab('helper_tasks')} />;
       }
       return (
         <HelperDashboard
@@ -289,7 +350,14 @@ export default function PageClient() {
       );
     }
 
-    // Default Customer view
+    // 5. Customer views
+    if (activeTab === 'fee_details') {
+      return <FeeDetailsPage onBack={() => setActiveTab('request')} />;
+    }
+    if (activeTab === 'helper_center') {
+      return <HelperCenterPage onBack={() => setActiveTab('request')} />;
+    }
+
     return (
       <CustomerHome
         initialSelectedOrderId={initialSelectedOrderId}
@@ -297,10 +365,6 @@ export default function PageClient() {
       />
     );
   };
-
-  const isAdminView = Boolean(
-    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || activeTab === 'admin_panel')
-  );
 
   // While Firebase auth is resolving, show a skeleton layout (mirrors real layout to avoid CLS)
   if (loading) {
@@ -482,8 +546,39 @@ export default function PageClient() {
         />
       )}
 
+      {/* Customer Coin Earning Celebration Modal (Triggered BEFORE Feedback) */}
+      {coinRewardOrder && (
+        <CoinRewardModal
+          order={coinRewardOrder}
+          earnedCoins={coinRewardOrder.coinsAwarded || getCoinsForService(coinRewardOrder.service, fallbackStore.pricingSettings)}
+          totalCoins={user?.coins}
+          onClose={() => {
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem(`coin_reward_seen_${coinRewardOrder.id}`, 'true');
+            }
+            const finishedOrder = coinRewardOrder;
+            setCoinRewardOrder(null);
+            // Check if feedback is needed
+            if (!finishedOrder.feedback) {
+              setFeedbackOrder(finishedOrder);
+            }
+          }}
+          onContinueToFeedback={() => {
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem(`coin_reward_seen_${coinRewardOrder.id}`, 'true');
+            }
+            const finishedOrder = coinRewardOrder;
+            setCoinRewardOrder(null);
+            // Immediately open feedback modal
+            if (!finishedOrder.feedback) {
+              setFeedbackOrder(finishedOrder);
+            }
+          }}
+        />
+      )}
+
       {/* Customer Order Delivery Feedback Modal */}
-      {feedbackOrder && (
+      {feedbackOrder && !coinRewardOrder && (
         <OrderFeedbackModal
           order={feedbackOrder}
           onClose={() => {

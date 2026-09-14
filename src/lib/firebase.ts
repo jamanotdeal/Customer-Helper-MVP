@@ -16,6 +16,7 @@ import {
   limit,
   arrayUnion,
   writeBatch,
+  increment,
 } from 'firebase/firestore';
 import {
   getMessaging,
@@ -40,8 +41,11 @@ import {
   FeeSuggestion,
   ShopOrder,
   ShopOrderStatus,
+  RewardPrize,
+  RewardClaim,
+  CoinTransaction,
 } from '@/types';
-import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius } from './pricing';
+import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -342,12 +346,16 @@ class FallbackStore {
   public walletTransactions: Map<string, WalletTransaction[]> = new Map();
   public withdrawals: Map<string, WithdrawalRequest> = new Map();
   public notifications: Map<string, AppNotification[]> = new Map();
+  public adminNotificationsHistory: Map<string, AppNotification> = new Map();
   public shops: Map<string, Shop> = new Map();
   public shopOrders: Map<string, ShopOrder> = new Map();
   public orderFeedbacks: Map<string, OrderFeedback> = new Map();
   public customModals: Map<string, AdminCustomModalConfig> = new Map();
   public feeSuggestions: Map<string, FeeSuggestion> = new Map();
   public scheduledNotifications: Map<string, AppNotification> = new Map();
+  public rewardPrizes: Map<string, RewardPrize> = new Map();
+  public rewardClaims: Map<string, RewardClaim> = new Map();
+  public coinTransactions: Map<string, CoinTransaction[]> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
 
   // Set by AuthContext when a user logs in/out so the Firestore
@@ -439,6 +447,8 @@ class FallbackStore {
         id: `notif-disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         createdAt: new Date().toISOString(),
         isScheduled: false,
+        isAdminPush: true,
+        createdByAdmin: true,
       };
       await this.addNotification(dispatchNotif);
 
@@ -447,12 +457,21 @@ class FallbackStore {
         const nextDate = new Date(now + 24 * 3600 * 1000);
         notif.scheduledAt = nextDate.toISOString();
         this.scheduledNotifications.set(notif.id, notif);
+        try {
+          await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
+        } catch (_) {}
       } else if (notif.repeatFrequency === 'WEEKLY') {
         const nextDate = new Date(now + 7 * 24 * 3600 * 1000);
         notif.scheduledAt = nextDate.toISOString();
         this.scheduledNotifications.set(notif.id, notif);
+        try {
+          await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
+        } catch (_) {}
       } else {
         this.scheduledNotifications.delete(notif.id);
+        try {
+          await deleteDoc(doc(db, 'scheduledNotifications', notif.id));
+        } catch (_) {}
       }
       this.notify();
       this.saveLocalStore();
@@ -592,6 +611,38 @@ class FallbackStore {
         });
       }
 
+      const parsedScheduled = this.safeParse<[string, AppNotification][]>('jamanot_scheduled_notifs_store');
+      if (parsedScheduled && Array.isArray(parsedScheduled)) {
+        parsedScheduled.forEach(([id, notif]) => {
+          if (id && notif) this.scheduledNotifications.set(id, notif);
+        });
+      }
+
+      const parsedAdminNotifs = this.safeParse<[string, AppNotification][]>('jamanot_admin_notifs_history_store');
+      if (parsedAdminNotifs && Array.isArray(parsedAdminNotifs)) {
+        parsedAdminNotifs.forEach(([id, notif]) => {
+          if (id && notif && (notif.isAdminPush || notif.createdByAdmin || id.startsWith('admin-notif-') || id.startsWith('notif-disp-'))) {
+            this.adminNotificationsHistory.set(id, notif);
+          }
+        });
+      }
+
+      const parsedPrizes = this.safeParse<[string, RewardPrize][]>('jamanot_reward_prizes_store');
+      if (parsedPrizes && Array.isArray(parsedPrizes)) {
+        parsedPrizes.forEach(([id, p]) => {
+          if (id && p && !['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(id)) {
+            this.rewardPrizes.set(id, p);
+          }
+        });
+      }
+
+      const parsedClaims = this.safeParse<[string, RewardClaim][]>('jamanot_reward_claims_store');
+      if (parsedClaims && Array.isArray(parsedClaims)) {
+        parsedClaims.forEach(([id, c]) => {
+          if (id && c) this.rewardClaims.set(id, c);
+        });
+      }
+
       const savedPricing = this.safeParse<PricingSettings>('jamanot_pricing_store');
       if (savedPricing && typeof savedPricing === 'object') {
         this.pricingSettings = savedPricing;
@@ -612,11 +663,15 @@ class FallbackStore {
       localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(Array.from(this.walletTransactions.entries())));
       localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
       localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
+      localStorage.setItem('jamanot_admin_notifs_history_store', JSON.stringify(Array.from(this.adminNotificationsHistory.entries())));
+      localStorage.setItem('jamanot_scheduled_notifs_store', JSON.stringify(Array.from(this.scheduledNotifications.entries())));
       localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
       localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(Array.from(this.shopOrders.entries())));
       localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
       localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
       localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
+      localStorage.setItem('jamanot_reward_prizes_store', JSON.stringify(Array.from(this.rewardPrizes.entries())));
+      localStorage.setItem('jamanot_reward_claims_store', JSON.stringify(Array.from(this.rewardClaims.entries())));
       localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
       console.warn('Local storage persist error:', e);
@@ -961,6 +1016,62 @@ class FallbackStore {
         )
       );
 
+      // Reward prizes (realtime)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'rewardPrizes'),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(change.doc.id)) {
+                deleteDoc(doc(db, 'rewardPrizes', change.doc.id)).catch(() => {});
+                this.rewardPrizes.delete(change.doc.id);
+                return;
+              }
+              if (change.type === 'removed') {
+                this.rewardPrizes.delete(change.doc.id);
+              } else {
+                this.rewardPrizes.set(change.doc.id, change.doc.data() as RewardPrize);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Customer rewardPrizes sync note:', err)
+        )
+      );
+
+      // Own reward claims (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'rewardClaims'), where('userId', '==', userId), limit(50)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.rewardClaims.delete(change.doc.id);
+              } else {
+                this.rewardClaims.set(change.doc.id, change.doc.data() as RewardClaim);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Customer rewardClaims sync note:', err)
+        )
+      );
+
+      // Customer's own profile (for live coins sync)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'users', userId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const u = docSnap.data() as UserProfile;
+              this.users.set(userId, u);
+              this.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Customer user doc sync note:', err)
+        )
+      );
+
       // Shops & modals: one-time reads with 30-min cache (rarely change)
       this._loadShopsCached();
       this._loadModalsCached();
@@ -1217,11 +1328,40 @@ class FallbackStore {
         )
       );
 
-      // Notifications (up to 200, realtime)
+      // Scheduled notifications (realtime for admin)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'notifications'), limit(200)),
-          (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+          collection(db, 'scheduledNotifications'),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.scheduledNotifications.delete(change.doc.id);
+              } else {
+                this.scheduledNotifications.set(change.doc.id, change.doc.data() as AppNotification);
+              }
+            });
+            this.notify();
+            this.saveLocalStore();
+          },
+          (err) => console.warn('[Firestore] Admin scheduledNotifications sync note:', err)
+        )
+      );
+
+      // Notifications (up to 300, realtime for admin)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(300)),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              const n = docSnap.data() as AppNotification;
+              if (n.isAdminPush || n.createdByAdmin || n.id?.startsWith('admin-notif-') || n.id?.startsWith('notif-disp-')) {
+                this.adminNotificationsHistory.set(n.id, n);
+              }
+            });
+            this._handleNotificationSnapshot(snapshot, userId);
+            this.notify();
+            this.saveLocalStore();
+          },
           (err) => console.warn('[Firestore] Admin notifications sync note:', err)
         )
       );
@@ -1266,6 +1406,43 @@ class FallbackStore {
             this.notify();
           },
           (err) => console.warn('[Firestore] Admin customModals sync note:', err)
+        )
+      );
+
+      // Reward prizes (realtime for admin)
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'rewardPrizes'),
+          (snapshot) => {
+            snapshot.docs.forEach((docSnap) => {
+              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(docSnap.id)) {
+                deleteDoc(doc(db, 'rewardPrizes', docSnap.id)).catch(() => {});
+                this.rewardPrizes.delete(docSnap.id);
+                return;
+              }
+              this.rewardPrizes.set(docSnap.id, docSnap.data() as RewardPrize);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin rewardPrizes sync note:', err)
+        )
+      );
+
+      // Reward claims (realtime for admin)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'rewardClaims'), orderBy('createdAt', 'desc'), limit(200)),
+          (snapshot) => {
+            const currentIds = new Set(snapshot.docs.map((d) => d.id));
+            for (const key of Array.from(this.rewardClaims.keys())) {
+              if (!currentIds.has(key)) this.rewardClaims.delete(key);
+            }
+            snapshot.docs.forEach((docSnap) => {
+              this.rewardClaims.set(docSnap.id, docSnap.data() as RewardClaim);
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin rewardClaims sync note:', err)
         )
       );
 
@@ -1871,9 +2048,11 @@ class FallbackStore {
         if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED') {
           // Use effective fee = max(deliveryFee, minFee) to match what the helper sees in the UI
           const minFee = this.pricingSettings.feeCalculatorMinFee ?? 0;
-          const effectiveFee = Math.max(updated.deliveryFee || 0, minFee);
-          const helperShare = calculateHelperCommission(effectiveFee, this.pricingSettings);
-          await this.creditHelperEarning(helperId, helperShare, effectiveFee, updated.id);
+          const baseFeeForHelper = updated.isFreeDelivery
+            ? Math.max(updated.originalDeliveryFee || 0, minFee)
+            : Math.max(updated.deliveryFee || 0, minFee);
+          const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
+          await this.creditHelperEarning(helperId, helperShare, baseFeeForHelper, updated.id);
         } else {
           const updatedWallet = this.getHelperWallet(helperId);
           this.wallets.set(helperId, updatedWallet);
@@ -1884,6 +2063,54 @@ class FallbackStore {
           }
         }
       }
+    }
+
+    // Deduct coins for free delivery reward when order is DELIVERED
+    if (
+      updated.status === 'DELIVERED' &&
+      previousStatus !== 'DELIVERED' &&
+      updated.customerId &&
+      (updated.isFreeDelivery || (updated.coinsRedeemedForDelivery || 0) > 0) &&
+      !updated.coinsDeductedForDelivery
+    ) {
+      const coinsToDeduct = updated.coinsRedeemedForDelivery || this.pricingSettings.freeDeliveryRequiredCoins || 50;
+      updated.coinsDeductedForDelivery = true;
+      updated.coinsDeductedAt = new Date().toISOString();
+      await this.deductCoinsForFreeDelivery(updated.customerId, coinsToDeduct, updated.id);
+
+      this.addNotification({
+        id: `notif-${Date.now()}-free-delivery-deduct`,
+        userId: updated.customerId,
+        title: '🎁 ফ্রি ডেলিভারি রিওয়ার্ড সম্পন্ন',
+        body: `আপনার অর্ডার #${updated.id} সফলভাবে ডেলিভারি হওয়ায় ফ্রি ডেলিভারির জন্য ${coinsToDeduct} কয়েন কাটা হয়েছে।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'status_update',
+      });
+    }
+
+    // Award customer gamification coins on order completion
+    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.customerId && !updated.coinsAwarded) {
+      const earnedCoins = getCoinsForService(updated.service, this.pricingSettings);
+      updated.coinsAwarded = earnedCoins;
+      updated.coinsAwardedAt = new Date().toISOString();
+
+      await this.awardCoinsToCustomer(updated.customerId, earnedCoins, updated.id);
+
+      // Add coin notification to customer
+      this.addNotification({
+        id: `notif-${Date.now()}-coins`,
+        userId: updated.customerId,
+        title: '🪙 আপনি জামানত কয়েন জিতেছেন!',
+        body: `অভিনন্দন! অর্ডার #${updated.id} সম্পন্ন করায় আপনি +${earnedCoins} কয়েন পেয়েছেন। আপনার কয়েন দিয়ে ফ্রি ডেলিভারি ও আকর্ষণীয় গিফট ক্লেইম করুন!`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        targetRole: 'customer',
+        type: 'coins_earned',
+      });
     }
 
     // Auto-settle previous due payments when an order with appliedDuePayment is DELIVERED
@@ -2725,6 +2952,8 @@ class FallbackStore {
       this.notifications.set(notif.userId, list);
     }
 
+    this.adminNotificationsHistory.set(notif.id, notif);
+    this.saveLocalStore();
     this.notify();
 
     // In-app feedback: sound + vibration on the device that created the notification.
@@ -2813,6 +3042,8 @@ class FallbackStore {
       isScheduled: isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE'),
       repeatFrequency: repeatFrequency || 'NONE',
       repeatTime: repeatTime,
+      isAdminPush: true,
+      createdByAdmin: true,
     };
 
     if (isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE')) {
@@ -2828,6 +3059,86 @@ class FallbackStore {
       await this.addNotification(notif);
     }
     return notif;
+  }
+
+  public async updateScheduledNotification(notifId: string, updatedFields: Partial<AppNotification>) {
+    const existing = this.scheduledNotifications.get(notifId);
+    if (!existing) return null;
+    const updated: AppNotification = {
+      ...existing,
+      ...updatedFields,
+      isAdminPush: true,
+      createdByAdmin: true,
+    };
+    this.scheduledNotifications.set(notifId, updated);
+    this.notify();
+    this.saveLocalStore();
+    try {
+      await setDoc(doc(db, 'scheduledNotifications', notifId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateScheduledNotification note (saved locally):', e?.message || e);
+    }
+    return updated;
+  }
+
+  public async deleteScheduledNotification(notifId: string) {
+    this.scheduledNotifications.delete(notifId);
+    this.notify();
+    this.saveLocalStore();
+    try {
+      await deleteDoc(doc(db, 'scheduledNotifications', notifId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteScheduledNotification note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async publishScheduledNotificationNow(notifId: string) {
+    const notif = this.scheduledNotifications.get(notifId);
+    if (!notif) return;
+
+    // Dispatch immediately
+    const dispatchNotif: AppNotification = {
+      ...notif,
+      id: `notif-disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+      isScheduled: false,
+      isAdminPush: true,
+      createdByAdmin: true,
+    };
+    await this.addNotification(dispatchNotif);
+
+    if (notif.repeatFrequency === 'DAILY' || notif.repeatFrequency === 'WEEKLY') {
+      const nextInterval = notif.repeatFrequency === 'DAILY' ? 24 * 3600 * 1000 : 7 * 24 * 3600 * 1000;
+      notif.scheduledAt = new Date(Date.now() + nextInterval).toISOString();
+      this.scheduledNotifications.set(notif.id, notif);
+      try {
+        await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
+      } catch (_) {}
+    } else {
+      this.scheduledNotifications.delete(notif.id);
+      try {
+        await deleteDoc(doc(db, 'scheduledNotifications', notif.id));
+      } catch (_) {}
+    }
+    this.notify();
+    this.saveLocalStore();
+  }
+
+  public async deleteNotification(notifId: string) {
+    this.adminNotificationsHistory.delete(notifId);
+    this.notifications.forEach((list, uid) => {
+      const filtered = list.filter((n) => n.id !== notifId);
+      if (filtered.length !== list.length) {
+        this.notifications.set(uid, filtered);
+      }
+    });
+    this.notify();
+    this.saveLocalStore();
+    try {
+      await deleteDoc(doc(db, 'notifications', notifId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteNotification note (saved locally):', e?.message || e);
+    }
   }
 
   public async markNotificationsRead(userId: string) {
@@ -3098,6 +3409,248 @@ class FallbackStore {
     } catch (e: any) {
       console.warn('[Firestore] deleteFeeSuggestion note (saved locally):', e?.message || e);
     }
+  }
+
+  // ─── Gamification & Rewards CRUD ──────────────────────────────────────────
+
+  public async submitRewardClaim(claimData: Omit<RewardClaim, 'id' | 'createdAt' | 'status'>): Promise<RewardClaim> {
+    // Check if user already has an active pending claim for the same prize
+    const hasPending = Array.from(this.rewardClaims.values()).some(
+      (c) => c.userId === claimData.userId && c.prizeId === claimData.prizeId && c.status === 'PENDING'
+    );
+    if (hasPending) {
+      throw new Error('এই পুরস্কারের একটি দাবি ইতোমধ্যে অপেক্ষমাণ রয়েছে। এডমিনের অনুমোদন বা বাতিলের পর পুনরায় চেষ্টা করুন।');
+    }
+
+    const claim: RewardClaim = {
+      ...claimData,
+      id: `claim-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    };
+    this.rewardClaims.set(claim.id, claim);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'rewardClaims', claim.id), cleanForFirestore(claim));
+    } catch (e: any) {
+      console.warn('[Firestore] submitRewardClaim note (saved locally):', e?.message || e);
+    }
+    return claim;
+  }
+
+  public async approveRewardClaim(claimId: string, reviewNote?: string, reviewedBy?: string): Promise<boolean> {
+    const claim = this.rewardClaims.get(claimId);
+    if (!claim) return false;
+
+    // Deduct coins from user profile
+    const user = this.users.get(claim.userId);
+    if (user) {
+      const updatedCoins = Math.max(0, (user.coins || 0) - (claim.requiredCoins || 0));
+      const updatedUser: UserProfile = {
+        ...user,
+        coins: updatedCoins,
+      };
+      this.users.set(claim.userId, updatedUser);
+      try {
+        await setDoc(doc(db, 'users', claim.userId), { coins: updatedCoins }, { merge: true });
+      } catch (e) {
+        console.warn('[Firestore] approveRewardClaim user coins update error:', e);
+      }
+    }
+
+    const updatedClaim: RewardClaim = {
+      ...claim,
+      status: 'APPROVED',
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reviewNote || 'অনুমোদিত',
+      reviewedBy: reviewedBy || 'Admin',
+    };
+    this.rewardClaims.set(claimId, updatedClaim);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'rewardClaims', claimId), cleanForFirestore(updatedClaim), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] approveRewardClaim note:', e);
+    }
+
+    // Send notification to customer
+    await this.addNotification({
+      id: `notif-reward-${Date.now()}`,
+      userId: claim.userId,
+      title: '🎉 পুরস্কার দাবি অনুমোদিত হয়েছে!',
+      body: `অভিনন্দন! আপনার "${claim.prizeTitle}" পুরস্কার দাবিটি সফলভাবে অনুমোদিত হয়েছে। আপনার অ্যাকাউন্ট থেকে ${claim.requiredCoins} কয়েন কর্তন করা হয়েছে।${reviewNote ? ` (নোট: ${reviewNote})` : ''}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+      type: 'reward_approved',
+    });
+
+    return true;
+  }
+
+  public async rejectRewardClaim(claimId: string, reason?: string, reviewedBy?: string): Promise<boolean> {
+    const claim = this.rewardClaims.get(claimId);
+    if (!claim) return false;
+
+    const updatedClaim: RewardClaim = {
+      ...claim,
+      status: 'REJECTED',
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reason || 'বাতিল করা হয়েছে',
+      reviewedBy: reviewedBy || 'Admin',
+    };
+    this.rewardClaims.set(claimId, updatedClaim);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'rewardClaims', claimId), cleanForFirestore(updatedClaim), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] rejectRewardClaim note:', e);
+    }
+
+    // Send notification to customer
+    await this.addNotification({
+      id: `notif-reward-${Date.now()}`,
+      userId: claim.userId,
+      title: '❌ পুরস্কার দাবি বাতিল করা হয়েছে',
+      body: `আপনার "${claim.prizeTitle}" পুরস্কার দাবিটি বাতিল করা হয়েছে। কারণ: ${reason || 'অনুরোধটি প্রক্রিয়াকরণ করা সম্ভব হয়নি। বিস্তারিত জানতে যোগাযোগ করুন।'}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+      type: 'reward_rejected',
+    });
+
+    return true;
+  }
+
+  public async saveRewardPrize(prize: RewardPrize): Promise<void> {
+    this.rewardPrizes.set(prize.id, prize);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'rewardPrizes', prize.id), cleanForFirestore(prize), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveRewardPrize note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteRewardPrize(prizeId: string): Promise<void> {
+    this.rewardPrizes.delete(prizeId);
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'rewardPrizes', prizeId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteRewardPrize note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async awardCoinsToCustomer(userId: string, earnedCoins: number, orderId?: string) {
+    if (!userId || !earnedCoins || earnedCoins <= 0) return;
+
+    // 1. Update in-memory user if present
+    const customer = this.users.get(userId);
+    if (customer) {
+      const newCoinBalance = (customer.coins || 0) + earnedCoins;
+      const newTotalEarned = (customer.totalEarnedCoins || 0) + earnedCoins;
+      const updatedCustomer: UserProfile = {
+        ...customer,
+        coins: newCoinBalance,
+        totalEarnedCoins: newTotalEarned,
+      };
+      this.users.set(userId, updatedCustomer);
+      this.notify();
+    }
+
+    // 2. Atomic Firestore update so it always succeeds regardless of memory state
+    try {
+      await setDoc(
+        doc(db, 'users', userId),
+        {
+          coins: increment(earnedCoins),
+          totalEarnedCoins: increment(earnedCoins),
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.warn('[Firestore] awardCoinsToCustomer error:', e?.message || e);
+    }
+  }
+
+  public async reconcileCustomerCoins(userId: string) {
+    if (!userId) return;
+    let user = this.users.get(userId);
+    if (!user) {
+      user = (await this.fetchUserFromFirestore(userId)) || undefined;
+      if (!user) return;
+    }
+
+    // Calculate coins from all delivered orders for this user
+    const customerOrders = Array.from(this.orders.values()).filter(
+      (o) => o.customerId === userId && o.status === 'DELIVERED'
+    );
+
+    let deliveredEarnedCoins = 0;
+    customerOrders.forEach((o) => {
+      const c = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
+      deliveredEarnedCoins += c;
+    });
+
+    // Calculate coins spent on claims & free delivery
+    const userClaims = Array.from(this.rewardClaims.values()).filter(
+      (c) => c.userId === userId && c.status !== 'REJECTED'
+    );
+    let spentOnClaims = 0;
+    userClaims.forEach((c) => {
+      spentOnClaims += c.requiredCoins || 0;
+    });
+
+    const ordersWithRedeemedCoins = Array.from(this.orders.values()).filter(
+      (o) => o.customerId === userId && (o.coinsRedeemedForDelivery || 0) > 0 && (o.status === 'DELIVERED' || o.coinsDeductedForDelivery)
+    );
+    let spentOnFreeDelivery = 0;
+    ordersWithRedeemedCoins.forEach((o) => {
+      spentOnFreeDelivery += o.coinsRedeemedForDelivery || 0;
+    });
+
+    const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
+    const expectedLifetime = Math.max(user.totalEarnedCoins || 0, deliveredEarnedCoins);
+
+    const currentCoins = user.coins || 0;
+    if (currentCoins < expectedMinCoins || (user.totalEarnedCoins || 0) < expectedLifetime) {
+      const updatedCoins = Math.max(currentCoins, expectedMinCoins);
+      const updatedUser: UserProfile = {
+        ...user,
+        coins: updatedCoins,
+        totalEarnedCoins: expectedLifetime,
+      };
+      this.users.set(userId, updatedUser);
+      this.notify();
+      try {
+        await setDoc(
+          doc(db, 'users', userId),
+          {
+            coins: updatedCoins,
+            totalEarnedCoins: expectedLifetime,
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('[Firestore] reconcileCustomerCoins sync error:', e);
+      }
+    }
+  }
+
+  public async deductCoinsForFreeDelivery(userId: string, coinsToDeduct: number, orderId: string): Promise<boolean> {
+    const user = this.users.get(userId);
+    if (!user || (user.coins || 0) < coinsToDeduct) return false;
+    const updatedCoins = Math.max(0, (user.coins || 0) - coinsToDeduct);
+    const updatedUser = { ...user, coins: updatedCoins };
+    this.users.set(userId, updatedUser);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', userId), { coins: updatedCoins }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] deductCoinsForFreeDelivery error:', e);
+    }
+    return true;
   }
   // ─── Store Application CRUD ───────────────────────────────────────────────
 

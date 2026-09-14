@@ -423,8 +423,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
                 <span>Fee Adjustment</span>
               </span>
             )}
-            <span className="font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl text-[12px]">
-              {order.feeAdjustment?.status === 'APPROVED'
+            <span className={`font-bold px-3 py-1.5 rounded-xl text-[12px] ${
+              order.isFreeDelivery
+                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                : 'text-emerald-700 bg-emerald-50'
+            }`}>
+              {order.isFreeDelivery
+                ? '🎁 Free Delivery (৳0)'
+                : order.feeAdjustment?.status === 'APPROVED'
                 ? `৳${order.feeAdjustment.amount} fee`
                 : order.deliveryFee > 0
                 ? `৳${order.deliveryFee} fee`

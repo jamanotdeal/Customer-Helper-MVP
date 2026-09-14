@@ -287,7 +287,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-5 right-5 p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200"
+            className="absolute top-5 right-5 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -585,7 +585,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3.5 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
+                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
               >
                 বাতিল
               </button>

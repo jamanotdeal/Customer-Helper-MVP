@@ -55,6 +55,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const [showAdminItemsModal, setShowAdminItemsModal] = useState(false);
   const [editItemsInput, setEditItemsInput] = useState('');
 
+  // Admin Service Type change state
+  const [showAdminServiceModal, setShowAdminServiceModal] = useState(false);
+  const [adminServiceInput, setAdminServiceInput] = useState('');
+
   // Admin Due Payment state
   const [showAdminDueModal, setShowAdminDueModal] = useState(false);
   const [adminDueAmountInput, setAdminDueAmountInput] = useState('');
@@ -183,8 +187,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       needDeliveryBack: adminTwoWayEnabled,
       needReturnItems: adminTwoWayEnabled,
       deliveryBackTime: newDeliveryBackTime,
-      deliveryFee: updatedFee,
-      originalDeliveryFee: updatedFee,
+      deliveryFee: o.isFreeDelivery ? 0 : updatedFee,
+      originalDeliveryFee: o.isFreeDelivery ? 0 : updatedFee,
       lastEditedBy: 'admin' as const,
       lastEditedAt: new Date().toISOString(),
       editHistory: [
@@ -532,6 +536,54 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     showAlert('অর্ডার বাতিল', 'অর্ডারটি সফলভাবে বাতিল করা হয়েছে।', 'info');
   };
 
+  const handleAdminSaveService = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newService = adminServiceInput.trim();
+    if (!newService) return;
+
+    const currentOrder = fallbackStore.orders.get(orderId);
+    if (!currentOrder) return;
+    const oldService = currentOrder.service || currentOrder.title || 'N/A';
+
+    fallbackStore.updateOrder(orderId, (o) => ({
+      ...o,
+      service: newService,
+      title: newService,
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: currentUser?.displayName || 'Admin',
+          changes: [
+            {
+              field: 'Service Type',
+              oldValue: oldService,
+              newValue: newService,
+            },
+          ],
+        },
+      ],
+      statusHistory: [
+        ...(o.statusHistory || []),
+        {
+          id: `sh-${Date.now()}`,
+          status: o.status,
+          timestamp: new Date().toISOString(),
+          actor: 'Admin',
+          note: `Service type changed from "${oldService}" to "${newService}" by Admin`,
+        },
+      ],
+    }));
+
+    setShowAdminServiceModal(false);
+    setAdminServiceInput('');
+    showAlert('সার্ভিস আপডেট', `অর্ডারের সার্ভিস টাইপ "${newService}" এ আপডেট করা হয়েছে।`, 'success');
+  };
+
   const handleAdminSaveFee = (e: React.FormEvent) => {
     e.preventDefault();
     const val = parseFloat(adminFeeInput);
@@ -614,6 +666,11 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       🔁 Return
                     </span>
                   )}
+                  {order.isFreeDelivery && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[10px] font-extrabold uppercase flex items-center gap-1 shadow-xs">
+                      🎁 Reward Claimed
+                    </span>
+                  )}
                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white text-[10px] font-bold flex items-center space-x-1">
                     <Clock className="w-3 h-3 text-purple-300" />
                     <span>{order.status === 'DELIVERED' ? `delivered in: ${getDeliveryDurationText(order)}` : order.status === 'CANCELED' ? `cancelled in: ${getDeliveryDurationText(order)}` : `Running: ${getElapsedTime(order)}`}</span>
@@ -626,7 +683,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="p-2 rounded-2xl bg-rose-500/80 hover:bg-rose-600 text-white transition-colors shadow-sm"
             >
               <X className="w-5 h-5" />
             </button>
@@ -735,6 +792,27 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <span>Order Content & Instructions</span>
               </h4>
               <p className="font-black text-sm text-gray-900">{`Order-#${order.id}`}</p>
+
+              {/* Service Type Row */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-purple-50 border border-purple-100">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[11px] font-bold text-purple-700 uppercase tracking-wide">Service Type:</span>
+                  <span className="text-xs font-black text-purple-950">
+                    {order.service || order.title || <span className="text-gray-400 italic font-normal">Not set</span>}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setAdminServiceInput(order.service || order.title || '');
+                    setShowAdminServiceModal(true);
+                  }}
+                  className="px-2.5 py-1 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-[10px] flex items-center space-x-1 transition-all shadow-sm"
+                  title="Change Service Type"
+                >
+                  <Edit2 className="w-3 h-3" />
+                  <span>Change</span>
+                </button>
+              </div>
               
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -774,24 +852,25 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
               {/* Locations */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
-                {order.pickupLocation && (
-                  <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-extrabold text-[11px] text-gray-700 flex items-center space-x-1">
-                        <MapPin className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Pickup Location:</span>
-                      </span>
-                      <button
-                        onClick={() => setActiveMapPicker('pickup')}
-                        className="p-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors shrink-0"
-                        title="Edit Pickup Location"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                    <p className="text-gray-900 font-medium leading-relaxed">{order.pickupLocation.address}</p>
+                <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-100 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-[11px] text-amber-900 flex items-center space-x-1">
+                      <MapPin className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Pickup Location:</span>
+                    </span>
+                    <button
+                      onClick={() => setActiveMapPicker('pickup')}
+                      className="p-1 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-900 transition-colors shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5"
+                      title={order.pickupLocation?.address ? "Edit Pickup Location" : "Set Pickup Location"}
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      {!order.pickupLocation?.address && <span>Add</span>}
+                    </button>
                   </div>
-                )}
+                  <p className="text-gray-900 font-medium leading-relaxed">
+                    {order.pickupLocation?.address || <span className="text-gray-400 italic font-normal">Not specified (Click Add to set pickup address)</span>}
+                  </p>
+                </div>
                 <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100 space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="font-extrabold text-[11px] text-emerald-900 flex items-center space-x-1">
@@ -961,8 +1040,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               const shopTotal = shopPrices.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price ?? 0), 0);
               const processingFeeValue = est.processingFee;
               const platformRevenueTotal = platformRevenue + processingFeeValue;
+              const isFreeDeliv = !!order.isFreeDelivery;
+              const effectiveCustomerDeliveryFee = isFreeDeliv ? 0 : order.deliveryFee;
               const appliedDueVal = order.appliedDuePayment?.amount || 0;
-              const totalCollectable = order.deliveryFee + productCost + processingFeeValue + appliedDueVal;
+              const totalCollectable = effectiveCustomerDeliveryFee + productCost + processingFeeValue + appliedDueVal;
               const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
                 { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
                 ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
@@ -970,6 +1051,12 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 { label: `Weight Fee (${rawWeightKg} kg → ${weightKg} kg × ৳${est.perKgRate}/kg)`, value: weightKg > 0 ? `৳${est.weightFee}` : '৳0 (no weight set)', sub: 'Rounded up to nearest whole kg for pricing', color: 'text-teal-700' },
                 { label: `Delivery Sub-total (min ৳${est.minFee})`, value: `৳${est.deliverySubtotal}`, sub: 'Distance + weight; min fee applied', color: 'text-slate-700' },
                 ...(isReturn ? [{ label: `Return/Two-Way Fee (+${est.returnPercent}%)`, value: `৳${est.returnFee}`, sub: 'Return delivery surcharge', color: 'text-indigo-700' }] : []),
+                ...(isFreeDeliv ? [{
+                  label: 'Free Delivery Reward (ফ্রি ডেলিভারি)',
+                  value: '৳0 (Reward Claimed)',
+                  sub: `Claimed using ${order.coinsRedeemedForDelivery || 50} coins`,
+                  color: 'text-amber-700 font-extrabold',
+                }] : []),
                 ...(est.processingFee > 0 ? [{ label: `Processing Fee (${pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? pricingSettings.feeCalculatorProcessingFee + '%' : '৳' + pricingSettings.feeCalculatorProcessingFee})`, value: `৳${est.processingFee}`, sub: 'Applied when product cost is set', color: 'text-orange-700' }] : []),
                 ...(appliedDueVal > 0 ? [{ label: `Previous Order Due (পূর্বের বাকি)`, value: `+৳${appliedDueVal}`, sub: order.appliedDuePayment?.note || 'Carried over from previous completed order', color: 'text-red-600 font-extrabold' }] : []),
               ];
@@ -1001,8 +1088,16 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-center">
                       <span className="text-[10px] font-bold text-emerald-700 uppercase block">Delivery Fee</span>
-                      <span className="text-sm font-black text-emerald-900">৳{order.deliveryFee}</span>
-                      <p className="text-[9px] text-emerald-600 mt-0.5">Charged to customer</p>
+                      <span className="text-sm font-black text-emerald-900">৳{effectiveCustomerDeliveryFee}</span>
+                      {isFreeDeliv ? (
+                        <div className="mt-1">
+                          <span className="text-[9px] font-black text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full inline-block">
+                            🎁 Reward Claimed
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-[9px] text-emerald-600 mt-0.5">Charged to customer</p>
+                      )}
                     </div>
                     <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-center">
                       <span className="text-[10px] font-bold text-gray-500 uppercase block">Product Cost</span>
@@ -1012,7 +1107,9 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-center">
                       <span className="text-[10px] font-bold text-indigo-700 uppercase block">Helper Payout ({pricingSettings.helperCommissionPercent}%)</span>
                       <span className="text-sm font-black text-indigo-900">৳{helperCommissionAmount}</span>
-                      <p className="text-[9px] text-indigo-600 mt-0.5">of delivery fee</p>
+                      <p className="text-[9px] text-indigo-600 mt-0.5">
+                        {isFreeDeliv ? 'Platform subsidy' : 'of delivery fee'}
+                      </p>
                     </div>
                     <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 text-center">
                       <span className="text-[10px] font-bold text-purple-700 uppercase block">Platform Revenue</span>
@@ -1035,7 +1132,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <div className="text-right">
                         <span className="text-2xl font-black">৳{totalCollectable}</span>
                         <p className="text-[10px] text-emerald-200">
-                          ({order.deliveryFee} fee + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''})
+                          ({effectiveCustomerDeliveryFee} fee{isFreeDeliv ? ' [Reward Claimed]' : ''} + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''})
                         </p>
                       </div>
                     </div>
@@ -1255,13 +1352,19 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <div>
                 <p className="text-[10px] text-slate-500 font-bold uppercase mb-1.5">Edit Fee & Budget:</p>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => { setAdminFeeInput(String(order.deliveryFee)); setAdminFeeReason(''); setShowAdminFeeModal(true); }}
-                    className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                    <span>Update Delivery Fee (৳{order.deliveryFee})</span>
-                  </button>
+                  {order.isFreeDelivery ? (
+                    <div className="py-2 px-3 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 font-extrabold text-xs flex items-center space-x-1.5">
+                      <span>🎁 Free Delivery (Reward Claimed - ৳0)</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { setAdminFeeInput(String(order.deliveryFee)); setAdminFeeReason(''); setShowAdminFeeModal(true); }}
+                      className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Update Delivery Fee (৳{order.deliveryFee})</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => { setAdminCostInput(order.productCost !== undefined ? String(order.productCost) : ''); setShowAdminCostModal(true); }}
                     className="py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
@@ -1358,7 +1461,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <Edit2 className="w-5 h-5 text-amber-600" />
                 <span>Admin: Update Delivery Fee</span>
               </h3>
-              <button onClick={() => setShowAdminFeeModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+              <button onClick={() => setShowAdminFeeModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1387,7 +1490,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 />
               </div>
               <div className="flex space-x-2 pt-1">
-                <button type="button" onClick={() => setShowAdminFeeModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="button" onClick={() => setShowAdminFeeModal(false)} className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all">Cancel</button>
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md">Save Fee</button>
               </div>
             </form>
@@ -1404,7 +1507,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <DollarSign className="w-5 h-5 text-purple-600" />
                 <span>Admin: Update Product Cost</span>
               </h3>
-              <button onClick={() => setShowAdminCostModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+              <button onClick={() => setShowAdminCostModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1424,7 +1527,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 />
               </div>
               <div className="flex space-x-2 pt-1">
-                <button type="button" onClick={() => setShowAdminCostModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="button" onClick={() => setShowAdminCostModal(false)} className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all">Cancel</button>
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md">Save Cost</button>
               </div>
             </form>
@@ -1441,7 +1544,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <Edit2 className="w-5 h-5 text-purple-600" />
                 <span>Admin: Edit Order Items</span>
               </h3>
-              <button onClick={() => setShowAdminItemsModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+              <button onClick={() => setShowAdminItemsModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1462,7 +1565,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 />
               </div>
               <div className="flex space-x-2 pt-1">
-                <button type="button" onClick={() => setShowAdminItemsModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="button" onClick={() => setShowAdminItemsModal(false)} className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all">Cancel</button>
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-bold text-xs shadow-md">Save Items</button>
               </div>
             </form>
@@ -1478,7 +1581,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <Repeat className="w-5 h-5 text-indigo-600" />
                 <span>Admin: Two-Way Delivery & Return Options</span>
               </h3>
-              <button onClick={() => setShowAdminTwoWayModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+              <button onClick={() => setShowAdminTwoWayModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1565,7 +1668,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               )}
 
               <div className="flex space-x-2 pt-1">
-                <button type="button" onClick={() => setShowAdminTwoWayModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">
+                <button type="button" onClick={() => setShowAdminTwoWayModal(false)} className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all">
                   Cancel
                 </button>
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md">
@@ -1586,7 +1689,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <DollarSign className="w-5 h-5 text-purple-700" />
                 <span>Admin: Manage Due Payment</span>
               </h3>
-              <button onClick={() => setShowAdminDueModal(false)} className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600">
+              <button onClick={() => setShowAdminDueModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1628,7 +1731,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     Delete
                   </button>
                 )}
-                <button type="button" onClick={() => setShowAdminDueModal(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs">Cancel</button>
+                <button type="button" onClick={() => setShowAdminDueModal(false)} className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all">Cancel</button>
                 <button type="submit" className="flex-1 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-md">Save Due</button>
               </div>
             </form>
@@ -1646,6 +1749,91 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           modalType={activeMapPicker}
           onSelectLocation={(loc) => handleAdminSaveAddress(activeMapPicker, loc)}
         />
+      )}
+
+      {/* Admin: Change Service Type Modal */}
+      {showAdminServiceModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-gray-900 flex items-center space-x-2">
+                <Edit2 className="w-5 h-5 text-purple-700" />
+                <span>Change Service Type</span>
+              </h3>
+              <button onClick={() => setShowAdminServiceModal(false)} className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Select a new service type for this request. The change will be recorded in the order history.
+            </p>
+            <form onSubmit={handleAdminSaveService} className="space-y-3">
+              {/* Dropdown from admin-configured services */}
+              {(() => {
+                const services = fallbackStore.pricingSettings.services || [];
+                return services.length > 0 ? (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-2">Select Service *</label>
+                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                      {services.map((svc) => (
+                        <button
+                          key={svc}
+                          type="button"
+                          onClick={() => setAdminServiceInput(svc)}
+                          className={`p-2.5 rounded-xl text-xs font-bold text-left border transition-all ${
+                            adminServiceInput === svc
+                              ? 'bg-purple-600 border-purple-600 text-white shadow-sm'
+                              : 'bg-white border-gray-200 text-gray-700 hover:bg-purple-50 hover:border-purple-300'
+                          }`}
+                        >
+                          {svc}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              {/* Free-text fallback / override */}
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">
+                  {(fallbackStore.pricingSettings.services || []).length > 0
+                    ? 'Or type a custom service:'
+                    : 'Service Type *'}
+                </label>
+                <input
+                  type="text"
+                  value={adminServiceInput}
+                  onChange={(e) => setAdminServiceInput(e.target.value)}
+                  placeholder="e.g. Shopping, Parcel Delivery..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-600 transition-colors"
+                  autoFocus={(fallbackStore.pricingSettings.services || []).length === 0}
+                />
+              </div>
+              {adminServiceInput.trim() && (
+                <div className="flex items-center space-x-2 p-2.5 rounded-xl bg-purple-50 border border-purple-100">
+                  <span className="text-[11px] text-purple-700 font-bold">Selected:</span>
+                  <span className="text-xs font-black text-purple-950">{adminServiceInput.trim()}</span>
+                </div>
+              )}
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminServiceModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!adminServiceInput.trim()}
+                  className="flex-1 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-md transition-all"
+                >
+                  Save Service Type
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </>
   );

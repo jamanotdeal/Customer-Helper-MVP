@@ -9,6 +9,7 @@ import { HelperApplicationModal } from './HelperApplicationModal';
 import { StoreApplicationModal } from './StoreApplicationModal';
 import { EditStoreModal } from './EditStoreModal';
 import { AuthModal } from './AuthModal';
+import { RewardStoreModal, SingleCoinIcon } from './RewardStoreModal';
 import { fallbackStore } from '@/lib/firebase';
 
 import { useModal } from './CustomModal';
@@ -24,14 +25,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
+  const [showRewardModal, setShowRewardModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [storeAppStatus, setStoreAppStatus] = useState<string | null>(null);
   const [helperAppStatus, setHelperAppStatus] = useState<string | null>(null);
   const [showEditStoreModal, setShowEditStoreModal] = useState(false);
   const [storeInfo, setStoreInfo] = useState<any>(null);
+  const [showBecomeHelperOption, setShowBecomeHelperOption] = useState<boolean>(
+    Boolean(fallbackStore.pricingSettings?.showBecomeHelper)
+  );
 
   useEffect(() => {
     const syncNotifs = () => {
+      setShowBecomeHelperOption(Boolean(fallbackStore.pricingSettings?.showBecomeHelper));
       if (user) {
         const notifs = fallbackStore.notifications.get(user.uid) || [];
         setUnreadCount(notifs.filter((n) => !n.read).length);
@@ -136,10 +142,25 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   )}
                 </button>
 
+                {/* Coin Badge Trigger (Beside Profile Avatar) */}
+                <button
+                  onClick={() => setShowRewardModal(true)}
+                  className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 text-emerald-950 transition-all shadow-xs active:scale-95 cursor-pointer"
+                  aria-label="Coins & Rewards"
+                  title="জামানত কয়েন ও রিওয়ার্ড"
+                >
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-amber-400 to-yellow-300 flex items-center justify-center shadow-xs shrink-0 ring-1 ring-amber-300/60">
+                    <SingleCoinIcon className="w-3.5 h-3.5 text-amber-950" />
+                  </div>
+                  <span className="text-xs font-black tracking-tight font-sans text-emerald-950">
+                    {user.coins || 0}
+                  </span>
+                </button>
+
                 {/* Profile Trigger */}
                 <button
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
-                  className="flex items-center space-x-1.5 p-1 rounded-2xl border border-emerald-200 hover:border-emerald-400 bg-white transition-all shadow-sm"
+                  className="flex items-center space-x-1.5 p-1 rounded-2xl border border-emerald-200 hover:border-emerald-400 bg-white transition-all shadow-sm cursor-pointer"
                 >
                   {user.photoURL ? (
                     <img
@@ -233,13 +254,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </div>
 
               {/* Mode Switcher */}
-              {/* Mode Switcher */}
               <div className="mt-5">
                 <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-2">
-                  {user.isAdmin ? 'Current Mode' : 'Select Mode'}
+                  {isAdminView ? 'Admin View' : isStoreUser ? 'Store Account' : 'Select Mode'}
                 </label>
                 <div className="space-y-2">
-                  {user.isAdmin ? (
+                  {isAdminView ? (
                     <div className="w-full flex items-center justify-between p-3 rounded-2xl border border-purple-500 bg-purple-50/70 text-purple-900 font-bold shadow-sm text-left">
                       <div className="flex items-center space-x-2.5">
                         <ShieldCheck className="w-5 h-5 text-purple-600" />
@@ -250,61 +270,61 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                       </div>
                       <CheckCircle2 className="w-5 h-5 text-purple-600" />
                     </div>
+                  ) : isStoreUser ? (
+                    /* Store User - Store details only */
+                    <div className="w-full p-3 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-950 shadow-sm space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <Store className="w-4 h-4 text-orange-600" />
+                          <div>
+                            <div className="text-xs font-black text-orange-850">
+                              {storeInfo?.name || 'My Store'}
+                            </div>
+                            <div className="text-[10px] text-gray-600 font-medium">Approved store mode active</div>
+                          </div>
+                        </div>
+                        <CheckCircle2 className="w-4.5 h-4.5 text-orange-600" />
+                      </div>
+                      
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          setShowEditStoreModal(true);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
+                      >
+                        <Edit className="w-3 h-3 text-white" />
+                        <span>Edit Store Info</span>
+                      </button>
+                    </div>
                   ) : (
                     <>
-                      {activeMode !== 'store' && (
-                        <button
-                          onClick={() => {
-                            setActiveMode('customer');
-                            setShowProfileMenu(false);
-                          }}
-                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                            activeMode === 'customer'
-                              ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                              : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          <div className="flex items-center space-x-2.5">
-                            <ShoppingBag className="w-5 h-5 text-emerald-600" />
-                            <div>
-                              <div className="text-sm font-semibold">Customer Mode</div>
-                              <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
-                            </div>
+                      {/* Customer Mode option */}
+                      <button
+                        onClick={() => {
+                          setActiveMode('customer');
+                          setShowProfileMenu(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                          activeMode === 'customer'
+                            ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                            : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <ShoppingBag className="w-5 h-5 text-emerald-600" />
+                          <div>
+                            <div className="text-sm font-semibold">Customer Mode</div>
+                            <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
                           </div>
-                          {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                        </button>
-                      )}
+                        </div>
+                        {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                      </button>
 
-                      {/* Store Mode — nested under Customer Mode */}
+                      {/* Store Application Option — for non-helpers and non-stores */}
                       {!isHelperUser && user.helperType !== 'dedicated' && (
                         <div className="ml-3 pl-3 border-l-2 border-emerald-100 space-y-1.5">
-                          {user.isStoreApproved ? (
-                            <div className="w-full p-3 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-950 shadow-sm space-y-2">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2">
-                                  <Store className="w-4 h-4 text-orange-600" />
-                                  <div>
-                                    <div className="text-xs font-black text-orange-850">
-                                      {storeInfo?.name || 'My Store'}
-                                    </div>
-                                    <div className="text-[10px] text-gray-600 font-medium">Approved store mode active</div>
-                                  </div>
-                                </div>
-                                <CheckCircle2 className="w-4.5 h-4.5 text-orange-600" />
-                              </div>
-                              
-                              <button
-                                onClick={() => {
-                                  setShowProfileMenu(false);
-                                  setShowEditStoreModal(true);
-                                }}
-                                className="w-full py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
-                              >
-                                <Edit className="w-3 h-3 text-white" />
-                                <span>Edit Store Info</span>
-                              </button>
-                            </div>
-                          ) : storeAppStatus === 'PENDING' ? (
+                          {storeAppStatus === 'PENDING' ? (
                             <button
                               onClick={() => { setShowProfileMenu(false); setShowStoreModal(true); }}
                               className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
@@ -312,7 +332,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                               <div className="flex items-center space-x-2">
                                 <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
                                 <div>
-                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-xs font-semibold">Become a Store</div>
                                   <div className="text-[10px] text-amber-700 font-semibold">আবেদন পর্যালোচনাধীন...</div>
                                 </div>
                               </div>
@@ -325,7 +345,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                               <div className="flex items-center space-x-2">
                                 <Store className="w-4 h-4 text-orange-500" />
                                 <div>
-                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-xs font-semibold">Become a Store</div>
                                   <div className="text-[10px] text-red-500 font-semibold">আবেদন প্রত্যাখ্যাত — পুনরায় আবেদন করুন</div>
                                 </div>
                               </div>
@@ -339,7 +359,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                               <div className="flex items-center space-x-2">
                                 <Store className="w-4 h-4 text-orange-500" />
                                 <div>
-                                  <div className="text-xs font-semibold">Became a Store</div>
+                                  <div className="text-xs font-semibold">Become a Store</div>
                                   <div className="text-[10px] text-gray-500 font-normal">দোকান নিবন্ধন করে স্টোর মোড পান</div>
                                 </div>
                               </div>
@@ -348,33 +368,33 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                         </div>
                       )}
 
-                      {/* Single Helper Option: "Helper Mode" if user is helper, "Become Helper" if not rider/helper */}
-                      {!isStoreUser && (
-                        user.isHelper ? (
-                          <button
-                            onClick={() => {
-                              setShowProfileMenu(false);
-                              setActiveMode('helper');
-                              onNavigate?.('helper_tasks');
-                            }}
-                            className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
-                              activeMode === 'helper'
-                                ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                                : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2.5">
-                              <Bike className="w-5 h-5 text-emerald-600" />
-                              <div>
-                                <div className="text-sm font-semibold">Helper Mode</div>
-                                <div className="text-[11px] text-gray-500 font-normal">
-                                  {user.helperType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} • Accept requests & earn
-                                </div>
+                      {/* Helper Option: "Helper Mode" if user is helper, "Become Helper" if enabled by admin for non-helpers */}
+                      {user.isHelper ? (
+                        <button
+                          onClick={() => {
+                            setShowProfileMenu(false);
+                            setActiveMode('helper');
+                            onNavigate?.('helper_tasks');
+                          }}
+                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
+                            activeMode === 'helper'
+                              ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                              : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2.5">
+                            <Bike className="w-5 h-5 text-emerald-600" />
+                            <div>
+                              <div className="text-sm font-semibold">Helper Mode</div>
+                              <div className="text-[11px] text-gray-500 font-normal">
+                                {user.helperType === 'dedicated' ? 'Dedicated Rider' : 'Commuter Helper'} • Accept requests & earn
                               </div>
                             </div>
-                            {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                          </button>
-                        ) : helperAppStatus === 'PENDING' ? (
+                          </div>
+                          {activeMode === 'helper' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                        </button>
+                      ) : showBecomeHelperOption ? (
+                        helperAppStatus === 'PENDING' ? (
                           <button
                             onClick={() => { setShowProfileMenu(false); setShowHelperModal(true); }}
                             className="w-full flex items-center justify-between p-3 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-900 text-left"
@@ -415,14 +435,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                             </div>
                           </button>
                         )
-                      )}
+                      ) : null}
                     </>
                   )}
                 </div>
               </div>
 
-              {/* Helper Center Sidebar Option - General, placed below select mode options */}
-              {fallbackStore.pricingSettings.helperCenterEnabled !== false && (
+              {/* Helper Center Sidebar Option - General, placed below select mode options (for customer/helper only) */}
+              {!isAdminView && !isStoreUser && fallbackStore.pricingSettings.helperCenterEnabled !== false && (
                 <div className="mt-4 pt-3 border-t border-gray-100">
                   <button
                     onClick={() => {
@@ -485,6 +505,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
 
       {/* Auth Modal (Google Sign In & Optional Email/Password Login & Registration) */}
       <AuthModal />
+
+      {/* Rewards & Coins Wallet Modal */}
+      <RewardStoreModal
+        isOpen={showRewardModal}
+        onClose={() => setShowRewardModal(false)}
+      />
     </>
   );
 };

@@ -765,8 +765,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       productCost: val,
-      deliveryFee: finalFee,
-      originalDeliveryFee: finalFee,
+      deliveryFee: o.isFreeDelivery ? 0 : finalFee,
+      originalDeliveryFee: o.isFreeDelivery ? 0 : finalFee,
     }));
     setShowCostModal(false);
   };
@@ -796,13 +796,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       ...o,
       productCost: newCost,
       weightKg: newWeight,
-      deliveryFee: finalFee,
-      originalDeliveryFee: finalFee,
+      deliveryFee: o.isFreeDelivery ? 0 : finalFee,
+      originalDeliveryFee: o.isFreeDelivery ? 0 : finalFee,
     }));
   };
 
   const handleSaveDeliveryFee = (e: React.FormEvent) => {
     e.preventDefault();
+    if (order.isFreeDelivery) {
+      showAlert(
+        'ফ্রি ডেলিভারি অর্ডার',
+        'এই অর্ডারে গ্রাহক কয়েন ব্যবহার করে ফ্রি ডেলিভারি নিয়েছেন। ডেলিভারি ফি পরিবর্তন বা যোগ করা যাবে না।',
+        'warning'
+      );
+      return;
+    }
+
     const val = parseFloat(feeInput);
     if (isNaN(val) || val < 0) return;
 
@@ -1184,49 +1193,47 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 )}
               </div>
 
-              {/* Customer Edit History Log for Pending Order */}
-              {order.editHistory && order.editHistory.length > 0 && (
-                <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                    <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
-                      <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Edit histories ({order.editHistory.length})</span>
-                    </span>
-                    {order.lastEditedAt && (
-                      <span className="text-[9px] font-bold text-amber-800">
-                        Last: {formatPlacedDateTime(order.lastEditedAt)}
+              {/* Customer Edit History Log: Show Latest Updated Change for Pending Order */}
+              {order.editHistory && order.editHistory.length > 0 && (() => {
+                const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
+                if (!latestHistoryItem) return null;
+                return (
+                  <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
+                        <FileEdit className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Latest Update {order.editHistory.length > 1 ? `(Change ${order.editHistory.length})` : ''}</span>
                       </span>
-                    )}
-                  </div>
-                  <div className="space-y-2 pt-1">
-                    {order.editHistory.slice().reverse().map((historyItem) => (
-                      <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
-                        <div className="border-b border-amber-100 pb-1">
-                          <div className="text-[10px] font-bold text-amber-900">
-                            Edited by: {historyItem.editedByName || historyItem.editedBy}
-                          </div>
-                          <div className="text-[9px] font-medium text-amber-700/80 mt-0.5">
-                            {formatPlacedDateTime(historyItem.timestamp)}
-                          </div>
+                      <span className="text-[9px] font-bold text-amber-800">
+                        {formatPlacedDateTime(latestHistoryItem.timestamp || order.lastEditedAt || new Date().toISOString())}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1.5 shadow-2xs">
+                      <div className="border-b border-amber-100 pb-1 flex items-center justify-between">
+                        <div className="text-[10px] font-bold text-amber-900">
+                          Edited by: {latestHistoryItem.editedByName || latestHistoryItem.editedBy}
                         </div>
-                        <div className="space-y-1 pt-0.5">
-                          {historyItem.changes.map((c, idx) => (
-                            <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                              <span className="font-extrabold text-amber-950">{c.field}:</span>
-                              <div className="font-semibold text-right">
-                                <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
-                                <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
-                                  {c.newValue}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
+                        <div className="text-[9px] font-medium text-amber-700/80">
+                          {formatPlacedDateTime(latestHistoryItem.timestamp)}
                         </div>
                       </div>
-                    ))}
+                      <div className="space-y-1 pt-0.5">
+                        {latestHistoryItem.changes.map((c, idx) => (
+                          <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                            <span className="font-extrabold text-amber-950">{c.field}:</span>
+                            <div className="font-semibold text-right">
+                              <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
+                              <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
+                                {c.newValue}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Addresses & Visual Map before Customer Details */}
               <div className="pt-2 border-t border-gray-100">
@@ -1371,49 +1378,47 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
             )}
 
-            {/* Customer Edit History Log for Active Order */}
-            {order.editHistory && order.editHistory.length > 0 && (
-              <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                  <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
-                    <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Edit histories ({order.editHistory.length})</span>
-                  </span>
-                  {order.lastEditedAt && (
-                    <span className="text-[9px] font-bold text-amber-800">
-                      Last: {formatPlacedDateTime(order.lastEditedAt)}
+            {/* Customer Edit History: Show Latest Updated Change for Active Order */}
+            {order.editHistory && order.editHistory.length > 0 && (() => {
+              const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
+              if (!latestHistoryItem) return null;
+              return (
+                <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
+                      <FileEdit className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Latest Update {order.editHistory.length > 1 ? `(Change ${order.editHistory.length})` : ''}</span>
                     </span>
-                  )}
-                </div>
-                <div className="space-y-2 pt-1">
-                  {order.editHistory.slice().reverse().map((historyItem) => (
-                    <div key={historyItem.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1 shadow-2xs">
-                      <div className="border-b border-amber-100 pb-1">
-                        <div className="text-[10px] font-bold text-amber-900">
-                          Edited by: {historyItem.editedByName || historyItem.editedBy}
-                        </div>
-                        <div className="text-[9px] font-medium text-amber-700/80 mt-0.5">
-                          {formatPlacedDateTime(historyItem.timestamp)}
-                        </div>
+                    <span className="text-[9px] font-bold text-amber-800">
+                      {formatPlacedDateTime(latestHistoryItem.timestamp || order.lastEditedAt || new Date().toISOString())}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1.5 shadow-2xs">
+                    <div className="border-b border-amber-100 pb-1 flex items-center justify-between">
+                      <div className="text-[10px] font-bold text-amber-900">
+                        Edited by: {latestHistoryItem.editedByName || latestHistoryItem.editedBy}
                       </div>
-                      <div className="space-y-1 pt-0.5">
-                        {historyItem.changes.map((c, idx) => (
-                          <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                            <span className="font-extrabold text-amber-950">{c.field}:</span>
-                            <div className="font-semibold text-right">
-                              <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
-                              <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
-                                {c.newValue}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
+                      <div className="text-[9px] font-medium text-amber-700/80">
+                        {formatPlacedDateTime(latestHistoryItem.timestamp)}
                       </div>
                     </div>
-                  ))}
+                    <div className="space-y-1 pt-0.5">
+                      {latestHistoryItem.changes.map((c, idx) => (
+                        <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                          <span className="font-extrabold text-amber-950">{c.field}:</span>
+                          <div className="font-semibold text-right">
+                            <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
+                            <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
+                              {c.newValue}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Two-Way Delivery Toggle */}
@@ -1450,8 +1455,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         needDeliveryBack: false,
                         needReturnItems: false,
                         deliveryBackTime: undefined,
-                        deliveryFee: baseFee,
-                        originalDeliveryFee: baseFee,
+                        deliveryFee: o.isFreeDelivery ? 0 : baseFee,
+                        originalDeliveryFee: o.isFreeDelivery ? 0 : baseFee,
                       }));
                     }
                   }}
@@ -1772,10 +1777,19 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               )}
 
               <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
-                <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
                 <div className="flex items-center space-x-1.5">
-                  <span className="text-base font-black text-emerald-850">৳{Math.max(order.deliveryFee, estdPricing.minFee)}</span>
-                  {!isDone && (
+                  <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
+                  {order.isFreeDelivery && (
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                      🎁 ফ্রি ডেলিভারি (Reward Claimed)
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center space-x-1.5">
+                  <span className="text-base font-black text-emerald-850">
+                    ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
+                  </span>
+                  {!isDone && !order.isFreeDelivery && (
                     <button
                       onClick={() => {
                         setFeeInput(String(order.deliveryFee));
@@ -1794,19 +1808,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total to Collect (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                 </span>
               </div>
 
               {/* Helper Earnings after Platfrom Commission Deduction */}
               {(() => {
-                const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
-                const netEarned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
+                const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
                 return (
                   <div className="flex items-center justify-between bg-purple-50/60 p-2.5 rounded-xl border border-purple-100 -mx-0.5">
                     <div>
                       <span className="font-bold text-purple-950 text-xs block">আপনার আয় (Net Earnings)</span>
-                      <span className="text-[9px] text-purple-700">প্ল্যাটফর্ম কমিশন বাদে নিট আয়</span>
+                      <span className="text-[9px] text-purple-700">
+                        {order.isFreeDelivery ? 'ফ্রি ডেলিভারি প্ল্যাটফর্ম সাবসিডি আয়' : 'প্ল্যাটফর্ম কমিশন বাদে নিট আয়'}
+                      </span>
                     </div>
                     <span className="text-base font-black text-purple-900">৳{netEarned}</span>
                   </div>
@@ -1873,7 +1889,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowDeliveryBackModal(false)}
-                className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+                className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1934,7 +1950,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowDeliveryBackModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-colors"
                 >
                   Cancel
                 </button>
@@ -1955,8 +1971,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       needReturnItems: true,
                       deliveryBackTime: returnWhen === 'schedule' ? new Date(deliveryBackTimeInput).toISOString() : undefined,
                       deliveryBackSetAt: new Date().toISOString(),
-                      originalDeliveryFee: o.originalDeliveryFee || o.deliveryFee,
-                      deliveryFee: targetFee,
+                      originalDeliveryFee: o.isFreeDelivery ? 0 : (o.originalDeliveryFee || o.deliveryFee),
+                      deliveryFee: o.isFreeDelivery ? 0 : targetFee,
                     }));
                     setShowDeliveryBackModal(false);
                   }}
@@ -2098,7 +2114,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowCostModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2117,7 +2133,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowCostModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
                 >
                   Cancel
                 </button>
@@ -2140,7 +2156,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowFeeModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2196,7 +2212,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowFeeModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-700 font-bold text-xs"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
                 >
                   Cancel
                 </button>
@@ -2219,7 +2235,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <button
               type="button"
               onClick={() => { setShowUncheckedModal(false); setPendingNextStatus(null); }}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2264,7 +2280,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     setShowUncheckedModal(false);
                     setPendingNextStatus(null);
                   }}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-colors"
                 >
                   ফিরে যান
                 </button>
@@ -2287,7 +2303,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowCancelModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2328,7 +2344,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowCancelModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-colors"
                 >
                   ফিরে যান
                 </button>
@@ -2371,7 +2387,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {order.deliveryFee !== undefined && (
                 <div className="flex items-center justify-between text-xs mt-1.5">
                   <span className="text-gray-500 font-bold uppercase tracking-wide">Delivery Fee</span>
-                  <span className="font-extrabold text-emerald-700">৳{Math.max(order.deliveryFee || 0, estdPricing.minFee)}</span>
+                  <span className="font-extrabold text-emerald-700">
+                    {order.isFreeDelivery ? '৳0 (Reward Claimed)' : `৳${Math.max(order.deliveryFee || 0, estdPricing.minFee)}`}
+                  </span>
                 </div>
               )}
             </div>
@@ -2387,7 +2405,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <div className="px-6 pb-6 flex gap-3">
               <button
                 onClick={() => setShowDeliveryConfirmModal(false)}
-                className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-sm transition-colors"
+                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-extrabold text-sm transition-colors"
               >
                 Cancel
               </button>
@@ -2421,9 +2439,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {(() => {
               const commissionPercent = fallbackStore.pricingSettings?.helperCommissionPercent || 80;
               const platformPercent = 100 - commissionPercent;
-              const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
-              const netEarned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
-              const platformCommissionFee = Math.max(0, effectiveFee - netEarned);
+              const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
+              const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
+              const platformCommissionFee = Math.max(0, baseFeeForHelper - netEarned);
 
               return (
                 <div className="space-y-3">
@@ -2438,7 +2456,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       You earned <span className="text-emerald-700 text-2xl font-black">{netEarned} BDT</span>
                     </p>
                     <p className="text-[11px] text-emerald-800 font-bold bg-emerald-100/70 py-1 px-2.5 rounded-xl border border-emerald-200/80 inline-block">
-                      (ডেলিভারি ফি ৳{order.deliveryFee} হতে {platformPercent}% প্ল্যাটফর্ম কমিশন ৳{platformCommissionFee} বাদে নিট আয়)
+                      {order.isFreeDelivery
+                        ? `(ফ্রি ডেলিভারি অর্ডার - প্ল্যাটফর্ম সাবসিডি হতে নিট আয় ৳${netEarned})`
+                        : `(ডেলিভারি ফি ৳${order.deliveryFee} হতে ${platformPercent}% প্ল্যাটফর্ম কমিশন ৳${platformCommissionFee} বাদে নিট আয়)`}
                     </p>
                   </div>
                   <p className="text-xs text-gray-500 font-semibold pt-1">
@@ -2795,7 +2815,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowCustomCostModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2860,7 +2880,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   type="button"
                   onClick={() => setShowCustomCostModal(false)}
                   disabled={isSubmittingCustomCost}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-750 font-bold text-xs disabled:opacity-50"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs disabled:opacity-50 transition-colors"
                 >
                   Cancel
                 </button>
@@ -2924,9 +2944,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
               <button
                 onClick={() => setShowHelperDueModal(false)}
-                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                className="p-1 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -2979,7 +2999,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowHelperDueModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-all"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-extrabold text-xs transition-all active:scale-95"
                 >
                   বাতিল
                 </button>

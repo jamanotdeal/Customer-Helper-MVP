@@ -173,23 +173,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(profile.email)) {
       setActiveModeState('admin');
       saveActiveMode('admin');
-    } else if (profile.isStoreApproved || profile.role === 'store') {
+    } else if (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId)) {
       // Approved stores are always locked into store mode
       setActiveModeState('store');
       saveActiveMode('store');
-    } else if (profile.isHelper && profile.helperType === 'dedicated') {
-      // Dedicated helper type users get helper view as primary automatically on login/load
+    } else if (profile.isHelper || profile.role === 'helper') {
+      // All helper type users automatically get helper view as primary on login/load
       setActiveModeState('helper');
       saveActiveMode('helper');
     } else {
-      // A stale 'admin'/'store' mode left in localStorage must never grant this
-      // user those interfaces — fall back to customer.
+      // Regular customer
       const safeSavedMode: ActiveMode =
-        savedMode === 'admin' || savedMode === 'store' ? 'customer' : savedMode || 'customer';
-      const targetMode: ActiveMode =
-        profile.isHelper && profile.lastActiveMode === 'helper' ? 'helper' : safeSavedMode;
-      setActiveModeState(targetMode);
-      saveActiveMode(targetMode);
+        savedMode === 'admin' || savedMode === 'store' || savedMode === 'helper' ? 'customer' : savedMode || 'customer';
+      setActiveModeState(safeSavedMode);
+      saveActiveMode(safeSavedMode);
     }
   };
 
@@ -242,9 +239,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Initialize role-scoped Firestore listeners (replaces the old 12-blanket-listeners approach)
         const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
           ? 'admin'
-          : (profile.isStoreApproved || profile.role === 'store' || profile.lastActiveMode === 'store' || savedMode === 'store')
+          : (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId))
           ? 'store'
-          : (profile.isHelper && (profile.helperType === 'dedicated' || profile.lastActiveMode === 'helper' || savedMode === 'helper'))
+          : (profile.isHelper || profile.role === 'helper')
           ? 'helper'
           : 'customer';
         fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
@@ -260,12 +257,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }).catch(() => {});
           }
         }
-        // Initialize FCM push token for this device (async, non-blocking)
-        requestBrowserNotificationPermission().then((granted) => {
-          if (granted) {
-            initFcmMessaging(fbUser.uid).catch(() => {});
-          }
-        });
+        // Initialize FCM push token: only prompt on load if helper or store; for customer, only init if already granted
+        if (listenerRole === 'helper' || listenerRole === 'store') {
+          requestBrowserNotificationPermission().then((granted) => {
+            if (granted) {
+              initFcmMessaging(fbUser.uid).catch(() => {});
+            }
+          });
+        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          initFcmMessaging(fbUser.uid).catch(() => {});
+        }
       } else {
         setUser(null);
         fallbackStore.currentUserId = null;
@@ -329,13 +330,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const setActiveMode = (mode: ActiveMode) => {
-    if (user && user.isAdmin) {
+    if (user && (user.isAdmin || user.role === 'admin' || isUserAdminEmail(user.email))) {
       setActiveModeState('admin');
       saveActiveMode('admin');
       return;
     }
     // Approved stores are locked into store mode
-    if (user && user.isStoreApproved) {
+    if (user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))) {
       setActiveModeState('store');
       saveActiveMode('store');
       return;
@@ -425,12 +426,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? 'helper'
           : 'customer';
         fallbackStore.initListenersForRole(demoRole, demoProfile.uid, demoProfile.helperType);
-        // Initialize FCM push token for this device & ask permission (async, non-blocking)
-        requestBrowserNotificationPermission().then((granted) => {
-          if (granted) {
-            initFcmMessaging(demoProfile.uid).catch(() => {});
-          }
-        });
+        // Initialize FCM push token for this device & ask permission only if helper
+        if (demoProfile.isHelper) {
+          requestBrowserNotificationPermission().then((granted) => {
+            if (granted) {
+              initFcmMessaging(demoProfile.uid).catch(() => {});
+            }
+          });
+        }
         setActiveMode(demoProfile.lastActiveMode);
         setLoading(false);
         return;
@@ -447,12 +450,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (syncedProfile) profile = syncedProfile;
         applyProfile(profile, savedMode);
 
-        // Ask browser notification permission immediately after login
-        requestBrowserNotificationPermission().then((granted) => {
-          if (granted) {
-            initFcmMessaging(res.user.uid).catch(() => {});
-          }
-        });
+        // Only ask browser notification permission immediately after login if helper or store
+        if (profile.isHelper || profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId)) {
+          requestBrowserNotificationPermission().then((granted) => {
+            if (granted) {
+              initFcmMessaging(res.user.uid).catch(() => {});
+            }
+          });
+        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          initFcmMessaging(res.user.uid).catch(() => {});
+        }
       }
       setLoading(false);
     } catch (err: any) {

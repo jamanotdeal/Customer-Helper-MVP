@@ -123,7 +123,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+          className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
@@ -183,7 +183,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-600 font-bold text-xs transition-all"
+              className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-600 border border-rose-200 font-bold text-xs transition-all"
             >
               পরে
             </button>

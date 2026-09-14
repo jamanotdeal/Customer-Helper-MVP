@@ -229,7 +229,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+            className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -315,7 +315,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+              className="px-4 py-2 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl active:scale-95 transition-colors"
             >
               বাতিল
             </button>

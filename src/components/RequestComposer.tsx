@@ -1,18 +1,19 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
-import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
+import { fallbackStore, saveCustomerSavedAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
 import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Clock, AlertTriangle } from 'lucide-react';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Check, Clock, AlertTriangle, AlertCircle, Coins, Sparkles, Gift, X } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { MapPickerModal } from './MapPickerModal';
 import { SavedAddressPicker } from './SavedAddressPicker';
 import { AsyncButton } from './ui/AsyncButton';
+import { requestNativePushPermission } from '@/lib/native';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -59,11 +60,42 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   // Previous unpaid due payment state
   const [unpaidDue, setUnpaidDue] = useState<{ totalAmount: number; notes: string[]; sourceOrderIds: string[] } | null>(null);
 
+  // Free delivery / Discount via Coins state
+  const [useFreeDelivery, setUseFreeDelivery] = useState(false);
+  const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
+
   // Service selection state
   const [service, setService] = useState('');
   const [services, setServices] = useState<string[]>(
     fallbackStore.pricingSettings.services || DEFAULT_SERVICES
   );
+  const [isServiceDropdownOpen, setIsServiceDropdownOpen] = useState(false);
+  const serviceDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Field validation errors
+  const [errors, setErrors] = useState<{
+    service?: string;
+    description?: string;
+    deliveryAddress?: string;
+    altPhone?: string;
+  }>({});
+
+  // Close service dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (serviceDropdownRef.current && !serviceDropdownRef.current.contains(event.target as Node)) {
+        setIsServiceDropdownOpen(false);
+      }
+    };
+    if (isServiceDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isServiceDropdownOpen]);
 
   // Check whether a service is in the no-save list
   const isNoSavePickupService = (svc: string): boolean => {
@@ -75,6 +107,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   // When service changes, pre-fill pickup from saved location (if allowed)
   const handleServiceChange = (newService: string) => {
     setService(newService);
+    setErrors((prev) => ({ ...prev, service: undefined }));
     if (!isNoSavePickupService(newService)) {
       const saved = getServicePickupLocation(newService);
       if (saved?.address) {
@@ -181,7 +214,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   const currentPlaceholder = placeholders[placeholderIndex] || 'কী করতে হবে? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে...';
 
-  // Handle focus / click on main input (Guard unauthenticated users & ask location permission)
+  // Handle focus / click on main input (Guard unauthenticated users)
   const handleInputInteract = () => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
       showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
@@ -189,29 +222,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       return;
     }
     setIsExpanded(true);
-
-    // Prompt location permission when customer starts creating order
-    if (typeof navigator !== 'undefined' && navigator.geolocation && !deliveryLat) {
-      const alreadyAskedLoc = typeof localStorage !== 'undefined' && localStorage.getItem('location_permission_prompted') === 'true';
-      if (!alreadyAskedLoc) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            setDeliveryLat(pos.coords.latitude);
-            setDeliveryLng(pos.coords.longitude);
-            if (typeof localStorage !== 'undefined') {
-              localStorage.setItem('location_permission_prompted', 'true');
-            }
-          },
-          (err) => {
-            console.warn('[RequestComposer] Customer location permission note:', err?.message);
-            if (typeof localStorage !== 'undefined') {
-              localStorage.setItem('location_permission_prompted', 'true');
-            }
-          },
-          { enableHighAccuracy: true, timeout: 8000 }
-        );
-      }
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -223,38 +233,32 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       return;
     }
 
-    if (!service) {
-      await showAlert('সার্ভিস প্রয়োজন', 'অনুগ্রহ করে একটি সার্ভিস সিলেক্ট করুন।', 'warning');
-      return;
+    const newErrors: typeof errors = {};
+
+    if (!service || !service.trim()) {
+      newErrors.service = 'সার্ভিস সিলেক্ট করা বাধ্যতামূলক';
     }
 
     if (!description.trim()) {
-      await showAlert('বিবরণ প্রয়োজন', 'অনুগ্রহ করে কী করতে হবে তা লিখুন।', 'warning');
-      return;
+      newErrors.description = 'কী করতে হবে তার বিবরণ লিখুন';
     }
 
     if (!deliveryAddress.trim()) {
-      await showAlert('ডেলিভারি ঠিকানা প্রয়োজন', 'অনুগ্রহ করে আপনার সঠিক ডেলিভারি ঠিকানা দিন।', 'warning');
-      return;
+      newErrors.deliveryAddress = 'ডেলিভারি ঠিকানা সিলেক্ট করুন';
     }
 
     if (!altPhone.trim()) {
-      await showAlert(
-        'হোয়াটসঅ্যাপ নম্বর প্রয়োজন',
-        'অনুগ্রহ করে যোগাযোগের জন্য সচল হোয়াটসঅ্যাপ নম্বর লিখুন।',
-        'warning'
-      );
+      newErrors.altPhone = 'হোয়াটসঅ্যাপ নম্বর দিন';
+    } else if (!/^01[3-9]\d{8}$/.test(altPhone.trim())) {
+      newErrors.altPhone = 'সঠিক ১১ ডিজিটের মোবাইল নম্বর লিখুন (যেমন: 01712345678)';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
       return;
     }
 
-    if (!/^01[3-9]\d{8}$/.test(altPhone.trim())) {
-      await showAlert(
-        'ভুল ফোন নম্বর',
-        'অনুগ্রহ করে ১১ ডিজিটের সঠিক সচল মোবাইল নম্বর (যেমন: 01712345678) লিখুন।',
-        'error'
-      );
-      return;
-    }
+    setErrors({});
 
     const isConfirmed = await showConfirm(
       'Confirm Your Request',
@@ -298,6 +302,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     }, fallbackStore.pricingSettings).totalFee;
     const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
 
+    const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
+    const isFree = useFreeDelivery && (user.coins || 0) >= reqCoins;
+    const discountPct = fallbackStore.pricingSettings.freeDeliveryDiscountPercent ?? 100;
+    const finalDeliveryFee = isFree
+      ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
+      : initialFee;
+
     // Generate zero-padded 5-digit order ID
     const orderNum = Math.floor(Math.random() * 90000) + 10000;
     const newOrder: Order = {
@@ -316,8 +327,11 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       deliveryLocation: finalDelivLoc,
       additionalNote: undefined,
       status: 'PENDING',
-      deliveryFee: initialFee,
+      deliveryFee: finalDeliveryFee,
       originalDeliveryFee: initialFee,
+      isFreeDelivery: isFree,
+      deliveryDiscountPercent: isFree ? discountPct : undefined,
+      coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
       appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
         ? {
             amount: unpaidDue.totalAmount,
@@ -333,7 +347,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           status: 'PENDING',
           timestamp: new Date().toISOString(),
           actor: 'Customer',
-          note: 'Request created',
+          note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
         },
       ],
     };
@@ -343,11 +357,20 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     // Reset form
     setDescription('');
     setService('');
+    setIsServiceDropdownOpen(false);
     setPickupNote('');
     setPickupLat(undefined);
     setPickupLng(undefined);
     setIsExpanded(false);
-    setSubmitting(false);
+    // Prompt notification permission on order submit so customer receives live helper updates
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
+      try {
+        const granted = await requestNativePushPermission();
+        if (granted && user?.uid) {
+          initFcmMessaging(user.uid).catch(() => {});
+        }
+      } catch (_) {}
+    }
 
     // Show admin-configured confirmation message
     const confirmMsg =
@@ -419,35 +442,104 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             {isExpanded && user && (
               <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
 
-                {/* Service Selection Dropdown */}
-                <div className="relative">
-                  <select
-                    value={service}
-                    onChange={(e) => handleServiceChange(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
-                    required
+                {/* Custom Service Selection Dropdown */}
+                <div className={`relative ${isServiceDropdownOpen ? 'z-50' : 'z-10'}`} ref={serviceDropdownRef}>
+                  {/* Full body dark backdrop overlay */}
+                  {isServiceDropdownOpen && (
+                    <div
+                      className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 animate-in fade-in duration-200"
+                      onClick={() => setIsServiceDropdownOpen(false)}
+                      aria-hidden="true"
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setIsServiceDropdownOpen((prev) => !prev)}
+                    className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm transition-all duration-200 cursor-pointer select-none relative ${
+                      isServiceDropdownOpen
+                        ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl z-50'
+                        : errors.service
+                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
+                        : 'border-gray-200 bg-white hover:border-emerald-300'
+                    }`}
+                    aria-haspopup="listbox"
+                    aria-expanded={isServiceDropdownOpen}
                   >
-                    <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
-                    {services.map((srv) => (
-                      <option key={srv} value={srv}>
-                        {srv}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                    <ChevronDown className="w-4 h-4" />
-                  </div>
+                    <span className={service ? 'text-gray-900 font-bold truncate' : 'text-gray-400 font-medium'}>
+                      {service || 'সার্ভিস সিলেক্ট করুন *'}
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 transition-transform duration-200 shrink-0 ml-2 ${
+                        isServiceDropdownOpen ? 'rotate-180 text-emerald-600' : 'text-gray-400'
+                      }`}
+                    />
+                  </button>
+
+                  {errors.service && !isServiceDropdownOpen && (
+                    <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.service}</span>
+                    </p>
+                  )}
+
+                  {/* Dropdown Options Menu */}
+                  {isServiceDropdownOpen && (
+                    <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-3xl shadow-2xl shadow-black/25 border border-emerald-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                      <div className="max-h-[520px] overflow-y-auto overscroll-contain divide-y divide-gray-100">
+                        {services.map((srv) => {
+                          const isSelected = service === srv;
+                          return (
+                            <button
+                              key={srv}
+                              type="button"
+                              onClick={() => {
+                                handleServiceChange(srv);
+                                setIsServiceDropdownOpen(false);
+                              }}
+                              className={`w-full px-4 py-3.5 text-left text-xs sm:text-sm flex items-center justify-between transition-all cursor-pointer group ${
+                                isSelected
+                                  ? 'bg-emerald-50/90 text-emerald-950 font-extrabold'
+                                  : 'text-gray-700 font-semibold hover:bg-emerald-50/40 hover:text-emerald-900 active:bg-gray-100'
+                              }`}
+                            >
+                              <span className="truncate pr-2">{srv}</span>
+                              {isSelected ? (
+                                <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-emerald-500/30">
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                </div>
+                              ) : (
+                                <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-emerald-400 shrink-0 transition-colors" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Description box */}
                 <div className="relative">
                   <textarea
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    onChange={(e) => {
+                      setDescription(e.target.value);
+                      if (errors.description) setErrors((prev) => ({ ...prev, description: undefined }));
+                    }}
                     placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
-                    className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
-                    required
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400 transition-colors ${
+                      errors.description
+                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
+                        : 'border-emerald-200 bg-emerald-50/40 focus:border-emerald-500'
+                    }`}
                   />
+                  {errors.description && (
+                    <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.description}</span>
+                    </p>
+                  )}
                 </div>
 
                 {/* Pickup / Source Location (optional) */}
@@ -475,28 +567,94 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     <input
                       type="text"
                       value={deliveryAddress}
-                      onChange={(e) => setDeliveryAddress(e.target.value)}
+                      onChange={(e) => {
+                        setDeliveryAddress(e.target.value);
+                        if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
+                      }}
                       onClick={handleDeliveryAddressClick}
                       placeholder="ডেলিভারি ঠিকানা (ক্লিক করে সিলেক্ট করুন) *"
-                      className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                      required
+                      className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer ${
+                        errors.deliveryAddress
+                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
+                          : 'border-gray-200 bg-white focus:border-emerald-500'
+                      }`}
                       readOnly
                     />
                   </div>
+                  {errors.deliveryAddress && (
+                    <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.deliveryAddress}</span>
+                    </p>
+                  )}
                 </div>
 
                 {/* WhatsApp Number */}
                 <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="tel"
-                    value={altPhone}
-                    onChange={(e) => setAltPhone(e.target.value)}
-                    placeholder="হোয়াটসঅ্যাপ নম্বর *"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                    required
-                  />
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <input
+                      type="tel"
+                      value={altPhone}
+                      onChange={(e) => {
+                        setAltPhone(e.target.value);
+                        if (errors.altPhone) setErrors((prev) => ({ ...prev, altPhone: undefined }));
+                      }}
+                      placeholder="হোয়াটসঅ্যাপ নম্বর *"
+                      className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 transition-colors ${
+                        errors.altPhone
+                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
+                          : 'border-gray-200 bg-white focus:border-emerald-500'
+                      }`}
+                    />
+                  </div>
+                  {errors.altPhone && (
+                    <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.altPhone}</span>
+                    </p>
+                  )}
                 </div>
+
+                {/* Free Delivery / Coins Discount Checkbox Card */}
+                {(() => {
+                  const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
+                  const userCoins = user?.coins || 0;
+                  const hasEnough = userCoins >= reqCoins;
+
+                  return (
+                    <div
+                      onClick={() => {
+                        if (!user) {
+                          openAuthModal();
+                          return;
+                        }
+                        if (!hasEnough) {
+                          setShowInsufficientCoinsModal(true);
+                          return;
+                        }
+                        setUseFreeDelivery(!useFreeDelivery);
+                      }}
+                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                        useFreeDelivery
+                          ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-400/20 shadow-xs'
+                          : 'bg-gradient-to-r from-amber-50/50 via-yellow-50/30 to-amber-50/50 border-amber-200/70 hover:border-amber-300'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <input
+                          type="checkbox"
+                          checked={useFreeDelivery}
+                          onChange={() => {}} // Handled by container click
+                          className="w-4 h-4 accent-amber-600 rounded cursor-pointer shrink-0 pointer-events-none"
+                        />
+                        <span className="text-xs sm:text-sm font-bold text-gray-900">
+                          Get Free Delivery
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Previous Unpaid Due Payment Card */}
                 {unpaidDue && unpaidDue.totalAmount > 0 && (
@@ -573,6 +731,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         onSelectAddress={(loc) => {
           const cleanAddr = formatShortAddress(loc.address);
           setDeliveryAddress(cleanAddr);
+          setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
           if (loc.lat) setDeliveryLat(loc.lat);
           if (loc.lng) setDeliveryLng(loc.lng);
         }}
@@ -621,6 +780,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         onSelectLocation={(loc) => {
           const cleanAddr = formatShortAddress(loc.address);
           setDeliveryAddress(cleanAddr);
+          setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
           if (loc.lat) setDeliveryLat(loc.lat);
           if (loc.lng) setDeliveryLng(loc.lng);
           // Auto-save new delivery address to localStorage + Firestore
@@ -633,6 +793,46 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           }
         }}
       />
+
+      {/* Minimalist Insufficient Coins Custom Modal */}
+      {showInsufficientCoinsModal && (
+        <div
+          className="fixed inset-0 z-[999999] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setShowInsufficientCoinsModal(false)}
+        >
+          <div
+            className="w-full max-w-[340px] bg-white rounded-3xl p-6 shadow-2xl border border-gray-100 relative animate-in zoom-in-95 duration-150 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => setShowInsufficientCoinsModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pt-2 px-1">
+              <h3 className="font-extrabold text-base text-gray-900 tracking-tight leading-snug">
+                {fallbackStore.pricingSettings.insufficientCoinsTitle || 'Get Free Delivery'}
+              </h3>
+              <p className="mt-2.5 text-xs sm:text-[13px] text-gray-600 font-medium leading-relaxed whitespace-pre-line">
+                {fallbackStore.pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই! ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowInsufficientCoinsModal(false)}
+              className="mt-5 w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs shadow-sm shadow-emerald-600/20 transition-all cursor-pointer"
+            >
+              ঠিক আছে
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
