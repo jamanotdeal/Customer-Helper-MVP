@@ -260,7 +260,7 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
+          className="p-2.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 hover:text-rose-100 border border-rose-800/50 transition-all"
         >
           <X className="w-5 h-5" />
         </button>

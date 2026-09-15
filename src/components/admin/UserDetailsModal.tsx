@@ -295,7 +295,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
             <button
               onClick={onClose}
-              className="p-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-colors self-start md:self-auto"
+              className="p-2.5 rounded-2xl bg-rose-500/80 hover:bg-rose-600 text-white transition-colors self-start md:self-auto shadow-sm"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1144,7 +1144,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
           <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
             <button
               onClick={onClose}
-              className="py-2.5 px-6 rounded-2xl bg-gray-200 hover:bg-gray-300 font-extrabold text-xs text-gray-800 transition-colors"
+              className="py-2.5 px-6 rounded-2xl bg-rose-50 hover:bg-rose-100 font-extrabold text-xs text-rose-600 border border-rose-200 active:scale-95 transition-colors"
             >
               Close Details
             </button>

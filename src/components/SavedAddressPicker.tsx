@@ -83,7 +83,7 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 active:scale-95 transition-all"
+            className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:bg-rose-100 hover:text-rose-700 border border-rose-200/60 active:scale-95 transition-all"
           >
             <X className="w-4 h-4" />
           </button>

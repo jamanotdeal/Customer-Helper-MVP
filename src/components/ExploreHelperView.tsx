@@ -43,8 +43,14 @@ export const ExploreHelperView: React.FC = () => {
       if (user) {
         const all = Array.from(fallbackStore.orders.values());
         
-        // Unaccepted (pending, unassigned) orders
-        const pending = all.filter((o) => o.status === 'PENDING' && !o.helperId);
+        // Unaccepted (pending, unassigned) orders: strictly PENDING and no helperId and not canceled or completed
+        const pending = all.filter((o) => {
+          if (o.status !== 'PENDING') return false;
+          if (o.helperId && o.helperId.trim() !== '') return false;
+          if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(o.status)) return false;
+          if (o.cancellationRequest?.status === 'APPROVED') return false;
+          return true;
+        });
         
         // Active orders count for the helper (excluding cancelled)
         const activeCount = all.filter(
@@ -92,12 +98,19 @@ export const ExploreHelperView: React.FC = () => {
       return;
     }
     
-    // Check if the order is still pending/unassigned
+    // Check at first if the order is already accepted / no longer pending
     const freshOrder = fallbackStore.orders.get(orderId);
-    if (!freshOrder || freshOrder.status !== 'PENDING' || freshOrder.helperId) {
+    const isAlreadyAccepted = !freshOrder || freshOrder.status !== 'PENDING' || Boolean(freshOrder.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(freshOrder.status) || freshOrder.cancellationRequest?.status === 'APPROVED';
+
+    if (isAlreadyAccepted) {
+      // Immediately hide this request from explore list/map
+      setUnacceptedOrders((prev) => prev.filter((o) => o.id !== orderId));
+      if (selectedOrderId === orderId) {
+        setSelectedOrderId(null);
+      }
       await showAlert(
-        'অর্ডারটি ইতিমধ্যে গৃহীত',
-        'অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন।',
+        'অর্ডারটি ইতিমধ্যে গৃহীত বা আর উপলব্ধ নেই',
+        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন অথবা আর উপলব্ধ নেই।',
         'warning'
       );
       return;
@@ -122,10 +135,16 @@ export const ExploreHelperView: React.FC = () => {
 
     // Double-check right before updating to handle any confirmation delay
     const doubleCheck = fallbackStore.orders.get(orderId);
-    if (!doubleCheck || doubleCheck.status !== 'PENDING' || doubleCheck.helperId) {
+    const isDoubleCheckAccepted = !doubleCheck || doubleCheck.status !== 'PENDING' || Boolean(doubleCheck.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(doubleCheck.status) || doubleCheck.cancellationRequest?.status === 'APPROVED';
+
+    if (isDoubleCheckAccepted) {
+      setUnacceptedOrders((prev) => prev.filter((o) => o.id !== orderId));
+      if (selectedOrderId === orderId) {
+        setSelectedOrderId(null);
+      }
       await showAlert(
-        'অর্ডারটি ইতিমধ্যে গৃহীত',
-        'অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন।',
+        'অর্ডারটি ইতিমধ্যে গৃহীত বা আর উপলব্ধ নেই',
+        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন অথবা আর উপলব্ধ নেই।',
         'warning'
       );
       return;
@@ -387,13 +406,29 @@ export const ExploreHelperView: React.FC = () => {
   if (selectedOrderId) {
     const targetOrder = fallbackStore.orders.get(selectedOrderId);
     if (targetOrder) {
-      // Check if order is already accepted by someone else
-      if (targetOrder.helperId && targetOrder.helperId !== user?.uid) {
+      // Check if order is already accepted by someone else, or canceled, or completed
+      const isAcceptedByOther = Boolean((targetOrder.helperId && targetOrder.helperId !== user?.uid) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(targetOrder.status));
+      const isCanceled = targetOrder.status === 'CANCELED' || targetOrder.cancellationRequest?.status === 'APPROVED';
+      const isCompleted = targetOrder.status === 'DELIVERED';
+
+      if (isAcceptedByOther || isCanceled || isCompleted) {
         return (
           <div className="w-full bg-white min-h-screen flex flex-col items-center justify-center p-6 text-center">
             <AlertTriangle className="w-16 h-16 text-amber-500 mb-4 animate-bounce" />
-            <h2 className="text-xl font-bold text-gray-900 mb-2">অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন</h2>
-            <p className="text-gray-500 text-sm mb-6">This order is already accepted by another helper.</p>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">
+              {isCanceled
+                ? 'অর্ডারটি বাতিল করা হয়েছে'
+                : isCompleted
+                ? 'অর্ডারটি সম্পন্ন হয়েছে'
+                : 'অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন'}
+            </h2>
+            <p className="text-gray-500 text-sm mb-6">
+              {isCanceled
+                ? 'This order has been canceled.'
+                : isCompleted
+                ? 'This order has already been completed.'
+                : 'This order is already accepted by another helper.'}
+            </p>
             <button
               onClick={() => setSelectedOrderId(null)}
               className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl text-xs font-bold transition-all active:scale-95 shadow-md"
@@ -408,7 +443,7 @@ export const ExploreHelperView: React.FC = () => {
           order={targetOrder}
           helperLocation={user?.helperLocation}
           onBack={() => setSelectedOrderId(null)}
-          onAccept={targetOrder.status === 'PENDING' ? handleAcceptOrder : undefined}
+          onAccept={targetOrder.status === 'PENDING' && !targetOrder.helperId ? handleAcceptOrder : undefined}
           activeOrdersCount={activeOrdersCount}
           activeOrderLimit={activeOrderLimit}
         />

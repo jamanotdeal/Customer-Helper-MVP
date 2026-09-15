@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon } from '@/types';
+import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
 import { useModal } from './CustomModal';
@@ -49,6 +49,8 @@ import {
   MessageSquare,
   Timer,
   Zap,
+  Gift,
+  Coins,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -70,6 +72,8 @@ import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
 import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
+import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
+import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AsyncButton } from './ui/AsyncButton';
 
 interface AdminDashboardProps {
@@ -84,7 +88,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
-    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'PRICING' | 'SETTINGS'
+    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
@@ -192,6 +196,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [mapPickerAddressRequiredMessage, setMapPickerAddressRequiredMessage] = useState<string>('অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।');
   const [noSavePickupServicesText, setNoSavePickupServicesText] = useState<string>('মিক্স কিছু কাজ করে দিন\nনা, অন্য একটা কাজ করে দিন\nআমার একটা জিনিস দিয়ে আসুন');
 
+  // Helper Sidebar Mode option visibility
+  const [showBecomeHelper, setShowBecomeHelper] = useState<boolean>(false);
+
   // Helper Center contact info
   const [helperCenterEnabled, setHelperCenterEnabled] = useState<boolean>(true);
   const [helperCenterOfficeAddress, setHelperCenterOfficeAddress] = useState<string>('');
@@ -225,6 +232,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
+  const [editingNotification, setEditingNotification] = useState<AppNotification | null>(null);
+  const [duplicateNotification, setDuplicateNotification] = useState<AppNotification | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [assignHelperOrder, setAssignHelperOrder] = useState<Order | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -346,6 +355,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [excStoreAppPageSize, setExcStoreAppPageSize] = useState(10);
   const [excPendingWdPage, setExcPendingWdPage] = useState(1);
   const [excPendingWdPageSize, setExcPendingWdPageSize] = useState(10);
+  const [excRewardClaimPage, setExcRewardClaimPage] = useState(1);
+  const [excRewardClaimPageSize, setExcRewardClaimPageSize] = useState(10);
 
   // Tab-specific Date Filters
   const [ordersStartDate, setOrdersStartDate] = useState('');
@@ -540,6 +551,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       ]).join('\n'));
 
       // Helper Center state sync
+      setShowBecomeHelper(Boolean(settings.showBecomeHelper));
       setHelperCenterEnabled(settings.helperCenterEnabled !== false);
       setHelperCenterOfficeAddress(settings.helperCenterOfficeAddress || '');
       setHelperCenterPhone1(settings.helperCenterPhone1 || '');
@@ -928,6 +940,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       (new Date().getTime() - new Date(o.createdAt).getTime() >= 3600000)
   );
 
+  const pendingRewardClaims = Array.from(fallbackStore.rewardClaims.values()).filter(
+    (c) => c.status === 'PENDING'
+  );
+
   const totalExceptionsCount =
     cancellingRequests.filter(o => o.cancellationRequest?.status === 'PENDING').length +
     notAcceptedRequests.length +
@@ -935,7 +951,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     pendingApps.length +
     pendingWds.length +
     pendingStoreApps.length +
-    delayedOrders.length;
+    delayedOrders.length +
+    pendingRewardClaims.length;
 
   const avgDeliveryTimeMins = React.useMemo(() => {
     const delivered = allOrders.filter(o => o.status === 'DELIVERED');
@@ -1263,6 +1280,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       mapPickerDeliveryPlaceholder: mapPickerDeliveryPlaceholder.trim() || undefined,
       mapPickerAddressRequiredMessage: mapPickerAddressRequiredMessage.trim() || undefined,
       noSavePickupLocationServices: noSavePickupServicesText.split('\n').map(s => s.trim()).filter(Boolean),
+      // Helper sidebar visibility settings
+      showBecomeHelper: showBecomeHelper,
       // Helper center settings
       helperCenterEnabled: helperCenterEnabled,
       helperCenterOfficeAddress: helperCenterOfficeAddress.trim() || undefined,
@@ -1763,10 +1782,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { key: 'SHOPS', label: 'Shops', icon: Store, color: 'text-purple-600' },
     { key: 'FEEDBACK', label: 'Order Feedback', icon: Star, color: 'text-amber-500' },
     { key: 'CUSTOM_MODALS', label: 'Custom Modals', icon: Sparkles, color: 'text-purple-600' },
+    { key: 'NOTIFICATIONS', label: 'Notification History', icon: Bell, color: 'text-purple-600' },
     { key: 'CUSTOMERS', label: 'Customers', icon: User, color: 'text-indigo-600' },
     { key: 'REVENUE', label: 'Revenue Analytics', icon: TrendingUp, color: 'text-emerald-600' },
     { key: 'WITHDRAWALS', label: 'Commissions Requests', icon: DollarSign, color: 'text-purple-600' },
     { key: 'PRICING', label: 'Pricing', icon: DollarSign, color: 'text-emerald-600' },
+    { key: 'REWARDS', label: 'Coins & Rewards', icon: Gift, color: 'text-amber-500' },
     { key: 'SETTINGS', label: 'Settings', icon: Settings, color: 'text-purple-600' },
   ];
 
@@ -2173,6 +2194,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         )}
 
+        {isTabAllowed('NOTIFICATIONS') && (
+          <button
+            onClick={() => setActiveTab('NOTIFICATIONS')}
+            data-active={activeTab === 'NOTIFICATIONS'}
+            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'NOTIFICATIONS'
+                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+          >
+            <Bell className="w-4 h-4 text-purple-600 shrink-0" />
+            <span>Notification History</span>
+            {Array.from(fallbackStore.scheduledNotifications.values()).length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] shrink-0 font-bold">
+                {Array.from(fallbackStore.scheduledNotifications.values()).length} sched
+              </span>
+            )}
+          </button>
+        )}
+
         {isTabAllowed('CUSTOMERS') && (
           <button
             onClick={() => setActiveTab('CUSTOMERS')}
@@ -2242,10 +2282,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span>Settings</span>
           </button>
         )}
+
+        {isTabAllowed('REWARDS') && (
+          <button
+            onClick={() => setActiveTab('REWARDS')}
+            data-active={activeTab === 'REWARDS'}
+            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'REWARDS'
+                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+          >
+            <Coins className="w-4 h-4 text-amber-500 shrink-0" />
+            <span>Coins & Rewards</span>
+            {pendingRewardClaims.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] shrink-0 font-bold">
+                {pendingRewardClaims.length}
+              </span>
+            )}
+          </button>
+        )}
       </DraggableTabsContainer>
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
-      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && (() => {
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && activeTab !== 'REWARDS' && (() => {
         const getTabSearchStates = () => {
           switch (activeTab) {
             case 'ORDERS':
@@ -2342,7 +2401,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
       })()}
 
-      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && (
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'NOTIFICATIONS' && activeTab !== 'REWARDS' && (
         <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3 -mt-4 border-t-0 rounded-t-none">
 
           <div className="flex flex-wrap items-center gap-2 w-full">
@@ -2493,7 +2552,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           pendingApps.length > 0 ||
           pendingWds.length > 0 ||
           pendingStoreApps.length > 0 ||
-          delayedOrders.length > 0;
+          delayedOrders.length > 0 ||
+          pendingRewardClaims.length > 0;
 
         return (
           <div className="space-y-6">
@@ -2704,7 +2764,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
                                   <div className="text-[11px] text-gray-500">{(ord.items || []).length} items</div>
                                 </td>
-                                <td className="py-3.5 px-5 font-extrabold text-emerald-700">৳{ord.deliveryFee}</td>
+                                <td className="py-3.5 px-5 font-extrabold text-emerald-700">
+                                  {ord.isFreeDelivery ? (
+                                    <div>
+                                      <span>৳0</span>
+                                      <span className="block text-[9px] font-black text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded w-fit mt-0.5">
+                                        🎁 Reward Claimed
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    `৳${ord.deliveryFee}`
+                                  )}
+                                </td>
                                 <td className="py-3.5 px-5 text-right">
                                   <div className="flex justify-end space-x-2">
                                     <button
@@ -3077,6 +3148,106 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     />
                   </div>
                 )}
+                {/* 7. Pending Reward Claims */}
+                {pendingRewardClaims.length > 0 && (() => {
+                  const prc = paginate(pendingRewardClaims, excRewardClaimPage, excRewardClaimPageSize);
+                  return (
+                    <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                      <div className="p-5 border-b border-gray-100 bg-yellow-50/50 flex items-center justify-between">
+                        <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                          <Coins className="w-4 h-4 text-amber-500" />
+                          <span>Pending Reward Claims ({pendingRewardClaims.length})</span>
+                        </h3>
+                        <button
+                          onClick={() => setActiveTab('REWARDS')}
+                          className="text-xs font-extrabold text-amber-700 hover:text-amber-900 underline"
+                        >
+                          Manage All →
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-gray-600 min-w-[600px]">
+                          <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                            <tr>
+                              <th className="py-3 px-5">Customer</th>
+                              <th className="py-3 px-5">Prize</th>
+                              <th className="py-3 px-5">Coins</th>
+                              <th className="py-3 px-5">Date</th>
+                              <th className="py-3 px-5 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 font-medium">
+                            {prc.items.map((claim) => (
+                              <tr key={claim.id} className="hover:bg-gray-50/80 transition-colors">
+                                <td className="py-3.5 px-5">
+                                  <div className="font-extrabold text-gray-900">{claim.userName}</div>
+                                  <div className="text-[11px] text-gray-500">{claim.userPhone || claim.userEmail || ''}</div>
+                                </td>
+                                <td className="py-3.5 px-5 font-bold text-gray-800">{claim.prizeTitle}</td>
+                                <td className="py-3.5 px-5">
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold text-[11px]">
+                                    🪙 {claim.requiredCoins}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-5 text-[11px] text-gray-500">
+                                  {new Date(claim.createdAt).toLocaleDateString('bn-BD')}
+                                </td>
+                                <td className="py-3.5 px-5 text-right">
+                                  <div className="flex justify-end items-center space-x-1.5">
+                                    <button
+                                      onClick={async () => {
+                                        const confirmed = await showConfirm(
+                                          'পুরস্কার দাবি অনুমোদন',
+                                          `"সেবাপ্রাপ্তো:" ${claim.prizeTitle} দাবিটি অনুমোদন করবেন? ${claim.requiredCoins} কয়েন ব্যবহারকারীর একান্ট থেকে কাটা হবে।`,
+                                          'হ্যাঁ, অনুমোদন করুন',
+                                          'বাতিল'
+                                        );
+                                        if (confirmed) {
+                                          await fallbackStore.approveRewardClaim(claim.id, 'অনুমোদিত', 'Admin');
+                                          showAlert('অনুমোদিত', `দাবি অনুমোদিত এবং ${claim.requiredCoins} কয়েন কাটা হয়েছে।`, 'success');
+                                        }
+                                      }}
+                                      className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        const confirmed = await showConfirm(
+                                          'দাবি বাতিল',
+                                          `"সেবাপ্রাপ্তো:" ${claim.prizeTitle} দাবিটি প্রত্যাখ্যান করবেন?`,
+                                          'হ্যাঁ, বাতিল করুন',
+                                          'ফিরে যান'
+                                        );
+                                        if (confirmed) {
+                                          await fallbackStore.rejectRewardClaim(claim.id, 'অনুরোধটি প্রক্রিয়াকরণ করা সম্ভব হয়নি।', 'Admin');
+                                          showAlert('বাতিল', 'দাবি বাতিল করা হয়েছে।', 'info');
+                                        }
+                                      }}
+                                      className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <PaginationControl
+                        currentPage={Math.min(excRewardClaimPage, prc.totalPages)}
+                        totalPages={prc.totalPages}
+                        totalItems={pendingRewardClaims.length}
+                        pageSize={excRewardClaimPageSize}
+                        onPageChange={(p) => setExcRewardClaimPage(p)}
+                        onPageSizeChange={(s) => { setExcRewardClaimPageSize(s); setExcRewardClaimPage(1); }}
+                        pageSizeOptions={[5, 10, 25]}
+                      />
+                    </div>
+                  );
+                })()}
+
               </div>
             )}
           </div>
@@ -3273,7 +3444,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </div>
                           )}
                         </td>
-                        <td className="py-4 px-5 font-black text-emerald-700 text-xs">৳{ord.deliveryFee}</td>
+                        <td className="py-4 px-5 font-black text-emerald-700 text-xs">
+                          {ord.isFreeDelivery ? (
+                            <div>
+                              <span>৳0</span>
+                              <span className="block text-[9px] font-black text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded w-fit mt-0.5">
+                                🎁 Reward Claimed
+                              </span>
+                            </div>
+                          ) : (
+                            `৳${ord.deliveryFee}`
+                          )}
+                        </td>
                         <td className="py-4 px-5">
                           <div className="flex flex-col gap-0.5">
                             <span
@@ -4894,6 +5076,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <p className="text-[10px] text-gray-500 mt-1">
                   কোন ধরনের হেলপাররা রিকোয়েস্ট দেখতে এবং গ্রহণ করতে পারবেন তা নির্ধারণ করুন।
                 </p>
+              </div>
+            </div>
+
+            {/* Become Helper Visibility Toggle for Customers */}
+            <div className="pt-3 border-t border-blue-200/80">
+              <div className="flex items-start justify-between p-3.5 bg-white/90 rounded-2xl border border-blue-200 shadow-xs">
+                <div className="pr-3">
+                  <label htmlFor="showBecomeHelperToggle" className="text-xs font-bold text-gray-800 cursor-pointer block">
+                    Show "Become Helper" in Sidebar (গ্রাহকদের সাইডবারে "Become Helper" বা হেল্পার হওয়ার অপশন দেখান)
+                  </label>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    সক্রিয় থাকলে সাধারণ গ্রাহকরা সাইডবার/ড্রয়ার মেনুতে হেল্পার হওয়ার আবেদন অপশন দেখতে পাবেন। বন্ধ থাকলে অপ্রয়োজনীয় আবেদন ও ডাটাবেজ স্টোরেজ রোধে অপশনটি সাধারণ গ্রাহকদের থেকে লুকানো থাকবে। (অ্যাডমিন কাউকে Dedicated বা Helper বানিয়ে দিলে তারা সবসময় Helper Mode দেখতে পাবেন)।
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  id="showBecomeHelperToggle"
+                  checked={showBecomeHelper}
+                  onChange={(e) => setShowBecomeHelper(e.target.checked)}
+                  className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer shrink-0 mt-0.5"
+                />
               </div>
             </div>
           </div>
@@ -6799,6 +7002,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
       })()}
 
+      {/* --- TAB 11: NOTIFICATION HISTORY TAB --- */}
+      {activeTab === 'NOTIFICATIONS' && isTabAllowed('NOTIFICATIONS') && (
+        <AdminNotificationHistory
+          onOpenCreateModal={() => {
+            setEditingNotification(null);
+            setDuplicateNotification(null);
+            setShowPushNotificationModal(true);
+          }}
+          onEditNotification={(notif) => {
+            setEditingNotification(notif);
+            setDuplicateNotification(null);
+            setShowPushNotificationModal(true);
+          }}
+          onDuplicateNotification={(notif) => {
+            setEditingNotification(null);
+            setDuplicateNotification(notif);
+            setShowPushNotificationModal(true);
+          }}
+        />
+      )}
+
+      {/* --- TAB 12: COINS & REWARDS TAB --- */}
+      {activeTab === 'REWARDS' && isTabAllowed('REWARDS') && (
+        <AdminRewardsManager />
+      )}
+
       {/* --- ALL MODALS OVERLAYS --- */}
 
       {/* 1. Admin Order Details Modal */}
@@ -6882,7 +7111,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
                   <button
                     onClick={() => setShowHighDurationModal(false)}
-                    className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
+                    className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -6988,7 +7217,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* 6. Admin Custom Push Notification Modal */}
       {showPushNotificationModal && (
         <AdminPushNotificationModal
-          onClose={() => setShowPushNotificationModal(false)}
+          editingNotification={editingNotification}
+          initialData={duplicateNotification}
+          onClose={() => {
+            setShowPushNotificationModal(false);
+            setEditingNotification(null);
+            setDuplicateNotification(null);
+          }}
         />
       )}
 
@@ -7064,7 +7299,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowFeeSuggestionsModal(false)}
-                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                  className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -7170,7 +7405,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowFeeSuggestionsModal(false)}
-                    className="ml-2 px-4 py-1.5 rounded-xl bg-purple-900 hover:bg-purple-950 text-white text-xs font-bold transition-all"
+                    className="ml-2 px-4 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 text-xs font-bold transition-all"
                   >
                     বন্ধ করুন
                   </button>

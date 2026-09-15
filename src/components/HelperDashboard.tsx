@@ -6,6 +6,7 @@ import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
+import { isNativeApp } from '@/lib/native';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -124,6 +125,49 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     // First capture on mount: use high accuracy so the initial position is precise.
     captureHelperLocation(true);
 
+    // Dev-side web prompts. In native builds the permission ladder in
+    // page-client.tsx requests these for real — running both would stack two
+    // modals on the single shared modal slot, so this path is web-only.
+    if (!isNativeApp()) {
+      // Prompt display over permission ONLY for dedicated helpers
+      const checkHelperPermissions = async () => {
+        const p = fallbackStore.pricingSettings;
+
+        if (user.helperType === 'dedicated') {
+          const displayOverPrompted = typeof localStorage !== 'undefined' && localStorage.getItem('display_over_permission_prompted') === 'true';
+          if (!displayOverPrompted) {
+            await showPermissionModal({
+              permissionType: 'display_over',
+              title: p.displayOverPermissionModalTitle || 'ডিসপ্লে ওভার পারমিশন আবশ্যক (Display Over Other Apps)',
+              message: p.displayOverPermissionModalBody || 'নতুন অর্ডারের ইনস্ট্যান্ট পপআপ অ্যালার্ম পেতে ডেডিকেটেড রাইডারদের জন্য ডিসপ্লে ওভার পারমিশন এলাউ করা আবশ্যক।',
+              allowText: 'Allow Display Over',
+            });
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('display_over_permission_prompted', 'true');
+            }
+          }
+        }
+
+        // Check notification permission
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
+          const notifPrompted = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
+          if (!notifPrompted) {
+            await showPermissionModal({
+              permissionType: 'notification',
+              title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+              message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও নতুন অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+              allowText: 'Allow Notification',
+            });
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('notification_permission_prompted', 'true');
+            }
+          }
+        }
+      };
+
+      checkHelperPermissions();
+    }
+
     // Periodic refresh while the dashboard is actually on screen.
     //
     // This used to run every 12 seconds and never stop, which cost an idle
@@ -163,7 +207,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       stopPolling();
       unsubscribeVisibility();
     };
-  }, [user?.uid, user?.isHelper]);
+  }, [user?.uid, user?.isHelper, user?.helperType]);
 
   // Track new available orders (not yet seen when they first appeared)
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
@@ -401,9 +445,21 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       return;
     }
 
-    // Check if the order is still pending/unassigned
+    // Check at first if the order is already accepted / no longer pending
     const freshOrder = fallbackStore.orders.get(orderId);
-    if (!freshOrder || freshOrder.status !== 'PENDING' || freshOrder.helperId) {
+    const isAlreadyAccepted = !freshOrder || freshOrder.status !== 'PENDING' || Boolean(freshOrder.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(freshOrder.status) || freshOrder.cancellationRequest?.status === 'APPROVED';
+
+    if (isAlreadyAccepted) {
+      // Hide/remove from available orders and notifications immediately
+      setAvailableOrders((prev) => prev.filter((o) => o.id !== orderId));
+      setNewOrderIds((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+      if (selectedOrderId === orderId) {
+        setSelectedOrderId(null);
+      }
       await showAlert(
         'দুঃখিত!',
         'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
@@ -422,7 +478,18 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
     // Double-check right before updating to handle any confirmation delay
     const doubleCheck = fallbackStore.orders.get(orderId);
-    if (!doubleCheck || doubleCheck.status !== 'PENDING' || doubleCheck.helperId) {
+    const isDoubleCheckAccepted = !doubleCheck || doubleCheck.status !== 'PENDING' || Boolean(doubleCheck.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(doubleCheck.status) || doubleCheck.cancellationRequest?.status === 'APPROVED';
+
+    if (isDoubleCheckAccepted) {
+      setAvailableOrders((prev) => prev.filter((o) => o.id !== orderId));
+      setNewOrderIds((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+      if (selectedOrderId === orderId) {
+        setSelectedOrderId(null);
+      }
       await showAlert(
         'দুঃখিত!',
         'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
@@ -1376,8 +1443,12 @@ const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
                     পণ্য ৳{order.productCost}
                   </span>
                 )}
-                <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-black shadow-sm">
-                  Fee ৳{order.deliveryFee}
+                <span className={`px-2.5 py-1 rounded-full text-xs font-black shadow-sm ${
+                  order.isFreeDelivery
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  {order.isFreeDelivery ? '🎁 Free Delivery (৳0)' : `Fee ৳${order.deliveryFee}`}
                 </span>
               </div>
             </div>

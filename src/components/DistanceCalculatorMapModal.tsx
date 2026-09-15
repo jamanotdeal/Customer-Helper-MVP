@@ -440,7 +440,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-gray-300 transition-colors"
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/50 transition-colors"
             >
               বাতিল
             </button>

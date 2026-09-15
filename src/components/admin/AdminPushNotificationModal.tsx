@@ -3,30 +3,94 @@ import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
 import { Bell, Send, X, Users, UserCheck, ShieldAlert, Sparkles, CheckCircle2, Search, Clock, Calendar, Repeat } from 'lucide-react';
 import { TimePickerInput } from './TimePickerInput';
-import { UserProfile } from '@/types';
+import { AppNotification, UserProfile } from '@/types';
 
 
 interface AdminPushNotificationModalProps {
   onClose: () => void;
+  editingNotification?: AppNotification | null;
+  initialData?: Partial<AppNotification> | null;
 }
 
-export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProps> = ({ onClose }) => {
+export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProps> = ({
+  onClose,
+  editingNotification,
+  initialData,
+}) => {
   const { showAlert } = useModal();
-  const [targetAudience, setTargetAudience] = useState<'helpers' | 'customers' | 'all' | 'specific' | 'segment'>('helpers');
-  const [selectedSegment, setSelectedSegment] = useState<string>('MULTIPLE_ORDERS');
-  const [selectedUserUid, setSelectedUserUid] = useState<string>('');
+  const isEditMode = !!editingNotification;
+  const initialSource = editingNotification || initialData;
+
+  const getInitialTarget = (): 'helpers' | 'customers' | 'all' | 'specific' | 'segment' => {
+    if (!initialSource?.userId) return 'helpers';
+    if (initialSource.userId === 'all-helpers') return 'helpers';
+    if (initialSource.userId === 'all-customers') return 'customers';
+    if (initialSource.userId === 'all') return 'all';
+    if (initialSource.userId.startsWith('segment:')) return 'segment';
+    return 'specific';
+  };
+
+  const getInitialSegment = () => {
+    if (initialSource?.userId?.startsWith('segment:')) {
+      return initialSource.userId.replace('segment:', '');
+    }
+    return 'MULTIPLE_ORDERS';
+  };
+
+  const getInitialUserUid = () => {
+    if (
+      initialSource?.userId &&
+      !['all-helpers', 'all-customers', 'all'].includes(initialSource.userId) &&
+      !initialSource.userId.startsWith('segment:')
+    ) {
+      return initialSource.userId;
+    }
+    return '';
+  };
+
+  const getInitialDate = () => {
+    if (initialSource?.scheduledAt) {
+      try {
+        return new Date(initialSource.scheduledAt).toISOString().split('T')[0];
+      } catch (_) {
+        return new Date().toISOString().split('T')[0];
+      }
+    }
+    return new Date().toISOString().split('T')[0];
+  };
+
+  const getInitialTime = () => {
+    if (initialSource?.repeatTime) return initialSource.repeatTime;
+    if (initialSource?.scheduledAt) {
+      try {
+        const d = new Date(initialSource.scheduledAt);
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      } catch (_) {
+        return '10:00';
+      }
+    }
+    return '10:00';
+  };
+
+  const [targetAudience, setTargetAudience] = useState<'helpers' | 'customers' | 'all' | 'specific' | 'segment'>(getInitialTarget);
+  const [selectedSegment, setSelectedSegment] = useState<string>(getInitialSegment);
+  const [selectedUserUid, setSelectedUserUid] = useState<string>(getInitialUserUid);
   const [searchUserQuery, setSearchUserQuery] = useState<string>('');
-  const [title, setTitle] = useState<string>('');
-  const [body, setBody] = useState<string>('');
-  const [orderId, setOrderId] = useState<string>('');
-  const [imageUrl, setImageUrl] = useState<string>('');
+  const [title, setTitle] = useState<string>(initialSource?.title || '');
+  const [body, setBody] = useState<string>(initialSource?.body || '');
+  const [orderId, setOrderId] = useState<string>(initialSource?.orderId || '');
+  const [imageUrl, setImageUrl] = useState<string>(initialSource?.imageUrl || '');
   const [isSending, setIsSending] = useState<boolean>(false);
 
   // Scheduled Notification state
-  const [sendTiming, setSendTiming] = useState<'now' | 'scheduled'>('now');
-  const [scheduledDate, setScheduledDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [scheduledTime, setScheduledTime] = useState<string>('10:00');
-  const [repeatFrequency, setRepeatFrequency] = useState<'NONE' | 'DAILY' | 'WEEKLY'>('NONE');
+  const [sendTiming, setSendTiming] = useState<'now' | 'scheduled'>(
+    initialSource?.isScheduled || initialSource?.scheduledAt ? 'scheduled' : 'now'
+  );
+  const [scheduledDate, setScheduledDate] = useState<string>(getInitialDate);
+  const [scheduledTime, setScheduledTime] = useState<string>(getInitialTime);
+  const [repeatFrequency, setRepeatFrequency] = useState<'NONE' | 'DAILY' | 'WEEKLY'>(
+    initialSource?.repeatFrequency || 'NONE'
+  );
 
   const [isSearchingUser, setIsSearchingUser] = useState<boolean>(false);
   const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
@@ -102,6 +166,29 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
         scheduledAtIso = schedObj.toISOString();
       }
 
+      if (isEditMode && editingNotification) {
+        const isFutureScheduled = scheduledAtIso ? new Date(scheduledAtIso).getTime() > Date.now() : false;
+        let mappedTarget = targetKey;
+        if (targetAudience === 'helpers') mappedTarget = 'all-helpers';
+        if (targetAudience === 'customers') mappedTarget = 'all-customers';
+
+        await fallbackStore.updateScheduledNotification(editingNotification.id, {
+          userId: mappedTarget,
+          title: title.trim(),
+          body: body.trim(),
+          orderId: orderId.trim() || undefined,
+          imageUrl: imageUrl.trim() || undefined,
+          scheduledAt: scheduledAtIso,
+          isScheduled: isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE'),
+          repeatFrequency: repeatFrequency,
+          repeatTime: scheduledTime,
+        });
+
+        showAlert('নোটিফিকেশন আপডেট সম্পন্ন!', 'সিডিউলকৃত নোটিফিকেশনের সকল তথ্য সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
+        onClose();
+        return;
+      }
+
       await fallbackStore.sendAdminPushNotification(
         targetKey,
         title.trim(),
@@ -157,13 +244,19 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
               <Bell className="w-6 h-6 text-purple-200 animate-pulse" />
             </div>
             <div>
-              <h3 className="font-extrabold text-base tracking-tight">Create & Send Push Notification</h3>
-              <p className="text-xs text-purple-200">Send real-time PWA push notification to target audiences</p>
+              <h3 className="font-extrabold text-base tracking-tight">
+                {isEditMode ? 'Edit Scheduled Notification' : 'Create & Send Push Notification'}
+              </h3>
+              <p className="text-xs text-purple-200">
+                {isEditMode
+                  ? 'Modify target audience, message details or scheduled release timing'
+                  : 'Send real-time PWA push notification to target audiences'}
+              </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+            className="p-2 rounded-2xl bg-rose-500/80 hover:bg-rose-600 text-white transition-colors shadow-sm"
           >
             <X className="w-5 h-5" />
           </button>
@@ -571,7 +664,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                 <button
                   type="button"
                   onClick={() => setImageUrl('')}
-                  className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white transition-colors"
+                  className="absolute top-2 right-2 p-1.5 rounded-full bg-rose-600/90 hover:bg-rose-700 text-white transition-colors shadow-sm"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -613,7 +706,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             <button
               type="button"
               onClick={onClose}
-              className="py-2.5 px-5 rounded-2xl bg-gray-100 hover:bg-gray-200 font-extrabold text-xs text-gray-700 transition-colors"
+              className="py-2.5 px-5 rounded-2xl bg-rose-50 hover:bg-rose-100 font-extrabold text-xs text-rose-600 border border-rose-200 active:scale-95 transition-colors"
             >
               Cancel
             </button>
@@ -624,7 +717,17 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
               className="py-2.5 px-6 rounded-2xl bg-purple-900 hover:bg-purple-950 disabled:opacity-50 text-white font-extrabold text-xs shadow-lg shadow-purple-950/20 flex items-center space-x-2 transition-all active:scale-95"
             >
               <Send className="w-4 h-4" />
-              <span>{isSending ? 'Sending Push...' : 'Send Push Notification Now'}</span>
+              <span>
+                {isSending
+                  ? isEditMode
+                    ? 'Updating...'
+                    : 'Sending Push...'
+                  : isEditMode
+                  ? 'Save & Update Notification'
+                  : sendTiming === 'scheduled'
+                  ? 'Schedule Notification'
+                  : 'Send Push Notification Now'}
+              </span>
             </button>
           </div>
         </form>

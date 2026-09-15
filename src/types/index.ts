@@ -139,6 +139,15 @@ export interface Order {
     note: string;
     sourceOrderIds?: string[];
   };
+
+  // Gamification & Free Delivery fields
+  isFreeDelivery?: boolean;
+  deliveryDiscountPercent?: number; // 1-100%
+  coinsRedeemedForDelivery?: number;
+  coinsDeductedForDelivery?: boolean;
+  coinsDeductedAt?: string;
+  coinsAwarded?: number;
+  coinsAwardedAt?: string;
 }
 
 export interface OrderDuePayment {
@@ -178,6 +187,8 @@ export interface UserProfile {
   isStore?: boolean;         // True if user has an approved store application
   isStoreApproved?: boolean; // Explicit approval flag for store mode
   storeId?: string;          // The shop document ID linked to this user's store
+  coins?: number;            // Current coin balance
+  totalEarnedCoins?: number; // Lifetime earned coins
 }
 
 export interface HelperApplication {
@@ -399,6 +410,7 @@ export interface PricingSettings {
   helperRadiusKm?: number; // Distance radius limit in km for helper request visibility & notifications (default 3.5)
   mapLocationPreference?: MapLocationPreference; // Default 'BD'
   customCountryCode?: string; // e.g. 'bd', 'in', 'us'
+  showBecomeHelper?: boolean; // When true, regular customers see "Become Helper" in the sidebar drawer. When false (default), it is hidden.
   pwaInstallPromptEnabled?: boolean; // Admin toggle to enable PWA install prompt on order success
   pwaInstallPromptTitle?: string;    // Custom title e.g. "Install Jamanot App"
   pwaInstallPromptDescription?: string; // Custom description text
@@ -407,6 +419,8 @@ export interface PricingSettings {
   locationPermissionModalBody?: string;  // Admin editable body message for location permission modal
   notificationPermissionModalTitle?: string; // Admin editable title for notification permission modal
   notificationPermissionModalBody?: string;  // Admin editable body message for notification permission modal
+  displayOverPermissionModalTitle?: string; // Admin editable title for display over permission modal
+  displayOverPermissionModalBody?: string;  // Admin editable body message for display over permission modal
   bkashInstructions?: string;
   nagadInstructions?: string;
   rocketInstructions?: string;
@@ -473,6 +487,15 @@ export interface PricingSettings {
   
   // Manual authentication (email/password login & register) toggle
   manualAuthEnabled?: boolean; // Default true
+
+  // Gamification & Rewards Settings
+  defaultOrderCoins?: number;                // Default coins awarded per order (e.g. 10)
+  serviceCoins?: Record<string, number>;     // Category/Service specific coin rewards
+  freeDeliveryRequiredCoins?: number;        // Coins needed for free/discounted delivery (e.g. 50)
+  freeDeliveryDiscountPercent?: number;      // Discount % on delivery fee (1-100, default 100)
+  insufficientCoinsTitle?: string;           // Admin customizable popup title when coins not enough
+  insufficientCoinsMessage?: string;         // Admin customizable popup message when coins not enough
+  rewardStoreTips?: string;                  // Tips / advice text block written by admin for customers
 }
 
 export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';
@@ -527,4 +550,49 @@ export interface AppNotification {
   repeatTime?: string; // HH:mm format for recurring push time
   targetRole?: UserRole;
   type?: string;
+  isAdminPush?: boolean;
+  createdByAdmin?: boolean;
 }
+
+export interface RewardPrize {
+  id: string;
+  title: string;
+  description?: string;
+  requiredCoins: number;
+  discountPercent?: number; // Optional 1-100% discount
+  imageUrl?: string;
+  icon?: string;
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface RewardClaim {
+  id: string;
+  userId: string;
+  userName: string;
+  userPhone?: string;
+  userEmail?: string;
+  prizeId: string;
+  prizeTitle: string;
+  requiredCoins: number;
+  discountPercent?: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  claimNote?: string;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  reviewedBy?: string;
+}
+
+export interface CoinTransaction {
+  id: string;
+  userId: string;
+  amount: number;
+  type: 'EARNED_ORDER' | 'CLAIM_REDEEM' | 'ADMIN_ADJUST' | 'FREE_DELIVERY';
+  orderId?: string;
+  claimId?: string;
+  description: string;
+  createdAt: string;
+}
+

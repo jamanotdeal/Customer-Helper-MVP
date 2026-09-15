@@ -102,10 +102,13 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   helperRadiusKm: 3.5,
   mapLocationPreference: 'BD',
   customCountryCode: 'bd',
+  showBecomeHelper: false,
   locationPermissionModalTitle: 'লোকেশন পারমিশন আবশ্যক (Location Required)',
   locationPermissionModalBody: 'কম্পিউটার হেলপার (Commuter Helper) মোড চালু করতে এবং আপনার আশেপাশের অর্ডারের নোটিফিকেশন পেতে ডিভাইসের জিপিএস লোকেশন পারমিশন দেওয়া আবশ্যক। অনুগ্রহ করে ব্রাউজার সেটিংসে Location Allow করুন।',
   notificationPermissionModalTitle: 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
   notificationPermissionModalBody: 'জরুরি আপডেট ও অর্ডারের নোটিফিকেশন পাওয়ার জন্য ব্রাউজার বা ডিভাইসে নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+  displayOverPermissionModalTitle: 'ডিসপ্লে ওভার পারমিশন আবশ্যক (Display Over Other Apps)',
+  displayOverPermissionModalBody: 'নতুন অর্ডার আসলে সাথে সাথে স্ক্রিনের উপর রিয়েল-টাইম পপআপ ও অ্যালার্ম নোটিফিকেশন পেতে ডিসপ্লে ওভার পারমিশন দেওয়া আবশ্যক।',
   bkashInstructions: 'bKash Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
   nagadInstructions: 'Nagad Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
   rocketInstructions: 'Rocket Personal: Send Money to 018XXXXXXXX and provide transaction ID.',
@@ -142,7 +145,52 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
 আপনার যেকোনো মতামত বা সার্ভিস ফি সংক্রান্ত পরামর্শ নিচে লিখে আমাদের জানাতে পারেন।`,
   allowedAdminTabs: [],
   manualAuthEnabled: true,
+  // Gamification & Rewards Defaults
+  defaultOrderCoins: 10,
+  serviceCoins: {
+    'Bazar-sodai korte hobe': 15,
+    'Khabar ante hobe': 10,
+    'Medicine ante hobe': 12,
+    'zuta selai korte hobe': 10,
+    'amar parcel recive kore dite hobe': 10,
+    'mix': 20,
+    'onno kicu': 10,
+    'বাজার-সদাই করে দিন': 15,
+    'খাবার এনে দিন': 10,
+    'ওষুধ এনে দিন': 12,
+    'জুতা সেলাই করে দিন': 10,
+    'পার্সেল রিসিভ করে দিন': 10,
+    'মিক্স / একাধিক কাজ': 20,
+    'অন্য কিছু': 10,
+  },
+  freeDeliveryRequiredCoins: 50,
+  freeDeliveryDiscountPercent: 100,
+  insufficientCoinsMessage: 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই! ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।',
+  rewardStoreTips: `💡 জামানত কয়েন টিপস:
+• প্রতিটি ডেলিভারি সফলভাবে সম্পন্ন হলে আপনি কয়েন পাবেন।
+• নির্দিষ্ট সার্ভিসে (যেমন: বাজার-সদাই বা মিক্স কাজ) বেশি কয়েন পাওয়ার সুযোগ রয়েছে।
+• অর্জিত কয়েন দিয়ে ১০০% ফ্রি ডেলিভারি চার্জ অথবা আকর্ষণীয় উপহার ও ডিসকাউন্ট ভাউচার ক্লেইম করতে পারবেন।`,
 };
+
+/**
+ * Calculates coins to award for an order based on service type and pricing settings
+ */
+export function getCoinsForService(service?: string, settings: PricingSettings = DEFAULT_PRICING_SETTINGS): number {
+  const defaultCoins = settings.defaultOrderCoins ?? 10;
+  if (!service) return defaultCoins;
+  const svcCoins = settings.serviceCoins || {};
+  if (svcCoins[service] !== undefined && typeof svcCoins[service] === 'number') {
+    return svcCoins[service];
+  }
+  // Try case-insensitive / trimmed match
+  const lower = service.toLowerCase().trim();
+  const matchKey = Object.keys(svcCoins).find(k => k.toLowerCase().trim() === lower);
+  if (matchKey && svcCoins[matchKey] !== undefined) {
+    return svcCoins[matchKey];
+  }
+  return defaultCoins;
+}
+
 
 /**
  * Calculates estimated delivery fee based on distance, product weight, return option, product price, base price, and discount.

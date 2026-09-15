@@ -94,7 +94,7 @@ export const AuthModal: React.FC = () => {
         <div className="relative bg-gradient-to-r from-emerald-600 to-teal-700 p-6 text-white text-center">
           <button
             onClick={closeAuthModal}
-            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+            className="absolute top-4 right-4 p-2 rounded-full bg-rose-500/80 hover:bg-rose-600 text-white shadow-sm transition-colors"
           >
             <X className="w-5 h-5" />
           </button>

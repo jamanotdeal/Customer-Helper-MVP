@@ -16,6 +16,7 @@ import {
 import { ShopOrder, ShopOrderStatus } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
+import { isNativeApp } from '@/lib/native';
 
 
 // Timer component to display live elapsed time
@@ -75,9 +76,69 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   setActiveTab: parentSetActiveTab,
 }) => {
   const { user } = useAuth();
-  const { showAlert, showConfirm } = useModal();
+  const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
   const [ordersSubTab, setOrdersSubTab] = useState<'NEW' | 'RUNNING' | 'COMPLETED'>('NEW');
+
+  // Permission prompts on store load (Notification, Location, Display Over)
+  useEffect(() => {
+    if (!user) return;
+    const checkPermissions = async () => {
+      const p = fallbackStore.pricingSettings;
+
+      // 1. Display Over Permission (Store only)
+      const displayOverPrompted = typeof localStorage !== 'undefined' && localStorage.getItem('display_over_permission_prompted') === 'true';
+      if (!displayOverPrompted) {
+        await showPermissionModal({
+          permissionType: 'display_over',
+          title: p.displayOverPermissionModalTitle || 'ডিসপ্লে ওভার পারমিশন আবশ্যক (Display Over Other Apps)',
+          message: p.displayOverPermissionModalBody || 'নতুন কাস্টমার অর্ডার আসলে স্ক্রিনের উপর সাথে সাথে রিয়েল-টাইম পপআপ অ্যালার্ম পেতে ডিসপ্লে ওভার পারমিশন এলাউ করুন।',
+          allowText: 'Allow Display Over',
+        });
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('display_over_permission_prompted', 'true');
+        }
+      }
+
+      // 2. Notification Permission
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
+        const notifPrompted = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
+        if (!notifPrompted) {
+          await showPermissionModal({
+            permissionType: 'notification',
+            title: p.notificationPermissionModalTitle || 'নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)',
+            message: p.notificationPermissionModalBody || 'জরুরি আপডেট ও নতুন অর্ডারের নোটিফিকেশন পাওয়ার জন্য নোটিফিকেশন পারমিশন দেওয়া আবশ্যক।',
+            allowText: 'Allow Notification',
+          });
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('notification_permission_prompted', 'true');
+          }
+        }
+      }
+
+      // 3. Location Permission
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        const locPrompted = typeof localStorage !== 'undefined' && localStorage.getItem('location_permission_prompted') === 'true';
+        if (!locPrompted) {
+          navigator.geolocation.getCurrentPosition(
+            () => {
+              if (typeof localStorage !== 'undefined') localStorage.setItem('location_permission_prompted', 'true');
+            },
+            () => {
+              if (typeof localStorage !== 'undefined') localStorage.setItem('location_permission_prompted', 'true');
+            },
+            { timeout: 8000 }
+          );
+        }
+      }
+    };
+
+    // Native builds run the real permission ladder in page-client.tsx; firing
+    // these web prompts too would stack a second modal on the shared modal slot
+    // and leave the ladder's await unresolved.
+    if (!isNativeApp()) checkPermissions();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
   
   const [showRequestComposer, setShowRequestComposer] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -1641,7 +1702,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               </div>
               <button
                 onClick={() => setShowStoreCancelModal(false)}
-                className="p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1676,7 +1737,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setShowStoreCancelModal(false)}
-                className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
               >
                 ফিরে যান
               </button>

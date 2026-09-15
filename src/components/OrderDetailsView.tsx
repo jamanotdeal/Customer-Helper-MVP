@@ -407,7 +407,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED';
   const isDelivered = order.status === 'DELIVERED';
   const isCanceled = (order.status as string) === 'CANCELED';
-  const totalPayable = (order.productCost || 0) + (order.deliveryFee || 0);
+  const totalPayable = (order.productCost || 0) + (order.isFreeDelivery ? 0 : (order.deliveryFee || 0));
 
   return (
     <div className="w-full bg-gray-50 min-h-screen pb-24 animate-in fade-in duration-200">
@@ -463,7 +463,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </p>
 
           {/* Quick cost summary */}
-          {(order.productCost !== undefined || order.deliveryFee > 0) && (
+          {(order.productCost !== undefined || order.deliveryFee > 0 || order.isFreeDelivery) && (
             <div className="mt-4 flex items-center space-x-3">
               {order.productCost !== undefined && (
                 <div
@@ -474,7 +474,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   <p className="text-sm font-black">৳{order.productCost}</p>
                 </div>
               )}
-              {order.deliveryFee > 0 && (
+              {order.isFreeDelivery ? (
+                <div
+                  onClick={scrollToCalculationSummary}
+                  className="bg-amber-400/20 border border-amber-300/40 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-amber-400/30 transition-all"
+                >
+                  <p className="text-[10px] text-amber-200 font-semibold">Delivery</p>
+                  <p className="text-sm font-black text-amber-300">Free (🎁)</p>
+                </div>
+              ) : order.deliveryFee > 0 ? (
                 <div
                   onClick={scrollToCalculationSummary}
                   className="bg-white/10 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/20 transition-all"
@@ -482,7 +490,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   <p className="text-[10px] text-white/60 font-semibold">Delivery</p>
                   <p className="text-sm font-black">৳{order.deliveryFee}</p>
                 </div>
-              )}
+              ) : null}
               {totalPayable > 0 && (
                 <div
                   onClick={scrollToCalculationSummary}
@@ -783,14 +791,23 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               )}
 
               <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
-                <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
-                <span className="text-base font-black text-emerald-850">৳{Math.max(order.deliveryFee, estdPricing.minFee)}</span>
+                <div className="flex items-center space-x-1.5">
+                  <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
+                  {order.isFreeDelivery && (
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                      🎁 ফ্রি ডেলিভারি (Reward Claimed)
+                    </span>
+                  )}
+                </div>
+                <span className="text-base font-black text-emerald-850">
+                  ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
+                </span>
               </div>
 
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total Payable Amount (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + Math.max(order.deliveryFee || 0, estdPricing.minFee) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
+                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                 </span>
               </div>
             </div>
@@ -982,7 +999,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
               <button
                 onClick={() => setShowEditModal(false)}
-                className="p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1100,7 +1117,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <button
                 type="button"
                 onClick={() => setShowEditModal(false)}
-                className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
               >
                 Discard
               </button>
@@ -1128,7 +1145,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
               <button
                 onClick={() => setShowCancelModal(false)}
-                className="p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1169,7 +1186,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 <button
                   type="button"
                   onClick={() => setShowCancelModal(false)}
-                  className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                  className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
                 >
                   ফিরে যান
                 </button>
@@ -1237,9 +1254,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
               <button
                 onClick={() => setShowDueModal(false)}
-                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -1291,7 +1308,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 <button
                   type="button"
                   onClick={() => setShowDueModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-all"
+                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-extrabold text-xs transition-all active:scale-95"
                 >
                   বাতিল
                 </button>

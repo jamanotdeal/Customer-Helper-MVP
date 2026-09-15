@@ -82,7 +82,7 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-3 right-3 p-2.5 rounded-full bg-black/30 hover:bg-black/50 text-white transition-all backdrop-blur-sm"
+            className="absolute top-3 right-3 p-2.5 rounded-full bg-rose-600/80 hover:bg-rose-700 text-white transition-all backdrop-blur-sm shadow-md"
           >
             <X className="w-4 h-4" />
           </button>

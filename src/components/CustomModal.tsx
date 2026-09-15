@@ -8,7 +8,7 @@ export type ModalType = 'info' | 'success' | 'warning' | 'error' | 'confirm' | '
 
 export interface ModalOptions {
   type?: ModalType;
-  permissionType?: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
+  permissionType?: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart' | 'display_over';
   title: string;
   message: string;
   confirmText?: string;
@@ -23,7 +23,7 @@ interface ModalContextType {
   showAlert: (title: string, message: string, type?: ModalType) => Promise<void>;
   showConfirm: (title: string, message: string, confirmText?: string, cancelText?: string) => Promise<boolean>;
   showPermissionModal: (options: {
-    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
+    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart' | 'display_over';
     title: string;
     message: string;
     onAllow?: () => Promise<boolean> | boolean;
@@ -72,7 +72,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const showPermissionModal = (options: {
-    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart';
+    permissionType: 'location' | 'notification' | 'overlay' | 'battery' | 'autostart' | 'display_over';
     title: string;
     message: string;
     onAllow?: () => Promise<boolean> | boolean;
@@ -87,7 +87,13 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         title: options.title,
         message: options.message,
         onAllow: options.onAllow,
-        allowText: options.allowText || (options.permissionType === 'location' ? 'Allow Location' : 'Allow Notification'),
+        allowText: options.allowText || (
+          options.permissionType === 'location' 
+            ? 'Allow Location' 
+            : options.permissionType === 'display_over'
+            ? 'Allow Display Over'
+            : 'Allow Notification'
+        ),
         cancelText: options.cancelText,
       });
       setResolver(() => resolve);
@@ -129,6 +135,11 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             );
           });
         }
+      } else if (modalState.permissionType === 'display_over') {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('display_over_permission_prompted', 'true');
+        }
+        granted = true;
       }
     } catch (_) {
       granted = false;
@@ -156,7 +167,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             {/* Close Button */}
             <button
               onClick={handleCancel}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -212,7 +223,7 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     <AsyncButton
                       type="button"
                       onClick={handleCancel}
-                      className="flex-1 py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all"
+                      className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
                     >
                       {modalState.cancelText || 'বাতিল'}
                     </AsyncButton>

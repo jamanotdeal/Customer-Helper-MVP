@@ -257,7 +257,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
           <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 text-center relative animate-in zoom-in-95 duration-200">
             <button
               onClick={() => setShowAuthRequiredModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200"
+              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>

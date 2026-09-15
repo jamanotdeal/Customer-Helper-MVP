@@ -209,7 +209,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-white/15 hover:bg-white/25 text-white transition-all"
+            className="absolute top-4 right-4 p-2 rounded-full bg-rose-500/80 hover:bg-rose-600 text-white transition-all shadow-sm"
           >
             <X className="w-5 h-5" />
           </button>
@@ -561,7 +561,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                 Delete
               </button>
               <button type="button" onClick={onClose}
-                className="py-2.5 px-4 rounded-2xl bg-gray-200 hover:bg-gray-300 text-gray-700 font-extrabold text-xs transition-all">
+                className="py-2.5 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-extrabold text-xs transition-all">
                 Close
               </button>
             </div>
@@ -573,7 +573,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
               <button type="button" onClick={() => setMode('VIEW')}
-                className="py-3 px-4 rounded-2xl bg-gray-200 hover:bg-gray-300 text-gray-700 font-extrabold text-xs transition-all">
+                className="py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-extrabold text-xs transition-all">
                 Cancel
               </button>
             </div>

@@ -968,7 +968,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedShop(null)}
-                className="p-1.5 bg-white/20 hover:bg-white/30 rounded-xl transition-colors"
+                className="p-1.5 bg-rose-500/80 hover:bg-rose-600 rounded-xl text-white transition-colors shadow-sm"
               >
                 <X className="w-4 h-4 text-white" />
               </button>
