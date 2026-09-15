@@ -67,7 +67,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   }, [user]);
 
   const isAdminView = Boolean(
-    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin')
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
   );
 
   const isStoreUser = Boolean(
@@ -89,6 +89,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       activeMode === 'helper' ||
       helperAppStatus === 'APPROVED'
     )
+  );
+
+  // Rewards coins is strictly for Customer mode (not helper, store, or admin)
+  const isCustomerMode = Boolean(
+    user && !isAdminView && !isStoreUser && (activeMode === 'customer' || (!activeMode && !user.isHelper && user.role !== 'helper'))
   );
 
   return (
@@ -142,20 +147,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   )}
                 </button>
 
-                {/* Coin Badge Trigger (Beside Profile Avatar) */}
-                <button
-                  onClick={() => setShowRewardModal(true)}
-                  className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 text-emerald-950 transition-all shadow-xs active:scale-95 cursor-pointer"
-                  aria-label="Coins & Rewards"
-                  title="জামানত কয়েন ও রিওয়ার্ড"
-                >
-                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-amber-400 to-yellow-300 flex items-center justify-center shadow-xs shrink-0 ring-1 ring-amber-300/60">
-                    <SingleCoinIcon className="w-3.5 h-3.5 text-amber-950" />
-                  </div>
-                  <span className="text-xs font-black tracking-tight font-sans text-emerald-950">
-                    {user.coins || 0}
-                  </span>
-                </button>
+                {/* Coin Badge Trigger (Beside Profile Avatar) - Customer only */}
+                {isCustomerMode && (
+                  <button
+                    onClick={() => setShowRewardModal(true)}
+                    className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 text-emerald-950 transition-all shadow-xs active:scale-95 cursor-pointer"
+                    aria-label="Coins & Rewards"
+                    title="জামানত কয়েন ও রিওয়ার্ড"
+                  >
+                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-amber-400 to-yellow-300 flex items-center justify-center shadow-xs shrink-0 ring-1 ring-amber-300/60">
+                      <SingleCoinIcon className="w-3.5 h-3.5 text-amber-950" />
+                    </div>
+                    <span className="text-xs font-black tracking-tight font-sans text-emerald-950">
+                      {user.coins || 0}
+                    </span>
+                  </button>
+                )}
 
                 {/* Profile Trigger */}
                 <button
@@ -506,11 +513,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       {/* Auth Modal (Google Sign In & Optional Email/Password Login & Registration) */}
       <AuthModal />
 
-      {/* Rewards & Coins Wallet Modal */}
-      <RewardStoreModal
-        isOpen={showRewardModal}
-        onClose={() => setShowRewardModal(false)}
-      />
+      {/* Rewards & Coins Wallet Modal (Customer Only) */}
+      {isCustomerMode && (
+        <RewardStoreModal
+          isOpen={showRewardModal}
+          onClose={() => setShowRewardModal(false)}
+        />
+      )}
     </>
   );
 };

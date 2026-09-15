@@ -898,21 +898,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setTimeout(() => setNoteSavedAlert(false), 2500);
   };
 
-  const getDirectionsUrl = () => {
-    const deliveryDest = order.deliveryLocation.lat && order.deliveryLocation.lng
-      ? `${order.deliveryLocation.lat},${order.deliveryLocation.lng}`
-      : encodeURIComponent(order.deliveryLocation.address);
-
-    if (order.pickupLocation?.address) {
-      const pickupWaypoint = order.pickupLocation.lat && order.pickupLocation.lng
-        ? `${order.pickupLocation.lat},${order.pickupLocation.lng}`
-        : encodeURIComponent(order.pickupLocation.address);
-
-      return `https://www.google.com/maps/dir/?api=1&destination=${deliveryDest}&waypoints=${pickupWaypoint}`;
-    }
-
-    return `https://www.google.com/maps/dir/?api=1&destination=${deliveryDest}`;
-  };
 
   const handleConfirmDeliveryWithModal = () => {
     const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);

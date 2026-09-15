@@ -233,7 +233,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       const deliveryHtml = `
         <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 110px; height: 50px; pointer-events: none;">
           <div style="background: #10b981; color: white; font-size: 10px; font-weight: 900; padding: 3px 6px; border-radius: 8px; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.4); white-space: nowrap;">
-            📍 Destination
+            🏠 Delivery Point
           </div>
           <div style="width: 2px; height: 10px; background: #10b981;"></div>
           <div style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 2.5px solid white; box-shadow: 0 0 8px #10b981;"></div>
@@ -251,16 +251,34 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       boundsPoints.push([dLat, dLng]);
     }
 
-    // 4. Draw Road Route Polylines
-    const routePoints: { lat: number; lng: number }[] = [];
-    if (rLat && rLng) routePoints.push({ lat: rLat, lng: rLng });
-    if (pLat && pLng) routePoints.push({ lat: pLat, lng: pLng });
-    if (dLat && dLng) routePoints.push({ lat: dLat, lng: dLng });
+    // 4. Draw Road Route Polylines — two colour-coded legs:
+    //    Leg A (orange dashed):  Helper  → Pickup  (go pick up the items)
+    //    Leg B (green solid):    Pickup  → Delivery (deliver to customer)
 
-    if (routePoints.length >= 2) {
-      fetchRoadRoute(routePoints).then((coords) => {
+    const hasHelper  = !!(rLat && rLng);
+    const hasPickup  = !!(pLat && pLng);
+    const hasDelivery = !!(dLat && dLng);
+
+    // Leg A: Helper → Pickup  (only when both helper pos and pickup are known)
+    if (hasHelper && hasPickup) {
+      fetchRoadRoute([{ lat: rLat!, lng: rLng! }, { lat: pLat!, lng: pLng! }]).then((coords) => {
         if (coords.length > 0) {
-          const polyline = L.polyline(coords, {
+          const polyA = L.polyline(coords, {
+            color: '#f59e0b',   // amber – "go to pickup"
+            weight: 4,
+            opacity: 0.95,
+            dashArray: '8, 6',
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(map);
+          layersRef.current.push(polyA);
+        }
+      });
+    } else if (hasHelper && !hasPickup && hasDelivery) {
+      // No pickup — draw helper → delivery directly
+      fetchRoadRoute([{ lat: rLat!, lng: rLng! }, { lat: dLat!, lng: dLng! }]).then((coords) => {
+        if (coords.length > 0) {
+          const polyDirect = L.polyline(coords, {
             color: '#10b981',
             weight: 4,
             opacity: 0.9,
@@ -268,9 +286,27 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             lineCap: 'round',
             lineJoin: 'round',
           }).addTo(map);
-          layersRef.current.push(polyline);
+          layersRef.current.push(polyDirect);
         }
       });
+    }
+
+    // Leg B: Pickup → Delivery  (only when both pickup and delivery are known)
+    if (hasPickup && hasDelivery) {
+      fetchRoadRoute([{ lat: pLat!, lng: pLng! }, { lat: dLat!, lng: dLng! }]).then((coords) => {
+        if (coords.length > 0) {
+          const polyB = L.polyline(coords, {
+            color: '#10b981',   // green – "deliver to customer"
+            weight: 4,
+            opacity: 0.9,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(map);
+          layersRef.current.push(polyB);
+        }
+      });
+    } else if (!hasPickup && !hasHelper && hasDelivery) {
+      // Fallback: only delivery point known — nothing to route
     }
 
     // Render service area overlays (soft green zones)
@@ -379,6 +415,19 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               <span>Close</span>
             </button>
           </div>
+        </div>
+
+        {/* Route Legend Strip */}
+        <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-slate-50 border-b border-gray-100 text-[10px] font-bold overflow-x-auto">
+          <span className="text-gray-500 shrink-0">Route:</span>
+          <span className="flex items-center gap-1.5 shrink-0">
+            <span className="inline-block w-6 h-0.5 bg-amber-400 rounded-full border border-dashed border-amber-500" style={{borderStyle:'dashed'}} />
+            <span className="text-amber-700">🛵→📦 You → Pickup</span>
+          </span>
+          <span className="flex items-center gap-1.5 shrink-0">
+            <span className="inline-block w-6 h-0.5 bg-emerald-500 rounded-full" />
+            <span className="text-emerald-700">📦→🏠 Pickup → Delivery</span>
+          </span>
         </div>
 
         {/* Map Body */}
