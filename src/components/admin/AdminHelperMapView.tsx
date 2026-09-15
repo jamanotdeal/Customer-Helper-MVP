@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { UserProfile, Order, HelperApplication, LocationData } from '@/types';
+import { UserProfile, Order, HelperApplication, LocationData, AllowedAreaPolygon } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { getElapsedTime } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
+import { getPolygonCenter } from '@/lib/geofenceUtils';
 import {
   Bike,
   Zap,
@@ -22,6 +23,8 @@ import {
   ShieldCheck,
   Eye,
   Layers,
+  Square,
+  Plus,
 } from 'lucide-react';
 import { DraggableTabsContainer } from './DraggableTabsContainer';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
@@ -31,9 +34,12 @@ interface AdminHelperMapViewProps {
   users: UserProfile[];
   orders: Order[];
   applications: HelperApplication[];
+  allowedDeliveryAreas?: AllowedAreaPolygon[];
   onSelectHelper: (helper: { id: string; name: string }) => void;
   onSelectUser: (userId: string) => void;
   onUpdateHelperType?: (userId: string, newType: 'commuter' | 'dedicated') => Promise<void>;
+  onEditArea?: (area: AllowedAreaPolygon) => void;
+  onAddArea?: () => void;
 }
 
 // Deterministic coordinate offset function based on string hash for missing locations
@@ -63,9 +69,12 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   users,
   orders,
   applications,
+  allowedDeliveryAreas = [],
   onSelectHelper,
   onSelectUser,
   onUpdateHelperType,
+  onEditArea,
+  onAddArea,
 }) => {
   // Leaflet consumes the drag itself, so the native pull gesture must be
   // disarmed while this map is on screen.
@@ -75,12 +84,14 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   const tileLayerRef = useRef<any>(null);
   const markersRef = useRef<Map<string, any>>(new Map());
   const routePolylinesRef = useRef<any[]>([]);
+  const areaLayersRef = useRef<any[]>([]);
 
   const hasFittedBoundsRef = useRef(false);
   const [selectedHelperId, setSelectedHelperId] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'COMMUTER' | 'DEDICATED' | 'ON_DUTY'>('ALL');
+  const [showServiceAreas, setShowServiceAreas] = useState(true);
   // Live elapsed-time clock, shared with every other card and map on
   // screen and paused while the app is hidden — see useSecondTick.
   const timerTick = useSecondTick();
@@ -244,6 +255,78 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
     };
   }, []);
 
+  // Render Service Areas (Geofencing Sub-areas) with Soft Green Overlay & Borderline
+  useEffect(() => {
+    if (!mapReady || !mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    if (!isMapAlive(map)) return;
+
+    // Clear previous area layers
+    areaLayersRef.current.forEach((layer) => {
+      try {
+        map.removeLayer(layer);
+      } catch (e) {}
+    });
+    areaLayersRef.current = [];
+
+    if (!showServiceAreas || !allowedDeliveryAreas || allowedDeliveryAreas.length === 0) {
+      return;
+    }
+
+    import('leaflet').then((L) => {
+      if (!isMapAlive(map)) return;
+
+      allowedDeliveryAreas.forEach((area) => {
+        if (!area.coordinates || area.coordinates.length < 3) return;
+
+        const latLngs = area.coordinates.map((p) => [p.lat, p.lng] as [number, number]);
+
+        // Soft green overlay with borderline
+        const poly = L.polygon(latLngs, {
+          color: '#059669', // Emerald 600 border
+          fillColor: '#10b981', // Emerald 500 fill
+          fillOpacity: 0.22, // Soft translucent overlay
+          weight: 2.5,
+          dashArray: '4, 4',
+        }).addTo(map);
+
+        // Calculate polygon centroid for centered label badge
+        const center = getPolygonCenter(area.coordinates);
+        const isAllHelpers = area.allHelpersAssigned !== false && (!area.assignedHelperIds || area.assignedHelperIds.length === 0);
+        const assignedCount = isAllHelpers
+          ? 'All Helpers'
+          : `${area.assignedHelperIds?.length || 0} Helpers`;
+
+        // Permanent clean label badge on polygon
+        poly.bindTooltip(
+          `
+          <div style="font-family: inherit; text-align: center; line-height: 1.3; cursor: pointer;">
+            <div style="font-size: 11px; font-weight: 900; color: #064e3b; display: flex; align-items: center; justify-content: center; gap: 3px;">
+              <span>📍</span> <span>${area.name}</span>
+            </div>
+            <div style="font-size: 9.5px; font-weight: 800; color: #047857; margin-top: 1px;">
+              👥 ${assignedCount}
+            </div>
+          </div>
+          `,
+          {
+            permanent: true,
+            direction: 'center',
+            className: 'service-area-badge bg-white/95 text-emerald-950 px-2.5 py-1 rounded-xl border border-emerald-300 shadow-md font-sans pointer-events-none',
+          }
+        );
+
+        poly.on('click', () => {
+          if (onEditArea) {
+            onEditArea(area);
+          }
+        });
+
+        areaLayersRef.current.push(poly);
+      });
+    });
+  }, [mapReady, showServiceAreas, allowedDeliveryAreas, onEditArea]);
+
   // Update Earth Map Markers and Route Polylines
   useEffect(() => {
     if (!mapReady || !mapInstanceRef.current) return;
@@ -351,56 +434,43 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
           existingMarker.on('click', () => {
             setSelectedHelperId(helper.uid);
           });
-          markersRef.current.get(helper.uid) || markersRef.current.set(helper.uid, existingMarker);
+          markersRef.current.set(helper.uid, existingMarker);
         }
 
-        // Draw road routing line if helper has active assigned orders
+        // Draw active order road route lines if helper has active order
         if (isOnDuty) {
-          for (const order of activeAssigned) {
-            if (order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
-              const destLat = order.deliveryLocation.lat;
-              const destLng = order.deliveryLocation.lng;
+          activeAssigned.forEach((order) => {
+            const destLat = order.deliveryLocation?.lat;
+            const destLng = order.deliveryLocation?.lng;
 
-              let routeCoords = await fetchRoadRoute([
-                { lat, lng },
-                { lat: destLat, lng: destLng },
-              ]);
-
-              if (isCancelled || !isMapAlive(map)) return;
-
-              if (routeCoords.length > 0) {
-                const roadPolyline = L.polyline(routeCoords, {
-                  color: isDedicated ? '#f59e0b' : '#6366f1',
-                  weight: 4,
-                  opacity: 0.9,
-                  lineCap: 'round',
-                  lineJoin: 'round',
-                  dashArray: '8, 8',
+            if (typeof destLat === 'number' && typeof destLng === 'number') {
+              fetchRoadRoute([{ lat, lng }, { lat: destLat, lng: destLng }]).then((routeCoords) => {
+                if (isCancelled || !isMapAlive(map)) return;
+                const polyline = L.polyline(routeCoords, {
+                  color: isDedicated ? '#f59e0b' : '#38bdf8',
+                  weight: 3.5,
+                  opacity: 0.85,
+                  dashArray: '6, 6',
                 }).addTo(map);
-
-                const destMarker = L.circleMarker([destLat, destLng], {
-                  radius: 7,
-                  color: '#ffffff',
-                  weight: 2,
-                  fillColor: isDedicated ? '#f59e0b' : '#6366f1',
-                  fillOpacity: 0.9,
-                }).addTo(map);
-
-                routePolylinesRef.current.push(roadPolyline, destMarker);
-              }
+                routePolylinesRef.current.push(polyline);
+              });
             }
-          }
+          });
         }
       }
 
-      // Auto-fit bounds on initial load
-      if (!hasFittedBoundsRef.current && allPoints.length > 0 && isMapAlive(map)) {
-        if (allPoints.length > 1) {
-          map.fitBounds(L.latLngBounds(allPoints), { padding: [50, 50] });
-        } else {
-          map.setView(allPoints[0], 14);
-        }
+      // Initial auto-fit once
+      if (!hasFittedBoundsRef.current && (allPoints.length > 0 || (allowedDeliveryAreas && allowedDeliveryAreas.length > 0))) {
         hasFittedBoundsRef.current = true;
+        const boundsPoints = [...allPoints];
+        allowedDeliveryAreas.forEach((a) => {
+          a.coordinates?.forEach((pt) => boundsPoints.push([pt.lat, pt.lng]));
+        });
+        if (boundsPoints.length > 0) {
+          try {
+            map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 15 });
+          } catch (e) {}
+        }
       }
     };
 
@@ -409,140 +479,141 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [filteredHelpers, orders, mapReady, timerTick]);
+  }, [mapReady, filteredHelpers, orders, allowedDeliveryAreas]);
 
-  // Recenter map button handler
-  const handleRecenter = async () => {
-    if (!isMapAlive(mapInstanceRef.current)) return;
-    const L = await import('leaflet');
-    const points: [number, number][] = [];
+  const handleRecenter = () => {
+    if (!mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    if (!isMapAlive(map)) return;
 
+    const allPoints: [number, number][] = [];
     filteredHelpers.forEach((h) => {
-      if (h.helperLocation?.lat && h.helperLocation?.lng) {
-        points.push([h.helperLocation.lat, h.helperLocation.lng]);
+      if (typeof h.helperLocation?.lat === 'number' && typeof h.helperLocation?.lng === 'number') {
+        allPoints.push([h.helperLocation.lat, h.helperLocation.lng]);
       }
     });
+    allowedDeliveryAreas.forEach((a) => {
+      a.coordinates?.forEach((pt) => allPoints.push([pt.lat, pt.lng]));
+    });
 
-    if (points.length > 1) {
-      mapInstanceRef.current.fitBounds(L.latLngBounds(points), { padding: [60, 60] });
-    } else if (points.length === 1) {
-      mapInstanceRef.current.setView(points[0], 15);
+    if (allPoints.length > 0) {
+      map.fitBounds(allPoints, { padding: [50, 50], maxZoom: 15 });
     } else {
-      mapInstanceRef.current.setView([23.8759, 90.3795], 13);
+      map.setView([23.8759, 90.3795], 14);
     }
   };
 
-  const selectedHelper = filteredHelpers.find((h) => h.uid === selectedHelperId);
-  const selectedHelperWallet = selectedHelper ? fallbackStore.getHelperWallet(selectedHelper.uid) : null;
+  const selectedHelper = users.find((u) => u.uid === selectedHelperId);
   const selectedHelperActiveOrders = selectedHelper
     ? orders.filter((o) => o.helperId === selectedHelper.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED')
     : [];
+  const selectedHelperWallet = selectedHelper ? fallbackStore.wallets.get(selectedHelper.uid) : null;
 
   return (
     <div
-      className={`relative w-full bg-slate-950 transition-all duration-300 flex flex-col ${
-        isFullscreen
-          ? 'fixed inset-0 z-[9999] h-screen w-screen rounded-none border-none shadow-none'
-          : 'h-[680px] rounded-3xl border border-slate-800 shadow-2xl overflow-hidden'
+      ref={mapContainerRef}
+      className={`relative w-full rounded-3xl overflow-hidden border border-gray-200 bg-slate-950 shadow-soft transition-all ${
+        isFullscreen ? 'fixed inset-0 z-[99999] rounded-none' : 'h-[650px] min-h-[500px]'
       }`}
     >
-      {/* Top Filter & Controls Overlay */}
-      <div className="absolute top-4 left-4 right-4 z-20 pointer-events-auto flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-2xl border border-slate-800 shadow-2xl">
-        {/* Filter Buttons */}
-        <DraggableTabsContainer
-          showScrollButtons={false}
-          containerClassName="bg-transparent border-none p-0"
-          className="bg-transparent border-none p-0 gap-1.5"
-          activeKey={typeFilter}
-        >
+      {/* Top Floating Controls Bar */}
+      <div className="absolute top-4 left-4 right-4 z-20 pointer-events-none flex flex-wrap items-center justify-between gap-2.5">
+        {/* Helper Filter Switchers */}
+        <div className="pointer-events-auto bg-slate-900/90 backdrop-blur-md p-1.5 rounded-2xl border border-slate-700 shadow-xl flex items-center gap-1 overflow-x-auto max-w-full">
           <button
             type="button"
             onClick={() => setTypeFilter('ALL')}
-            data-active={typeFilter === 'ALL'}
-            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all shrink-0 ${
               typeFilter === 'ALL'
                 ? 'bg-purple-600 text-white shadow-md'
-                : 'bg-slate-800 text-slate-300 hover:text-white'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Globe className="w-3.5 h-3.5 text-purple-200 shrink-0" />
-            <span>সকল হেলপার ({helperUsers.length})</span>
+            All Fleet ({helperUsers.length})
           </button>
 
           <button
             type="button"
             onClick={() => setTypeFilter('COMMUTER')}
-            data-active={typeFilter === 'COMMUTER'}
             className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 shrink-0 ${
               typeFilter === 'COMMUTER'
                 ? 'bg-indigo-600 text-white shadow-md'
-                : 'bg-slate-800 text-slate-300 hover:text-white'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Bike className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
-            <span>🚲 Commuter ({commuterCount})</span>
+            <Bike className="w-3.5 h-3.5 text-indigo-300" />
+            <span>Commuter ({commuterCount})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setTypeFilter('DEDICATED')}
-            data-active={typeFilter === 'DEDICATED'}
             className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 shrink-0 ${
               typeFilter === 'DEDICATED'
                 ? 'bg-amber-600 text-white shadow-md'
-                : 'bg-slate-800 text-slate-300 hover:text-white'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Zap className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-            <span>⚡ Dedicated ({dedicatedCount})</span>
+            <Zap className="w-3.5 h-3.5 text-amber-300" />
+            <span>Dedicated ({dedicatedCount})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setTypeFilter('ON_DUTY')}
-            data-active={typeFilter === 'ON_DUTY'}
             className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 shrink-0 ${
               typeFilter === 'ON_DUTY'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-slate-800 text-slate-300 hover:text-white'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Clock className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
-            <span>🔥 On Active Duty ({activeDutyCount})</span>
+            <Clock className="w-3.5 h-3.5 text-emerald-300" />
+            <span>On-Duty ({activeDutyCount})</span>
           </button>
-        </DraggableTabsContainer>
+        </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center gap-2">
+        {/* Right Side Map Actions */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {/* Toggle Service Areas Overlay */}
+          <button
+            type="button"
+            onClick={() => setShowServiceAreas((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-extrabold border backdrop-blur-md shadow-xl transition-all ${
+              showServiceAreas
+                ? 'bg-emerald-600/90 text-white border-emerald-400'
+                : 'bg-slate-900/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+            }`}
+            title="সার্ভিস এরিয়া ওভারলে টগল করুন"
+          >
+            <Square className="w-3.5 h-3.5 text-emerald-300" />
+            <span>সার্ভিস এলাকা ({allowedDeliveryAreas.length})</span>
+          </button>
+
+          {/* Add Sub-Area Action Button */}
+          {onAddArea && (
+            <button
+              type="button"
+              onClick={onAddArea}
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold border border-emerald-400/50 shadow-xl transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>নতুন সাব-এরিয়া ড্র</span>
+            </button>
+          )}
+
+          {/* Fullscreen Button */}
           <button
             type="button"
             onClick={toggleFullscreen}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-              isFullscreen
-                ? 'bg-red-600 hover:bg-red-700 text-white border border-red-400'
-                : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
-            }`}
-            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen Map'}
+            className="p-2.5 bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md text-white rounded-2xl border border-slate-700 shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer"
+            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           >
-            {isFullscreen ? (
-              <>
-                <X className="w-3.5 h-3.5 text-white" />
-                <span className="hidden sm:inline">ফুল স্ক্রিন বন্ধ করুন</span>
-              </>
-            ) : (
-              <>
-                <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden sm:inline">ফুল স্ক্রিন</span>
-              </>
-            )}
+            <Maximize2 className="w-4 h-4 text-slate-200" />
           </button>
         </div>
       </div>
 
-      {/* Leaflet Map Canvas */}
-      <div ref={mapContainerRef} className="w-full h-full z-10" />
-
-      {/* Bottom Left Control: Re-center & Live Earth Badge */}
+      {/* Bottom Center Bar */}
       <div className="absolute bottom-4 left-4 z-20 pointer-events-auto flex items-center gap-2">
         <button
           type="button"
@@ -550,7 +621,7 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
           className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md text-white rounded-2xl text-xs font-bold border border-slate-700 shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer"
         >
           <Navigation className="w-3.5 h-3.5 text-cyan-400" />
-          <span>কেন্দ্রবিন্দু (All Helpers)</span>
+          <span>কেন্দ্রবিন্দু (All Fleet)</span>
         </button>
 
         <div className="hidden sm:flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-slate-700 shadow-xl">
@@ -630,9 +701,11 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
             </div>
 
             <div className="bg-slate-800/80 p-2.5 rounded-2xl border border-slate-700/80">
-              <span className="text-[10px] text-slate-400 font-bold block uppercase">Wallet Balance</span>
-              <span className="font-extrabold text-purple-300 text-sm">
-                ৳{selectedHelperWallet?.balance || 0}
+              <span className="text-[10px] text-slate-400 font-bold block uppercase">Assigned Areas</span>
+              <span className="font-extrabold text-purple-300 text-xs">
+                {selectedHelper.serveAllAreas !== false
+                  ? 'All Areas'
+                  : `${selectedHelper.assignedAreaIds?.length || 0} zones`}
               </span>
             </div>
           </div>

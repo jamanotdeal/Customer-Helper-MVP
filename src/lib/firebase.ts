@@ -48,6 +48,7 @@ import {
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isAppVisible, subscribeAppVisibility } from './appVisibility';
+import { isHelperEligibleForOrder } from './geofenceUtils';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -1054,12 +1055,32 @@ class FallbackStore {
         // re-announce it, even if the shared broadcast doc still says unread.
         if (this._readNotifIds.has(notif.id)) return;
 
+        // Determine if this broadcast notification targets the current user's role/type
+        const isHelperBroadcast =
+          (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
+          (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
+          (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated');
+
+        // For helper broadcast new-order notifications, apply area-based eligibility filtering
+        // on the receiver side so only eligible helpers see the popup on their own device.
+        let helperBroadcastEligible = isHelperBroadcast;
+        if (isHelperBroadcast && notif.type === 'new_order' && notif.orderId && currentUser) {
+          const targetOrder = this.orders.get(notif.orderId);
+          const areas = this.pricingSettings.allowedDeliveryAreas;
+          if (targetOrder && areas && areas.length > 0) {
+            helperBroadcastEligible = isHelperEligibleForOrder(
+              currentUser,
+              targetOrder,
+              areas,
+              this.pricingSettings.allowedDeliveryAreasEnabled
+            );
+          }
+        }
+
         const targets =
           notif.userId === uid ||
           notif.userId === 'all' ||
-          (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
-          (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
-          (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated') ||
+          helperBroadcastEligible ||
           (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
 
         if (targets && !notif.read) {
@@ -3375,8 +3396,15 @@ class FallbackStore {
     if (target === 'all-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper) {
-          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
-            return;
+          if (targetOrder) {
+            if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
+              if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
+                return;
+              }
+            }
+            if (!isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+              return;
+            }
           }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
@@ -3386,8 +3414,15 @@ class FallbackStore {
     } else if (target === 'all-commuter-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper && u.helperType !== 'dedicated') {
-          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
-            return;
+          if (targetOrder) {
+            if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
+              if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
+                return;
+              }
+            }
+            if (!isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+              return;
+            }
           }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
@@ -3397,8 +3432,15 @@ class FallbackStore {
     } else if (target === 'all-dedicated-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper && u.helperType === 'dedicated') {
-          if (targetOrder && !isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
-            return;
+          if (targetOrder) {
+            if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
+              if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
+                return;
+              }
+            }
+            if (!isHelperWithinOrderRadius(u.helperLocation, targetOrder, radiusKm)) {
+              return;
+            }
           }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
@@ -3465,8 +3507,19 @@ class FallbackStore {
       const allUsers = Array.from(this.users.values());
       const t = notif.userId;
 
-      if (t === 'all-helpers') {
-        allUsers.forEach((u) => { if (u.isHelper && u.fcmToken) targetTokens.push(u.fcmToken); });
+      if (t === 'all-helpers' || t === 'all-commuter-helpers' || t === 'all-dedicated-helpers') {
+        allUsers.forEach((u) => {
+          if (u.isHelper && u.fcmToken) {
+            if (t === 'all-commuter-helpers' && u.helperType === 'dedicated') return;
+            if (t === 'all-dedicated-helpers' && u.helperType !== 'dedicated') return;
+            if (targetOrder && this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
+              if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
+                return;
+              }
+            }
+            targetTokens.push(u.fcmToken);
+          }
+        });
       } else if (t === 'all-customers') {
         allUsers.forEach((u) => { if (!u.isHelper && u.role !== 'admin' && u.fcmToken) targetTokens.push(u.fcmToken); });
       } else if (t === 'all') {

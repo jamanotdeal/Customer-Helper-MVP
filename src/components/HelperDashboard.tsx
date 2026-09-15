@@ -7,6 +7,7 @@ import { fallbackStore } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { isNativeApp } from '@/lib/native';
+import { isHelperEligibleForOrder } from '@/lib/geofenceUtils';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -356,6 +357,23 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           // 2. Dynamic Location-Based Radius Filter (within admin configured km radius of pickup/delivery)
           if (!isHelperWithinOrderRadius(user.helperLocation, o, radiusKm)) {
             return false;
+          }
+
+          // 3. Sub-Area Geofence Assignment Eligibility Filter (Only see orders from helper's assigned sub-areas or if allowed)
+          if (
+            fallbackStore.pricingSettings.allowedDeliveryAreas &&
+            fallbackStore.pricingSettings.allowedDeliveryAreas.length > 0
+          ) {
+            if (
+              !isHelperEligibleForOrder(
+                user,
+                o,
+                fallbackStore.pricingSettings.allowedDeliveryAreas,
+                fallbackStore.pricingSettings.allowedDeliveryAreasEnabled
+              )
+            ) {
+              return false;
+            }
           }
 
           return true;

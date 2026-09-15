@@ -51,6 +51,7 @@ import {
   Zap,
   Gift,
   Coins,
+  Square,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -90,7 +91,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<
     'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS'
   >('EXCEPTIONS');
-  const [helperSubView, setHelperSubView] = useState<'MAP' | 'APPLICATIONS' | 'TABLE'>('MAP');
+  const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
   const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
@@ -3937,6 +3938,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <button
                   type="button"
+                  onClick={() => setHelperSubView('AREAS')}
+                  className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'AREAS'
+                      ? 'bg-purple-950 text-white shadow-md'
+                      : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                >
+                  <Square className="w-4 h-4 text-emerald-400" />
+                  <span>🛡️ Service Areas ({allowedDeliveryAreas.length})</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setHelperSubView('APPLICATIONS')}
                   className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'APPLICATIONS'
                       ? 'bg-purple-950 text-white shadow-md'
@@ -3967,11 +3980,283 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 users={users}
                 orders={orders}
                 applications={applications}
+                allowedDeliveryAreas={allowedDeliveryAreas}
                 onSelectHelper={(h) => setSelectedHelper(h)}
                 onSelectUser={(uid) => setSelectedUserId(uid)}
                 onUpdateHelperType={handleUpdateHelperType}
+                onEditArea={(area) => {
+                  setEditingArea(area);
+                  setShowAreaDrawerModal(true);
+                }}
+                onAddArea={() => {
+                  setEditingArea(null);
+                  setShowAreaDrawerModal(true);
+                }}
               />
             )}
+
+            {/* Service Areas & Geofencing Sub-View */}
+            {helperSubView === 'AREAS' && (() => {
+              const helperFleet = users.filter((u) => u.isHelper || u.role === 'helper');
+
+              const handleToggleGeofence = async (enabled: boolean) => {
+                setAllowedDeliveryAreasEnabled(enabled);
+                const updatedPricing: PricingSettings = {
+                  ...fallbackStore.pricingSettings,
+                  allowedDeliveryAreasEnabled: enabled,
+                };
+                await fallbackStore.savePricingSettings(updatedPricing);
+                setPricing(updatedPricing);
+                showAlert(
+                  'সেটিংস সংরক্ষিত',
+                  `সার্ভিস এরিয়া রেস্ট্রিকশন ${enabled ? 'চালু' : 'বন্ধ'} করা হয়েছে।`,
+                  'success'
+                );
+              };
+
+              const handleSaveWarningMessage = async () => {
+                const updatedPricing: PricingSettings = {
+                  ...fallbackStore.pricingSettings,
+                  outOfServiceAreaMessage: outOfServiceAreaMessage.trim() || undefined,
+                };
+                await fallbackStore.savePricingSettings(updatedPricing);
+                setPricing(updatedPricing);
+                showAlert('সংরক্ষিত', 'ওয়ার্নিং বার্তা সফলভাবে সেভ হয়েছে।', 'success');
+              };
+
+              return (
+                <div className="space-y-6">
+                  {/* Top Control Bar */}
+                  <div className="p-6 rounded-3xl bg-emerald-50/80 border border-emerald-200 shadow-soft flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <div className="p-2 rounded-2xl bg-emerald-600 text-white shadow-xs">
+                          <Globe className="w-5 h-5" />
+                        </div>
+                        <h4 className="font-extrabold text-base text-emerald-950">
+                          Specific Serving Areas & Geofencing (সার্ভিস এলাকা ও হেলপার অ্যাসাইনমেন্ট)
+                        </h4>
+                      </div>
+                      <p className="text-xs text-emerald-800 font-medium">
+                        ম্যাপে আয়তক্ষেত্র (Rectangle) বা পলিগন ড্র করে সাব-এরিয়া তৈরি করুন এবং নির্দিষ্ট হেলপার নির্ধারণ করুন। শুধুমাত্র নির্ধারিত হেলপারেরাই ঐ এলাকার নতুন অর্ডারের নোটিফিকেশন পাবেন।
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingArea(null);
+                        setShowAreaDrawerModal(true);
+                      }}
+                      className="py-2.5 px-5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all flex items-center justify-center space-x-2 shrink-0 active:scale-95"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Sub-Area (নতুন এলাকা ড্র)</span>
+                    </button>
+                  </div>
+
+                  {/* Geofence Enforcement Toggle & Message Config */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="p-5 bg-white rounded-3xl border border-gray-100 shadow-soft space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h5 className="text-xs font-extrabold text-gray-900 uppercase tracking-wider">
+                            সার্ভিস বাউন্ডারি এনফোর্সমেন্ট
+                          </h5>
+                          <p className="text-[11px] text-gray-500 font-medium mt-0.5">
+                            চালু রাখলে গ্রাহকরা কেবল ড্র করা এরিয়ার ভেতর অর্ডার ও ঠিকানা সিলেক্ট করতে পারবেন।
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          id="allowedDeliveryAreasEnabledHelpers"
+                          checked={allowedDeliveryAreasEnabled}
+                          onChange={(e) => handleToggleGeofence(e.target.checked)}
+                          className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300 cursor-pointer"
+                        />
+                      </div>
+                      <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 flex items-center justify-between">
+                        <span>স্ট্যাটাস:</span>
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
+                          allowedDeliveryAreasEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'
+                        }`}>
+                          {allowedDeliveryAreasEnabled ? 'সক্রিয় (Enforced)' : 'নিষ্ক্রিয় (Bypass Allowed)'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-5 bg-white rounded-3xl border border-gray-100 shadow-soft space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-extrabold text-gray-900 block">
+                          সীমানার বাইরে নোটিশ বার্তা (Out of Area Message):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleSaveWarningMessage}
+                          className="text-[11px] font-extrabold text-emerald-700 hover:text-emerald-800 underline"
+                        >
+                          Save Message
+                        </button>
+                      </div>
+                      <textarea
+                        value={outOfServiceAreaMessage}
+                        onChange={(e) => setOutOfServiceAreaMessage(e.target.value)}
+                        placeholder="যেমন: দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। অনুগ্রহ করে নির্ধারিত সার্ভিস এরিয়ার ভেতর থেকে পয়েন্ট নির্বাচন করুন।"
+                        rows={2}
+                        className="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50 text-xs font-medium outline-none focus:border-emerald-600 leading-relaxed font-sans"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Sub-Areas Cards List */}
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Square className="w-5 h-5 text-emerald-600" />
+                        <h4 className="font-extrabold text-base text-gray-900">
+                          নির্ধারিত সাব-এরিয়া ও হেলপার তালিকা ({allowedDeliveryAreas.length})
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingArea(null);
+                          setShowAreaDrawerModal(true);
+                        }}
+                        className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Draw Area</span>
+                      </button>
+                    </div>
+
+                    {allowedDeliveryAreas.length === 0 ? (
+                      <div className="p-10 text-center text-xs text-gray-400">
+                        <Globe className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                        <p className="font-bold text-gray-600">কোনো সার্ভিস সাব-এরিয়া ড্র করা হয়নি।</p>
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          এলাকা যুক্ত করতে উপরের &ldquo;Add Sub-Area&rdquo; বাটনে ক্লিক করুন।
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {allowedDeliveryAreas.map((area) => {
+                          const isAllHelpers =
+                            area.allHelpersAssigned !== false &&
+                            (!area.assignedHelperIds || area.assignedHelperIds.length === 0);
+
+                          const assignedHelpers = isAllHelpers
+                            ? helperFleet
+                            : helperFleet.filter((h) => area.assignedHelperIds?.includes(h.uid));
+
+                          return (
+                            <div
+                              key={area.id}
+                              className="p-4 rounded-3xl border border-emerald-100 bg-emerald-50/30 hover:border-emerald-300 transition-all shadow-xs flex flex-col justify-between space-y-3"
+                            >
+                              <div>
+                                <div className="flex items-start justify-between gap-2 mb-1.5">
+                                  <div className="flex items-center space-x-2 min-w-0">
+                                    <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-xs shrink-0 shadow-xs">
+                                      📍
+                                    </div>
+                                    <h5 className="font-extrabold text-sm text-gray-900 truncate">
+                                      {area.name}
+                                    </h5>
+                                  </div>
+                                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 shrink-0">
+                                    {area.country || 'Bangladesh'}
+                                  </span>
+                                </div>
+
+                                <div className="text-[11px] text-gray-500 font-medium">
+                                  🗺️ {area.coordinates?.length || 0} vertices বাউন্ডারি পয়েন্ট
+                                </div>
+
+                                {/* Helper Assignment Badges */}
+                                <div className="mt-3 pt-2.5 border-t border-emerald-100/80">
+                                  <div className="flex items-center justify-between mb-1.5">
+                                    <span className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">
+                                      অ্যাসাইনড হেলপার:
+                                    </span>
+                                    <span className="text-[10px] font-black text-emerald-800 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                                      {isAllHelpers ? 'All Fleet (উন্মুক্ত)' : `${assignedHelpers.length} জন`}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto pr-1">
+                                    {isAllHelpers ? (
+                                      <span className="px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 text-[10px] font-extrabold">
+                                        🌟 সকল নিবন্ধিত হেলপার গ্রহণযোগ্য
+                                      </span>
+                                    ) : assignedHelpers.length === 0 ? (
+                                      <span className="text-[10px] text-amber-700 font-semibold">
+                                        ⚠️ কোনো নির্দিষ্ট হেলপার অ্যাসাইন নেই
+                                      </span>
+                                    ) : (
+                                      assignedHelpers.map((h) => (
+                                        <span
+                                          key={h.uid}
+                                          className="px-2 py-0.5 rounded-lg bg-white border border-emerald-200 text-gray-800 text-[10px] font-bold shadow-xs truncate max-w-[130px]"
+                                          title={h.displayName}
+                                        >
+                                          {h.displayName}
+                                        </span>
+                                      ))
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Card Actions */}
+                              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-emerald-100/60">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingArea(area);
+                                    setShowAreaDrawerModal(true);
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-extrabold text-xs border border-gray-200 shadow-xs transition-colors flex items-center space-x-1"
+                                >
+                                  <Edit className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Edit & Assign</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const confirmed = await showConfirm(
+                                      'এলাকা ডিলিট নিশ্চিতকরণ',
+                                      `আপনি কি "${area.name}" এলাকাটি ডিলিট করতে চান?`,
+                                      'হ্যাঁ, ডিলিট করুন',
+                                      'বাতিল'
+                                    );
+                                    if (confirmed) {
+                                      const updated = allowedDeliveryAreas.filter((a) => a.id !== area.id);
+                                      setAllowedDeliveryAreas(updated);
+                                      const updatedPricing: PricingSettings = {
+                                        ...fallbackStore.pricingSettings,
+                                        allowedDeliveryAreas: updated,
+                                      };
+                                      await fallbackStore.savePricingSettings(updatedPricing);
+                                      setPricing(updatedPricing);
+                                      showAlert('ডিলিট সম্পন্ন', 'এলাকাটি সফলভাবে মুছে ফেলা হয়েছে।', 'success');
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 shadow-xs transition-colors"
+                                  title="Delete area"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Helper Applications Sub-View */}
             {helperSubView === 'APPLICATIONS' && (() => {
@@ -5150,110 +5435,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Specific Allowed Serving Areas (Geofencing Polygons) Settings */}
-          <div className="p-5 rounded-3xl bg-purple-50/80 border border-purple-200 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h4 className="font-extrabold text-sm text-purple-950 uppercase tracking-wider flex items-center space-x-2">
-                  <Globe className="w-5 h-5 text-purple-700" />
-                  <span>Specific Serving Areas & Geofencing (নির্দিষ্ট সার্ভিস এলাকা ও ম্যাপ বাউন্ডারি)</span>
-                </h4>
-                <p className="text-[11px] text-purple-900 font-medium mt-0.5">
-                  এডমিন ম্যাপে নির্দিষ্ট এলাকার (যেমন: Bangladesh → Uttara 18, Ashulia Model Town) সীমানা এঁকে দিলে ফ্রন্টএন্ডে গ্রাহকরা কেবল এই এলাকাগুলোর ভেতরেই অর্ডার ও ঠিকানা নির্বাচন করতে পারবেন।
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingArea(null);
-                  setShowAreaDrawerModal(true);
-                }}
-                className="py-2 px-3.5 bg-purple-900 hover:bg-purple-950 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all flex items-center space-x-1.5 shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Serving Area</span>
-              </button>
-            </div>
-
-            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-purple-100">
-              <input
-                type="checkbox"
-                id="allowedDeliveryAreasEnabled"
-                checked={allowedDeliveryAreasEnabled}
-                onChange={(e) => setAllowedDeliveryAreasEnabled(e.target.checked)}
-                className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500 border-gray-300"
-              />
-              <label htmlFor="allowedDeliveryAreasEnabled" className="text-xs font-extrabold text-gray-900 cursor-pointer">
-                সার্ভিস এলাকা বাউন্ডারি চেক চালু করুন (Enforce Serving Area Restriction)
-              </label>
-            </div>
-
-            {allowedDeliveryAreas.length === 0 ? (
-              <div className="p-6 bg-white rounded-2xl border border-purple-100 text-center text-xs text-purple-700 font-medium">
-                কোনো নির্দিষ্ট সার্ভিস এলাকা ড্র করা হয়নি। এলাকা ড্র করতে উপরের &ldquo;Add Serving Area&rdquo; বাটনে ক্লিক করুন।
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {allowedDeliveryAreas.map((area) => (
-                  <div key={area.id} className="p-3.5 bg-white rounded-2xl border border-purple-200 shadow-xs flex items-center justify-between">
-                    <div>
-                      <div className="font-extrabold text-xs text-gray-900">{area.name}</div>
-                      <div className="text-[10px] text-purple-700 font-semibold mt-0.5">
-                        {area.country || 'Bangladesh'} • {area.coordinates?.length || 0} polygon points
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingArea(area);
-                          setShowAreaDrawerModal(true);
-                        }}
-                        className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
-                        title="Edit area"
-                      >
-                        <Edit className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const confirmed = await showConfirm(
-                            'এলাকা ডিলিট নিশ্চিতকরণ',
-                            `আপনি কি "${area.name}" এলাকাটি ডিলিট করতে চান?`,
-                            'হ্যাঁ, ডিলিট করুন',
-                            'বাতিল'
-                          );
-                          if (confirmed) {
-                            setAllowedDeliveryAreas((prev) => prev.filter((a) => a.id !== area.id));
-                          }
-                        }}
-                        className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
-                        title="Delete area"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                সার্ভিস এরিয়ার বাইরে নির্বাচন করলে দেখানোর নোটিশ বার্তা (Out of Service Area Warning Message):
-              </label>
-              <textarea
-                value={outOfServiceAreaMessage}
-                onChange={(e) => setOutOfServiceAreaMessage(e.target.value)}
-                placeholder="যেমন: দুঃখিত, আপনার নির্বাচন করা লোকেশনটি আমাদের সার্ভিস এরিয়ার বাইরে। অনুগ্রহ করে নির্ধারিত সার্ভিস এরিয়ার ভেতর থেকে পয়েন্ট নির্বাচন করুন।"
-                rows={2}
-                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-purple-600 leading-relaxed font-sans"
-              />
-              <p className="text-[10px] text-gray-500 mt-1">
-                গ্রাহক সার্ভিস এরিয়ার বাইরের অবস্থান বাছাই করে &ldquo;ঠিকানা নিশ্চিত করুন&rdquo; বাটনে ক্লিক করলে এই বার্তাটি পপআপে দেখানো হবে এবং ম্যাপটি স্বয়ংক্রিয়ভাবে সার্ভিস এরিয়ার ভেতরে চলে আসবে।
+          {/* Specific Allowed Serving Areas (Geofencing Polygons) Link to Helpers Tab */}
+          <div className="p-5 rounded-3xl bg-emerald-50/80 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h4 className="font-extrabold text-sm text-emerald-950 uppercase tracking-wider flex items-center space-x-2">
+                <Globe className="w-5 h-5 text-emerald-700" />
+                <span>Specific Serving Areas & Geofencing (সার্ভিস এলাকা ও হেলপার বাউন্ডারি)</span>
+              </h4>
+              <p className="text-[11px] text-emerald-800 font-medium">
+                নির্দিষ্ট সার্ভিস এলাকা, ম্যাপে আয়তক্ষেত্র/পলিগন সাব-এরিয়া তৈরি এবং প্রতি এলাকার জন্য হেলপার নির্ধারণ এখন <strong>Helpers</strong> ট্যাব থেকে সরাসরি নিয়ন্ত্রণ করা যায়।
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('HELPERS');
+                setHelperSubView('AREAS');
+              }}
+              className="py-2.5 px-4 bg-emerald-800 hover:bg-emerald-900 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all flex items-center space-x-1.5 shrink-0 self-start sm:self-auto cursor-pointer"
+            >
+              <span>Manage in Helpers Tab 👉</span>
+            </button>
           </div>
 
           {/* Manual Auth (Email/Password Login & Register) Settings */}
@@ -7435,20 +7638,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <AreaDrawerModal
           isOpen={showAreaDrawerModal}
           areaToEdit={editingArea}
+          existingAreas={allowedDeliveryAreas}
+          helpers={users.filter((u) => u.isHelper || u.role === 'helper')}
           onClose={() => {
             setShowAreaDrawerModal(false);
             setEditingArea(null);
           }}
-          onSaveArea={(savedArea) => {
-            setAllowedDeliveryAreas((prev) => {
-              const idx = prev.findIndex((a) => a.id === savedArea.id);
+          onSaveArea={async (savedArea, assignedHelperIds, allHelpers) => {
+            const updatedAreas = (() => {
+              const idx = allowedDeliveryAreas.findIndex((a) => a.id === savedArea.id);
               if (idx > -1) {
-                const next = [...prev];
+                const next = [...allowedDeliveryAreas];
                 next[idx] = savedArea;
                 return next;
               }
-              return [...prev, savedArea];
-            });
+              return [...allowedDeliveryAreas, savedArea];
+            })();
+
+            setAllowedDeliveryAreas(updatedAreas);
+
+            // Persist immediately to pricing settings in Firestore & memory
+            const updatedPricing: PricingSettings = {
+              ...fallbackStore.pricingSettings,
+              allowedDeliveryAreas: updatedAreas,
+              allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
+              outOfServiceAreaMessage: outOfServiceAreaMessage,
+            };
+            await fallbackStore.savePricingSettings(updatedPricing);
+            setPricing(updatedPricing);
+
+            // Sync helper profiles if specific helpers assigned
+            if (allHelpers) {
+              // Open to all helpers
+            } else if (assignedHelperIds) {
+              const helperFleet = users.filter((u) => u.isHelper || u.role === 'helper');
+              for (const h of helperFleet) {
+                let areaList = h.assignedAreaIds || [];
+                if (assignedHelperIds.includes(h.uid)) {
+                  if (!areaList.includes(savedArea.id)) {
+                    areaList = [...areaList, savedArea.id];
+                  }
+                } else {
+                  areaList = areaList.filter((id) => id !== savedArea.id);
+                }
+                const updatedUser = { ...h, assignedAreaIds: areaList };
+                await fallbackStore.saveUser(updatedUser);
+              }
+              setUsers(Array.from(fallbackStore.users.values()));
+            }
+
+            showAlert(
+              'সাব-এরিয়া সংরক্ষিত',
+              `"${savedArea.name}" এলাকা ও হেলপার অ্যাসাইনমেন্ট সফলভাবে সেভ করা হয়েছে।`,
+              'success'
+            );
+
             setShowAreaDrawerModal(false);
             setEditingArea(null);
           }}
