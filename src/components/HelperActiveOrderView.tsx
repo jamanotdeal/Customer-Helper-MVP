@@ -3,7 +3,7 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2 } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2 } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -1252,8 +1252,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   </p>
                 </div>
                 {/* Visual Map */}
-                <div className="mt-3 relative w-full h-[220px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-100 shadow-inner">
+                <div className="mt-3 relative w-full h-[220px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-100 shadow-inner group">
                   <div ref={pendingMapContainerRef} className="w-full h-full z-10" />
+                  <button
+                    type="button"
+                    onClick={() => setShowMapModal(true)}
+                    className="absolute top-2.5 right-2.5 z-20 flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900/90 hover:bg-slate-950 text-white rounded-xl text-xs font-extrabold backdrop-blur-md shadow-md transition-all active:scale-95 cursor-pointer border border-slate-700"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>ম্যাপ বড় করে দেখুন (Full Map)</span>
+                  </button>
                 </div>
               </div>
 
@@ -2497,6 +2505,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           onClose={() => setShowMapModal(false)}
           order={order}
           helperLocation={helperLocation}
+          onAccept={order.status === 'PENDING' ? onAccept : undefined}
           shops={Array.from(fallbackStore.shops.values())}
           shopOrders={shopOrders}
           onSelectShop={(shop) => {

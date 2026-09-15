@@ -32,6 +32,8 @@ export interface AllowedAreaPolygon {
   name: string; // e.g. "Uttara 18", "Ashulia Model Town"
   country?: string; // e.g. "Bangladesh"
   coordinates: { lat: number; lng: number }[]; // Outer ring polygon coordinates
+  assignedHelperIds?: string[]; // IDs of helpers specifically assigned to this area
+  allHelpersAssigned?: boolean; // If true or empty/unset by default, all helpers can serve this area
 }
 
 export interface FeeAdjustment {
@@ -185,6 +187,8 @@ export interface UserProfile {
   storeId?: string;          // The shop document ID linked to this user's store
   coins?: number;            // Current coin balance
   totalEarnedCoins?: number; // Lifetime earned coins
+  assignedAreaIds?: string[]; // Specific sub-area IDs assigned to this helper
+  serveAllAreas?: boolean;   // If true, helper receives orders from all service areas
 }
 
 export interface HelperApplication {
