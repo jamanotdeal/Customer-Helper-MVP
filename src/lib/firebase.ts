@@ -1274,6 +1274,21 @@ class FallbackStore {
         )
       );
 
+      // Helper's own user profile (for live coins & profile sync)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'users', userId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const u = docSnap.data() as UserProfile;
+              this.users.set(userId, u);
+              this.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Helper user doc sync note:', err)
+        )
+      );
+
     // ── ADMIN role ────────────────────────────────────────────────────────────
     } else if (role === 'admin') {
       // All orders (most recent 100, realtime — used for Needs Attention; full list fetched on-demand in ORDERS tab)
@@ -1294,10 +1309,10 @@ class FallbackStore {
         )
       );
 
-      // All users (up to 30, realtime)
+      // All users (up to 500, realtime)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'users'), limit(30)),
+          query(collection(db, 'users'), limit(500)),
           (snapshot) => {
             snapshot.docs.forEach((docSnap) => {
               const u = docSnap.data() as UserProfile;
@@ -3795,6 +3810,15 @@ class FallbackStore {
       if (!user) return;
     }
 
+    // Only initialize if coins or totalEarnedCoins are completely unset
+    // Do NOT override manual admin adjustments or reductions
+    const needsCoinsInit = typeof user.coins !== 'number';
+    const needsLifetimeInit = typeof user.totalEarnedCoins !== 'number';
+
+    if (!needsCoinsInit && !needsLifetimeInit) {
+      return;
+    }
+
     // Calculate coins from all delivered orders for this user
     const customerOrders = Array.from(this.orders.values()).filter(
       (o) => o.customerId === userId && o.status === 'DELIVERED'
@@ -3824,31 +3848,106 @@ class FallbackStore {
     });
 
     const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
-    const expectedLifetime = Math.max(user.totalEarnedCoins || 0, deliveredEarnedCoins);
+    const expectedLifetime = Math.max(0, deliveredEarnedCoins);
 
-    const currentCoins = user.coins || 0;
-    if (currentCoins < expectedMinCoins || (user.totalEarnedCoins || 0) < expectedLifetime) {
-      const updatedCoins = Math.max(currentCoins, expectedMinCoins);
-      const updatedUser: UserProfile = {
-        ...user,
-        coins: updatedCoins,
-        totalEarnedCoins: expectedLifetime,
-      };
-      this.users.set(userId, updatedUser);
-      this.notify();
-      try {
-        await setDoc(
-          doc(db, 'users', userId),
-          {
-            coins: updatedCoins,
-            totalEarnedCoins: expectedLifetime,
-          },
-          { merge: true }
-        );
-      } catch (e) {
-        console.warn('[Firestore] reconcileCustomerCoins sync error:', e);
-      }
+    const updatedCoins = needsCoinsInit ? expectedMinCoins : user.coins!;
+    const updatedLifetime = needsLifetimeInit ? Math.max(updatedCoins, expectedLifetime) : user.totalEarnedCoins!;
+
+    const updatedUser: UserProfile = {
+      ...user,
+      coins: updatedCoins,
+      totalEarnedCoins: updatedLifetime,
+    };
+    this.users.set(userId, updatedUser);
+    this.notify();
+    try {
+      await setDoc(
+        doc(db, 'users', userId),
+        {
+          coins: updatedCoins,
+          totalEarnedCoins: updatedLifetime,
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.warn('[Firestore] reconcileCustomerCoins sync error:', e);
     }
+  }
+
+  public async updateUserCoins(
+    userId: string,
+    newCoins: number,
+    reason?: string
+  ): Promise<{ success: boolean; user?: UserProfile; delta: number }> {
+    if (!userId) return { success: false, delta: 0 };
+    let user = this.users.get(userId);
+    if (!user) {
+      user = (await this.fetchUserFromFirestore(userId)) || undefined;
+      if (!user) return { success: false, delta: 0 };
+    }
+
+    const cleanCoins = Math.max(0, Math.floor(newCoins));
+    const oldCoins = typeof user.coins === 'number' ? user.coins : 0;
+    const delta = cleanCoins - oldCoins;
+
+    let updatedLifetime = user.totalEarnedCoins || 0;
+    if (delta > 0) {
+      updatedLifetime = Math.max(updatedLifetime, oldCoins) + delta;
+    }
+
+    const updatedUser: UserProfile = {
+      ...user,
+      coins: cleanCoins,
+      totalEarnedCoins: updatedLifetime,
+    };
+
+    this.users.set(userId, updatedUser);
+    this.notify();
+
+    // 1. Sync to Firestore
+    try {
+      await setDoc(
+        doc(db, 'users', userId),
+        {
+          coins: cleanCoins,
+          totalEarnedCoins: updatedLifetime,
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.warn('[Firestore] updateUserCoins sync error:', e?.message || e);
+    }
+
+    // 2. Add in-app notification to the user so they know their coins were modified
+    try {
+      const notifTitle =
+        delta > 0
+          ? `🎁 +${delta} জামানত কয়েন যোগ হয়েছে!`
+          : delta < 0
+          ? `🪙 ${delta} জামানত কয়েন সমন্বয় করা হয়েছে`
+          : `🪙 জামানত কয়েন আপডেট করা হয়েছে`;
+
+      const notifBody =
+        delta > 0
+          ? `এডমিন আপনার অ্যাকাউন্টে +${delta} কয়েন যোগ করেছেন। বর্তমান কয়েন ব্যালেন্স: ${cleanCoins} কয়েন।${reason ? ` (নোট: ${reason})` : ''}`
+          : delta < 0
+          ? `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স সমন্বয় করে ${cleanCoins} কয়েন নির্ধারণ করেছেন (${delta} কয়েন)।${reason ? ` (নোট: ${reason})` : ''}`
+          : `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স ${cleanCoins} কয়েন নিশ্চিত করেছেন।${reason ? ` (নোট: ${reason})` : ''}`;
+
+      await this.addNotification({
+        id: `notif-${Date.now()}-coins-adj`,
+        userId: userId,
+        title: notifTitle,
+        body: notifBody,
+        createdAt: new Date().toISOString(),
+        read: false,
+        type: 'coins_earned',
+      });
+    } catch (e) {
+      console.warn('[Firestore] updateUserCoins notif error:', e);
+    }
+
+    return { success: true, user: updatedUser, delta };
   }
 
   public async deductCoinsForFreeDelivery(userId: string, coinsToDeduct: number, orderId: string): Promise<boolean> {

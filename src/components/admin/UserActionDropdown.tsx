@@ -2,12 +2,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { UserProfile } from '@/types';
-import { MoreVertical, User, ShieldCheck, ShieldAlert, Ban, Trash2, CheckCircle2 } from 'lucide-react';
+import { MoreVertical, User, ShieldCheck, ShieldAlert, Ban, Trash2, CheckCircle2, Coins } from 'lucide-react';
 
 interface UserActionDropdownProps {
   user: UserProfile;
   currentUser: UserProfile | null;
   onViewProfile: (userId: string) => void;
+  onEditCoins?: (user: UserProfile) => void;
   onToggleAdmin: (user: UserProfile, makeAdmin: boolean) => void;
   onToggleBlock: (user: UserProfile) => void;
   onDeleteUser: (user: UserProfile) => void;
@@ -17,6 +18,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
   user,
   currentUser,
   onViewProfile,
+  onEditCoins,
   onToggleAdmin,
   onToggleBlock,
   onDeleteUser,
@@ -42,7 +44,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
           e.stopPropagation();
           setIsOpen(!isOpen);
         }}
-        className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors flex items-center space-x-1 font-bold text-xs"
+        className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors flex items-center space-x-1 font-bold text-xs cursor-pointer"
       >
         <span>Actions</span>
         <MoreVertical className="w-3.5 h-3.5" />
@@ -51,7 +53,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
       {isOpen && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="origin-top-right absolute right-0 mt-2 w-48 rounded-2xl shadow-xl bg-white ring-1 ring-black/5 divide-y divide-gray-100 z-30 animate-in fade-in duration-150"
+          className="origin-top-right absolute right-0 mt-2 w-52 rounded-2xl shadow-xl bg-white ring-1 ring-black/5 divide-y divide-gray-100 z-30 animate-in fade-in duration-150"
         >
           <div className="py-1">
             <button
@@ -60,10 +62,31 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
                 setIsOpen(false);
                 onViewProfile(user.uid);
               }}
-              className="w-full text-left px-4 py-2.5 text-xs font-bold text-gray-700 hover:bg-purple-50 hover:text-purple-900 flex items-center space-x-2"
+              className="w-full text-left px-4 py-2.5 text-xs font-bold text-gray-700 hover:bg-purple-50 hover:text-purple-900 flex items-center space-x-2 cursor-pointer"
             >
               <User className="w-4 h-4 text-purple-600" />
               <span>View Profile & History</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false);
+                if (onEditCoins) {
+                  onEditCoins(user);
+                } else {
+                  onViewProfile(user.uid);
+                }
+              }}
+              className="w-full text-left px-4 py-2 text-xs font-bold text-amber-950 hover:bg-amber-50 flex items-center justify-between cursor-pointer"
+            >
+              <div className="flex items-center space-x-2">
+                <Coins className="w-4 h-4 text-amber-600" />
+                <span>Edit Reward Coins</span>
+              </div>
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-black text-[10px]">
+                🪙 {user.coins || 0}
+              </span>
             </button>
 
             {currentUser?.isSuperAdmin && user.uid !== currentUser.uid && !user.isSuperAdmin && (

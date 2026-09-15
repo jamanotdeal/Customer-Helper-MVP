@@ -241,6 +241,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
 
+  // Quick User Coin Balance Editing state
+  const [editingCoinsUser, setEditingCoinsUser] = useState<UserProfile | null>(null);
+  const [coinsInputValue, setCoinsInputValue] = useState<number>(0);
+  const [coinsReasonValue, setCoinsReasonValue] = useState<string>('');
+  const [savingCoinsState, setSavingCoinsState] = useState<boolean>(false);
+
+  const handleOpenEditCoins = (targetUser: UserProfile) => {
+    setEditingCoinsUser(targetUser);
+    setCoinsInputValue(targetUser.coins || 0);
+    setCoinsReasonValue('');
+  };
+
+  const handleSaveCoinsModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCoinsUser) return;
+
+    try {
+      setSavingCoinsState(true);
+      const targetCoins = Math.max(0, Math.floor(Number(coinsInputValue) || 0));
+      await fallbackStore.updateUserCoins(
+        editingCoinsUser.uid,
+        targetCoins,
+        coinsReasonValue.trim() || undefined
+      );
+      setUsers((prev) =>
+        prev.map((u) => (u.uid === editingCoinsUser.uid ? { ...u, coins: targetCoins } : u))
+      );
+      showAlert(
+        'কয়েন আপডেট সফল',
+        `${editingCoinsUser.displayName}-এর কয়েন ব্যালেন্স সফলভাবে ${targetCoins} কয়েনে আপডেট করা হয়েছে!`,
+        'success'
+      );
+      setEditingCoinsUser(null);
+    } catch (err: any) {
+      console.error('Error updating user coins from admin dashboard:', err);
+      showAlert('ত্রুটি', 'কয়েন ব্যালেন্স আপডেট করতে ব্যর্থ হয়েছে।', 'error');
+    } finally {
+      setSavingCoinsState(false);
+    }
+  };
+
   // Multi-select state for bulk deletion of orders
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [isDeletingOrders, setIsDeletingOrders] = useState<boolean>(false);
@@ -3595,6 +3636,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <tr>
                     <th className="py-3.5 px-5">User Profile</th>
                     <th className="py-3.5 px-5">Role & Badges</th>
+                    <th className="py-3.5 px-5">Reward Coins (কয়েন)</th>
                     <th className="py-3.5 px-5">Order Stats & Patterns</th>
                     <th className="py-3.5 px-5">Live Current Running State</th>
                     <th className="py-3.5 px-5">Audience Segments</th>
@@ -3641,6 +3683,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 Admin
                               </span>
                             ) : null}
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-5" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-col gap-1.5 items-start">
+                            <div className="inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200/90 px-2.5 py-1 rounded-xl shadow-2xs">
+                              <span className="text-sm leading-none">🪙</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-xs font-black text-amber-950">{u.coins || 0}</span>
+                                <span className="text-[10px] text-amber-700 font-bold">Coins</span>
+                              </div>
+                            </div>
+                            {u.totalEarnedCoins !== undefined && u.totalEarnedCoins !== (u.coins || 0) && (
+                              <span className="text-[9.5px] text-gray-400 font-medium">
+                                মোট অর্জিত: {u.totalEarnedCoins}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCoins(u)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[10.5px] font-extrabold text-amber-900 bg-amber-100/90 hover:bg-amber-200 active:scale-95 rounded-lg border border-amber-300 transition-all cursor-pointer"
+                              title="ব্যবহারকারীর কয়েন পরিবর্তন করুন"
+                            >
+                              <Edit className="w-3 h-3 text-amber-700" />
+                              <span>কয়েন পরিবর্তন</span>
+                            </button>
                           </div>
                         </td>
 
@@ -3748,6 +3816,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             user={u}
                             currentUser={currentUser}
                             onViewProfile={(uid) => setSelectedUserId(uid)}
+                            onEditCoins={(target) => handleOpenEditCoins(target)}
                             onToggleAdmin={(targetUser, makeAdmin) => handleToggleAdminRole(targetUser, makeAdmin)}
                             onToggleBlock={async (targetUser) => {
                               if (targetUser.isBlocked) {
@@ -7419,6 +7488,144 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onClose={() => setSelectedUserId(null)}
           onUserUpdated={() => setUsers(Array.from(fallbackStore.users.values()))}
         />
+      )}
+
+      {/* 5.1 Quick User Reward Coins Edit Modal */}
+      {editingCoinsUser && (
+        <div className="fixed inset-0 z-[10020] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-gray-100 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-900 flex items-center justify-center shadow-xs">
+                  <Coins className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-gray-900 leading-tight">
+                    কয়েন ব্যালেন্স পরিবর্তন
+                  </h3>
+                  <p className="text-[11px] text-gray-500 font-medium">
+                    Edit User Reward Coins Balance
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCoinsUser(null)}
+                className="p-2 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target User Info Summary */}
+            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-black text-gray-900">
+                  {editingCoinsUser.displayName}
+                </h4>
+                <p className="text-[11px] text-gray-600 font-mono">
+                  {editingCoinsUser.email || editingCoinsUser.alternativePhone || editingCoinsUser.uid}
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-bold text-amber-800 uppercase block">বর্তমান ব্যালেন্স</span>
+                <span className="text-sm font-black text-amber-950 flex items-center gap-1 justify-end">
+                  🪙 {editingCoinsUser.coins || 0}
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveCoinsModal} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-extrabold text-gray-800 mb-1.5">
+                  নতুন কয়েন ব্যালেন্স (New Balance) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base">🪙</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={coinsInputValue}
+                    onChange={(e) => setCoinsInputValue(Math.max(0, Number(e.target.value)))}
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 text-sm font-black text-gray-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200/50"
+                    placeholder="যেমন: 50"
+                    required
+                  />
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  এই সংখ্যাটি ব্যবহারকারীর মূল অ্যাকাউন্টে তাৎক্ষণিকভাবে প্রতিফলিত হবে।
+                </p>
+              </div>
+
+              {/* Quick Adjust Buttons */}
+              <div>
+                <label className="block text-[11px] font-bold text-gray-600 mb-1.5">
+                  দ্রুত কয়েন সমন্বয় (Quick Adjust):
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: '+10', val: 10 },
+                    { label: '+20', val: 20 },
+                    { label: '+50', val: 50 },
+                    { label: '+100', val: 100 },
+                    { label: '-10', val: -10 },
+                    { label: '-20', val: -20 },
+                    { label: '-50', val: -50 },
+                  ].map((btn) => (
+                    <button
+                      key={btn.label}
+                      type="button"
+                      onClick={() =>
+                        setCoinsInputValue((prev) => Math.max(0, Math.floor(Number(prev) || 0) + btn.val))
+                      }
+                      className="px-2.5 py-1 rounded-xl text-xs font-black bg-gray-100 hover:bg-amber-100 hover:text-amber-900 border border-gray-200 text-gray-700 transition-all cursor-pointer active:scale-95"
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setCoinsInputValue(0)}
+                    className="px-2.5 py-1 rounded-xl text-xs font-black bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-all cursor-pointer active:scale-95"
+                  >
+                    Reset (0)
+                  </button>
+                </div>
+              </div>
+
+              {/* Reason / Admin note */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  সমন্বয়ের কারণ বা নোট (ঐচ্ছিক):
+                </label>
+                <input
+                  type="text"
+                  value={coinsReasonValue}
+                  onChange={(e) => setCoinsReasonValue(e.target.value)}
+                  placeholder="যেমন: অর্ডার ক্যাম্পেইন বোনাস, রিফান্ড সমন্বয় ইত্যাদি"
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingCoinsUser(null)}
+                  className="flex-1 py-3 rounded-2xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <AsyncButton
+                  type="submit"
+                  isLoading={savingCoinsState}
+                  className="flex-1 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black shadow-md shadow-amber-500/20 active:scale-95 transition-all cursor-pointer"
+                >
+                  সংরক্ষণ করুন
+                </AsyncButton>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* 6. Admin Custom Push Notification Modal */}
