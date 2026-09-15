@@ -1162,6 +1162,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       ...o,
       deliveryFee: o.feeAdjustment!.amount,
       feeAdjustment: { ...o.feeAdjustment!, status: 'APPROVED' },
+      lastEditedBy: 'admin',
+      lastEditedAt: new Date().toISOString(),
       statusHistory: [
         ...o.statusHistory,
         {
@@ -1182,6 +1184,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
+      lastEditedBy: 'admin',
+      lastEditedAt: new Date().toISOString(),
       statusHistory: [
         ...o.statusHistory,
         {

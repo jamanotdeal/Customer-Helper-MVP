@@ -249,10 +249,12 @@ export const HelperWallet: React.FC = () => {
 
     const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
     filteredOrders.forEach((o) => {
-      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
-      const helperShare = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
+      const baseFeeForHelper = o.isFreeDelivery
+        ? Math.max(o.originalDeliveryFee || 0, minFee)
+        : Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
       earned += helperShare;
-      commissionDue += (effectiveFee - helperShare);
+      commissionDue += (baseFeeForHelper - helperShare);
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -317,10 +319,12 @@ export const HelperWallet: React.FC = () => {
       const orderDate = o.deliveredAt || o.createdAt;
       const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
       if (orderLocalStr === todayStr) {
-        const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
-        const helperShare = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
+        const baseFeeForHelper = o.isFreeDelivery
+          ? Math.max(o.originalDeliveryFee || 0, minFee)
+          : Math.max(o.deliveryFee || 0, minFee);
+        const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
         earnedToday += helperShare;
-        commissionDueToday += (effectiveFee - helperShare);
+        commissionDueToday += (baseFeeForHelper - helperShare);
       }
     });
 

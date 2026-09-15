@@ -59,12 +59,18 @@ export const saveActiveMode = (mode: ActiveMode) => {
 
 // ── Per-category pickup location ─────────────────────────────────────────────
 
-const servicePickupKey = (service: string) =>
-  `jamanot_pickup_loc_${service.trim().toLowerCase().replace(/\s+/g, '_')}`;
+const servicePickupKey = (service: string, uid?: string) =>
+  uid
+    ? `jamanot_pickup_loc_${uid}_${service.trim().toLowerCase().replace(/\s+/g, '_')}`
+    : `jamanot_pickup_loc_${service.trim().toLowerCase().replace(/\s+/g, '_')}`;
 
-export const getServicePickupLocation = (service: string): LocationData | null => {
+export const getServicePickupLocation = (service: string, uid?: string): LocationData | null => {
   if (typeof window === 'undefined' || !service) return null;
-  const raw = localStorage.getItem(servicePickupKey(service));
+  // If uid provided, try user-specific key first, then fallback to global
+  let raw = uid ? localStorage.getItem(servicePickupKey(service, uid)) : null;
+  if (!raw) {
+    raw = localStorage.getItem(servicePickupKey(service));
+  }
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -73,9 +79,14 @@ export const getServicePickupLocation = (service: string): LocationData | null =
   }
 };
 
-export const saveServicePickupLocation = (service: string, loc: LocationData) => {
+export const saveServicePickupLocation = (service: string, loc: LocationData, uid?: string) => {
   if (typeof window === 'undefined' || !service) return;
+  // Save to global key
   localStorage.setItem(servicePickupKey(service), JSON.stringify(loc));
+  // If uid provided, also save to user-specific key
+  if (uid) {
+    localStorage.setItem(servicePickupKey(service, uid), JSON.stringify(loc));
+  }
 };
 
 // ── Map guide overlay show count ─────────────────────────────────────────────
@@ -99,6 +110,7 @@ export const incrementMapGuideShowCount = (modalType: string): number => {
 // Stored per-user to avoid mixing data between accounts on shared devices.
 
 const savedAddressesKey = (uid: string) => `jamanot_saved_delivery_addresses_${uid}`;
+const savedPickupAddressesKey = (uid: string) => `jamanot_saved_pickup_addresses_${uid}`;
 const MAX_SAVED_ADDRESSES = 10;
 
 export const getSavedDeliveryAddresses = (uid: string): import('@/types').LocationData[] => {
@@ -141,4 +153,45 @@ export const addSavedDeliveryAddress = (uid: string, newAddress: import('@/types
   saveSavedDeliveryAddresses(uid, updated);
   return updated;
 };
+
+// ── Customer saved pickup addresses ────────────────────────────────────────
+
+export const getSavedPickupAddresses = (uid: string): import('@/types').LocationData[] => {
+  if (typeof window === 'undefined' || !uid) return [];
+  try {
+    const raw = localStorage.getItem(savedPickupAddressesKey(uid));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveSavedPickupAddresses = (uid: string, addresses: import('@/types').LocationData[]) => {
+  if (typeof window === 'undefined' || !uid) return;
+  const seen = new Set<string>();
+  const deduped = addresses.filter((a) => {
+    const key = a.address.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, MAX_SAVED_ADDRESSES);
+  localStorage.setItem(savedPickupAddressesKey(uid), JSON.stringify(deduped));
+};
+
+/**
+ * Adds a new pickup address to the user's saved list (prepends, deduplicates, caps).
+ * Returns the updated list.
+ */
+export const addSavedPickupAddress = (uid: string, newAddress: import('@/types').LocationData): import('@/types').LocationData[] => {
+  const existing = getSavedPickupAddresses(uid);
+  const filtered = existing.filter(
+    (a) => a.address.trim().toLowerCase() !== newAddress.address.trim().toLowerCase()
+  );
+  const updated = [newAddress, ...filtered].slice(0, MAX_SAVED_ADDRESSES);
+  saveSavedPickupAddresses(uid, updated);
+  return updated;
+};
+
 

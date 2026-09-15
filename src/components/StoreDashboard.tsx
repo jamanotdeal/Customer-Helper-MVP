@@ -133,13 +133,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     };
 
     checkPermissions();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
-  
+
   const [showRequestComposer, setShowRequestComposer] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedShopOrderId, setSelectedShopOrderId] = useState<string | null>(null);
-  
+
   const [storeOrders, setStoreOrders] = useState<Order[]>([]);
   const [myRequests, setMyRequests] = useState<Order[]>([]);
   const [storeShopOrders, setStoreShopOrders] = useState<ShopOrder[]>([]);
@@ -274,7 +274,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       if (intervalId) clearInterval(intervalId);
       if (timeoutId) clearTimeout(timeoutId);
       if (audioCtx) {
-        audioCtx.close().catch(() => {});
+        audioCtx.close().catch(() => { });
       }
     };
   }, [isAlarmPlaying]);
@@ -329,7 +329,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
       snap.docs.forEach((docSnap) => {
         const so = docSnap.data() as ShopOrder;
-        
+
         // Fetch parent order if not cached
         if (!newParentOrders[so.parentOrderId] && !fallbackStore.orders.has(so.parentOrderId)) {
           parentOrderFetchPromises.push(
@@ -408,10 +408,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       // Store Orders: orders that involve this shop (via selectedShopIds)
       const shopOrders = storeId
         ? all.filter(
-            (o) =>
-              o.selectedShopIds?.includes(storeId) &&
-              !['CANCELED'].includes(o.status)
-          ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          (o) =>
+            o.selectedShopIds?.includes(storeId) &&
+            !['CANCELED'].includes(o.status)
+        ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         : [];
 
       // My Requests: orders where store user is the customer
@@ -582,7 +582,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const categorizedShopOrders = useMemo(() => {
     return allAvailableShopOrders.filter((so) => {
       const parentStatus = getParentOrderStatus(so.parentOrderId);
-      
+
       const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
       const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
 
@@ -843,7 +843,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       const parentStatus = getParentOrderStatus(currentShopOrder.parentOrderId);
       const isCanceled = currentShopOrder.status === 'CANCELED' || parentStatus === 'CANCELED';
       const isDelivered = parentStatus === 'DELIVERED' || currentShopOrder.status === 'DELIVERED';
-      
+
       const shopOrderSteps: { status: ShopOrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
         { status: 'ACCEPTED', label: 'Accepted', icon: Check, desc: 'Store accepted the request' },
         { status: 'PREPARING', label: 'Processing', icon: Package, desc: 'Store is preparing the items' },
@@ -911,10 +911,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
                     {currentShopOrder.requestText
                       ? currentShopOrder.requestText
-                          .replace(/^["'\s]+|["'\s]+$/g, '')
-                          .trim()
-                          .replace(/[ \t]+/g, ' ')
-                          .replace(/\n\s*\n+/g, '\n')
+                        .replace(/^["'\s]+|["'\s]+$/g, '')
+                        .trim()
+                        .replace(/[ \t]+/g, ' ')
+                        .replace(/\n\s*\n+/g, '\n')
                       : ''}
                   </div>
                 </div>
@@ -1000,17 +1000,17 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 {!isCanceled && (
                   <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-4">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">Order Progress</h3>
-                    
+
                     <div className="relative flex items-center justify-between w-full px-2 pt-2 pb-4">
                       {/* Background Line */}
                       <div className="absolute left-6 right-6 top-6 h-0.5 bg-gray-100 -translate-y-1/2 z-0" />
-                      
+
                       {/* Active Progress Line */}
-                      <div 
+                      <div
                         className="absolute left-6 top-6 h-0.5 bg-emerald-500 -translate-y-1/2 z-0 transition-all duration-300"
                         style={{ width: `calc(${(shopOrderSteps.findIndex((s) => s.status === currentShopOrder.status) / (shopOrderSteps.length - 1)) * 100}% - 8px)` }}
                       />
-                      
+
                       {shopOrderSteps.map((step) => {
                         const state = getShopOrderStepState(step.status);
                         const StepIcon = step.icon;
@@ -1018,8 +1018,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         const canChangeStatus = !isHandover && !isCanceled && !isDelivered && step.status !== 'DELIVERED';
 
                         return (
-                          <div 
-                            key={step.status} 
+                          <div
+                            key={step.status}
                             onClick={() => {
                               if (canChangeStatus) {
                                 if (step.status === 'PREPARING' && (!costInput || parseFloat(costInput) <= 0)) {
@@ -1031,22 +1031,20 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             }}
                             className={`flex flex-col items-center relative z-10 flex-1 ${canChangeStatus ? 'cursor-pointer group' : ''}`}
                           >
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                              state === 'COMPLETED'
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${state === 'COMPLETED'
                                 ? 'bg-emerald-600 text-white shadow-sm'
                                 : state === 'CURRENT'
-                                ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                                : 'bg-gray-100 text-gray-400 border border-gray-200'
-                            } ${canChangeStatus ? 'group-hover:scale-110 transition-transform' : ''}`}>
+                                  ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                                  : 'bg-gray-100 text-gray-400 border border-gray-200'
+                              } ${canChangeStatus ? 'group-hover:scale-110 transition-transform' : ''}`}>
                               {state === 'COMPLETED' ? (
                                 <Check className="w-3.5 h-3.5" />
                               ) : (
                                 <StepIcon className={`w-3.5 h-3.5 ${state === 'CURRENT' ? 'animate-bounce text-white' : 'text-gray-400'}`} />
                               )}
                             </div>
-                            <span className={`text-[10px] font-extrabold mt-2 text-center leading-tight ${
-                              state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-850' : 'text-gray-300'
-                            }`}>
+                            <span className={`text-[10px] font-extrabold mt-2 text-center leading-tight ${state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-850' : 'text-gray-300'
+                              }`}>
                               {step.label}
                             </span>
                           </div>
@@ -1062,7 +1060,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             onClick={() => {
                               if (!costInput || parseFloat(costInput) <= 0) {
                                 setShowPriceAlertModal(true);
-                                  return;
+                                return;
                               }
                               handleUpdateStatus(currentShopOrder.id, 'PREPARING');
                             }}
@@ -1100,10 +1098,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
                     {currentShopOrder.requestText
                       ? currentShopOrder.requestText
-                          .replace(/^["'\s]+|["'\s]+$/g, '')
-                          .trim()
-                          .replace(/[ \t]+/g, ' ')
-                          .replace(/\n\s*\n+/g, '\n')
+                        .replace(/^["'\s]+|["'\s]+$/g, '')
+                        .trim()
+                        .replace(/[ \t]+/g, ' ')
+                        .replace(/\n\s*\n+/g, '\n')
                       : ''}
                   </div>
 
@@ -1241,11 +1239,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         <div className="flex space-x-1.5 bg-gray-100 p-1.5 rounded-2xl">
           <button
             onClick={() => { setLocalActiveTab('ORDERS'); }}
-            className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
-              localActiveTab === 'ORDERS'
+            className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${localActiveTab === 'ORDERS'
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-gray-600 hover:text-gray-900'
-            }`}
+              }`}
           >
             <Package className="w-3.5 h-3.5" />
             <span>Incoming Orders{storeShopOrders.length > 0 && ` (${storeShopOrders.length})`}</span>
@@ -1253,11 +1250,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
           <button
             onClick={() => { setLocalActiveTab('MY_REQUESTS'); setMyRequestsVisibleCount(PAGE_SIZE); }}
-            className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
-              localActiveTab === 'MY_REQUESTS'
+            className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${localActiveTab === 'MY_REQUESTS'
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-gray-600 hover:text-gray-900'
-            }`}
+              }`}
           >
             <ShoppingBag className="w-3.5 h-3.5" />
             <span>My Requests{myRequests.length > 0 && ` (${myRequests.length})`}</span>
@@ -1926,11 +1922,10 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
                     <button
                       key={i}
                       onClick={() => setCurrentIdx(i)}
-                      className={`rounded-full transition-all ${
-                        i === safeIdx
+                      className={`rounded-full transition-all ${i === safeIdx
                           ? 'w-5 h-2 bg-red-500'
                           : 'w-2 h-2 bg-gray-300 hover:bg-gray-400'
-                      }`}
+                        }`}
                     />
                   ))}
                 </div>

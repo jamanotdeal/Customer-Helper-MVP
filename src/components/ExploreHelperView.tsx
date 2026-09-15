@@ -9,6 +9,7 @@ import { getElapsedTime } from '@/lib/timeUtils';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { useModal } from './CustomModal';
+import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
 import { Compass, Map as MapIcon, Layers, Clock, MapPin, Bike, Navigation, RefreshCw, AlertTriangle } from 'lucide-react';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
@@ -29,6 +30,102 @@ export const ExploreHelperView: React.FC = () => {
   const hasFittedBoundsRef = useRef(false);
 
   const activeOrderLimit = fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5;
+
+  // Track new unaccepted orders for alert overlay
+  const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
+  const [seenOrderIds, setSeenOrderIds] = useState<Set<string>>(new Set());
+  const seenOrderIdsRef = useRef<Set<string>>(new Set());
+
+  // Alarm state for sound/vibration loop
+  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+
+  useEffect(() => {
+    if (newOrderIds.size > 0) {
+      setIsAlarmPlaying(true);
+    } else {
+      setIsAlarmPlaying(false);
+    }
+  }, [newOrderIds]);
+
+  // Audio Context and Vibration looping
+  useEffect(() => {
+    if (!isAlarmPlaying) return;
+
+    let active = true;
+    let audioCtx: AudioContext | null = null;
+    let intervalId: any = null;
+
+    const startAlarm = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass();
+        }
+      } catch (e) {
+        console.warn('AudioContext init failed:', e);
+      }
+
+      const triggerAlert = () => {
+        if (!active) return;
+
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate([500, 250, 500, 250, 500]);
+        }
+
+        if (audioCtx) {
+          try {
+            if (audioCtx.state === 'suspended') {
+              audioCtx.resume();
+            }
+            const osc1 = audioCtx.createOscillator();
+            const osc2 = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc1.type = 'sawtooth';
+            osc1.frequency.setValueAtTime(880, audioCtx.currentTime);
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(440, audioCtx.currentTime);
+
+            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
+
+            osc1.connect(gain);
+            osc2.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc1.start();
+            osc2.start();
+            osc1.stop(audioCtx.currentTime + 0.8);
+            osc2.stop(audioCtx.currentTime + 0.8);
+          } catch (e) {
+            console.warn('Oscillator failed:', e);
+          }
+        }
+      };
+
+      triggerAlert();
+      intervalId = setInterval(triggerAlert, 1500);
+    };
+
+    startAlarm();
+
+    const timeoutId = setTimeout(() => {
+      setIsAlarmPlaying(false);
+    }, 60000);
+
+    return () => {
+      active = false;
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [isAlarmPlaying]);
+
+  useEffect(() => {
+    seenOrderIdsRef.current = seenOrderIds;
+  }, [seenOrderIds]);
 
   // Live timer tick for real-time countdown / elapsed time
   useEffect(() => {
@@ -76,7 +173,29 @@ export const ExploreHelperView: React.FC = () => {
           return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
         });
 
-        setUnacceptedOrders(sorted);
+        setUnacceptedOrders((prev) => {
+          const prevIds = new Set(prev.map((o) => o.id));
+          const freshNewIds = sorted
+            .filter((o) => !prevIds.has(o.id))
+            .map((o) => o.id);
+
+          setNewOrderIds((prevNew) => {
+            const updated = new Set<string>();
+            prevNew.forEach((id) => {
+              const fresh = fallbackStore.orders.get(id);
+              if (fresh && fresh.status === 'PENDING' && !fresh.helperId && !seenOrderIdsRef.current.has(id)) {
+                updated.add(id);
+              }
+            });
+            freshNewIds.forEach((id) => {
+              if (!seenOrderIdsRef.current.has(id)) {
+                updated.add(id);
+              }
+            });
+            return updated;
+          });
+          return sorted;
+        });
         setActiveOrdersCount(activeCount);
       }
     };
@@ -90,11 +209,6 @@ export const ExploreHelperView: React.FC = () => {
 
   const handleAcceptOrder = async (orderId: string) => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
-      await showAlert(
-        'লগইন আবশ্যক',
-        'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
-        'warning'
-      );
       openAuthModal();
       return;
     }
@@ -589,6 +703,64 @@ export const ExploreHelperView: React.FC = () => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* New Order Alert Overlay */}
+      {isAlarmPlaying && newOrderIds.size > 0 && (
+        <NewOrderAlertOverlay
+          newOrderIds={newOrderIds}
+          autoDismissSeconds={20}
+          onAccept={async (orderId) => {
+            setIsAlarmPlaying(false);
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(orderId);
+              return updated;
+            });
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(orderId);
+              return updated;
+            });
+            await handleAcceptOrder(orderId);
+          }}
+          onView={(orderId) => {
+            setIsAlarmPlaying(false);
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(orderId);
+              return updated;
+            });
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(orderId);
+              return updated;
+            });
+            setSelectedOrderId(orderId);
+          }}
+          onDismissOne={(orderId) => {
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(orderId);
+              return updated;
+            });
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(orderId);
+              return updated;
+            });
+            if (newOrderIds.size <= 1) setIsAlarmPlaying(false);
+          }}
+          onDismissAll={() => {
+            setIsAlarmPlaying(false);
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              newOrderIds.forEach((id) => updated.add(id));
+              return updated;
+            });
+            setNewOrderIds(new Set());
+          }}
+        />
       )}
     </div>
   );

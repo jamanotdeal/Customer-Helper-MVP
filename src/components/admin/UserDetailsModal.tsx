@@ -798,11 +798,15 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
               const pricing = fallbackStore.pricingSettings;
               const minFee = pricing.feeCalculatorMinFee ?? 20;
               const totalRiderEarned = completedHelperOrders.reduce((sum, o) => {
-                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                const effectiveFee = o.isFreeDelivery
+                  ? Math.max(o.originalDeliveryFee || 0, minFee)
+                  : Math.max(o.deliveryFee || 0, minFee);
                 return sum + calculateHelperCommission(effectiveFee, pricing);
               }, 0);
               const totalPlatformShare = completedHelperOrders.reduce((sum, o) => {
-                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                const effectiveFee = o.isFreeDelivery
+                  ? Math.max(o.originalDeliveryFee || 0, minFee)
+                  : Math.max(o.deliveryFee || 0, minFee);
                 return sum + (effectiveFee - calculateHelperCommission(effectiveFee, pricing));
               }, 0);
               const totalPaidCommission = wallet.totalPaidCommission || 0;

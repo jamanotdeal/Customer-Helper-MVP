@@ -7,8 +7,7 @@ import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ArrowRight, X, ChevronDown } from 'lucide-react';
-import Image from 'next/image';
+import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 
 import { OrderSuccessPwaModal } from './PWAInstallModal';
@@ -26,7 +25,6 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [showAuthRequiredModal, setShowAuthRequiredModal] = useState(false);
   const [createdOrderForSuccessModal, setCreatedOrderForSuccessModal] = useState<Order | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
 
@@ -109,7 +107,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       <RequestComposer
         onOrderCreated={(newOrder) => {
           if (!user) {
-            setShowAuthRequiredModal(true);
+            openAuthModal();
           } else {
             setSelectedOrderId(newOrder.id);
           }
@@ -251,64 +249,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
         </div>
       )}
 
-      {/* Auth Required Modal */}
-      {showAuthRequiredModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 text-center relative animate-in zoom-in-95 duration-200">
-            <button
-              onClick={() => setShowAuthRequiredModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
 
-            <div className="relative w-12 h-12 rounded-none overflow-hidden shadow-sm border border-emerald-200 mx-auto mb-2 bg-emerald-50">
-              <Image
-                src="/Jamanot-Logo.png"
-                alt="Jamanot Logo"
-                fill
-                className="object-cover"
-                priority
-              />
-            </div>
-
-            <h3 className="font-extrabold text-lg text-gray-900">Sign In Required</h3>
-            <p className="text-xs text-gray-600 leading-relaxed">
-              আপনার রিকোয়েস্টটি সেভ করতে এবং হেলপার খুঁজে পেতে আপনার Google অ্যাকাউন্ট দিয়ে লগইন করুন।
-            </p>
-
-            <button
-              onClick={() => {
-                setShowAuthRequiredModal(false);
-                openAuthModal();
-              }}
-              className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-floating flex items-center justify-center space-x-2 transition-all"
-            >
-              <span>Continue with Google</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-
-            <p className="text-[11px] text-gray-500 text-center pt-1 leading-relaxed">
-              By continuing, you agree to Jamanot&apos;s{' '}
-              <Link
-                href="/terms"
-                onClick={() => setShowAuthRequiredModal(false)}
-                className="text-emerald-600 font-bold underline hover:text-emerald-700"
-              >
-                Terms of Service
-              </Link>{' '}
-              and{' '}
-              <Link
-                href="/privacy"
-                onClick={() => setShowAuthRequiredModal(false)}
-                className="text-emerald-600 font-bold underline hover:text-emerald-700"
-              >
-                Privacy Policy
-              </Link>.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Order Success PWA Modal */}
       {createdOrderForSuccessModal && (

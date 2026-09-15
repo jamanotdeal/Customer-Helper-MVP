@@ -164,6 +164,23 @@ export async function loadCustomerSavedAddresses(uid: string): Promise<import('@
   return [];
 }
 
+export async function loadCustomerSavedPickupData(uid: string): Promise<{ addresses: import('@/types').LocationData[]; serviceLocations: Record<string, import('@/types').LocationData> }> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+      const data = snap.data();
+      const addresses = Array.isArray(data?.savedPickupAddresses) ? (data.savedPickupAddresses as import('@/types').LocationData[]) : [];
+      const serviceLocations = (data?.servicePickupLocations && typeof data.servicePickupLocations === 'object')
+        ? (data.servicePickupLocations as Record<string, import('@/types').LocationData>)
+        : {};
+      return { addresses, serviceLocations };
+    }
+  } catch (e: any) {
+    console.warn('[Firestore] loadCustomerSavedPickupData note:', e?.message || e);
+  }
+  return { addresses: [], serviceLocations: {} };
+}
+
 /**
  * Appends a new delivery address to the customer's Firestore savedDeliveryAddresses array.
  * Uses arrayUnion so concurrent writes don't overwrite each other.
@@ -179,6 +196,31 @@ export async function saveCustomerSavedAddressToFirestore(uid: string, address: 
     console.warn('[Firestore] saveCustomerSavedAddressToFirestore note:', e?.message || e);
   }
 }
+
+/**
+ * Saves a pickup address to the customer's Firestore profile.
+ * Adds to savedPickupAddresses and optionally sets the servicePickupLocations entry.
+ */
+export async function saveCustomerPickupAddressToFirestore(uid: string, address: import('@/types').LocationData, service?: string): Promise<void> {
+  if (!uid || !address?.address) return;
+  try {
+    const updatePayload: Record<string, any> = {
+      savedPickupAddresses: arrayUnion(cleanForFirestore(address)),
+    };
+    if (service && service.trim()) {
+      const svcKey = service.trim().toLowerCase().replace(/\s+/g, '_');
+      updatePayload[`servicePickupLocations.${svcKey}`] = cleanForFirestore(address);
+    }
+    await setDoc(
+      doc(db, 'users', uid),
+      updatePayload,
+      { merge: true }
+    );
+  } catch (e: any) {
+    console.warn('[Firestore] saveCustomerPickupAddressToFirestore note:', e?.message || e);
+  }
+}
+
 
 /**
  * Sends a native push notification to all target devices via FCM.
@@ -1914,23 +1956,39 @@ class FallbackStore {
       });
     }
 
-    // Delivery fee update notification to customer
+    // Delivery fee update notification to customer & helper
     if (
       existing.deliveryFee !== undefined &&
-      existing.deliveryFee !== updated.deliveryFee &&
-      updated.customerId
+      (existing.deliveryFee !== updated.deliveryFee || existing.originalDeliveryFee !== updated.originalDeliveryFee)
     ) {
-      this.addNotification({
-        id: `notif-${Date.now()}-fee-change`,
-        userId: updated.customerId,
-        title: 'ডেলিভারি ফি আপডেট করা হয়েছে',
-        body: `আপনার অর্ডার #${updated.id} এর ডেলিভারি চার্জ ৳${updated.deliveryFee} টাকা করা হয়েছে।`,
-        orderId: updated.id,
-        read: false,
-        createdAt: new Date().toISOString(),
-        targetRole: 'customer',
-        type: 'order_update',
-      });
+      if (updated.customerId) {
+        this.addNotification({
+          id: `notif-${Date.now()}-fee-change`,
+          userId: updated.customerId,
+          title: 'ডেলিভারি ফি আপডেট করা হয়েছে',
+          body: `আপনার অর্ডার #${updated.id} এর ডেলিভারি চার্জ ৳${updated.deliveryFee} টাকা করা হয়েছে।${updated.feeAdjustment?.reason ? ` (${updated.feeAdjustment.reason})` : ''}`,
+          orderId: updated.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+          targetRole: 'customer',
+          type: 'order_update',
+        });
+      }
+
+      const helperTarget = updated.helperId || existing.helperId;
+      if (helperTarget) {
+        this.addNotification({
+          id: `notif-${Date.now()}-fee-change-hlp`,
+          userId: helperTarget,
+          title: 'ডেলিভারি ফি পরিবর্তিত হয়েছে',
+          body: `অর্ডার #${updated.id} এর ডেলিভারি ফি ৳${existing.deliveryFee || 0} থেকে ৳${updated.deliveryFee || 0} এ সমন্বয় করা হয়েছে।${(updated.status === 'DELIVERED' || previousStatus === 'DELIVERED') ? ' আপনার ওয়ালেটেও নতুন ফি অনুযায়ী সমন্বয় করা হয়েছে।' : ''}`,
+          orderId: updated.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+          targetRole: 'helper',
+          type: 'order_update',
+        });
+      }
     }
 
     // Customer edit notification to helper
@@ -1991,6 +2049,21 @@ class FallbackStore {
           saveCustomerSavedAddressToFirestore(updated.customerId, updated.deliveryLocation).catch(() => {});
         } catch (e) {
           console.warn('[Firestore] Error saving updated address to customer history:', e);
+        }
+      }
+
+      // Save updated pickup address to customer's saved pickup address history & per-service in localStorage & Firestore
+      if (isPickupChanged && updated.customerId && updated.pickupLocation?.address && updated.pickupLocation.address !== 'Local Helper Area') {
+        try {
+          import('./storage').then(({ addSavedPickupAddress, saveServicePickupLocation }) => {
+            addSavedPickupAddress(updated.customerId, updated.pickupLocation!);
+            if (updated.service) {
+              saveServicePickupLocation(updated.service, updated.pickupLocation!, updated.customerId);
+            }
+          });
+          saveCustomerPickupAddressToFirestore(updated.customerId, updated.pickupLocation, updated.service).catch(() => {});
+        } catch (e) {
+          console.warn('[Firestore] Error saving updated pickup address to customer history:', e);
         }
       }
     }
@@ -2062,25 +2135,64 @@ class FallbackStore {
       });
     }
 
-    // If order was already delivered or is now delivered, update the helper's wallet document in Firestore
+    // Helper Wallet Management (Order completion, cancellation reversals, or admin fee adjustments)
     if ((previousStatus === 'DELIVERED' || updated.status === 'DELIVERED') && (updated.helperId || existing.helperId)) {
       const helperId = updated.helperId || existing.helperId;
+      const minFee = this.pricingSettings.feeCalculatorMinFee ?? 0;
+
       if (helperId) {
         if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED') {
-          // Use effective fee = max(deliveryFee, minFee) to match what the helper sees in the UI
-          const minFee = this.pricingSettings.feeCalculatorMinFee ?? 0;
+          // Newly delivered: Credit helper earnings & platform commission
           const baseFeeForHelper = updated.isFreeDelivery
             ? Math.max(updated.originalDeliveryFee || 0, minFee)
             : Math.max(updated.deliveryFee || 0, minFee);
           const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
           await this.creditHelperEarning(helperId, helperShare, baseFeeForHelper, updated.id);
-        } else {
-          const updatedWallet = this.getHelperWallet(helperId);
-          this.wallets.set(helperId, updatedWallet);
-          try {
-            await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
-          } catch (e) {
-            console.warn('[Firestore] updateOrder wallet sync note:', e);
+        } else if (previousStatus === 'DELIVERED' && updated.status !== 'DELIVERED') {
+          // Status reverted/canceled from DELIVERED: Reverse previously credited earnings
+          const baseFeeForHelper = existing.isFreeDelivery
+            ? Math.max(existing.originalDeliveryFee || 0, minFee)
+            : Math.max(existing.deliveryFee || 0, minFee);
+          const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
+          const platformShare = Math.max(0, baseFeeForHelper - helperShare);
+          await this.adjustHelperWalletForOrder(helperId, -helperShare, -platformShare, baseFeeForHelper, 0, updated.id, 'reversal');
+        } else if (previousStatus === 'DELIVERED' && updated.status === 'DELIVERED') {
+          // Already DELIVERED order was edited
+          if (previousHelperId && updated.helperId && previousHelperId !== updated.helperId) {
+            // Helper was reassigned on an already delivered order
+            const prevFee = existing.isFreeDelivery
+              ? Math.max(existing.originalDeliveryFee || 0, minFee)
+              : Math.max(existing.deliveryFee || 0, minFee);
+            const prevHelperShare = calculateHelperCommission(prevFee, this.pricingSettings);
+            const prevPlatformShare = Math.max(0, prevFee - prevHelperShare);
+            await this.adjustHelperWalletForOrder(previousHelperId, -prevHelperShare, -prevPlatformShare, prevFee, 0, updated.id, 'reversal');
+
+            const newFee = updated.isFreeDelivery
+              ? Math.max(updated.originalDeliveryFee || 0, minFee)
+              : Math.max(updated.deliveryFee || 0, minFee);
+            const newHelperShare = calculateHelperCommission(newFee, this.pricingSettings);
+            await this.creditHelperEarning(updated.helperId, newHelperShare, newFee, updated.id);
+          } else {
+            // Delivery fee or free-delivery settings adjusted on an already delivered order
+            const oldBaseFee = existing.isFreeDelivery
+              ? Math.max(existing.originalDeliveryFee || 0, minFee)
+              : Math.max(existing.deliveryFee || 0, minFee);
+            const newBaseFee = updated.isFreeDelivery
+              ? Math.max(updated.originalDeliveryFee || 0, minFee)
+              : Math.max(updated.deliveryFee || 0, minFee);
+
+            const oldHelperShare = calculateHelperCommission(oldBaseFee, this.pricingSettings);
+            const newHelperShare = calculateHelperCommission(newBaseFee, this.pricingSettings);
+
+            const oldPlatformShare = Math.max(0, oldBaseFee - oldHelperShare);
+            const newPlatformShare = Math.max(0, newBaseFee - newHelperShare);
+
+            const diffHelperShare = newHelperShare - oldHelperShare;
+            const diffPlatformShare = newPlatformShare - oldPlatformShare;
+
+            if (diffHelperShare !== 0 || diffPlatformShare !== 0) {
+              await this.adjustHelperWalletForOrder(helperId, diffHelperShare, diffPlatformShare, oldBaseFee, newBaseFee, updated.id, 'adjustment');
+            }
           }
         }
       }
@@ -2453,10 +2565,12 @@ class FallbackStore {
 
     const minFee = this.pricingSettings.feeCalculatorMinFee ?? 20;
     helperOrders.forEach((o) => {
-      const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
-      const helperShare = calculateHelperCommission(effectiveFee, this.pricingSettings);
+      const baseFeeForHelper = o.isFreeDelivery
+        ? Math.max(o.originalDeliveryFee || 0, minFee)
+        : Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
       totalEarned += helperShare;
-      totalPlatformShare += (effectiveFee - helperShare);
+      totalPlatformShare += (baseFeeForHelper - helperShare);
     });
 
     const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
@@ -2547,6 +2661,52 @@ class FallbackStore {
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
     } catch (e: any) {
       console.warn('[Firestore] creditHelperEarning note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async adjustHelperWalletForOrder(
+    helperId: string,
+    diffHelperShare: number,
+    diffPlatformShare: number,
+    oldFee: number,
+    newFee: number,
+    orderId: string,
+    mode: 'adjustment' | 'reversal' = 'adjustment'
+  ) {
+    const existing = this.wallets.get(helperId);
+    const updatedWallet: Wallet = {
+      userId: helperId,
+      totalEarned: Math.max(0, (existing?.totalEarned ?? 0) + diffHelperShare),
+      balance:     Math.max(0, (existing?.balance     ?? 0) + diffPlatformShare),
+      totalPaidCommission: existing?.totalPaidCommission ?? 0,
+      totalWithdrawn:      existing?.totalWithdrawn      ?? 0,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(helperId, updatedWallet);
+
+    const desc = mode === 'reversal'
+      ? `Order #${orderId} status changed/reverted by Admin — Reversed earning ৳${Math.abs(diffHelperShare)}`
+      : `Order #${orderId} fee adjusted by Admin (৳${oldFee} → ৳${newFee}) — Net earning: ${diffHelperShare >= 0 ? '+' : ''}৳${diffHelperShare}`;
+
+    const txs = this.walletTransactions.get(helperId) || [];
+    const newTx: WalletTransaction = {
+      id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      userId: helperId,
+      amount: diffHelperShare,
+      type: 'ADJUSTMENT',
+      orderId: orderId,
+      description: desc,
+      createdAt: new Date().toISOString(),
+    };
+    txs.unshift(newTx);
+    this.walletTransactions.set(helperId, txs);
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+    } catch (e: any) {
+      console.warn('[Firestore] adjustHelperWalletForOrder note (saved locally):', e?.message || e);
     }
   }
 

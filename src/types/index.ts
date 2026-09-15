@@ -176,6 +176,8 @@ export interface UserProfile {
   alternativePhone?: string;
   defaultDeliveryLocation?: LocationData;
   savedDeliveryAddresses?: LocationData[]; // Customer's saved delivery addresses (synced from Firestore on login)
+  savedPickupAddresses?: LocationData[];   // Customer's saved pickup addresses (synced from Firestore on login)
+  servicePickupLocations?: Record<string, LocationData>; // Per-service pickup location mapping
   missingItemPreference?: MissingItemPref;
   createdAt: string;
   isBlocked?: boolean;
