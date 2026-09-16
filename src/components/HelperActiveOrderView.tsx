@@ -386,13 +386,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   }, [order.id, order.helperId, order.helperName]);
 
   useEffect(() => {
-    // Only auto-update productCost if it has not been set manually (0)
-    const calculatedProductCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
-    if (order.productCost !== calculatedProductCost) {
-      fallbackStore.updateOrder(order.id, (o) => ({
-        ...o,
-        productCost: calculatedProductCost,
-      }));
+    // Only auto-update productCost from shopOrders if this order actually has connected shop orders
+    if (shopOrders.length > 0) {
+      const calculatedProductCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
+      if (order.productCost !== calculatedProductCost) {
+        fallbackStore.updateOrder(order.id, (o) => ({
+          ...o,
+          productCost: calculatedProductCost,
+        }));
+      }
     }
   }, [shopOrders, order.id, order.productCost]);
 
@@ -497,7 +499,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       };
       return updatedOrder;
     });
-    showAlert('ঠিকানা আপডেট করা হয়েছে', 'ঠিকানা সফলভাবে পরিবর্তন করা হয়েছে এবং কাস্টমারকে জানানো হয়েছে।', 'success');
+
+    if (type === 'pickup') {
+      showAlert(
+        'পিকআপ ঠিকানা সংরক্ষণ হয়েছে',
+        'পিকআপ ঠিকানা সফলভাবে সেট করা হয়েছে। নির্ভুল দূরত্ব ও ডেলিভারি চার্জ হিসাব করা হয়েছে এবং এই কাস্টমারের জন্য ঠিকানাটি পরবর্তীতে ব্যবহারের জন্য সংরক্ষণ করা হয়েছে।',
+        'success'
+      );
+    } else {
+      showAlert('ঠিকানা আপডেট করা হয়েছে', 'ঠিকানা সফলভাবে পরিবর্তন করা হয়েছে এবং কাস্টমারকে জানানো হয়েছে।', 'success');
+    }
   };
 
   const handlePlaceShopOrder = async (e: React.FormEvent) => {
@@ -1218,19 +1229,61 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
               {/* Addresses & Visual Map before Customer Details */}
               <div className="pt-2 border-t border-gray-100">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1.5">
-                  <MapPin className="w-4 h-4 text-emerald-600" />
-                  <span>Addresses</span>
-                </h4>
-                <div className="space-y-1.5 text-xs">
-                  <p className="p-3 rounded-2xl bg-gray-50 text-gray-700 font-bold border border-gray-200">
-                    <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                    <span>{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</span>
-                  </p>
-                  <p className="p-3 rounded-2xl bg-emerald-50/50 text-emerald-950 font-bold border border-emerald-100">
-                    <strong className="font-extrabold text-emerald-800">Delivery: </strong>
-                    <span>{order.deliveryLocation?.address || 'N/A'}</span>
-                  </p>
+                <div className="flex items-center justify-between mb-1.5">
+                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
+                    <MapPin className="w-4 h-4 text-emerald-600" />
+                    <span>Addresses & Distance</span>
+                  </h4>
+                  {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                    <span className="text-[11px] font-black text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-200">
+                      📍 {calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2)} km
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-2 text-xs">
+                  {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
+                    <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 shadow-xs space-y-2">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-extrabold text-amber-900 text-xs">কাস্টমার পিকআপ ঠিকানা দেননি (Pickup Not Set)</p>
+                          <p className="text-[11px] text-amber-700 font-medium leading-relaxed mt-0.5">
+                            সঠিক দূরত্ব ও ডেলিভারি হিসাবের জন্য পিকআপ লোকেশন নির্ধারণ করুন। এটি কাস্টমারের প্রোফাইলে সংরক্ষিত থাকবে।
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveMapPicker('pickup')}
+                        className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-98 cursor-pointer"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>📍 পিকআপ ঠিকানা নির্ধারণ করুন (Set Pickup)</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-2xl bg-gray-50 text-gray-700 font-bold border border-gray-200 flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                        <span className="break-words">{order.pickupLocation.address}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveMapPicker('pickup')}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                        title="পিকআপ ঠিকানা পরিবর্তন"
+                      >
+                        <FileEdit className="w-3 h-3 text-gray-700" />
+                        <span>Edit</span>
+                      </button>
+                    </div>
+                  )}
+                  <div className="p-3 rounded-2xl bg-emerald-50/50 text-emerald-950 font-bold border border-emerald-100 flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <strong className="font-extrabold text-emerald-800">Delivery: </strong>
+                      <span className="break-words">{order.deliveryLocation?.address || 'N/A'}</span>
+                    </div>
+                  </div>
                 </div>
                 {/* Visual Map */}
                 <div className="mt-3 relative w-full h-[220px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-100 shadow-inner group">
@@ -1627,27 +1680,53 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
           {/* 6. COMBINED ADDRESSES BLOCK — inline Pickup/Delivery format */}
           <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
-              <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Addresses</span>
-            </h4>
+            <div className="flex items-center justify-between mb-1.5">
+              <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
+                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Addresses & Distance</span>
+              </h4>
+              {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
+                  📍 {distanceKm.toFixed(2)} km
+                </span>
+              )}
+            </div>
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
-              <div className="flex items-start justify-between gap-2 min-w-0">
-                <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}>
-                  <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                  <span>{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</span>
-                </p>
-                {!isDone && (
-                  <button
-                    onClick={() => setActiveMapPicker('pickup')}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95"
-                    title="পিকআপ ঠিকানা পরিবর্তন"
-                  >
-                    <FileEdit className="w-3 h-3 text-gray-700" />
-                    <span>Edit</span>
-                  </button>
-                )}
-              </div>
+              {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
+                <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
+                  <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span className="truncate">পিকআপ লোকেশন নির্ধারণ করা হয়নি</span>
+                  </div>
+                  {!isDone && (
+                    <button
+                      onClick={() => setActiveMapPicker('pickup')}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
+                      title="পিকআপ ঠিকানা যোগ করুন"
+                    >
+                      <MapPin className="w-3 h-3 text-white" />
+                      <span>+ Set Pickup</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area'}>
+                    <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                    <span>{order.pickupLocation.address}</span>
+                  </p>
+                  {!isDone && (
+                    <button
+                      onClick={() => setActiveMapPicker('pickup')}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                      title="পিকআপ ঠিকানা পরিবর্তন"
+                    >
+                      <FileEdit className="w-3 h-3 text-gray-700" />
+                      <span>Edit</span>
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex items-start justify-between gap-2 min-w-0">
                 <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
                   <strong className="font-extrabold text-emerald-800">Delivery: </strong>
@@ -1656,7 +1735,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {!isDone && (
                   <button
                     onClick={() => setActiveMapPicker('delivery')}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95"
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
                     title="ডেলিভারি ঠিকানা পরিবর্তন"
                   >
                     <FileEdit className="w-3 h-3 text-emerald-700" />
@@ -1668,7 +1747,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowMapModal(true)}
-                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
                 >
                   <Map className="w-3.5 h-3.5" />
                   <span>Road and Shops</span>
@@ -1676,7 +1755,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={handleOpenGoogleMapsDirection}
-                  className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 shrink-0"
+                  className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 shrink-0 cursor-pointer"
                   title="Google Map Direction"
                 >
                   <Navigation className="w-3.5 h-3.5" />
@@ -1702,8 +1781,29 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Distance ({Math.ceil(distanceKm)} km)</span>
-                <span className="font-bold text-gray-900">৳{estdPricing.distanceFee}</span>
+                {distanceKm > 0 ? (
+                  <>
+                    <span className="text-gray-500 font-bold">Distance ({distanceKm.toFixed(1)} km)</span>
+                    <span className="font-bold text-gray-900">৳{estdPricing.distanceFee}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-amber-700 font-bold flex items-center gap-1">
+                      <span>Distance (পিকআপ সেট নেই)</span>
+                    </span>
+                    {!isDone ? (
+                      <button
+                        type="button"
+                        onClick={() => setActiveMapPicker('pickup')}
+                        className="text-[11px] text-amber-700 underline font-extrabold hover:text-amber-800 cursor-pointer"
+                      >
+                        + সেট করুন
+                      </button>
+                    ) : (
+                      <span className="font-bold text-gray-400">৳0</span>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="flex items-center justify-between">
@@ -1983,7 +2083,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   onClick={() => {
                     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
-                      showAlert('লগইন আবশ্যক', 'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
                       openAuthModal();
                       return;
                     }

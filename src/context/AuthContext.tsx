@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { UserProfile, ActiveMode, HelperApplication, StoreApplication } from '@/types';
-import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses, saveFcmToken } from '@/lib/firebase';
+import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses, loadCustomerSavedPickupData, saveFcmToken } from '@/lib/firebase';
 import {
   signInWithPopup,
   signInWithRedirect,
@@ -14,7 +14,7 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
-import { getSavedActiveMode, saveActiveMode, getSavedDeliveryAddresses, saveSavedDeliveryAddresses } from '@/lib/storage';
+import { getSavedActiveMode, saveActiveMode, getSavedDeliveryAddresses, saveSavedDeliveryAddresses, getSavedPickupAddresses, saveSavedPickupAddresses, saveServicePickupLocation } from '@/lib/storage';
 import {
   getNativePosition,
   isNativeApp,
@@ -354,7 +354,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? 'helper'
           : 'customer';
         fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
-        // On customer login: load saved delivery addresses from Firestore if not already in localStorage
+        // On customer login: load saved delivery and pickup addresses from Firestore if not already in localStorage
         if (listenerRole === 'customer') {
           const localAddresses = getSavedDeliveryAddresses(fbUser.uid);
           if (localAddresses.length === 0) {
@@ -365,6 +365,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
             }).catch(() => {});
           }
+
+          // Fetch saved pickup addresses and per-service pickup mappings
+          loadCustomerSavedPickupData(fbUser.uid).then(({ addresses, serviceLocations }) => {
+            if (addresses.length > 0) {
+              saveSavedPickupAddresses(fbUser.uid, addresses);
+            }
+            if (serviceLocations && Object.keys(serviceLocations).length > 0) {
+              Object.entries(serviceLocations).forEach(([svc, loc]) => {
+                if (svc && loc) {
+                  saveServicePickupLocation(svc, loc, fbUser.uid);
+                }
+              });
+            }
+          }).catch(() => {});
         }
         // Mirror identity into SharedPreferences and start/stop the duty
         // service so the Java background path knows who is signed in.

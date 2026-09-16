@@ -441,10 +441,30 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
   const handleApproveFeeAdjustment = () => {
     if (!order.feeAdjustment) return;
+    const oldFee = order.deliveryFee;
+    const newFee = order.feeAdjustment.amount;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
-      deliveryFee: o.feeAdjustment!.amount,
+      deliveryFee: newFee,
       feeAdjustment: { ...o.feeAdjustment!, status: 'APPROVED' },
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: currentUser?.displayName || 'Admin',
+          changes: [
+            {
+              field: 'Delivery Fee (Adjustment Approved)',
+              oldValue: `৳${oldFee}`,
+              newValue: `৳${newFee}`,
+            },
+          ],
+        },
+      ],
       statusHistory: [
         ...(o.statusHistory || []),
         {
@@ -452,7 +472,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           status: o.status,
           timestamp: new Date().toISOString(),
           actor: 'Admin',
-          note: `Approved fee adjustment to ৳${o.feeAdjustment!.amount}`,
+          note: `Approved fee adjustment to ৳${newFee}`,
         },
       ],
     }));
@@ -464,6 +484,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       feeAdjustment: { ...o.feeAdjustment!, status: 'REJECTED' },
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
       statusHistory: [
         ...(o.statusHistory || []),
         {
@@ -493,6 +515,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       updatedAt: new Date().toISOString(),
       deliveredAt: targetStatus === 'DELIVERED' ? new Date().toISOString() : o.deliveredAt,
       cancelledAt: targetStatus === 'CANCELED' ? new Date().toISOString() : o.cancelledAt,
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
       statusHistory: [
         ...(o.statusHistory || []),
         {
@@ -519,6 +543,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       ...o,
       status: 'CANCELED',
       cancelledAt: new Date().toISOString(),
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
       cancellationRequest: o.cancellationRequest
         ? { ...o.cancellationRequest, status: 'APPROVED' }
         : { requestedBy: 'helper', reason: 'Cancelled by Admin', status: 'APPROVED', createdAt: new Date().toISOString() },
@@ -588,6 +614,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     e.preventDefault();
     const val = parseFloat(adminFeeInput);
     if (isNaN(val) || val < 0) return;
+    const oldFee = order.deliveryFee;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       deliveryFee: val,
@@ -597,6 +624,24 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         status: 'APPROVED',
         requestedAt: new Date().toISOString(),
       },
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: currentUser?.displayName || 'Admin',
+          changes: [
+            {
+              field: 'Delivery Fee',
+              oldValue: `৳${oldFee}`,
+              newValue: `৳${val}`,
+            },
+          ],
+        },
+      ],
       statusHistory: [
         ...(o.statusHistory || []),
         {
@@ -618,9 +663,28 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     e.preventDefault();
     const val = parseFloat(adminCostInput);
     if (isNaN(val) || val < 0) return;
+    const oldCost = order.productCost || 0;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       productCost: val,
+      lastEditedBy: 'admin' as const,
+      lastEditedAt: new Date().toISOString(),
+      editHistory: [
+        ...(o.editHistory || []),
+        {
+          id: `eh-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          editedBy: 'admin' as const,
+          editedByName: currentUser?.displayName || 'Admin',
+          changes: [
+            {
+              field: 'Product Cost / Budget',
+              oldValue: `৳${oldCost}`,
+              newValue: `৳${val}`,
+            },
+          ],
+        },
+      ],
       statusHistory: [
         ...(o.statusHistory || []),
         {

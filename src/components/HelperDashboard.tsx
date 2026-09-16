@@ -15,6 +15,7 @@ import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
+import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
 import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, XCircle, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter, AlertTriangle } from 'lucide-react';
 
 interface HelperDashboardProps {
@@ -303,7 +304,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       if (intervalId) clearInterval(intervalId);
       if (timeoutId) clearTimeout(timeoutId);
       if (audioCtx) {
-        audioCtx.close().catch(() => {});
+        audioCtx.close().catch(() => { });
       }
     };
   }, [isAlarmPlaying]);
@@ -404,13 +405,14 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
           setNewOrderIds((prevNew) => {
             const updated = new Set<string>();
-            // Keep only those that are still in avail
+            // Keep active new orders if they are still pending and unassigned
             prevNew.forEach((id) => {
-              if (avail.some((o) => o.id === id)) {
+              const fresh = fallbackStore.orders.get(id);
+              if (fresh && fresh.status === 'PENDING' && !fresh.helperId && !seenOrderIdsRef.current.has(id)) {
                 updated.add(id);
               }
             });
-            // Add new ones
+            // Add newly discovered available orders
             freshNewIds.forEach((id) => {
               if (!seenOrderIdsRef.current.has(id)) {
                 updated.add(id);
@@ -446,11 +448,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   const handleAcceptOrder = async (orderId: string) => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
-      await showAlert(
-        'লগইন আবশ্যক',
-        'অর্ডার একসেপ্ট বা গ্রহণ করার জন্য আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।',
-        'warning'
-      );
       openAuthModal();
       return;
     }
@@ -637,7 +634,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   };
 
   const visibleAvailable = availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id));
-  
+
   // Filter active orders by statusFilter
   const filteredActiveOrders = statusFilter === 'ALL'
     ? activeOrders
@@ -896,11 +893,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             });
             setNewOrderIds(new Set());
           }}
-          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${
-            activeTab === 'NEW'
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${activeTab === 'NEW'
               ? 'bg-white text-emerald-800 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
-          }`}
+            }`}
         >
           <span>New{visibleAvailable.length > 0 && ` (${visibleAvailable.length})`}</span>
           {newOrderIds.size > 0 && activeTab !== 'NEW' && (
@@ -912,13 +908,12 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         <button
           onClick={() => { setActiveTab('ACTIVE'); setActiveVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
-            activeTab === 'ACTIVE'
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'ACTIVE'
               ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
               : filteredActiveOrders.length > 0
-              ? 'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
+                ? 'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
         >
           {filteredActiveOrders.length > 0 && (
             <span className="relative flex h-2 w-2 shrink-0">
@@ -936,22 +931,20 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         <button
           onClick={() => { setActiveTab('SCHEDULED'); setScheduledVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
-            activeTab === 'SCHEDULED'
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'SCHEDULED'
               ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
               : 'text-gray-600 hover:text-gray-900'
-          }`}
+            }`}
         >
           <span>Scheduled{filteredScheduledOrders.length > 0 && ` (${filteredScheduledOrders.length})`}</span>
         </button>
 
         <button
           onClick={() => { setActiveTab('COMPLETED'); setCompletedVisibleCount(PAGE_SIZE); }}
-          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${
-            activeTab === 'COMPLETED'
+          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'COMPLETED'
               ? 'bg-white text-emerald-800 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
-          }`}
+            }`}
         >
           <span>Completed{filteredCompletedOrders.length > 0 && ` (${filteredCompletedOrders.length})`}</span>
         </button>
@@ -1038,11 +1031,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('LIST')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    viewMode === 'LIST'
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'LIST'
                       ? 'bg-white text-emerald-800 shadow-xs font-black'
                       : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                    }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
                   <span>Norm</span>
@@ -1050,11 +1042,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('MAP')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    viewMode === 'MAP'
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'MAP'
                       ? 'bg-emerald-600 text-white shadow-xs font-black'
                       : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                    }`}
                 >
                   <Map className="w-3.5 h-3.5" />
                   <span>Map</span>
@@ -1069,11 +1060,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setTwoWayOnly((prev) => !prev)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-extrabold border transition-all ${
-                  twoWayOnly
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-extrabold border transition-all ${twoWayOnly
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200'
                     : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
-                }`}
+                  }`}
               >
                 <RotateCcw className={`w-3 h-3 ${twoWayOnly ? 'text-white' : 'text-indigo-500'}`} />
                 <span>Two-Way Orders</span>
@@ -1140,11 +1130,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 key={pill.value}
                 type="button"
                 onClick={() => setStatusFilter(pill.value as any)}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${
-                  statusFilter === pill.value
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${statusFilter === pill.value
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                     : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                }`}
+                  }`}
               >
                 {pill.label}
               </button>
@@ -1240,11 +1229,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => handleSetPresetDate('today')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  startDate === getLocalDateString(new Date().toISOString()) && endDate === getLocalDateString(new Date().toISOString())
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${startDate === getLocalDateString(new Date().toISOString()) && endDate === getLocalDateString(new Date().toISOString())
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                  }`}
               >
                 আজ
               </button>
@@ -1265,11 +1253,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setShowCustomRange((prev) => !prev)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  showCustomRange
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${showCustomRange
                     ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                  }`}
               >
                 Custom
               </button>
@@ -1324,10 +1311,34 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       {isAlarmPlaying && newOrderIds.size > 0 && (
         <NewOrderAlertOverlay
           newOrderIds={newOrderIds}
+          autoDismissSeconds={20}
           onAccept={async (orderId) => {
             setIsAlarmPlaying(false);
-            setNewOrderIds(new Set());
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(orderId);
+              return updated;
+            });
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(orderId);
+              return updated;
+            });
             await handleAcceptOrder(orderId);
+          }}
+          onView={(orderId) => {
+            setIsAlarmPlaying(false);
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(orderId);
+              return updated;
+            });
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.delete(orderId);
+              return updated;
+            });
+            handleViewOrderDetails(orderId);
           }}
           onDismissOne={(orderId) => {
             setNewOrderIds((prev) => {
@@ -1344,289 +1355,15 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           }}
           onDismissAll={() => {
             setIsAlarmPlaying(false);
+            setSeenOrderIds((prev) => {
+              const updated = new Set(prev);
+              newOrderIds.forEach((id) => updated.add(id));
+              return updated;
+            });
             setNewOrderIds(new Set());
           }}
         />
       )}
-    </div>
-  );
-};
-
-interface NewOrderAlertOverlayProps {
-  newOrderIds: Set<string>;
-  onAccept: (orderId: string) => Promise<void>;
-  onDismissOne: (orderId: string) => void;
-  onDismissAll: () => void;
-}
-
-const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
-  newOrderIds,
-  onAccept,
-  onDismissOne,
-  onDismissAll,
-}) => {
-  const orderIdList = Array.from(newOrderIds);
-  const [currentIdx, setCurrentIdx] = useState(orderIdList.length - 1); // latest first
-  const [accepting, setAccepting] = useState(false);
-
-  // Keep currentIdx in bounds when orders are dismissed
-  const safeIdx = Math.min(currentIdx, orderIdList.length - 1);
-  const orderId = orderIdList[safeIdx];
-  const order = orderId ? fallbackStore.orders.get(orderId) : null;
-
-  const goNext = () => setCurrentIdx((i) => Math.min(i + 1, orderIdList.length - 1));
-  const goPrev = () => setCurrentIdx((i) => Math.max(i - 1, 0));
-
-  const handleAccept = async () => {
-    if (!order || accepting) return;
-    setAccepting(true);
-    await onAccept(order.id);
-    setAccepting(false);
-  };
-
-  const handleDismissThis = () => {
-    if (!order) return;
-    onDismissOne(order.id);
-    // After dismiss, shift index if needed
-    setCurrentIdx((i) => Math.max(0, Math.min(i, orderIdList.length - 2)));
-  };
-
-  if (!order) return null;
-
-  const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
-    : null;
-
-  return (
-    <div
-      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
-      className="z-[9999] bg-red-950/85 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300"
-    >
-      {/* Pulsing background glow */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-red-500/20 animate-ping" />
-      </div>
-
-      {/* Header row: dismiss all button */}
-      <div className="w-full max-w-sm flex items-center justify-between mb-3 relative z-10">
-        <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 bg-red-500/30 rounded-full flex items-center justify-center animate-bounce">
-            <Bell className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-white font-black text-sm">🚨 নতুন অর্ডার এসেছে!</span>
-        </div>
-        <button
-          onClick={onDismissAll}
-          className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold transition-all"
-        >
-          <X className="w-3.5 h-3.5" />
-          <span>মিউট</span>
-        </button>
-      </div>
-
-      <div className="relative w-full max-w-sm flex items-center justify-center z-10">
-        {/* Left Navigation Arrow */}
-        {orderIdList.length > 1 && (
-          <button
-            onClick={goPrev}
-            disabled={safeIdx === 0}
-            className="absolute -left-6 md:-left-16 z-20 w-11 h-11 rounded-full bg-white hover:bg-red-50 text-red-600 shadow-2xl border border-red-200 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-all hover:scale-110 active:scale-95 shrink-0"
-            aria-label="Previous order"
-          >
-            <ChevronLeft className="w-7 h-7 stroke-[3px]" />
-          </button>
-        )}
-
-        {/* Card */}
-        <div className="w-full bg-white rounded-3xl shadow-2xl border-2 border-red-400 relative overflow-hidden animate-in zoom-in-95 duration-300">
-          {/* Animated top stripe */}
-          <div className="h-1.5 bg-gradient-to-r from-red-500 via-orange-400 to-red-500 animate-pulse" />
-
-          {/* Counter badge */}
-          {orderIdList.length > 1 && (
-            <div className="absolute top-3 right-3 bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-md">
-              {safeIdx + 1} / {orderIdList.length}
-            </div>
-          )}
-
-          <div className="p-5 space-y-4">
-            {/* Order ID & Fee row */}
-            <div className="flex items-center justify-between">
-              <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2.5 py-0.5 rounded-md shadow-xs">
-                #{order.id}
-              </span>
-              <div className="flex items-center space-x-2">
-                {order.productCost && order.productCost > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-extrabold">
-                    পণ্য ৳{order.productCost}
-                  </span>
-                )}
-                <span className={`px-2.5 py-1 rounded-full text-xs font-black shadow-sm ${
-                  order.isFreeDelivery
-                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                    : 'bg-emerald-100 text-emerald-800'
-                }`}>
-                  {order.isFreeDelivery ? '🎁 Free Delivery (৳0)' : `Fee ৳${order.deliveryFee}`}
-                </span>
-              </div>
-            </div>
-
-            {/* Service type */}
-            <div className="flex items-start space-x-2.5">
-              <div className="p-2 rounded-xl bg-blue-50 text-blue-600 shrink-0 mt-0.5">
-                <ShoppingBag className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">সার্ভিস / অর্ডার</p>
-                <p className="font-black text-gray-900 text-sm leading-snug">
-                  {order.service || order.title || 'Service Request'}
-                </p>
-              </div>
-            </div>
-
-            {/* Items */}
-            {itemsSummary && (
-              <div className="flex items-start space-x-2.5">
-                <div className="p-2 rounded-xl bg-amber-50 text-amber-600 shrink-0 mt-0.5">
-                  <Package className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">আইটেমসমূহ</p>
-                  <p className="text-sm text-gray-800 font-semibold leading-snug line-clamp-2">{itemsSummary}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Pickup location */}
-            {order.pickupLocation?.address && (
-              <div className="flex items-start space-x-2.5">
-                <div className="p-2 rounded-xl bg-orange-50 text-orange-500 shrink-0 mt-0.5">
-                  <MapPin className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">পিকআপ লোকেশন</p>
-                  <p className="text-sm text-gray-800 font-semibold leading-snug line-clamp-2">
-                    {order.pickupLocation.address}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Delivery location */}
-            <div className="flex items-start space-x-2.5">
-              <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600 shrink-0 mt-0.5">
-                <MapPin className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">ডেলিভারি লোকেশন</p>
-                <p className="text-sm text-gray-800 font-semibold leading-snug line-clamp-2">
-                  {order.deliveryLocation.address}
-                </p>
-              </div>
-            </div>
-
-            {/* Additional note */}
-            {order.additionalNote && (
-              <div className="flex items-start space-x-2.5">
-                <div className="p-2 rounded-xl bg-gray-50 text-gray-500 shrink-0 mt-0.5">
-                  <FileText className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">নোট</p>
-                  <p className="text-sm text-gray-700 font-medium leading-snug line-clamp-3">{order.additionalNote}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Customer phone */}
-            {order.customerPhone && (
-              <div className="flex items-center space-x-2.5">
-                <div className="p-2 rounded-xl bg-teal-50 text-teal-600 shrink-0">
-                  <Phone className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">কাস্টমার</p>
-                  <p className="text-sm text-gray-800 font-semibold">{order.customerName}</p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Slide navigation + dot indicators (only if multiple) */}
-          {orderIdList.length > 1 && (
-            <div className="px-5 pb-2">
-              <div className="flex items-center justify-between">
-                <button
-                  onClick={goPrev}
-                  disabled={safeIdx === 0}
-                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 disabled:opacity-30 transition-all"
-                >
-                  <ChevronLeft className="w-4 h-4 text-gray-700" />
-                </button>
-                <div className="flex items-center space-x-1.5">
-                  {orderIdList.map((_, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setCurrentIdx(i)}
-                      className={`rounded-full transition-all ${
-                        i === safeIdx
-                          ? 'w-5 h-2 bg-red-500'
-                          : 'w-2 h-2 bg-gray-300 hover:bg-gray-400'
-                      }`}
-                    />
-                  ))}
-                </div>
-                <button
-                  onClick={goNext}
-                  disabled={safeIdx === orderIdList.length - 1}
-                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 disabled:opacity-30 transition-all"
-                >
-                  <ChevronRight className="w-4 h-4 text-gray-700" />
-                </button>
-              </div>
-              <p className="text-center text-[10px] text-gray-400 font-medium mt-1">
-                স্লাইড করে অন্য অর্ডার দেখুন
-              </p>
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div className="px-5 pb-5 pt-1 space-y-2">
-            <button
-              onClick={handleAccept}
-              disabled={accepting}
-              className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-2xl font-black text-sm shadow-lg active:scale-[0.98] transition-all disabled:opacity-60"
-            >
-              {accepting ? 'গ্রহণ করা হচ্ছে…' : '✅ Accept করুন (অর্ডার নিন)'}
-            </button>
-            <button
-              onClick={handleDismissThis}
-              className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-2xl font-bold text-xs transition-all"
-            >
-              ❌ এই অর্ডার বাতিল করুন
-            </button>
-          </div>
-        </div>
-
-        {/* Right Navigation Arrow */}
-        {orderIdList.length > 1 && (
-          <button
-            onClick={goNext}
-            disabled={safeIdx === orderIdList.length - 1}
-            className="absolute -right-6 md:-right-16 z-20 w-11 h-11 rounded-full bg-white hover:bg-red-50 text-red-600 shadow-2xl border border-red-200 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-all hover:scale-110 active:scale-95 shrink-0"
-            aria-label="Next order"
-          >
-            <ChevronRight className="w-7 h-7 stroke-[3px]" />
-          </button>
-        )}
-      </div>
-
-      {/* Hint text */}
-      <p className="mt-4 text-white/60 text-[11px] font-medium text-center relative z-10">
-        {orderIdList.length > 1
-          ? `${orderIdList.length}টি নতুন অর্ডার পেন্ডিং আছে — স্লাইড করে দেখুন`
-          : 'নতুন রিকুয়েস্ট আপনার জন্য অপেক্ষা করছে!'}
-      </p>
     </div>
   );
 };

@@ -3,6 +3,7 @@ import { Order, OrderStatus } from '@/types';
 import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
+import { calculateDistanceKm } from '@/lib/pricing';
 import { AsyncButton } from './ui/AsyncButton';
 
 interface OrderCardProps {
@@ -392,16 +393,30 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         </div>
 
         {/* Locations Flow */}
-        <div className={`flex items-center text-xs text-gray-600 space-x-2 py-2.5 px-3 rounded-2xl ${accent.locationBg} border mb-2`}>
-          <div className="flex items-center space-x-1 min-w-0 flex-1">
-            <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span className="truncate">{order.pickupLocation?.address || 'Local Helper Area'}</span>
-          </div>
-          <ArrowRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-          <div className="flex items-center space-x-1 min-w-0 flex-1">
-            <span className="truncate font-semibold text-gray-900">{order.deliveryLocation.address}</span>
-          </div>
-        </div>
+        {(() => {
+          const distKm = (order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng)
+            ? calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(1)
+            : null;
+          return (
+            <div className={`flex items-center text-xs text-gray-600 space-x-2 py-2.5 px-3 rounded-2xl ${accent.locationBg} border mb-2`}>
+              <div className="flex items-center space-x-1 min-w-0 flex-1">
+                <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="truncate">{order.pickupLocation?.address || 'Local Helper Area'}</span>
+              </div>
+              <div className="flex items-center space-x-1 shrink-0">
+                {distKm && (
+                  <span className="text-[10px] font-black text-emerald-800 bg-emerald-100/90 px-1.5 py-0.5 rounded-md border border-emerald-200">
+                    {distKm} km
+                  </span>
+                )}
+                <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+              </div>
+              <div className="flex items-center space-x-1 min-w-0 flex-1">
+                <span className="truncate font-semibold text-gray-900">{order.deliveryLocation.address}</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Bottom row: fee / fee pending */}
         <div className="flex items-center justify-between text-xs pt-1">

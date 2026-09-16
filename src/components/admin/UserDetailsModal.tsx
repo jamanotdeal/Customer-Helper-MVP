@@ -24,6 +24,8 @@ import {
   Wallet,
   AlertCircle,
   Sparkles,
+  Coins,
+  Edit2,
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
@@ -85,13 +87,46 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   const [editEmail, setEditEmail] = useState(user?.email || '');
   const [editPhone, setEditPhone] = useState(user?.alternativePhone || '');
 
+  // Edit Reward Coins states
+  const [isEditingCoins, setIsEditingCoins] = useState(false);
+  const [coinsInput, setCoinsInput] = useState(String(user?.coins ?? 0));
+  const [coinsReasonInput, setCoinsReasonInput] = useState('');
+  const [savingCoins, setSavingCoins] = useState(false);
+
   React.useEffect(() => {
     if (user) {
       setEditName(user.displayName);
       setEditEmail(user.email || '');
       setEditPhone(user.alternativePhone || '');
+      setCoinsInput(String(user.coins ?? 0));
     }
   }, [user]);
+
+  const handleSaveCoins = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const num = parseInt(coinsInput, 10);
+    if (isNaN(num) || num < 0) {
+      showAlert('ভুল সংখ্যা', 'অনুগ্রহ করে সঠিক কয়েন সংখ্যা প্রদান করুন (০ বা তার বেশি)।', 'warning');
+      return;
+    }
+    setSavingCoins(true);
+    const res = await fallbackStore.updateUserCoins(userId, num, coinsReasonInput.trim() || undefined);
+    setSavingCoins(false);
+    setIsEditingCoins(false);
+    setCoinsReasonInput('');
+    if (res.success) {
+      const deltaText = res.delta > 0 ? `+${res.delta}` : `${res.delta}`;
+      showAlert(
+        'কয়েন আপডেট সফল',
+        `ব্যবহারকারীর কয়েন ব্যালেন্স সফলভাবে ${num} কয়েন নির্ধারণ করা হয়েছে (${deltaText})। ব্যবহারকারীর স্ক্রিনে ও হেডারে অবিলম্বে ${num} কয়েন প্রদর্শিত হবে।`,
+        'success'
+      );
+      if (onUserUpdated) onUserUpdated();
+    } else {
+      showAlert('ব্যর্থ', 'কয়েন আপডেট করা সম্ভব হয়নি।', 'error');
+    }
+  };
 
   const handleSaveInfo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -327,7 +362,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
           </div>
 
           {/* Key Metrics Dashboard Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-gray-50 border-b border-gray-100 text-center text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-4 bg-gray-50 border-b border-gray-100 text-center text-xs">
             <div className="p-3 bg-white rounded-2xl border border-gray-200 shadow-sm">
               <span className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider block">Customer Orders</span>
               <span className="text-xl font-black text-gray-900">{customerOrders.length}</span>
@@ -351,6 +386,25 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                 ৳{wallet.balance}
               </span>
               <span className="text-[10px] text-indigo-700 block font-semibold">৳{wallet.totalEarned} earned</span>
+            </div>
+            <div 
+              onClick={() => {
+                setCoinsInput(String(user.coins ?? 0));
+                setIsEditingCoins(true);
+              }}
+              className="p-3 bg-gradient-to-br from-amber-50 to-yellow-50/80 rounded-2xl border border-amber-200/80 shadow-sm cursor-pointer hover:border-amber-400 hover:shadow-md transition-all text-amber-950 group"
+              title="Click to edit user reward coins"
+            >
+              <div className="flex items-center justify-center space-x-1">
+                <Coins className="w-3.5 h-3.5 text-amber-600" />
+                <span className="text-[10px] font-extrabold text-amber-700 uppercase tracking-wider block">Reward Coins</span>
+              </div>
+              <span className="text-xl font-black text-amber-950 flex items-center justify-center gap-1">
+                🪙 {user.coins ?? 0}
+              </span>
+              <span className="text-[10px] text-amber-700 block font-bold group-hover:underline">
+                {user.totalEarnedCoins || user.coins || 0} earned • Edit ✏️
+              </span>
             </div>
           </div>
 
@@ -438,6 +492,154 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Reward Coins & Gamification Balance Card */}
+                <div className="bg-gradient-to-br from-amber-50 via-yellow-50/50 to-orange-50/30 p-4 rounded-2xl border border-amber-200/80 space-y-3 shadow-xs">
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <h4 className="font-extrabold text-xs text-amber-950 uppercase tracking-wider flex items-center space-x-1.5">
+                      <Coins className="w-4 h-4 text-amber-600" />
+                      <span>জামানত কয়েন ও রিওয়ার্ড ব্যালেন্স (Reward Coins & Balance)</span>
+                    </h4>
+                    {!isEditingCoins && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCoinsInput(String(user.coins ?? 0));
+                          setIsEditingCoins(true);
+                        }}
+                        className="py-1 px-3 bg-amber-500 hover:bg-amber-600 text-purple-950 font-black rounded-xl text-[10px] transition-all flex items-center space-x-1 shadow-xs cursor-pointer active:scale-95"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        <span>কয়েন পরিবর্তন (Edit Coins)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {isEditingCoins ? (
+                    <form onSubmit={handleSaveCoins} className="p-3.5 bg-white rounded-2xl border border-amber-300 space-y-3 shadow-sm">
+                      <div className="flex items-center justify-between flex-wrap gap-1">
+                        <label className="text-xs font-black text-amber-950">
+                          নতুন কয়েন সংখ্যা নির্ধারণ করুন (Set Coin Balance):
+                        </label>
+                        <span className="text-[10px] text-gray-500 font-bold">
+                          বর্তমান ব্যালেন্স: <strong className="text-amber-700">{user.coins ?? 0}</strong> কয়েন
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <div className="relative flex-1">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm">🪙</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={coinsInput}
+                            onChange={(e) => setCoinsInput(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 bg-amber-50/50 border border-amber-300 rounded-xl text-sm font-black text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            required
+                            autoFocus
+                          />
+                        </div>
+                      </div>
+
+                      {/* Quick Adjust Buttons */}
+                      <div className="flex flex-wrap gap-1.5 items-center pt-0.5">
+                        <span className="text-[10px] font-bold text-gray-500 mr-1">দ্রুত যোগ/বিয়োগ:</span>
+                        {[-50, -20, -10, 10, 20, 50, 100].map((delta) => (
+                          <button
+                            key={delta}
+                            type="button"
+                            onClick={() => {
+                              const currentVal = parseInt(coinsInput, 10) || 0;
+                              setCoinsInput(String(Math.max(0, currentVal + delta)));
+                            }}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${
+                              delta > 0 
+                                ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900' 
+                                : 'bg-red-100 hover:bg-red-200 text-red-900'
+                            }`}
+                          >
+                            {delta > 0 ? `+${delta}` : `${delta}`}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setCoinsInput('0')}
+                          className="px-2 py-1 rounded-lg text-[10px] font-extrabold bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all cursor-pointer"
+                        >
+                          Reset (0)
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          পরিবর্তনের কারণ/নোট (ঐচ্ছিক - ব্যবহারকারী নোটিফিকেশনে দেখতে পাবেন):
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Compensation, loyalty bonus, admin adjustment..."
+                          value={coinsReasonInput}
+                          onChange={(e) => setCoinsReasonInput(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="submit"
+                          disabled={savingCoins}
+                          className="py-1.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-xs flex items-center space-x-1 cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{savingCoins ? 'সংরক্ষণ হচ্ছে...' : 'সংরক্ষণ করুন (Save Coins)'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsEditingCoins(false);
+                            setCoinsInput(String(user.coins ?? 0));
+                            setCoinsReasonInput('');
+                          }}
+                          className="py-1.5 px-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        >
+                          বাতিল (Cancel)
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                      <div className="p-3 bg-white/80 rounded-xl border border-amber-200">
+                        <span className="text-[10px] font-extrabold text-amber-800 uppercase block">Current Active Coins</span>
+                        <div className="text-xl font-black text-amber-950 flex items-center space-x-1.5 mt-0.5">
+                          <span>🪙 {user.coins ?? 0}</span>
+                          <span className="text-xs font-bold text-gray-500">Coins</span>
+                        </div>
+                        <span className="text-[10px] text-gray-500 block mt-0.5">User sees this balance live</span>
+                      </div>
+                      <div className="p-3 bg-white/80 rounded-xl border border-amber-200">
+                        <span className="text-[10px] font-extrabold text-amber-800 uppercase block">Lifetime Earned</span>
+                        <div className="text-xl font-black text-purple-950 flex items-center space-x-1.5 mt-0.5">
+                          <span>{user.totalEarnedCoins || user.coins || 0}</span>
+                          <span className="text-xs font-bold text-gray-500">Coins</span>
+                        </div>
+                        <span className="text-[10px] text-gray-500 block mt-0.5">Total earned across orders</span>
+                      </div>
+                      <div className="p-3 bg-white/80 rounded-xl border border-amber-200">
+                        <span className="text-[10px] font-extrabold text-amber-800 uppercase block">Loyalty Tier Status</span>
+                        <span className="text-sm font-black text-indigo-900 block mt-1">
+                          {(user.totalEarnedCoins || user.coins || 0) >= 500
+                            ? '💎 Platinum Member'
+                            : (user.totalEarnedCoins || user.coins || 0) >= 200
+                            ? '🥇 Gold Member'
+                            : (user.totalEarnedCoins || user.coins || 0) >= 50
+                            ? '🥈 Silver Member'
+                            : '🥉 Standard Member'}
+                        </span>
+                        <span className="text-[10px] text-indigo-700 block mt-0.5">Tier unlocks perks</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Profile Details Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -798,11 +1000,15 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
               const pricing = fallbackStore.pricingSettings;
               const minFee = pricing.feeCalculatorMinFee ?? 20;
               const totalRiderEarned = completedHelperOrders.reduce((sum, o) => {
-                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                const effectiveFee = o.isFreeDelivery
+                  ? Math.max(o.originalDeliveryFee || 0, minFee)
+                  : Math.max(o.deliveryFee || 0, minFee);
                 return sum + calculateHelperCommission(effectiveFee, pricing);
               }, 0);
               const totalPlatformShare = completedHelperOrders.reduce((sum, o) => {
-                const effectiveFee = Math.max(o.deliveryFee || 0, minFee);
+                const effectiveFee = o.isFreeDelivery
+                  ? Math.max(o.originalDeliveryFee || 0, minFee)
+                  : Math.max(o.deliveryFee || 0, minFee);
                 return sum + (effectiveFee - calculateHelperCommission(effectiveFee, pricing));
               }, 0);
               const totalPaidCommission = wallet.totalPaidCommission || 0;
@@ -970,6 +1176,73 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                       শুধুমাত্র <strong className="text-amber-400 font-extrabold">Super Admin</strong> অন্য ব্যবহারকারীদের অ্যাডমিন হিসেবে যোগ করতে বা রোল সরাতে পারবেন।
                     </p>
                   )}
+                </div>
+
+                {/* 0.1 Reward Coins Balance Management */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50/60 border border-amber-200/80 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="font-extrabold text-xs text-amber-950 uppercase tracking-wider flex items-center space-x-1.5">
+                      <Coins className="w-4 h-4 text-amber-600" />
+                      <span>Reward Coins & Loyalty Management</span>
+                    </h4>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-200/60 text-amber-950 font-black text-[10px]">
+                      বর্তমান ব্যালেন্স: 🪙 {user.coins ?? 0} কয়েন
+                    </span>
+                  </div>
+
+                  <form onSubmit={handleSaveCoins} className="p-3 bg-white rounded-xl border border-amber-300 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row gap-2 items-center">
+                      <div className="w-full sm:w-48 relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm">🪙</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={coinsInput}
+                          onChange={(e) => setCoinsInput(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 bg-amber-50/50 border border-amber-300 rounded-xl text-xs font-black text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          placeholder="Coins..."
+                          required
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="পরিবর্তনের কারণ (ঐচ্ছিক)..."
+                        value={coinsReasonInput}
+                        onChange={(e) => setCoinsReasonInput(e.target.value)}
+                        className="flex-1 w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={savingCoins}
+                        className="w-full sm:w-auto px-4 py-2 bg-amber-500 hover:bg-amber-600 text-purple-950 font-black rounded-xl text-xs transition-all shadow-xs flex items-center justify-center space-x-1 whitespace-nowrap cursor-pointer active:scale-95"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>{savingCoins ? 'আপডেট হচ্ছে...' : 'কয়েন আপডেট করুন'}</span>
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1 items-center">
+                      <span className="text-[10px] font-bold text-gray-400 mr-1">Quick:</span>
+                      {[-50, -10, 10, 50, 100].map((delta) => (
+                        <button
+                          key={delta}
+                          type="button"
+                          onClick={() => {
+                            const currentVal = parseInt(coinsInput, 10) || 0;
+                            setCoinsInput(String(Math.max(0, currentVal + delta)));
+                          }}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                            delta > 0
+                              ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900'
+                              : 'bg-red-100 hover:bg-red-200 text-red-900'
+                          }`}
+                        >
+                          {delta > 0 ? `+${delta}` : `${delta}`}
+                        </button>
+                      ))}
+                    </div>
+                  </form>
                 </div>
 
                 {/* 1. Custom Labeling Section */}

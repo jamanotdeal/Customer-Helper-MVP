@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
 
-// Reusable Clean Single Coin Icon
+// Reusable Clean Single Coin Icon - Crisp standard geometry for all screen densities
 export const SingleCoinIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
     viewBox="0 0 24 24"
@@ -30,9 +30,15 @@ export const SingleCoinIcon: React.FC<{ className?: string }> = ({ className = '
     className={className}
     xmlns="http://www.w3.org/2000/svg"
   >
-    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2.2" />
-    <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="2 1.5" opacity="0.8" />
-    <path d="M12 6.5l1.6 3.6 3.9.4-2.9 2.6.8 3.9-3.4-2-3.4 2 .8-3.9-2.9-2.6 3.9-.4z" />
+    {/* Clean circular coin body and outer rim */}
+    <circle cx="12" cy="12" r="9.5" fill="currentColor" fillOpacity="0.22" stroke="currentColor" strokeWidth="1.8" />
+    {/* Inner crisp accent rim */}
+    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.65" />
+    {/* Clean centered star emblem */}
+    <polygon
+      points="12,7 13.5,10.3 17,10.8 14.5,13.2 15.1,16.6 12,14.9 8.9,16.6 9.5,13.2 7,10.8 10.5,10.3"
+      fill="currentColor"
+    />
   </svg>
 );
 
@@ -51,7 +57,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
   insufficientMessage,
   requiredCoinsForAction,
 }) => {
-  const { user } = useAuth();
+  const { user, openAuthModal } = useAuth();
   const { showAlert } = useModal();
   const [activeTab, setActiveTab] = useState<'prizes' | 'my_claims' | 'how_to_earn'>('prizes');
   const [claimingPrize, setClaimingPrize] = useState<RewardPrize | null>(null);
@@ -408,7 +414,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                           type="button"
                           onClick={() => {
                             if (!user) {
-                              showAlert('লগইন আবশ্যক', 'পুরস্কার দাবি করতে অনুগ্রহ করে লগইন করুন।', 'info');
+                              openAuthModal();
                               return;
                             }
                             if (isPendingForThisPrize) {

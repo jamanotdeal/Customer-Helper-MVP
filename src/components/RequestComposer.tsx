@@ -4,9 +4,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
-import { fallbackStore, saveCustomerSavedAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
+import { fallbackStore, saveCustomerSavedAddressToFirestore, saveCustomerPickupAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
-import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress } from '@/lib/storage';
+import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress, getSavedPickupAddresses, addSavedPickupAddress } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Check, Clock, AlertTriangle, AlertCircle, Coins, Sparkles, Gift, X } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
@@ -109,12 +109,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     setService(newService);
     setErrors((prev) => ({ ...prev, service: undefined }));
     if (!isNoSavePickupService(newService)) {
-      const saved = getServicePickupLocation(newService);
+      const saved = getServicePickupLocation(newService, user?.uid);
+      const userPickupList = user?.uid ? getSavedPickupAddresses(user.uid) : [];
       if (saved?.address) {
         setPickupNote(saved.address);
         if (saved.lat) setPickupLat(saved.lat);
         if (saved.lng) setPickupLng(saved.lng);
-        setSavedPickupAddresses([saved]);
+        setSavedPickupAddresses(userPickupList.length > 0 ? userPickupList : [saved]);
+      } else if (userPickupList.length > 0) {
+        setSavedPickupAddresses(userPickupList);
       } else {
         setPickupNote('');
         setPickupLat(undefined);
@@ -185,6 +188,12 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       // Load saved delivery addresses from localStorage (populated from Firestore on login)
       const addresses = getSavedDeliveryAddresses(user.uid);
       setSavedAddresses(addresses);
+
+      // Load saved pickup addresses from localStorage (populated from Firestore on login)
+      const pickupAddresses = getSavedPickupAddresses(user.uid);
+      if (pickupAddresses.length > 0) {
+        setSavedPickupAddresses(pickupAddresses);
+      }
     }
   }, [user]);
 
@@ -217,7 +226,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   // Handle focus / click on main input (Guard unauthenticated users)
   const handleInputInteract = () => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
-      showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
       openAuthModal();
       return;
     }
@@ -228,7 +236,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     e.preventDefault();
 
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
-      await showAlert('লগইন আবশ্যক', 'অনুরোধ পাঠাতে বা তৈরি করতে আপনাকে প্রথমে সঠিকভাবে লগইন করতে হবে।', 'warning');
       openAuthModal();
       return;
     }
@@ -757,9 +764,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           setPickupNote(cleanAddr);
           if (loc.lat) setPickupLat(loc.lat);
           if (loc.lng) setPickupLng(loc.lng);
+          const locToSave = { ...loc, address: cleanAddr };
           // Save per-category if service is not in no-save list
           if (service && !isNoSavePickupService(service)) {
-            saveServicePickupLocation(service, { ...loc, address: cleanAddr });
+            saveServicePickupLocation(service, locToSave, user?.uid);
+          }
+          if (user?.uid) {
+            const updated = addSavedPickupAddress(user.uid, locToSave);
+            setSavedPickupAddresses(updated);
+            saveCustomerPickupAddressToFirestore(user.uid, locToSave, service).catch(() => {});
           }
         }}
       />

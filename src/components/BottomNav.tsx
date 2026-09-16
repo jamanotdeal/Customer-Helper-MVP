@@ -110,10 +110,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
               id="nav-tab-helper-tasks"
               onClick={() => handleTabChange('helper_tasks')}
               className={tabClass(activeTab === 'helper_tasks' || activeTab === 'request')}
-              aria-label="Tasks"
+              aria-label="Requests"
             >
               <Bike className="w-5 h-5" />
-              <span className="text-[11px]">Tasks</span>
+              <span className="text-[11px]">Requests</span>
               {(activeTab === 'helper_tasks' || activeTab === 'request') && (
                 <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
               )}
