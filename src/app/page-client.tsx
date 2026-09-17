@@ -81,8 +81,7 @@ export default function PageClient() {
     }
   };
 
-  // iOS "Add to Home Screen" install banner (only shown in browser, not in native app)
-  const [showIosInstallBanner, setShowIosInstallBanner] = useState(false);
+
 
   // Check for completed customer orders needing Coin Reward Celebration first, then Feedback
   useEffect(() => {
@@ -156,19 +155,7 @@ export default function PageClient() {
     return () => unsub();
   }, [user, activeMode]);
 
-  // Detect iOS Safari standalone check (only show in browser PWA mode)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    // Already in standalone PWA mode — no need for install prompt
-    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const isInStandaloneMode =
-      ('standalone' in window.navigator && (window.navigator as any).standalone === true) ||
-      window.matchMedia('(display-mode: standalone)').matches;
-    const dismissed = sessionStorage.getItem('ios_install_banner_dismissed');
-    if (isIos && !isInStandaloneMode && !dismissed) {
-      setShowIosInstallBanner(true);
-    }
-  }, []);
+
 
   // Native status bar color (emerald green matching the header)
   useEffect(() => {
@@ -444,83 +431,7 @@ export default function PageClient() {
         onNavigate={(tab) => setActiveTab(tab as any)}
       />
 
-      {/* iOS "Add to Home Screen" install banner (only shown in browser PWA mode) */}
-      {showIosInstallBanner && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '80px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 9999,
-            width: 'calc(100% - 32px)',
-            maxWidth: '680px',
-            background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-            borderRadius: '20px',
-            padding: '16px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: '#fff',
-          }}
-        >
-          <button
-            onClick={() => {
-              setShowIosInstallBanner(false);
-              sessionStorage.setItem('ios_install_banner_dismissed', '1');
-            }}
-            style={{
-              position: 'absolute',
-              top: '10px',
-              right: '12px',
-              background: 'rgba(255,255,255,0.15)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '24px',
-              height: '24px',
-              color: '#fff',
-              fontSize: '14px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-            <div style={{
-              width: '44px', height: '44px', borderRadius: '12px',
-              background: 'linear-gradient(135deg, #10b981, #059669)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0, fontSize: '20px',
-            }}>
-              🔔
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontWeight: 800, fontSize: '13px', margin: '0 0 4px', lineHeight: 1.3 }}>
-                নোটিফিকেশন পেতে অ্যাপ ইনস্টল করুন
-              </p>
-              <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', margin: '0 0 10px', lineHeight: 1.5 }}>
-                iPhone-এ push নোটিফিকেশন পেতে হোম স্ক্রিনে যোগ করুন:
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'rgba(255,255,255,0.85)' }}>
-                <span style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '8px', padding: '4px 8px', fontWeight: 700 }}>
-                  Share ↑
-                </span>
-                <span>→</span>
-                <span style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '8px', padding: '4px 8px', fontWeight: 700 }}>
-                  Add to Home Screen
-                </span>
-                <span>→</span>
-                <span style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '8px', padding: '4px 8px', fontWeight: 700 }}>
-                  Add
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* Main Content Body */}
       <main className={isAdminView ? "flex-1 w-full" : "flex-1 w-full"}>

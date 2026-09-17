@@ -146,16 +146,20 @@ export const ExploreHelperView: React.FC = () => {
           if (o.status !== 'PENDING') return false;
           if (o.helperId && o.helperId.trim() !== '') return false;
           if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(o.status)) return false;
+          if ((o.status as string) === 'COMPLETED' || (o.status as string) === 'CANCELLED') return false;
           if (o.cancellationRequest?.status === 'APPROVED') return false;
           return true;
         });
         
-        // Active orders count for the helper (excluding cancelled)
+        // Active orders count for the helper (strictly excluding delivered, completed, and cancelled)
         const activeCount = all.filter(
           (o) =>
             o.helperId === user.uid &&
             ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status) &&
+            o.status !== 'DELIVERED' &&
+            (o.status as string) !== 'COMPLETED' &&
             o.status !== 'CANCELED' &&
+            (o.status as string) !== 'CANCELLED' &&
             o.cancellationRequest?.status !== 'APPROVED'
         ).length;
 

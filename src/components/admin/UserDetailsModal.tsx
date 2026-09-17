@@ -167,7 +167,12 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
   const completedCustomerOrders = customerOrders.filter((o) => o.status === 'DELIVERED');
   const activeCustomerOrders = customerOrders.filter(
-    (o) => o.status !== 'DELIVERED' && o.status !== 'CANCELED'
+    (o) =>
+      o.status !== 'DELIVERED' &&
+      (o.status as string) !== 'COMPLETED' &&
+      o.status !== 'CANCELED' &&
+      (o.status as string) !== 'CANCELLED' &&
+      o.cancellationRequest?.status !== 'APPROVED'
   );
   const totalSpent = completedCustomerOrders.reduce(
     (sum, o) => sum + (o.productCost || 0) + o.deliveryFee,
@@ -179,9 +184,16 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     .filter((o) => o.helperId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const completedHelperOrders = helperOrders.filter((o) => o.status === 'DELIVERED');
+  const completedHelperOrders = helperOrders.filter(
+    (o) => o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED'
+  );
   const activeHelperOrders = helperOrders.filter(
-    (o) => o.status !== 'DELIVERED' && o.status !== 'CANCELED'
+    (o) =>
+      o.status !== 'DELIVERED' &&
+      (o.status as string) !== 'COMPLETED' &&
+      o.status !== 'CANCELED' &&
+      (o.status as string) !== 'CANCELLED' &&
+      o.cancellationRequest?.status !== 'APPROVED'
   );
 
   // User Actions: Block / Unblock

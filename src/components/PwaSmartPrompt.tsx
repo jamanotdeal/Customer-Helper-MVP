@@ -80,7 +80,9 @@ export const PwaSmartPrompt: React.FC = () => {
   const [isIos, setIsIos] = useState<boolean>(false);
   const [hasPrompt, setHasPrompt] = useState<boolean>(false);
   const [showPromptModal, setShowPromptModal] = useState<boolean>(false);
-  const [showIosGuide, setShowIosGuide] = useState<boolean>(false);
+  const [showIosGuideModal, setShowIosGuideModal] = useState<boolean>(false);
+  const [showInAppGuideModal, setShowInAppGuideModal] = useState<boolean>(false);
+  const [showFallbackGuideModal, setShowFallbackGuideModal] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [isInstalling, setIsInstalling] = useState<boolean>(false);
 
@@ -111,13 +113,15 @@ export const PwaSmartPrompt: React.FC = () => {
       setIsStandalone(true);
       setIsInstalledPreviously(true);
       setShowPromptModal(false);
-      setShowIosGuide(false);
+      setShowIosGuideModal(false);
+      setShowInAppGuideModal(false);
+      setShowFallbackGuideModal(false);
     };
 
     window.addEventListener('pwa-install-available', handlePromptAvail);
     window.addEventListener('pwa-installed-success', handleInstallSuccess);
 
-    // If NOT standalone and prompt was not dismissed recently, show first-visit prompt after 2.5 seconds
+    // If NOT standalone and prompt was not dismissed recently, show prompt after 2 seconds
     if (!standalone) {
       const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
       const now = Date.now();
@@ -127,7 +131,7 @@ export const PwaSmartPrompt: React.FC = () => {
       if (shouldAutoShow) {
         const timer = setTimeout(() => {
           setShowPromptModal(true);
-        }, 2200);
+        }, 2000);
         return () => {
           clearTimeout(timer);
           window.removeEventListener('pwa-install-available', handlePromptAvail);
@@ -148,7 +152,9 @@ export const PwaSmartPrompt: React.FC = () => {
 
   const handleDismiss = () => {
     setShowPromptModal(false);
-    setShowIosGuide(false);
+    setShowIosGuideModal(false);
+    setShowInAppGuideModal(false);
+    setShowFallbackGuideModal(false);
     try {
       localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
     } catch (_) {}
@@ -161,7 +167,6 @@ export const PwaSmartPrompt: React.FC = () => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2500);
     } catch (_) {
-      // Fallback prompt
       alert(`লিংক: ${window.location.origin}`);
     }
   };
@@ -188,22 +193,15 @@ export const PwaSmartPrompt: React.FC = () => {
       } finally {
         setIsInstalling(false);
       }
-    } else if (isIos) {
-      setShowIosGuide(true);
+    } else if (isIos || isIosDevice()) {
+      // For iOS / iPhone: show guide popup
+      setShowIosGuideModal(true);
     } else if (isInApp) {
-      // In-app browser instructions
-      setShowPromptModal(true);
+      // In-app browser (Facebook/Messenger/Instagram): show open-in-browser guide popup
+      setShowInAppGuideModal(true);
     } else {
-      // Generic Android / other browser instructions
-      if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
-        (window as any).showCustomAlert(
-          'ইনস্টল নির্দেশিকা (Install App)',
-          'অ্যাপ ইনস্টল করতে আপনার ব্রাউজারের উপরে/নিচে ৩-ডট (⋮) মেনু ওপেন করে "Install app" অথবা "Add to Home screen" চাপুন।',
-          'info'
-        );
-      } else {
-        alert('অ্যাপ ইনস্টল করতে ব্রাউজার মেনু (⋮) ওপেন করে "Install app" অথবা "Add to Home screen" চাপুন।');
-      }
+      // Fallback for browsers without deferred prompt
+      setShowFallbackGuideModal(true);
     }
   };
 
@@ -244,7 +242,7 @@ export const PwaSmartPrompt: React.FC = () => {
         </div>
       )}
 
-      {/* 2. Main First-Visit / Smart PWA Bottom Modal */}
+      {/* 2. Main PWA Installation Modal (Single clean modal as requested) */}
       {showPromptModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-emerald-100 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4">
@@ -281,86 +279,22 @@ export const PwaSmartPrompt: React.FC = () => {
               </div>
             </div>
 
-            {/* CASE A: In-App Browser Detected (Facebook, Messenger, Instagram) */}
-            {isInApp ? (
-              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 space-y-2.5 text-left">
-                <div className="flex items-center gap-2 text-amber-900 font-extrabold text-xs">
-                  <Compass className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>ফেসবুক/মেসেঞ্জার ব্রাউজার নির্দেশিকা</span>
-                </div>
-                <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
-                  অ্যাপ সরাসরি ইনস্টল করতে ব্রাউজারের উপরে বা নিচে <strong>৩-ডট (⋮)</strong> বাটনে চাপ দিয়ে <strong>&quot;Open in Chrome&quot;</strong> অথবা <strong>&quot;Open in Safari / Browser&quot;</strong> সিলেক্ট করুন।
-                </p>
-                <button
-                  type="button"
-                  onClick={handleCopyCurrentLink}
-                  className="w-full py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all active:scale-98"
-                >
-                  {copiedLink ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>লিংক কপি হয়েছে! Chrome-এ পেস্ট করুন</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>লিংক কপি করুন (Copy Link)</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            ) : isIos && showIosGuide ? (
-              /* CASE B: iOS Safari Detailed Visual Guide */
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-emerald-950 text-white space-y-3 text-left shadow-md">
-                <p className="text-xs font-black text-emerald-300 flex items-center gap-1.5">
-                  <Smartphone className="w-4 h-4" />
-                  <span>iPhone / iPad-এ মাত্র ৩ ধাপে ইনস্টল করুন:</span>
-                </p>
-                <div className="space-y-2 text-xs text-gray-200">
-                  <div className="flex items-center gap-2.5 bg-white/10 p-2 rounded-xl">
-                    <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
-                      1
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      Safari ব্রাউজারের নিচে <Share2 className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>Share</strong> বাটনে চাপ দিন
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2.5 bg-white/10 p-2 rounded-xl">
-                    <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
-                      2
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      নিচে স্ক্রল করে <PlusSquare className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>Add to Home Screen</strong> চাপুন
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2.5 bg-white/10 p-2 rounded-xl">
-                    <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
-                      3
-                    </span>
-                    <span>
-                      উপরে ডানে <strong>Add</strong> বাটনে ক্লিক করলেই ইনস্টল সম্পন্ন!
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* CASE C: Android / Chrome / Desktop 1-Click Install */
-              <div className="space-y-2.5">
-                <button
-                  type="button"
-                  onClick={handleInstallClick}
-                  disabled={isInstalling}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>{isInstalling ? 'ইনস্টল হচ্ছে...' : 'অ্যাপ ইনস্টল করুন (Install App)'}</span>
-                </button>
+            {/* Main Action Button */}
+            <div className="space-y-2.5 pt-1">
+              <button
+                type="button"
+                onClick={handleInstallClick}
+                disabled={isInstalling}
+                className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>{isInstalling ? 'ইনস্টল হচ্ছে...' : 'অ্যাপ ইনস্টল করুন (Install App)'}</span>
+              </button>
 
-                <p className="text-[11px] text-gray-500 text-center font-medium">
-                  {isIos ? 'iPhone ব্যবহারকারীদের জন্য ইনস্টল গাইড' : 'কোনো স্টোরেজ বা চার্জ ছাড়াই তাৎক্ষণিক ইনস্টল হয়'}
-                </p>
-              </div>
-            )}
+              <p className="text-[11px] text-gray-500 text-center font-medium">
+                কোনো স্টোরেজ বা চার্জ ছাড়াই তাৎক্ষণিক ইনস্টল হয়
+              </p>
+            </div>
 
             {/* Bottom Actions */}
             <div className="pt-1 flex items-center justify-between text-xs font-bold text-gray-500">
@@ -371,12 +305,170 @@ export const PwaSmartPrompt: React.FC = () => {
               >
                 এখন নয় (Later)
               </button>
-              <div className="flex items-center gap-1 text-[11px] text-emerald-700">
+              <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
                 <Sparkles className="w-3 h-3 text-emerald-600" />
                 <span>Fast • Lightweight • Offline Ready</span>
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* 3. iOS / iPhone Step-by-Step Guide Popup */}
+      {showIosGuideModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-emerald-100 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4">
+            {/* Close Button */}
+            <button
+              onClick={() => setShowIosGuideModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Header */}
+            <div className="flex items-center gap-2.5 text-emerald-900 font-extrabold text-sm pr-8">
+              <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-gray-900 text-sm">iPhone / iPad ইনস্টল গাইড</h4>
+                <p className="text-[11px] text-gray-500 font-normal">Safari ব্রাউজার দিয়ে মাত্র ৩ ধাপে ইনস্টল করুন</p>
+              </div>
+            </div>
+
+            {/* Visual Step Guide */}
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-emerald-950 text-white space-y-3 shadow-md">
+              <div className="space-y-2 text-xs text-gray-200">
+                <div className="flex items-center gap-2.5 bg-white/10 p-2.5 rounded-xl">
+                  <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
+                    1
+                  </span>
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    Safari ব্রাউজারের নিচে <Share2 className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>Share</strong> বাটনে চাপ দিন
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5 bg-white/10 p-2.5 rounded-xl">
+                  <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
+                    2
+                  </span>
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    নিচে স্ক্রল করে <PlusSquare className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>Add to Home Screen</strong> চাপুন
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5 bg-white/10 p-2.5 rounded-xl">
+                  <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
+                    3
+                  </span>
+                  <span>
+                    উপরে ডানপাশে <strong>Add</strong> বাটনে ক্লিক করলেই অ্যাপ ইনস্টল সম্পন্ন!
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Got It Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowIosGuideModal(false);
+                setShowPromptModal(false);
+              }}
+              className="w-full py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2"
+            >
+              <Check className="w-4 h-4" />
+              <span>বুঝেছি (Got It)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. In-App Browser Guide Popup (Facebook/Messenger/Instagram) */}
+      {showInAppGuideModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-amber-100 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4">
+            <button
+              onClick={() => setShowInAppGuideModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 space-y-2.5 text-left">
+              <div className="flex items-center gap-2 text-amber-900 font-extrabold text-sm">
+                <Compass className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>ফেসবুক/মেসেঞ্জার ব্রাউজার নির্দেশিকা</span>
+              </div>
+              <p className="text-xs text-amber-800 leading-relaxed font-medium">
+                অ্যাপ সরাসরি ইনস্টল করতে ব্রাউজারের উপরে বা নিচে <strong>৩-ডট (⋮)</strong> বাটনে চাপ দিয়ে <strong>&quot;Open in Chrome&quot;</strong> অথবা <strong>&quot;Open in Safari&quot;</strong> সিলেক্ট করুন।
+              </p>
+              <button
+                type="button"
+                onClick={handleCopyCurrentLink}
+                className="w-full py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all active:scale-98"
+              >
+                {copiedLink ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>লিংক কপি হয়েছে! Chrome-এ পেস্ট করুন</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>লিংক কপি করুন (Copy Link)</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowInAppGuideModal(false);
+                setShowPromptModal(false);
+              }}
+              className="w-full py-2.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+            >
+              ঠিক আছে
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Generic Browser Fallback Guide Popup */}
+      {showFallbackGuideModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-gray-100 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4">
+            <button
+              onClick={() => setShowFallbackGuideModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5 text-gray-900 font-bold text-sm">
+              <Download className="w-4 h-4 text-emerald-600" />
+              <span>ইনস্টল নির্দেশিকা</span>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              অ্যাপ ইনস্টল করতে আপনার ব্রাউজারের উপরে বা নিচের <strong>৩-ডট (⋮)</strong> মেনু ওপেন করে <strong>&quot;Install app&quot;</strong> অথবা <strong>&quot;Add to Home screen&quot;</strong> চাপুন।
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowFallbackGuideModal(false);
+                setShowPromptModal(false);
+              }}
+              className="w-full py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-colors"
+            >
+              বুঝেছি
+            </button>
           </div>
         </div>
       )}

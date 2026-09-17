@@ -284,6 +284,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         // Available (New tab): status PENDING, no helper assigned, matching helper type rule & within location radius
         const avail = all.filter((o) => {
           if (o.status !== 'PENDING' || o.helperId) return false;
+          if (o.cancellationRequest?.status === 'APPROVED') return false;
 
           const allowedTypes = fallbackStore.pricingSettings.allowedHelperTypes || 'both';
           if (allowedTypes === 'dedicated_only' && !isDedicatedHelper) return false;
@@ -335,12 +336,15 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           (o) =>
             o.helperId === user.uid &&
             ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status) &&
+            o.status !== 'DELIVERED' &&
+            (o.status as string) !== 'COMPLETED' &&
             o.status !== 'CANCELED' &&
+            (o.status as string) !== 'CANCELLED' &&
             o.cancellationRequest?.status !== 'APPROVED'
         );
         // Completed: delivered orders by current helper, sorted recent to old
         const comp = all
-          .filter((o) => o.helperId === user.uid && o.status === 'DELIVERED')
+          .filter((o) => o.helperId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED'))
           .sort((a, b) => {
             const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
             const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
@@ -586,13 +590,24 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   const visibleAvailable = availableOrders.filter((ord) => !rejectedOrderIds.has(ord.id));
 
-  // Filter active orders by statusFilter
+  // Filter active orders by statusFilter (strictly excluding DELIVERED/COMPLETED and CANCELED)
+  const baseActiveOrders = activeOrders.filter(
+    (o) =>
+      o.status !== 'DELIVERED' &&
+      (o.status as string) !== 'COMPLETED' &&
+      o.status !== 'CANCELED' &&
+      (o.status as string) !== 'CANCELLED' &&
+      o.cancellationRequest?.status !== 'APPROVED'
+  );
+
   const filteredActiveOrders = statusFilter === 'ALL'
-    ? activeOrders
-    : activeOrders.filter(o => o.status === statusFilter);
+    ? baseActiveOrders
+    : baseActiveOrders.filter(o => o.status === statusFilter);
 
   // Filter scheduled orders (active orders where needDeliveryBack and deliveryBackTime is set)
-  const scheduledOrders = activeOrders.filter(o => o.needDeliveryBack && o.deliveryBackTime && o.status !== 'CANCELED' && o.cancellationRequest?.status !== 'APPROVED');
+  const scheduledOrders = baseActiveOrders.filter(
+    o => o.needDeliveryBack && o.deliveryBackTime
+  );
   const filteredScheduledOrders = statusFilter === 'ALL'
     ? scheduledOrders
     : scheduledOrders.filter(o => o.status === statusFilter);
