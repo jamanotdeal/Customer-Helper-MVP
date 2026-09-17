@@ -29,6 +29,10 @@ import {
   Calculator,
   Repeat,
   CalendarClock,
+  Store,
+  Plus,
+  AlertCircle,
+  Compass,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 
@@ -300,6 +304,51 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   };
   
   const [activeMapPicker, setActiveMapPicker] = useState<'pickup' | 'delivery' | null>(null);
+
+  // Admin Set Pickup Address Modal
+  const [showAdminPickupModal, setShowAdminPickupModal] = useState(false);
+  const [pickupInputMode, setPickupInputMode] = useState<'shop' | 'manual'>('shop');
+  const [adminPickupAddressText, setAdminPickupAddressText] = useState('');
+  const [adminPickupDetailsText, setAdminPickupDetailsText] = useState('');
+  const [adminSelectedShopId, setAdminSelectedShopId] = useState('');
+  const [shopSearchFilter, setShopSearchFilter] = useState('');
+
+  const handleOpenSetPickupModal = () => {
+    const currentOrder = fallbackStore.orders.get(orderId);
+    setAdminPickupAddressText(currentOrder?.pickupLocation?.address || '');
+    setAdminPickupDetailsText(currentOrder?.pickupLocation?.details || '');
+    setAdminSelectedShopId(currentOrder?.shopId || (currentOrder?.selectedShopIds && currentOrder.selectedShopIds[0]) || '');
+    setShopSearchFilter('');
+    setShowAdminPickupModal(true);
+  };
+
+  const handleAdminSaveManualPickup = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pickupInputMode === 'shop') {
+      const selectedShop = fallbackStore.shops.get(adminSelectedShopId);
+      if (!selectedShop) {
+        showAlert('দোকান নির্বাচন করুন', 'অনুগ্রহ করে তালিকা থেকে একটি দোকান নির্বাচন করুন।', 'warning');
+        return;
+      }
+      handleAdminSaveAddress('pickup', {
+        address: selectedShop.name + (selectedShop.location?.address ? ` (${selectedShop.location.address})` : ''),
+        lat: selectedShop.location?.lat,
+        lng: selectedShop.location?.lng,
+        details: selectedShop.location?.details || selectedShop.description,
+      });
+      setShowAdminPickupModal(false);
+    } else {
+      if (!adminPickupAddressText.trim()) {
+        showAlert('ঠিকানা লিখুন', 'অনুগ্রহ করে পিকআপ ঠিকানা প্রবেশ করান।', 'warning');
+        return;
+      }
+      handleAdminSaveAddress('pickup', {
+        address: adminPickupAddressText.trim(),
+        details: adminPickupDetailsText.trim() || undefined,
+      });
+      setShowAdminPickupModal(false);
+    }
+  };
 
   const handleAdminSaveAddress = (type: 'pickup' | 'delivery', loc: LocationData) => {
     fallbackStore.updateOrder(orderId, (o) => {
@@ -914,6 +963,27 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 </div>
               )}
 
+              {/* Missing Pickup Address Alert Banner (If customer didn't provide one) */}
+              {!order.pickupLocation?.address && (
+                <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-950">কাস্টমার কোনো পিকআপ লোকেশন প্রদান করেননি</p>
+                      <p className="text-[11px] text-amber-800">অর্ডারের পিকআপ লোকেশন সেট করতে পাশের বাটনে চাপুন।</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenSetPickupModal}
+                    className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all shrink-0 active:scale-95"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Set Pickup Address</span>
+                  </button>
+                </div>
+              )}
+
               {/* Locations */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
                 <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-100 space-y-1">
@@ -923,16 +993,21 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <span>Pickup Location:</span>
                     </span>
                     <button
-                      onClick={() => setActiveMapPicker('pickup')}
+                      onClick={handleOpenSetPickupModal}
                       className="p-1 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-900 transition-colors shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5"
                       title={order.pickupLocation?.address ? "Edit Pickup Location" : "Set Pickup Location"}
                     >
                       <Edit2 className="w-3 h-3" />
-                      {!order.pickupLocation?.address && <span>Add</span>}
+                      {!order.pickupLocation?.address ? <span>Set Pickup</span> : <span>Edit</span>}
                     </button>
                   </div>
                   <p className="text-gray-900 font-medium leading-relaxed">
-                    {order.pickupLocation?.address || <span className="text-gray-400 italic font-normal">Not specified (Click Add to set pickup address)</span>}
+                    {order.pickupLocation?.address || (
+                      <span className="text-amber-800/80 italic font-semibold text-xs flex items-center gap-1 mt-0.5">
+                        <AlertCircle className="w-3 h-3 text-amber-600 inline shrink-0" />
+                        <span>Not specified (Click &apos;Set Pickup&apos; to add)</span>
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100 space-y-1">
@@ -1893,6 +1968,197 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   className="flex-1 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-md transition-all"
                 >
                   Save Service Type
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Set Pickup Address Modal */}
+      {showAdminPickupModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-white rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto border border-amber-200">
+            <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
+                  <MapPin className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-gray-900">Set Pickup Location</h3>
+                  <p className="text-[11px] text-gray-500">পিকআপ লোকেশন যুক্ত বা সংশোধন করুন</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAdminPickupModal(false)}
+                className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Action: Open Interactive Map */}
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <Compass className="w-5 h-5 text-emerald-700 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-emerald-950">ইন্টারেক্টিভ ম্যাপ থেকে পয়েন্ট করতে চান?</p>
+                  <p className="text-[11px] text-emerald-800">ম্যাপে পিন ড্র্যাগ করে নিখুঁত লোকেশন নির্বাচন করুন</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAdminPickupModal(false);
+                  setActiveMapPicker('pickup');
+                }}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shrink-0 flex items-center gap-1 shadow-sm transition-all active:scale-95"
+              >
+                <MapPin className="w-3.5 h-3.5" />
+                <span>ম্যাপে পয়েন্ট করুন</span>
+              </button>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="grid grid-cols-2 p-1 bg-gray-100 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setPickupInputMode('shop')}
+                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                  pickupInputMode === 'shop'
+                    ? 'bg-white text-amber-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Store className="w-3.5 h-3.5" />
+                <span>দোকান নির্বাচন (Registered Shop)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickupInputMode('manual')}
+                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                  pickupInputMode === 'manual'
+                    ? 'bg-white text-amber-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>কাস্টম ঠিকানা (Manual Input)</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleAdminSaveManualPickup} className="space-y-4">
+              {pickupInputMode === 'shop' ? (
+                <div className="space-y-3">
+                  {/* Shop Search Input */}
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      তালিকা থেকে দোকান বা স্টোর খুঁজুন
+                    </label>
+                    <input
+                      type="text"
+                      value={shopSearchFilter}
+                      onChange={(e) => setShopSearchFilter(e.target.value)}
+                      placeholder="দোকানের নাম বা ঠিকানা দিয়ে সার্চ করুন..."
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  {/* Shop Selection List */}
+                  <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1 border border-gray-100 rounded-2xl p-2 bg-gray-50/50">
+                    {Array.from(fallbackStore.shops.values())
+                      .filter((s) => {
+                        if (!shopSearchFilter.trim()) return true;
+                        const q = shopSearchFilter.toLowerCase();
+                        return (
+                          s.name?.toLowerCase().includes(q) ||
+                          s.location?.address?.toLowerCase().includes(q) ||
+                          s.type?.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((s) => {
+                        const isSelected = adminSelectedShopId === s.id;
+                        return (
+                          <div
+                            key={s.id}
+                            onClick={() => setAdminSelectedShopId(s.id)}
+                            className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start justify-between gap-2 ${
+                              isSelected
+                                ? 'bg-amber-50 border-amber-500 text-amber-950 shadow-xs'
+                                : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-800'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-black truncate flex items-center gap-1.5">
+                                <Store className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>{s.name}</span>
+                                {s.type && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800">
+                                    {s.type}
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-[11px] text-gray-600 truncate mt-0.5">
+                                📍 {s.location?.address || 'Address not listed'}
+                              </p>
+                            </div>
+                            {isSelected && (
+                              <span className="w-5 h-5 rounded-full bg-amber-600 text-white flex items-center justify-center text-xs font-black shrink-0">
+                                ✓
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    {Array.from(fallbackStore.shops.values()).length === 0 && (
+                      <p className="text-xs text-gray-400 p-3 text-center">কোনো রেজিস্টার্ড দোকান পাওয়া যায়নি।</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      পিকআপ ঠিকানা / এলাকা (Pickup Address) *
+                    </label>
+                    <input
+                      type="text"
+                      value={adminPickupAddressText}
+                      onChange={(e) => setAdminPickupAddressText(e.target.value)}
+                      placeholder="যেমন: মিরপুর ১০ ফল পট্টি, ঢাকা"
+                      className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-amber-600"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      অতিরিক্ত তথ্য / ল্যান্ডমার্ক (Optional Details)
+                    </label>
+                    <input
+                      type="text"
+                      value={adminPickupDetailsText}
+                      onChange={(e) => setAdminPickupDetailsText(e.target.value)}
+                      placeholder="যেমন: দোকান নং ১২, মেইন রোডের পাশে"
+                      className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-amber-600"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex space-x-2 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminPickupModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all active:scale-95"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>Save Pickup Location</span>
                 </button>
               </div>
             </form>

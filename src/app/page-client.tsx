@@ -27,6 +27,7 @@ import { CustomModalInjector } from '@/components/CustomModalInjector';
 import { HelperCenterPage } from '@/components/HelperCenterPage';
 import { FeeDetailsPage } from '@/components/FeeDetailsPage';
 import { StoreDashboard } from '@/components/StoreDashboard';
+import { PwaSmartPrompt } from '@/components/PwaSmartPrompt';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
@@ -598,6 +599,9 @@ export default function PageClient() {
 
       {/* Dynamic Admin Custom Modal Injector */}
       <CustomModalInjector currentEvent="FIRST_VISIT" />
+
+      {/* PWA Smart First-Visit Detection & Prompts */}
+      <PwaSmartPrompt />
     </div>
   );
 }

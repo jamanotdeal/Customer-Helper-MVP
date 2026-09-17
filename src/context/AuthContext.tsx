@@ -510,7 +510,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const openAuthModal = () => {
-    const manualAuthEnabled = fallbackStore.pricingSettings.manualAuthEnabled !== false;
+    const manualAuthEnabled = fallbackStore.pricingSettings?.manualAuthEnabled === true;
     if (!manualAuthEnabled) {
       loginWithGoogle();
     } else {

@@ -175,7 +175,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     commissionPercent: '',
   });
   const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
-  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(true);
+  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(fallbackStore.pricingSettings?.manualAuthEnabled === true);
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -531,7 +531,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAllowedDeliveryAreasEnabled(settings.allowedDeliveryAreasEnabled || false);
       setAllowedDeliveryAreas(settings.allowedDeliveryAreas || []);
       setOutOfServiceAreaMessage(settings.outOfServiceAreaMessage || '');
-      setManualAuthEnabled(settings.manualAuthEnabled !== false);
+      setManualAuthEnabled(settings.manualAuthEnabled === true);
       setPwaInstallPromptEnabled(settings.pwaInstallPromptEnabled !== false);
       setPwaInstallPromptTitle(settings.pwaInstallPromptTitle || 'Install Jamanot App');
       setPwaInstallPromptDescription(
