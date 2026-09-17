@@ -487,8 +487,8 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
               {/* Floating hint pill when no location selected yet */}
               {!hasSelected && (
-                <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-black/85 backdrop-blur-md text-lime-300 border border-lime-400/50 text-[11px] font-extrabold px-3 py-1.5 rounded-full shadow-xl flex items-center gap-1.5 animate-pulse max-w-[90%] text-center">
-                  <MapPin className="w-3.5 h-3.5 text-lime-400 shrink-0" />
+                <div className="absolute top-14 left-2.5 right-2.5 z-20 pointer-events-none bg-slate-950/90 backdrop-blur-md text-lime-300 border border-lime-400/70 text-xs sm:text-sm font-black px-4 py-2.5 rounded-2xl shadow-2xl flex items-center justify-center gap-2 animate-pulse text-center">
+                  <MapPin className="w-4 h-4 text-lime-400 shrink-0" />
                   <span>ম্যাপে যেকোনো স্থানে ক্লিক করে লোকেশন সিলেক্ট করুন</span>
                 </div>
               )}
@@ -498,7 +498,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
               {/* Floating error message badge when address is left blank on confirm */}
               {showDetailAddressError && (
-                <div className="absolute bottom-[68px] left-3 right-3 z-30 flex flex-col items-start pointer-events-none transition-all duration-300">
+                <div className="absolute bottom-[104px] left-3 right-3 z-30 flex flex-col items-start pointer-events-none transition-all duration-300">
                   <div className="w-full bg-red-600 text-white font-extrabold text-xs sm:text-sm leading-snug px-4 py-3 rounded-2xl shadow-2xl flex items-start gap-2.5 border-2 border-red-400">
                     <AlertTriangle className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
                     <span className="flex-1 text-left">
@@ -517,26 +517,34 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
               {/* Detail Address Overlay - bottom of the map */}
               <div
-                className={`absolute bottom-[3px] left-0 right-0 z-20 flex items-center py-3.5 px-3 bg-white rounded-t-2xl shadow-xl transition-all ${
+                className={`absolute bottom-0 left-0 right-0 z-20 p-3 sm:p-3.5 bg-white/95 backdrop-blur-md rounded-t-2xl sm:rounded-t-3xl shadow-[0_-8px_25px_rgba(0,0,0,0.12)] transition-all ${
                   showDetailAddressError
-                    ? 'border-2 border-red-500 bg-red-50/90 ring-4 ring-red-500/20'
-                    : 'border-t border-emerald-100'
+                    ? 'border-t-2 border-x-2 border-red-500 bg-red-50/95 ring-4 ring-red-500/20'
+                    : 'border-t-2 border-emerald-500/40 bg-white'
                 }`}
               >
-                <input
-                  ref={detailInputRef}
-                  type="text"
-                  value={detailAddress}
-                  onChange={(e) => {
-                    setDetailAddress(e.target.value);
-                    if (showDetailAddressError && e.target.value.trim()) {
-                      setShowDetailAddressError(false);
-                    }
-                  }}
-                  placeholder={inputPlaceholder}
-                  className="w-full bg-transparent outline-none text-xs text-gray-900 placeholder-gray-400 font-semibold px-1"
-                  required
-                />
+                <div className="flex items-center gap-1.5 mb-1.5 px-0.5">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="text-[11px] sm:text-xs font-black text-gray-700">
+                    ম্যানুয়াল বিস্তারিত ঠিকানা (বাড়ি/রোড/ফ্ল্যাট/স্থান) <span className="text-red-500">*</span>
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    ref={detailInputRef}
+                    type="text"
+                    value={detailAddress}
+                    onChange={(e) => {
+                      setDetailAddress(e.target.value);
+                      if (showDetailAddressError && e.target.value.trim()) {
+                        setShowDetailAddressError(false);
+                      }
+                    }}
+                    placeholder={inputPlaceholder}
+                    className="w-full py-2.5 sm:py-3 px-3.5 bg-gray-50 hover:bg-gray-100/80 focus:bg-white border-2 border-gray-200 focus:border-emerald-500 rounded-xl outline-none text-xs sm:text-sm text-gray-900 placeholder-gray-400 font-bold transition-all shadow-inner"
+                    required
+                  />
+                </div>
               </div>
 
               <button
@@ -544,7 +552,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
                 onClick={handleCurrentLocation}
                 disabled={isLocating}
                 title="আপনার বর্তমান লোকেশনে যান"
-                className="absolute bottom-16 right-2.5 z-20 flex items-center gap-2 px-3 py-2 active:scale-95 rounded-2xl text-[10px] font-bold transition-all disabled:opacity-60 text-white"
+                className="absolute bottom-[98px] right-2.5 z-20 flex items-center gap-2 px-3 py-2 active:scale-95 rounded-2xl text-[10px] font-bold transition-all disabled:opacity-60 text-white"
                 style={{ background: 'linear-gradient(135deg, #a3e635 0%, #65a30d 100%)', border: '1px solid rgba(163,230,53,0.5)', boxShadow: '0 0 12px 3px rgba(163,230,53,0.55), 0 4px 16px rgba(101,163,13,0.4)' }}
               >
                 <Navigation className={`w-4 h-4 text-white shrink-0 ${isLocating ? 'animate-spin' : ''}`} />

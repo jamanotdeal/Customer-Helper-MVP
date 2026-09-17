@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { MapPickerModal } from '../MapPickerModal';
@@ -49,6 +49,19 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const { user: currentUser } = useAuth();
   const isSuperAdmin = currentUser?.isSuperAdmin ?? false;
   const [showAssignModal, setShowAssignModal] = useState(false);
+
+  // Reactive live order state bound to fallbackStore updates
+  const [order, setOrder] = useState<Order | undefined>(() => fallbackStore.orders.get(orderId));
+
+  useEffect(() => {
+    const sync = () => {
+      const fresh = fallbackStore.orders.get(orderId);
+      setOrder(fresh ? { ...fresh } : undefined);
+    };
+    sync();
+    const unsub = fallbackStore.subscribe(sync);
+    return () => unsub();
+  }, [orderId]);
 
   // Admin edit modals
   const [showAdminFeeModal, setShowAdminFeeModal] = useState(false);
@@ -392,7 +405,6 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     showAlert('ঠিকানা আপডেট করা হয়েছে', 'ঠিকানা সফলভাবে পরিবর্তন করা হয়েছে এবং কাস্টমারকে জানানো হয়েছে।', 'success');
   };
 
-  const order = fallbackStore.orders.get(orderId);
   if (!order) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -447,13 +459,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   };
 
   const handleApproveCancellation = () => {
+    if (!order) return;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       status: 'CANCELED',
       cancelledAt: new Date().toISOString(),
       cancellationRequest: o.cancellationRequest
         ? { ...o.cancellationRequest, status: 'APPROVED' }
-        : undefined,
+        : { requestedBy: 'customer', reason: 'Cancellation approved by Admin', status: 'APPROVED', createdAt: new Date().toISOString() },
       statusHistory: [
         ...(o.statusHistory || []),
         {
@@ -469,6 +482,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   };
 
   const handleRejectCancellation = () => {
+    if (!order) return;
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       cancellationRequest: o.cancellationRequest

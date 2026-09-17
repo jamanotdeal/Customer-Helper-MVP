@@ -1156,18 +1156,8 @@ class FallbackStore {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
                 const existing = this.orders.get(change.doc.id);
-                const docData = change.doc.data() as Order | undefined;
-                // If the doc data from the removed change reflects DELIVERED or CANCELED, update it in local store
-                if (
-                  docData &&
-                  (docData.status === 'DELIVERED' ||
-                    docData.status === 'CANCELED' ||
-                    (docData.status as string) === 'CANCELLED' ||
-                    docData.cancellationRequest?.status === 'APPROVED')
-                ) {
-                  this.orders.set(change.doc.id, docData);
-                } else if (!existing || existing.helperId !== userId) {
-                  // Not this helper's own order, delete it
+                // If not this helper's own order, remove from available pool
+                if (!existing || existing.helperId !== userId) {
                   this.orders.delete(change.doc.id);
                 }
               } else {
@@ -1305,12 +1295,12 @@ class FallbackStore {
         onSnapshot(
           query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100)),
           (snapshot) => {
-            const currentIds = new Set(snapshot.docs.map((d) => d.id));
-            for (const key of Array.from(this.orders.keys())) {
-              if (!currentIds.has(key)) this.orders.delete(key);
-            }
-            snapshot.docs.forEach((docSnap) => {
-              this.orders.set(docSnap.id, docSnap.data() as Order);
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
             });
             this.notify();
           },

@@ -54,8 +54,10 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    setInstalled(isPwaInstalled());
-    setShowIosInstructions(isIosDevice() && !isPwaInstalled());
+    const isAlreadyInstalled =
+      isPwaInstalled() || (typeof window !== 'undefined' && localStorage.getItem('jamanot_pwa_installed') === 'true');
+    setInstalled(isAlreadyInstalled);
+    setShowIosInstructions(isIosDevice() && !isAlreadyInstalled);
   }, [isOpen]);
 
   if (!isOpen) return null;

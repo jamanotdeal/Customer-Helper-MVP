@@ -76,6 +76,7 @@ export const isIosDevice = (): boolean => {
 export const PwaSmartPrompt: React.FC = () => {
   const [isStandalone, setIsStandalone] = useState<boolean>(true);
   const [isInstalledPreviously, setIsInstalledPreviously] = useState<boolean>(false);
+  const [isFloatingBarDismissed, setIsFloatingBarDismissed] = useState<boolean>(false);
   const [isInApp, setIsInApp] = useState<boolean>(false);
   const [isIos, setIsIos] = useState<boolean>(false);
   const [hasPrompt, setHasPrompt] = useState<boolean>(false);
@@ -94,6 +95,18 @@ export const PwaSmartPrompt: React.FC = () => {
 
     const prevInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true';
     setIsInstalledPreviously(prevInstalled);
+
+    // Check modern browser installed related apps API
+    if ('getInstalledRelatedApps' in navigator) {
+      (navigator as any).getInstalledRelatedApps().then((relatedApps: any[]) => {
+        if (relatedApps && relatedApps.length > 0) {
+          setIsInstalledPreviously(true);
+          try {
+            localStorage.setItem('jamanot_pwa_installed', 'true');
+          } catch (_) {}
+        }
+      }).catch(() => {});
+    }
 
     const inApp = isInAppBrowser();
     setIsInApp(inApp);
@@ -121,8 +134,8 @@ export const PwaSmartPrompt: React.FC = () => {
     window.addEventListener('pwa-install-available', handlePromptAvail);
     window.addEventListener('pwa-installed-success', handleInstallSuccess);
 
-    // If NOT standalone and prompt was not dismissed recently, show prompt after 2 seconds
-    if (!standalone) {
+    // ONLY auto-show install modal if NOT standalone AND NOT previously installed
+    if (!standalone && !prevInstalled) {
       const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
       const now = Date.now();
       const oneDay = 24 * 60 * 60 * 1000;
@@ -130,7 +143,11 @@ export const PwaSmartPrompt: React.FC = () => {
 
       if (shouldAutoShow) {
         const timer = setTimeout(() => {
-          setShowPromptModal(true);
+          // Double check if installed state changed in the interim
+          const isNowInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true' || isPwaInstalled();
+          if (!isNowInstalled) {
+            setShowPromptModal(true);
+          }
         }, 2000);
         return () => {
           clearTimeout(timer);
@@ -160,6 +177,32 @@ export const PwaSmartPrompt: React.FC = () => {
     } catch (_) {}
   };
 
+  const handleOpenApp = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const isIosDeviceType = isIosDevice();
+
+    if (isAndroid) {
+      // Use Android Intent URL to launch installed WebAPK / PWA directly
+      const pathAndQuery = window.location.pathname + window.location.search;
+      const intentUrl = `intent://${window.location.host}${pathAndQuery}#Intent;scheme=https;action=android.intent.action.VIEW;end;`;
+      window.location.href = intentUrl;
+    } else if (isIosDeviceType) {
+      if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+        (window as any).showCustomAlert(
+          'অ্যাপ ওপেন করুন',
+          'আপনার আইফোনের হোম স্ক্রিন (Home Screen) থেকে Jamanot অ্যাপ আইকনে ট্যাপ করে অ্যাপটি সরাসরি খুলুন।',
+          'info'
+        );
+      } else {
+        alert('আপনার আইফোনের হোম স্ক্রিন (Home Screen) থেকে Jamanot অ্যাপ আইকনে ট্যাপ করে অ্যাপটি সরাসরি খুলুন।');
+      }
+    } else {
+      // Desktop / Other
+      window.open(window.location.origin, '_blank');
+    }
+  };
+
   const handleCopyCurrentLink = async () => {
     if (typeof window === 'undefined') return;
     try {
@@ -183,6 +226,7 @@ export const PwaSmartPrompt: React.FC = () => {
             localStorage.setItem('jamanot_pwa_installed', 'true');
           } catch (_) {}
           setShowPromptModal(false);
+          setIsInstalledPreviously(true);
         } else {
           console.log('[PWA] User dismissed the native install dialog');
         }
@@ -214,30 +258,36 @@ export const PwaSmartPrompt: React.FC = () => {
   return (
     <>
       {/* 1. Floating Open App Banner if app was already installed on device but user visited in browser */}
-      {isInstalledPreviously && !showPromptModal && (
+      {isInstalledPreviously && !isFloatingBarDismissed && !showPromptModal && (
         <div className="fixed bottom-20 left-4 right-4 z-40 max-w-md mx-auto animate-in slide-in-from-bottom-5 duration-300">
-          <div className="bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-xl border border-emerald-500/30 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
+          <div className="bg-slate-900/95 backdrop-blur-md text-white px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center shrink-0 shadow-sm">
                 <Smartphone className="w-4 h-4 text-white" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-bold truncate">জামানত অ্যাপ ইনস্টল করা আছে</p>
-                <p className="text-[10px] text-gray-300 truncate">ফুলস্ক্রিন ও দ্রুত ব্যবহারের জন্য অ্যাপ খুলুন</p>
+                <p className="text-xs font-black text-white truncate">জামানত অ্যাপ ইনস্টল করা আছে</p>
+                <p className="text-[10px] text-emerald-300 truncate font-medium">ফুলস্ক্রিন ও দ্রুত ব্যবহারের জন্য অ্যাপ খুলুন</p>
               </div>
             </div>
-            <a
-              href="/"
-              onClick={() => {
-                try {
-                  window.location.href = '/';
-                } catch (_) {}
-              }}
-              className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 transition-all active:scale-95 shadow-md flex items-center gap-1"
-            >
-              <span>ওপেন করুন</span>
-              <ExternalLink className="w-3 h-3" />
-            </a>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleOpenApp}
+                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition-all active:scale-95 shadow-md flex items-center gap-1 cursor-pointer"
+              >
+                <span>ওপেন করুন</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsFloatingBarDismissed(true)}
+                className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </div>
       )}
