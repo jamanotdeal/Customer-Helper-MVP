@@ -27,8 +27,13 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   isFirstOrder = false,
   helperLocation,
 }) => {
-  const isCapReached = activeOrdersCount >= activeOrderLimit;
-  const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
+  const isCapReached = (activeOrdersCount || 0) >= (activeOrderLimit || 5);
+  const isDone =
+    order.status === 'DELIVERED' ||
+    (order.status as string) === 'COMPLETED' ||
+    order.status === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED' ||
+    order.cancellationRequest?.status === 'APPROVED';
   const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 

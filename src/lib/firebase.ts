@@ -1530,7 +1530,7 @@ class FallbackStore {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
                 const existing = this.orders.get(change.doc.id);
-                // Do not delete helper's own orders when they leave active status (e.g. DELIVERED)
+                // If not this helper's own order, remove from available pool
                 if (!existing || existing.helperId !== userId) {
                   this.orders.delete(change.doc.id);
                 }
@@ -1544,12 +1544,11 @@ class FallbackStore {
         )
       );
 
-      // This helper's own orders — all statuses (history, delivered, etc.) (realtime)
-      // Limit 200 with orderBy createdAt desc so newest orders are always included;
-      // Using a high limit prevents wallet recomputation from dropping older delivered orders.
+      // This helper's own orders — all statuses (history, delivered, canceled, active) (realtime)
+      // Limit 200 without compound orderBy on different field avoids missing composite index failure in Firestore.
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(200)),
+          query(collection(db, 'orders'), where('helperId', '==', userId), limit(200)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -1660,12 +1659,12 @@ class FallbackStore {
         onSnapshot(
           query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100)),
           (snapshot) => {
-            const currentIds = new Set(snapshot.docs.map((d) => d.id));
-            for (const key of Array.from(this.orders.keys())) {
-              if (!currentIds.has(key)) this.orders.delete(key);
-            }
-            snapshot.docs.forEach((docSnap) => {
-              this.orders.set(docSnap.id, docSnap.data() as Order);
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, change.doc.data() as Order);
+              }
             });
             this.notify();
           },

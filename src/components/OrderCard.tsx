@@ -115,7 +115,12 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const badge = getStatusBadgeInfo(order.status);
   const accent = getCardAccent(order.status);
   const BadgeIcon = badge.icon;
-  const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
+  const isDone =
+    order.status === 'DELIVERED' ||
+    (order.status as string) === 'COMPLETED' ||
+    order.status === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED' ||
+    order.cancellationRequest?.status === 'APPROVED';
   const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
 
   const [elapsed, setElapsed] = useState(() =>

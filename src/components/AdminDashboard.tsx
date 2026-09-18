@@ -175,7 +175,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     commissionPercent: '',
   });
   const [pwaInstallPromptEnabled, setPwaInstallPromptEnabled] = useState<boolean>(true);
-  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(true);
+  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(fallbackStore.pricingSettings?.manualAuthEnabled === true);
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
@@ -461,6 +461,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
         const seen = new Set<string>();
         return copy.filter((o) => {
+          if (!fallbackStore.orders.has(o.id)) return false;
+          if (seen.has(o.id)) return false;
+          seen.add(o.id);
+          return true;
+        });
+      });
+
+      // Also merge into serverOrders so table view, cancellation approvals, and helper status updates reflect immediately
+      setServerOrders((prev) => {
+        if (!prev) return null;
+        const copy = [...prev];
+        freshOrders.forEach((o) => {
+          const idx = copy.findIndex((item) => item.id === o.id);
+          if (idx > -1) {
+            copy[idx] = o;
+          } else {
+            copy.unshift(o);
+          }
+        });
+        const seen = new Set<string>();
+        return copy.filter((o) => {
+          if (!fallbackStore.orders.has(o.id)) return false;
           if (seen.has(o.id)) return false;
           seen.add(o.id);
           return true;
@@ -531,7 +553,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAllowedDeliveryAreasEnabled(settings.allowedDeliveryAreasEnabled || false);
       setAllowedDeliveryAreas(settings.allowedDeliveryAreas || []);
       setOutOfServiceAreaMessage(settings.outOfServiceAreaMessage || '');
-      setManualAuthEnabled(settings.manualAuthEnabled !== false);
+      setManualAuthEnabled(settings.manualAuthEnabled === true);
       setPwaInstallPromptEnabled(settings.pwaInstallPromptEnabled !== false);
       setPwaInstallPromptTitle(settings.pwaInstallPromptTitle || 'Install Jamanot App');
       setPwaInstallPromptDescription(
@@ -962,11 +984,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Needs Attention Queue calculations — computed from overall allOrders dataset for complete accuracy across DB
   const cancellingRequests = allOrders.filter(
     (o) =>
-      (o.cancellationRequest && o.cancellationRequest.status === 'PENDING') ||
-      (o.status === 'CANCELED' && new Date().getTime() - new Date(o.cancelledAt || o.updatedAt).getTime() < 86400000)
+      o.cancellationRequest && o.cancellationRequest.status === 'PENDING'
   );
 
-  const notAcceptedRequests = allOrders.filter((o) => o.status === 'PENDING');
+  const notAcceptedRequests = allOrders.filter(
+    (o) => o.status === 'PENDING' && !o.helperId && o.cancellationRequest?.status !== 'APPROVED'
+  );
   const feeAdjustmentsPending = allOrders.filter(
     (o) => o.feeAdjustment && o.feeAdjustment.status === 'PENDING'
   );
@@ -1159,9 +1182,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       cancelledAt: new Date().toISOString(),
       cancellationRequest: o.cancellationRequest
         ? { ...o.cancellationRequest, status: 'APPROVED' }
-        : undefined,
+        : { requestedBy: 'customer', reason: 'Cancellation approved by Admin', status: 'APPROVED', createdAt: new Date().toISOString() },
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: 'CANCELED',
@@ -1183,7 +1206,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         ? { ...o.cancellationRequest, status: 'REJECTED' }
         : undefined,
       statusHistory: [
-        ...o.statusHistory,
+        ...(o.statusHistory || []),
         {
           id: `sh-${Date.now()}`,
           status: o.status,

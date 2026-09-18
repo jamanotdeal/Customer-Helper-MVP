@@ -25,6 +25,7 @@ export interface LocationData {
   lat?: number;
   lng?: number;
   name?: string;
+  details?: string;
 }
 
 export interface AllowedAreaPolygon {
@@ -130,6 +131,7 @@ export interface Order {
   deliveryBackSetAt?: string;
   needReturnItems?: boolean;
   weightKg?: number;
+  shopId?: string;
   selectedShopIds?: string[];
   mutuallyDiscussed?: boolean;
   
@@ -492,7 +494,7 @@ export interface PricingSettings {
   outOfServiceAreaMessage?: string; // Admin configured custom message when user selects outside area
   
   // Manual authentication (email/password login & register) toggle
-  manualAuthEnabled?: boolean; // Default true
+  manualAuthEnabled?: boolean; // Default false (only active if admin explicitly checks it)
 
   // Gamification & Rewards Settings
   defaultOrderCoins?: number;                // Default coins awarded per order (e.g. 10)

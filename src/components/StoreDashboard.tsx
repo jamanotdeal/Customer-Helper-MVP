@@ -7,7 +7,6 @@ import { fallbackStore, db } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
-import { OrderSuccessPwaModal } from './PWAInstallModal';
 import { StoreWallet } from './StoreWallet';
 import {
   Store, PlusCircle, Package, ShoppingBag,
@@ -147,7 +146,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [storeOrders, setStoreOrders] = useState<Order[]>([]);
   const [myRequests, setMyRequests] = useState<Order[]>([]);
   const [storeShopOrders, setStoreShopOrders] = useState<ShopOrder[]>([]);
-  const [createdOrderForModal, setCreatedOrderForModal] = useState<Order | null>(null);
 
   // Incoming Orders (Store Shop Orders) Filters & Pagination
   const [storeStatusFilter, setStoreStatusFilter] = useState<string>('ALL');
@@ -870,23 +868,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           </button>
           <RequestComposer
             onOrderCreated={(newOrder) => {
-              setCreatedOrderForModal(newOrder);
+              setSelectedOrderId(newOrder.id);
               setShowRequestComposer(false);
             }}
           />
-          {createdOrderForModal && (
-            <OrderSuccessPwaModal
-              isOpen
-              onClose={() => setCreatedOrderForModal(null)}
-              orderId={createdOrderForModal.id}
-              orderTitle={createdOrderForModal.title}
-              onViewOrderDetails={() => {
-                const id = createdOrderForModal.id;
-                setCreatedOrderForModal(null);
-                setSelectedOrderId(id);
-              }}
-            />
-          )}
         </div>
       );
     }

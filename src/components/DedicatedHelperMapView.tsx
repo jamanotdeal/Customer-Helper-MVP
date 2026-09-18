@@ -121,8 +121,15 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Live map display - strictly for active running orders
-  const visibleOrders = activeOrders;
+  // Live map display - strictly for active running orders (excluding DELIVERED & CANCELED)
+  const visibleOrders = activeOrders.filter(
+    (o) =>
+      o.status !== 'DELIVERED' &&
+      (o.status as string) !== 'COMPLETED' &&
+      o.status !== 'CANCELED' &&
+      (o.status as string) !== 'CANCELLED' &&
+      o.cancellationRequest?.status !== 'APPROVED'
+  );
 
   // Load Leaflet dynamically & initialize live map (Real Earth Satellite Mode)
   useEffect(() => {

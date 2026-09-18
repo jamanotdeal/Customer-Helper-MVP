@@ -10,7 +10,6 @@ import { fallbackStore } from '@/lib/firebase';
 import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 
-import { OrderSuccessPwaModal } from './PWAInstallModal';
 
 interface CustomerHomeProps {
   initialSelectedOrderId?: string | null;
@@ -25,7 +24,6 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED'>('ALL');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [createdOrderForSuccessModal, setCreatedOrderForSuccessModal] = useState<Order | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
@@ -251,20 +249,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
 
 
 
-      {/* Order Success PWA Modal */}
-      {createdOrderForSuccessModal && (
-        <OrderSuccessPwaModal
-          isOpen={Boolean(createdOrderForSuccessModal)}
-          onClose={() => setCreatedOrderForSuccessModal(null)}
-          orderId={createdOrderForSuccessModal.id}
-          orderTitle={createdOrderForSuccessModal.title}
-          onViewOrderDetails={() => {
-            const ordId = createdOrderForSuccessModal.id;
-            setCreatedOrderForSuccessModal(null);
-            setSelectedOrderId(ordId);
-          }}
-        />
-      )}
+
 
       {/* Customer Bottom Footer Links */}
       <footer className="-mx-4 px-4 pt-6 border-t border-gray-100 text-center text-xs text-gray-400 space-y-2">

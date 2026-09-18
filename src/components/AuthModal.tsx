@@ -23,7 +23,7 @@ export const AuthModal: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Read pricingSettings dynamically from fallbackStore
-  const manualAuthEnabled = fallbackStore.pricingSettings.manualAuthEnabled !== false;
+  const manualAuthEnabled = fallbackStore.pricingSettings?.manualAuthEnabled === true;
 
   if (!isAuthModalOpen || !manualAuthEnabled) return null;
 
