@@ -29,6 +29,18 @@
 -keep public class * extends com.getcapacitor.Plugin { *; }
 -keepclassmembers class * { @com.getcapacitor.PluginMethod public *; }
 
+# Capacitor reads each plugin's permission aliases off the @CapacitorPlugin
+# annotation at runtime (Plugin.getPermissionStringsForAliases). R8 full mode —
+# the AGP 8 default — strips runtime annotations unless the annotation *type* is
+# itself kept, and then proves PluginHandle.pluginAnnotation is always null,
+# drops the field and inlines getPluginAnnotation() to return null. The next
+# requestPermissionForAlias() call NPEs. Keeping the annotation types is what
+# makes permission requests work in release builds.
+-keep @interface com.getcapacitor.annotation.**
+-keep @interface com.getcapacitor.**
+-keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations, AnnotationDefault
+-keep class com.getcapacitor.PluginHandle { *; }
+
 # Credential Manager / Google Identity read credential payloads reflectively.
 -keep class com.google.android.libraries.identity.googleid.** { *; }
 -keep class androidx.credentials.** { *; }

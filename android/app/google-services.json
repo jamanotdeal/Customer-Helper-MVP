@@ -23,6 +23,14 @@
           }
         },
         {
+          "client_id": "685363529279-b9h6n9r18fhj86iubsjgavr4duvdlnu3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.jamanot.app",
+            "certificate_hash": "1348052cc173c7be4d8c5164bbe4b70333b98ae8"
+          }
+        },
+        {
           "client_id": "685363529279-373io3jn3e4hf68ia12u0d118nmush9b.apps.googleusercontent.com",
           "client_type": 3
         }
