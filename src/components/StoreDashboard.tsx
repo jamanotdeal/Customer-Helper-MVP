@@ -730,6 +730,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
     }
 
+    if (newStatus === 'HANDOVER') {
+      const effectivePrice = costInput ? parseFloat(costInput) : targetSo?.price;
+      if (!effectivePrice || effectivePrice <= 0) {
+        setShowPriceAlertModal(true);
+        return;
+      }
+    }
+
     // Automatically save price & note when status moves
     const currentPrice = costInput ? parseFloat(costInput) : undefined;
     const currentNote = noteInput.trim() || undefined;
@@ -1007,9 +1015,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             key={step.status}
                             onClick={() => {
                               if (canChangeStatus) {
-                                if (step.status === 'PREPARING' && (!costInput || parseFloat(costInput) <= 0)) {
-                                  setShowPriceAlertModal(true);
-                                  return;
+                                if (step.status === 'HANDOVER') {
+                                  const effectivePrice = costInput ? parseFloat(costInput) : (currentShopOrder.price || 0);
+                                  if (!effectivePrice || effectivePrice <= 0) {
+                                    setShowPriceAlertModal(true);
+                                    return;
+                                  }
                                 }
                                 handleUpdateStatus(currentShopOrder.id, step.status);
                               }
@@ -1042,13 +1053,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       <div className="pt-3 border-t border-gray-100">
                         {currentShopOrder.status === 'ACCEPTED' ? (
                           <button
-                            onClick={() => {
-                              if (!costInput || parseFloat(costInput) <= 0) {
-                                setShowPriceAlertModal(true);
-                                return;
-                              }
-                              handleUpdateStatus(currentShopOrder.id, 'PREPARING');
-                            }}
+                            onClick={() => handleUpdateStatus(currentShopOrder.id, 'PREPARING')}
                             className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
                           >
                             অর্ডার রেডি করছেন...
@@ -1062,7 +1067,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                           </button>
                         ) : currentShopOrder.status === 'READY' ? (
                           <button
-                            onClick={() => handleUpdateStatus(currentShopOrder.id, 'HANDOVER')}
+                            onClick={() => {
+                              const effectivePrice = costInput ? parseFloat(costInput) : (currentShopOrder.price || 0);
+                              if (!effectivePrice || effectivePrice <= 0) {
+                                setShowPriceAlertModal(true);
+                                return;
+                              }
+                              handleUpdateStatus(currentShopOrder.id, 'HANDOVER');
+                            }}
                             className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
                           >
                             হেল্পারকে দিয়ে দিয়েছি
@@ -1695,7 +1707,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               <div className="space-y-1.5">
                 <h3 className="text-base font-black text-gray-900">পণ্যের দাম আবশ্যক</h3>
                 <p className="text-xs text-gray-600 font-semibold leading-relaxed">
-                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Processing স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
+                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Handed Over (হস্তান্তর) স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
                 </p>
               </div>
               <button

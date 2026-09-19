@@ -26,6 +26,8 @@ import {
   RefreshCw,
   Search,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   Filter,
   User,
   ChevronRight,
@@ -76,6 +78,7 @@ import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AsyncButton } from './ui/AsyncButton';
+import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -373,6 +376,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [serverFeedbacks, setServerFeedbacks] = useState<OrderFeedback[] | null>(null);
   const [serverCustomModals, setServerCustomModals] = useState<AdminCustomModalConfig[] | null>(null);
   const [isFetchingServer, setIsFetchingServer] = useState(false);
+  const [shopsCategoryFilter, setShopsCategoryFilter] = useState<string>('ALL');
+  const [usersCoinsFilter, setUsersCoinsFilter] = useState<string>('ALL');
+  const [usersMinCoins, setUsersMinCoins] = useState<string>('');
+  const [usersMaxCoins, setUsersMaxCoins] = useState<string>('');
+  const [usersSortByCoins, setUsersSortByCoins] = useState<'NONE' | 'HIGH_TO_LOW' | 'LOW_TO_HIGH'>('NONE');
+  const [usersSortColumn, setUsersSortColumn] = useState<'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE' | null>(null);
+  const [usersSortDirection, setUsersSortDirection] = useState<'asc' | 'desc'>('desc');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
   const [withdrawalTypeFilter, setWithdrawalTypeFilter] = useState<string>('ALL');
@@ -585,7 +595,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setRocketInstructions(settings.rocketInstructions || '');
       setBankInstructions(settings.bankInstructions || '');
       setCashInstructions(settings.cashInstructions || '');
-      setStoreTypesText((settings.storeTypes || []).join('\n'));
+      setStoreTypesText(parseStoreTypes(settings.storeTypes).join('\n'));
 
       // Store form placeholders sync
       const sfp = settings.storeFormPlaceholders || {};
@@ -722,12 +732,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, currentPage, pageSize, users.length]);
+  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortByCoins, currentPage, pageSize, users.length]);
 
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || statusFilter !== 'ALL');
+      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= shops.length;
       if (!hasFilter && !needsPageFetch) {
         setServerShops(null);
@@ -746,7 +756,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, shopsAppliedSearchQuery, statusFilter, currentPage, pageSize, shops.length]);
+  }, [activeTab, shopsAppliedSearchQuery, shopsCategoryFilter, statusFilter, currentPage, pageSize, shops.length]);
 
   useEffect(() => {
     const fetchWithdrawals = async () => {
@@ -1326,9 +1336,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rocketInstructions: rocketInstructions.trim() || undefined,
       bankInstructions: bankInstructions.trim() || undefined,
       cashInstructions: cashInstructions.trim() || undefined,
-      storeTypes: storeTypesText.split('\n').map(s => s.trim()).filter(Boolean).length > 0
-        ? storeTypesText.split('\n').map(s => s.trim()).filter(Boolean)
-        : undefined,
+      storeTypes: parseStoreTypes(storeTypesText),
       // Store form placeholders
       storeFormPlaceholders: {
         storeName: storeFormPh.storeName.trim() || undefined,
@@ -1820,11 +1828,91 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       list = list.filter((item) => item.segments.includes(audienceFilter));
     }
 
-    list.sort((a, b) => {
-      if (sortBy === 'OLDEST') return new Date(a.user.createdAt).getTime() - new Date(b.user.createdAt).getTime();
-      if (sortBy === 'ORDERS_HIGH') return b.totalOrdersCount - a.totalOrdersCount;
-      return new Date(b.user.createdAt).getTime() - new Date(a.user.createdAt).getTime();
-    });
+    // Coins filter
+    if (usersCoinsFilter === 'HAS_COINS') {
+      list = list.filter((item) => (item.user.coins || 0) > 0);
+    } else if (usersCoinsFilter === 'COINS_50_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 50);
+    } else if (usersCoinsFilter === 'COINS_100_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 100);
+    } else if (usersCoinsFilter === 'COINS_500_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 500);
+    } else if (usersCoinsFilter === 'NO_COINS') {
+      list = list.filter((item) => (item.user.coins || 0) === 0);
+    } else if (usersCoinsFilter === 'CUSTOM') {
+      if (usersMinCoins !== '') {
+        const minVal = parseFloat(usersMinCoins) || 0;
+        list = list.filter((item) => (item.user.coins || 0) >= minVal);
+      }
+      if (usersMaxCoins !== '') {
+        const maxVal = parseFloat(usersMaxCoins) || 0;
+        list = list.filter((item) => (item.user.coins || 0) <= maxVal);
+      }
+    }
+
+    if (usersSortColumn) {
+      list.sort((a, b) => {
+        let comparison = 0;
+        switch (usersSortColumn) {
+          case 'NAME': {
+            const nameA = (a.user.displayName || a.user.email || a.user.uid || '').toLowerCase();
+            const nameB = (b.user.displayName || b.user.email || b.user.uid || '').toLowerCase();
+            comparison = nameA.localeCompare(nameB);
+            break;
+          }
+          case 'ROLE': {
+            const roleRank = (u: UserProfile) => (u.isSuperAdmin ? '0' : u.isAdmin ? '1' : u.isHelper ? '2' : u.role || '3');
+            comparison = roleRank(a.user).localeCompare(roleRank(b.user));
+            break;
+          }
+          case 'COINS': {
+            comparison = (a.user.coins || 0) - (b.user.coins || 0);
+            break;
+          }
+          case 'ORDERS': {
+            comparison = a.totalOrdersCount - b.totalOrdersCount;
+            break;
+          }
+          case 'ACTIVITY': {
+            const actA = a.activeDel ? 2 : a.activeReq ? 1 : 0;
+            const actB = b.activeDel ? 2 : b.activeReq ? 1 : 0;
+            comparison = actA - actB;
+            break;
+          }
+          case 'SEGMENTS': {
+            const segA = (a.segments || []).join(',');
+            const segB = (b.segments || []).join(',');
+            comparison = segA.localeCompare(segB);
+            break;
+          }
+          case 'STATUS': {
+            const statA = a.user.isBlocked ? 'blocked' : 'active';
+            const statB = b.user.isBlocked ? 'blocked' : 'active';
+            comparison = statA.localeCompare(statB);
+            break;
+          }
+          case 'DATE': {
+            const dateA = new Date(a.user.createdAt || 0).getTime();
+            const dateB = new Date(b.user.createdAt || 0).getTime();
+            comparison = dateA - dateB;
+            break;
+          }
+          default:
+            comparison = 0;
+        }
+        return usersSortDirection === 'asc' ? comparison : -comparison;
+      });
+    } else if (usersSortByCoins === 'HIGH_TO_LOW') {
+      list.sort((a, b) => (b.user.coins || 0) - (a.user.coins || 0));
+    } else if (usersSortByCoins === 'LOW_TO_HIGH') {
+      list.sort((a, b) => (a.user.coins || 0) - (b.user.coins || 0));
+    } else {
+      list.sort((a, b) => {
+        if (sortBy === 'OLDEST') return new Date(a.user.createdAt).getTime() - new Date(b.user.createdAt).getTime();
+        if (sortBy === 'ORDERS_HIGH') return b.totalOrdersCount - a.totalOrdersCount;
+        return new Date(b.user.createdAt).getTime() - new Date(a.user.createdAt).getTime();
+      });
+    }
 
     return list;
   };
@@ -3601,9 +3689,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
         const processed = getProcessedUsersList();
-        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
+        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null);
         const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
+
+        const handleUserColumnSort = (col: 'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE') => {
+          if (usersSortColumn === col) {
+            setUsersSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+          } else {
+            setUsersSortColumn(col);
+            if (col === 'NAME' || col === 'ROLE' || col === 'STATUS') {
+              setUsersSortDirection('asc');
+            } else {
+              setUsersSortDirection('desc');
+            }
+          }
+          setCurrentPage(1);
+        };
+
+        const renderUserSortHeader = (
+          label: string,
+          col: 'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE',
+          extraClass = ''
+        ) => {
+          const isActive = usersSortColumn === col;
+          return (
+            <th
+              onClick={() => handleUserColumnSort(col)}
+              className={`py-3.5 px-5 cursor-pointer select-none transition-colors group hover:bg-purple-100/70 hover:text-purple-950 ${
+                isActive ? 'bg-purple-100/80 text-purple-950 font-black' : ''
+              } ${extraClass}`}
+              title={`Click to sort by ${label} (${isActive ? (usersSortDirection === 'asc' ? 'Ascending' : 'Descending') : 'Click to Sort'})`}
+            >
+              <div className="flex items-center space-x-1.5">
+                <span>{label}</span>
+                <span className="inline-flex shrink-0">
+                  {isActive ? (
+                    usersSortDirection === 'asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-purple-700" />
+                    ) : (
+                      <ArrowDown className="w-3.5 h-3.5 text-purple-700" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="w-3 h-3 text-gray-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+                  )}
+                </span>
+              </div>
+            </th>
+          );
+        };
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
@@ -3614,13 +3748,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
 
-            {/* Date Range Filter Bar */}
+            {/* Date & Coins Filter Bar */}
             <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center space-x-2">
                 <Calendar className="w-4 h-4 text-purple-700" />
-                <span className="font-extrabold text-gray-900">Filter by Registration Date Range</span>
+                <span className="font-extrabold text-gray-900">Filter Users (Date & Coins)</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Coins Filter Dropdown */}
+                <div className="flex items-center space-x-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <Coins className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">Coins:</span>
+                  <select
+                    value={usersCoinsFilter}
+                    onChange={(e) => {
+                      setUsersCoinsFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px] cursor-pointer"
+                  >
+                    <option value="ALL">All Coins</option>
+                    <option value="HAS_COINS">Has Coins (&gt; 0)</option>
+                    <option value="COINS_50_PLUS">50+ Coins</option>
+                    <option value="COINS_100_PLUS">100+ Coins</option>
+                    <option value="COINS_500_PLUS">500+ Coins</option>
+                    <option value="NO_COINS">0 Coins</option>
+                    <option value="CUSTOM">Custom Range...</option>
+                  </select>
+                </div>
+
+                {/* Custom Coins Range */}
+                {usersCoinsFilter === 'CUSTOM' && (
+                  <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl px-2 py-0.5">
+                    <input
+                      type="number"
+                      placeholder="Min"
+                      value={usersMinCoins}
+                      onChange={(e) => {
+                        setUsersMinCoins(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-14 text-center font-extrabold text-[11px] text-gray-800 outline-none"
+                    />
+                    <span className="text-gray-400 text-[10px]">-</span>
+                    <input
+                      type="number"
+                      placeholder="Max"
+                      value={usersMaxCoins}
+                      onChange={(e) => {
+                        setUsersMaxCoins(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-14 text-center font-extrabold text-[11px] text-gray-800 outline-none"
+                    />
+                  </div>
+                )}
+
+                {/* Sort by Coins */}
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">Sort:</span>
+                  <select
+                    value={usersSortByCoins}
+                    onChange={(e) => {
+                      setUsersSortByCoins(e.target.value as any);
+                      if (e.target.value !== 'NONE') {
+                        setUsersSortColumn(null);
+                      }
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px] cursor-pointer"
+                  >
+                    <option value="NONE">Default Order</option>
+                    <option value="HIGH_TO_LOW">Coins: High to Low</option>
+                    <option value="LOW_TO_HIGH">Coins: Low to High</option>
+                  </select>
+                </div>
+
+                {/* Registration Date Range */}
                 <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
                   <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
                   <input
@@ -3639,13 +3843,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
                   />
                 </div>
-                {(usersStartDate || usersEndDate) && (
+                {(usersStartDate || usersEndDate || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null) && (
                   <button
                     onClick={() => {
                       setUsersStartDate('');
                       setUsersEndDate('');
+                      setUsersCoinsFilter('ALL');
+                      setUsersMinCoins('');
+                      setUsersMaxCoins('');
+                      setUsersSortByCoins('NONE');
+                      setUsersSortColumn(null);
+                      setUsersSortDirection('desc');
+                      setCurrentPage(1);
                     }}
-                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all cursor-pointer"
                   >
                     Clear
                   </button>
@@ -3657,13 +3868,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
-                    <th className="py-3.5 px-5">User Profile</th>
-                    <th className="py-3.5 px-5">Role & Badges</th>
-                    <th className="py-3.5 px-5">Reward Coins (কয়েন)</th>
-                    <th className="py-3.5 px-5">Order Stats & Patterns</th>
-                    <th className="py-3.5 px-5">Live Current Running State</th>
-                    <th className="py-3.5 px-5">Audience Segments</th>
-                    <th className="py-3.5 px-5">Status</th>
+                    {renderUserSortHeader('User Profile', 'NAME')}
+                    {renderUserSortHeader('Role & Badges', 'ROLE')}
+                    {renderUserSortHeader('Reward Coins (কয়েন)', 'COINS')}
+                    {renderUserSortHeader('Order Stats & Patterns', 'ORDERS')}
+                    {renderUserSortHeader('Live Current Running State', 'ACTIVITY')}
+                    {renderUserSortHeader('Audience Segments', 'SEGMENTS')}
+                    {renderUserSortHeader('Status', 'STATUS')}
                     <th className="py-3.5 px-5 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -6265,7 +6476,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 8: SHOPS TAB --- */}
       {activeTab === 'SHOPS' && isTabAllowed('SHOPS') && (() => {
         const shopsSource = serverShops !== null ? serverShops : shops;
+        const predefinedCategories = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
+        const dynamicCats = new Set<string>(predefinedCategories);
+        shopsSource.forEach((s) => {
+          if (s.type && s.type.trim()) dynamicCats.add(s.type.trim());
+        });
+        const allShopCategories = Array.from(dynamicCats).sort();
+
         let filteredShops = [...shopsSource];
+        if (shopsCategoryFilter !== 'ALL') {
+          filteredShops = filteredShops.filter((s) => (s.type || '').trim() === shopsCategoryFilter.trim());
+        }
         if (shopsAppliedSearchQuery.trim()) {
           const q = shopsAppliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
@@ -6278,7 +6499,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filteredShops.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim());
+        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL');
         const overrideShopsCount = (serverShops === null && !hasShopsFilter && exactShopsCount !== null) ? exactShopsCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops, undefined, undefined, overrideShopsCount);
 
@@ -6293,13 +6514,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div>
                   <h3 className="font-extrabold text-base text-gray-900">Registered Store / Shop List</h3>
                   <span className="text-xs font-bold text-purple-700">
-                    {totalItems} stores registered
+                    {totalItems} stores {shopsCategoryFilter !== 'ALL' ? `(${shopsCategoryFilter})` : 'registered'}
                   </span>
                 </div>
               </div>
 
-              {/* Sub-view Toggles & Add Shop Button */}
+              {/* Sub-view Toggles & Category Filter & Add Shop Button */}
               <div className="flex items-center space-x-2 flex-wrap gap-2">
+                {/* Category Dropdown Filter */}
+                <div className="flex items-center space-x-1.5 bg-gray-100 border border-gray-200 rounded-2xl px-3 py-1.5">
+                  <Filter className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                  <span className="text-gray-500 text-[11px] font-bold">Category:</span>
+                  <select
+                    value={shopsCategoryFilter}
+                    onChange={(e) => {
+                      setShopsCategoryFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer max-w-[170px] truncate"
+                  >
+                    <option value="ALL">All Categories ({shopsSource.length})</option>
+                    {allShopCategories.map((cat) => {
+                      const count = shopsSource.filter((s) => (s.type || '').trim() === cat.trim()).length;
+                      return (
+                        <option key={cat} value={cat}>
+                          {cat} ({count})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {shopsCategoryFilter !== 'ALL' && (
+                  <button
+                    onClick={() => {
+                      setShopsCategoryFilter('ALL');
+                      setCurrentPage(1);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 text-xs font-bold transition-all"
+                  >
+                    Clear Filter
+                  </button>
+                )}
+
                 <div className="flex bg-gray-100 p-1 rounded-2xl">
                   <button
                     type="button"

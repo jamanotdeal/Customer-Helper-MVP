@@ -69,17 +69,45 @@ export const DEFAULT_SERVICES: string[] = [
 ];
 
 export const DEFAULT_STORE_TYPES: string[] = [
-  'Grocery & Supermarket',
-  'Pharmacy & Medicine',
-  'Restaurant & Fast Food',
-  'Meat & Fish Market',
-  'Fruits & Vegetables',
-  'Electronics & Gadgets',
-  'Stationery & Books',
-  'Clothing & Fashion',
-  'Laundry & Dry Cleaning',
-  'Other',
+  'মুদিখানা ও সুপারশপ',
+  'ফার্মেসি ও ওষুধ',
+  'রেস্টুরেন্ট ও ফাস্টফুড',
+  'মাংস ও মাছ বাজার',
+  'ফল ও সবজির দোকান',
+  'ইলেকট্রনিক্স ও গ্যাজেট',
+  'স্টেশনারি ও বই',
+  'পোশাক ও ফ্যাশন',
+  'লন্ড্রি ও ড্রাই ক্লিনিং',
+  'অন্যান্য',
 ];
+
+/**
+ * Splits and sanitizes store types if provided as a single string,
+ * delimited by newlines, or separated by '&'.
+ */
+export const parseStoreTypes = (rawTypes?: string[] | string | null): string[] => {
+  if (!rawTypes) return DEFAULT_STORE_TYPES;
+  const items = Array.isArray(rawTypes) ? rawTypes : [rawTypes];
+  const parsed: string[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== 'string') continue;
+    const lines = item.split(/\r?\n/);
+    for (const line of lines) {
+      if (line.includes('&')) {
+        const parts = line.split('&').map((p) => p.trim()).filter(Boolean);
+        parsed.push(...parts);
+      } else {
+        const trimmed = line.trim();
+        if (trimmed) {
+          parsed.push(trimmed);
+        }
+      }
+    }
+  }
+
+  return parsed.length > 0 ? parsed : DEFAULT_STORE_TYPES;
+};
 
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   rules: [

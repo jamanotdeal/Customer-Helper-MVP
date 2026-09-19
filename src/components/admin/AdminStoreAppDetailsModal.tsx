@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { StoreApplication } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { parseStoreTypes } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
 import {
   X,
@@ -44,21 +45,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
   const [mode, setMode] = useState<ViewMode>('VIEW');
 
   // Admin-configurable store types (same source as the store application form)
-  const STORE_TYPES_DEFAULT = [
-    'মুদিখানা ও সুপারশপ',
-    'ফার্মেসি ও ওষুধ',
-    'রেস্টুরেন্ট ও ফাস্টফুড',
-    'মাংস ও মাছ বাজার',
-    'ফল ও সবজির দোকান',
-    'ইলেকট্রনিক্স ও গ্যাজেট',
-    'স্টেশনারি ও বই',
-    'পোশাক ও ফ্যাশন',
-    'লন্ড্রি ও ড্রাই ক্লিনিং',
-    'অন্যান্য',
-  ];
-  const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
-    ? fallbackStore.pricingSettings.storeTypes
-    : STORE_TYPES_DEFAULT;
+  const storeTypes = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
 
   // Edit form fields
   const [storeName, setStoreName] = useState(application.storeName);

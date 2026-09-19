@@ -330,6 +330,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showCustomCostModal, setShowCustomCostModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [customProductCost, setCustomProductCost] = useState('');
+  const [customSellerName, setCustomSellerName] = useState('');
+  const [customSellerPhone, setCustomSellerPhone] = useState('');
   const [isSubmittingCustomCost, setIsSubmittingCustomCost] = useState(false);
   const [checkedNoteItems, setCheckedNoteItems] = useState<Record<number, boolean>>({});
   const [checkedSubItems, setCheckedSubItems] = useState<Record<string, boolean>>({});
@@ -555,25 +557,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const handleOpenGoogleMapsDirection = () => {
-    let originStr = '';
-    if (helperLocation && helperLocation.lat && helperLocation.lng) {
-      originStr = `&origin=${helperLocation.lat},${helperLocation.lng}`;
-    }
+    const pLat = order.pickupLocation?.lat;
+    const pLng = order.pickupLocation?.lng;
     const destLat = order.deliveryLocation?.lat;
     const destLng = order.deliveryLocation?.lng;
+
+    let originStr = '';
+    if (pLat && pLng) {
+      originStr = `&origin=${pLat},${pLng}`;
+    } else if (order.pickupLocation?.address) {
+      originStr = `&origin=${encodeURIComponent(order.pickupLocation.address)}`;
+    }
+
     const destStr = destLat && destLng ? `${destLat},${destLng}` : encodeURIComponent(order.deliveryLocation?.address || '');
     
-    let waypointsStr = '';
-    if (order.pickupLocation) {
-      const pLat = order.pickupLocation.lat;
-      const pLng = order.pickupLocation.lng;
-      if (pLat && pLng) {
-        waypointsStr = `&waypoints=${pLat},${pLng}`;
-      } else if (order.pickupLocation.address) {
-        waypointsStr = `&waypoints=${encodeURIComponent(order.pickupLocation.address)}`;
-      }
-    }
-    const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}${waypointsStr}&travelmode=driving`;
+    const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}&travelmode=driving`;
     window.open(url, '_blank');
   };
 
@@ -1611,7 +1609,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             so.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
                             so.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
                             so.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                            'bg-red-100 text-red-800 border-red-250'
+                            so.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                            so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                            'bg-gray-100 text-gray-700 border-gray-250'
                           }`}>
                             {so.status === 'PREPARING' ? 'Processing' : so.status}
                           </span>
@@ -2787,10 +2787,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       {viewRequestDetails && (() => {
         const isMyself = viewRequestDetails.shopId === 'myself';
         const shop = !isMyself ? fallbackStore.shops.get(viewRequestDetails.shopId) : null;
-        const contactNum = shop?.whatsapp || shop?.managerWhatsapp || '';
+        const contactNum = isMyself
+          ? (viewRequestDetails.sellerPhone || '')
+          : (shop?.whatsapp || shop?.managerWhatsapp || '');
         return (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100">
+            <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
               <button
                 type="button"
                 onClick={() => setViewRequestDetails(null)}
@@ -2803,16 +2805,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <Store className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="font-black text-base text-gray-900 leading-tight">{viewRequestDetails.shopName}</h3>
-                  {!isMyself && (
+                  <h3 className="font-black text-base text-gray-900 leading-tight">
+                    {isMyself ? (viewRequestDetails.sellerName || 'Custom Cost / নিজের কেনা') : viewRequestDetails.shopName}
+                  </h3>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
-                      {shop?.type || 'Store'}
+                      {isMyself ? 'Direct Purchase' : (shop?.type || 'Store')}
                     </span>
-                  )}
+                    {!isMyself && viewRequestDetails.status && (
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                        viewRequestDetails.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
+                        viewRequestDetails.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
+                        viewRequestDetails.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
+                        viewRequestDetails.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
+                        viewRequestDetails.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                        viewRequestDetails.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                        viewRequestDetails.status === 'CANCELED' || (viewRequestDetails.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                        'bg-gray-100 text-gray-700 border-gray-250'
+                      }`}>
+                        {viewRequestDetails.status === 'PREPARING' ? 'Processing' : viewRequestDetails.status}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {shop?.description && (
+              {!isMyself && shop?.description && (
                 <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-xl border border-gray-100 leading-relaxed font-medium">
                   {shop.description}
                 </p>
@@ -2821,7 +2839,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {/* Edit inputs */}
               <div className="space-y-3 pt-1">
                 <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details</label>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details (পণ্যের বিবরণ)</label>
                   <textarea
                     value={viewRequestDetails.requestText}
                     disabled={isDone}
@@ -2841,16 +2859,43 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
                   />
                 </div>
+
+                {isMyself && (
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতা / দোকানের নাম (Seller Name)</label>
+                      <input
+                        type="text"
+                        value={viewRequestDetails.sellerName || ''}
+                        disabled={isDone}
+                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
+                        placeholder="যেমন: ভাই ভাই স্টোর"
+                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number)</label>
+                      <input
+                        type="tel"
+                        value={viewRequestDetails.sellerPhone || ''}
+                        disabled={isDone}
+                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerPhone: e.target.value })}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
-              {!isMyself && contactNum && (
+              {contactNum && (
                 <div className="flex items-center space-x-2 pt-1">
                   <a
                     href={`tel:${contactNum}`}
                     className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
                   >
                     <Phone className="w-3.5 h-3.5" />
-                    <span>Call Manager</span>
+                    <span>{isMyself ? 'Call Seller' : 'Call Manager'}</span>
                   </a>
                   <a
                     href={`https://wa.me/880${contactNum.replace(/^0/, '')}`}
@@ -2887,6 +2932,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         ...so,
                         requestText: viewRequestDetails.requestText.trim(),
                         price: viewRequestDetails.price,
+                        sellerName: viewRequestDetails.sellerName?.trim() || undefined,
+                        sellerPhone: viewRequestDetails.sellerPhone?.trim() || undefined,
                       }), 'helper');
                       setViewRequestDetails(null);
                     }}
@@ -2904,7 +2951,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       {/* Enter Custom Cost Modal */}
       {showCustomCostModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 relative">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 relative max-h-[90vh] overflow-y-auto">
             <button
               type="button"
               onClick={() => setShowCustomCostModal(false)}
@@ -2912,12 +2959,28 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
-            <h3 className="font-bold text-base text-gray-900">Add Custom Cost</h3>
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                <Store className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-gray-900">Add Custom Cost</h3>
+                <p className="text-[11px] text-gray-500 font-medium">হেলপারের নিজস্ব কেনা পণ্যের কস্ট ও বিক্রেতার তথ্য</p>
+              </div>
+            </div>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
                 if (isSubmittingCustomCost) return;
                 if (!customProductName.trim() || !customProductCost.trim()) return;
+                if (!customSellerName.trim()) {
+                  showAlert('বিক্রেতার নাম আবশ্যক', 'অনুগ্রহ করে যেখান থেকে কিনেছেন সেই দোকান বা বিক্রেতার নাম লিখুন।', 'warning');
+                  return;
+                }
+                if (!customSellerPhone.trim()) {
+                  showAlert('বিক্রেতার মোবাইল নম্বর আবশ্যক', 'অনুগ্রহ করে বিক্রেতার মোবাইল নম্বর লিখুন যাতে কাস্টমার যাচাই করতে পারেন।', 'warning');
+                  return;
+                }
                 setIsSubmittingCustomCost(true);
                 try {
                   const cost = parseFloat(customProductCost) || 0;
@@ -2929,6 +2992,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     helperId: order.helperId || '',
                     helperName: order.helperName || 'Helper',
                     requestText: customProductName.trim(),
+                    sellerName: customSellerName.trim(),
+                    sellerPhone: customSellerPhone.trim(),
                     status: 'ACCEPTED',
                     price: cost,
                     createdAt: new Date().toISOString(),
@@ -2939,6 +3004,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   setShowCustomCostModal(false);
                   setCustomProductName('');
                   setCustomProductCost('');
+                  setCustomSellerName('');
+                  setCustomSellerPhone('');
                 } finally {
                   setIsSubmittingCustomCost(false);
                 }
@@ -2946,7 +3013,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               className="space-y-3"
             >
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name (পণ্যের নাম) *</label>
                 <input
                   type="text"
                   value={customProductName}
@@ -2957,13 +3024,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (৳)</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (দাম - ৳) *</label>
                 <input
                   type="number"
                   step="0.01"
                   value={customProductCost}
                   onChange={(e) => setCustomProductCost(e.target.value)}
                   placeholder="যেমন: ১২০"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতা / দোকানের নাম (Seller Name) *</label>
+                <input
+                  type="text"
+                  value={customSellerName}
+                  onChange={(e) => setCustomSellerName(e.target.value)}
+                  placeholder="যেমন: আল-মদিনা স্টোর বা করিম ভাই"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number) *</label>
+                <input
+                  type="tel"
+                  value={customSellerPhone}
+                  onChange={(e) => setCustomSellerPhone(e.target.value)}
+                  placeholder="01XXXXXXXXX"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
                   required
                 />

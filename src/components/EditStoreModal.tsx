@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, Store, Check, AlertCircle, MapPin, Edit } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
+import { parseStoreTypes } from '@/lib/pricing';
 import { Shop, LocationData } from '@/types';
 import { MapPickerModal } from './MapPickerModal';
 
@@ -11,23 +12,8 @@ interface EditStoreModalProps {
   onClose: () => void;
 }
 
-const STORE_TYPES_DEFAULT = [
-  'মুদিখানা ও সুপারশপ',
-  'ফার্মেসি ও ওষুধ',
-  'রেস্টুরেন্ট ও ফাস্টফুড',
-  'মাংস ও মাছ বাজার',
-  'ফল ও সবজির দোকান',
-  'ইলেকট্রনিক্স ও গ্যাজেট',
-  'স্টেশনারি ও বই',
-  'পোশাক ও ফ্যাশন',
-  'লন্ড্রি ও ড্রাই ক্লিনিং',
-  'অন্যান্য',
-];
-
 export const EditStoreModal: React.FC<EditStoreModalProps> = ({ shop, onClose }) => {
-  const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
-    ? fallbackStore.pricingSettings.storeTypes
-    : STORE_TYPES_DEFAULT;
+  const storeTypes = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
 
   // Form fields
   const [storeName, setStoreName] = useState(shop.name);

@@ -521,6 +521,8 @@ export interface ShopOrder {
   requestText: string;       // Helper's typed order/request
   status: ShopOrderStatus;
   price?: number;            // Set by store
+  sellerName?: string;       // Custom cost seller / vendor name
+  sellerPhone?: string;      // Custom cost seller / vendor phone number
   note?: string;             // Store's note to helper
   viewedByStore?: boolean;   // Set to true when store clicks "দেখতেছি" or views the order
   createdAt: string;
