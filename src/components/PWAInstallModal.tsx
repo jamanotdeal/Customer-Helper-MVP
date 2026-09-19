@@ -16,22 +16,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Utility function to check if app is running as standalone PWA or Native App / WebView / TWA
-export const isPwaInstalled = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  const isStandaloneMatch = window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: twa)').matches;
-  const isNavigatorStandalone = (window.navigator as any).standalone === true;
-  const isTwaOrAndroidApp = document.referrer.startsWith('android-app://');
-  const isCapacitorOrCordova = !!(window as any).Capacitor || !!(window as any).Cordova || !!(window as any).AndroidInterface;
-  const isWebView = /wv|Android.*Version\/[0-9]\.[0-9]/i.test(window.navigator.userAgent) && !/Safari/i.test(window.navigator.userAgent);
-  return isStandaloneMatch || isNavigatorStandalone || isTwaOrAndroidApp || isCapacitorOrCordova || isWebView;
-};
-
-// Utility function to check if device is iOS (Safari)
-export const isIosDevice = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
-};
+import { isPwaInstalled, isIosDevice, isPwaSupported } from './PwaSmartPrompt';
 
 interface OrderSuccessPwaModalProps {
   isOpen: boolean;
@@ -49,11 +34,14 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
   onViewOrderDetails,
 }) => {
   const [installed, setInstalled] = useState<boolean>(false);
+  const [isSupported, setIsSupported] = useState<boolean>(false);
   const [installing, setInstalling] = useState<boolean>(false);
   const [showIosInstructions, setShowIosInstructions] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isOpen) return;
+    const supported = isPwaSupported();
+    setIsSupported(supported);
     const isAlreadyInstalled =
       isPwaInstalled() || (typeof window !== 'undefined' && localStorage.getItem('jamanot_pwa_installed') === 'true');
     setInstalled(isAlreadyInstalled);
@@ -130,8 +118,8 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
           )}
         </div>
 
-        {/* PWA Install Promotion Box (Controlled by Admin & Install Status) */}
-        {isEnabled && !installed && (
+        {/* PWA Install Promotion Box (Controlled by Admin, Install Status & Browser Support) */}
+        {isEnabled && !installed && isSupported && (
           <div className="bg-gradient-to-br from-emerald-950 via-slate-900 to-teal-950 text-white p-5 rounded-3xl text-left space-y-4 shadow-xl border border-emerald-500/20 relative overflow-hidden">
             <div className="flex items-start gap-3">
               <div className="relative w-12 h-12 rounded-2xl overflow-hidden shadow-md border border-emerald-400/30 shrink-0 bg-emerald-900/50 flex items-center justify-center">

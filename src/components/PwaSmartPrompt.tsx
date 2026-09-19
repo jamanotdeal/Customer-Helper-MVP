@@ -58,6 +58,51 @@ export const isPwaInstalled = (): boolean => {
   );
 };
 
+// Check if device is iOS (iPhone/iPad/iPod)
+export const isIosDevice = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const ua = window.navigator.userAgent || '';
+  return /iphone|ipad|ipod/i.test(ua) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+};
+
+// Check if current browser environment supports PWA installation
+export const isPwaSupported = (): boolean => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+
+  // 1. Service Worker is a hard requirement for PWA
+  if (!('serviceWorker' in navigator)) return false;
+
+  // 2. Chromium-based browsers with native install prompt support
+  if ('onbeforeinstallprompt' in window || globalDeferredPrompt) {
+    return true;
+  }
+
+  const ua = navigator.userAgent || navigator.vendor || '';
+
+  // 3. iOS devices (iPhone, iPad, iPod) - Safari/WebKit supports Add to Home Screen PWA
+  if (isIosDevice()) {
+    return true;
+  }
+
+  // 4. Android devices (Chrome, Samsung Internet, Firefox Android, Opera, etc.) support PWA
+  const isAndroid = /android/i.test(ua);
+  if (isAndroid) {
+    return true;
+  }
+
+  // 5. Desktop Safari 17+ on macOS Sonoma supports PWA ("Add to Dock")
+  const isMacSafari = /Macintosh/i.test(ua) && /Safari/i.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/i.test(ua);
+  if (isMacSafari) {
+    const versionMatch = ua.match(/Version\/(\d+)/i);
+    const safariVersion = versionMatch ? parseInt(versionMatch[1], 10) : 0;
+    if (safariVersion >= 17) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 // Detect if user is running inside an in-app browser (FB, Messenger, Instagram, TikTok, etc.)
 export const isInAppBrowser = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -67,14 +112,9 @@ export const isInAppBrowser = (): boolean => {
   );
 };
 
-// Check if device is iOS (iPhone/iPad/iPod)
-export const isIosDevice = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
-};
-
 export const PwaSmartPrompt: React.FC = () => {
   const [isStandalone, setIsStandalone] = useState<boolean>(true);
+  const [isSupported, setIsSupported] = useState<boolean>(false);
   const [isInstalledPreviously, setIsInstalledPreviously] = useState<boolean>(false);
   const [isFloatingBarDismissed, setIsFloatingBarDismissed] = useState<boolean>(false);
   const [isInApp, setIsInApp] = useState<boolean>(false);
@@ -90,11 +130,19 @@ export const PwaSmartPrompt: React.FC = () => {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    const supported = isPwaSupported();
+    setIsSupported(supported);
+
     const standalone = isPwaInstalled();
     setIsStandalone(standalone);
 
     const prevInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true';
     setIsInstalledPreviously(prevInstalled);
+
+    // If browser doesn't support PWA, or already installed, nothing more to do
+    if (!supported || standalone || prevInstalled) {
+      return;
+    }
 
     // Check modern browser installed related apps API
     if ('getInstalledRelatedApps' in navigator) {
@@ -120,6 +168,7 @@ export const PwaSmartPrompt: React.FC = () => {
 
     const handlePromptAvail = () => {
       setHasPrompt(true);
+      setIsSupported(true);
     };
 
     const handleInstallSuccess = () => {
@@ -134,27 +183,25 @@ export const PwaSmartPrompt: React.FC = () => {
     window.addEventListener('pwa-install-available', handlePromptAvail);
     window.addEventListener('pwa-installed-success', handleInstallSuccess);
 
-    // ONLY auto-show install modal if NOT standalone AND NOT previously installed
-    if (!standalone && !prevInstalled) {
-      const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
-      const now = Date.now();
-      const oneDay = 24 * 60 * 60 * 1000;
-      const shouldAutoShow = !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
+    // ONLY auto-show install modal if supported AND NOT standalone AND NOT previously installed
+    const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const shouldAutoShow = !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
 
-      if (shouldAutoShow) {
-        const timer = setTimeout(() => {
-          // Double check if installed state changed in the interim
-          const isNowInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true' || isPwaInstalled();
-          if (!isNowInstalled) {
-            setShowPromptModal(true);
-          }
-        }, 2000);
-        return () => {
-          clearTimeout(timer);
-          window.removeEventListener('pwa-install-available', handlePromptAvail);
-          window.removeEventListener('pwa-installed-success', handleInstallSuccess);
-        };
-      }
+    if (shouldAutoShow) {
+      const timer = setTimeout(() => {
+        // Double check if installed state changed in the interim
+        const isNowInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true' || isPwaInstalled();
+        if (!isNowInstalled && isPwaSupported()) {
+          setShowPromptModal(true);
+        }
+      }, 2000);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('pwa-install-available', handlePromptAvail);
+        window.removeEventListener('pwa-installed-success', handleInstallSuccess);
+      };
     }
 
     return () => {
@@ -249,8 +296,8 @@ export const PwaSmartPrompt: React.FC = () => {
     }
   };
 
-  // If already in standalone PWA or previously installed on device, do not render anything
-  if (isStandalone || isInstalledPreviously) return null;
+  // If browser does not support PWA, already in standalone PWA, or previously installed on device, do not render anything
+  if (!isSupported || isStandalone || isInstalledPreviously) return null;
 
   // If admin turned off PWA install prompts
   if (!isEnabled) return null;

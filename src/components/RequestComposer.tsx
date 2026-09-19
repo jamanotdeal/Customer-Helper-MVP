@@ -219,7 +219,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return () => clearInterval(timer);
   }, [placeholders]);
 
-  const currentPlaceholder = placeholders[placeholderIndex] || 'আপনাকে কীভাবে Help করতে পারি? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে...';
+  const rawPlaceholder = placeholders[placeholderIndex] || 'আপনাকে কীভাবে Help করতে পারি? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে';
+  const currentPlaceholder = rawPlaceholder.replace(/(\.{2,}|…)$/, '').trim();
 
   // Handle focus / click on main input (Guard unauthenticated users)
   const handleInputInteract = () => {
@@ -432,10 +433,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             className="w-full text-center mb-4 group outline-none"
           >
             <h2 className="font-extrabold text-lg text-gray-900 mb-1">আপনাকে কীভাবে Help করতে পারি?</h2>
-            <div className="min-h-[1.75rem] flex items-center justify-center my-1 relative select-none overflow-hidden transition-all duration-300">
+            <div className="min-h-[2.75rem] sm:min-h-[2.5rem] flex items-center justify-center my-1.5 relative select-none w-full px-2 max-w-xl mx-auto transition-all duration-300">
               <p
                 key={placeholderIndex}
-                className="text-[15px] sm:text-base font-bold text-emerald-600 animate-slide-up-fade px-2 text-center break-words leading-relaxed"
+                className="text-[15px] sm:text-base font-bold text-emerald-600 animate-slide-up-fade px-2 text-center break-words whitespace-normal leading-relaxed w-full"
               >
                 {currentPlaceholder}
               </p>
@@ -464,9 +465,9 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     aria-haspopup="dialog"
                     aria-expanded={isServiceDropdownOpen}
                   >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <Sparkles className={`w-4 h-4 shrink-0 ${service ? 'text-emerald-600' : 'text-gray-400'}`} />
-                      <span className={service ? 'text-gray-900 font-bold truncate' : 'text-gray-400 font-medium'}>
+                    <div className="flex items-start sm:items-center gap-2.5 flex-1 min-w-0 pr-2">
+                      <Sparkles className={`w-4 h-4 shrink-0 mt-0.5 sm:mt-0 ${service ? 'text-emerald-600' : 'text-gray-400'}`} />
+                      <span className={`text-left leading-snug break-words ${service ? 'text-gray-900 font-bold' : 'text-gray-400 font-medium'}`}>
                         {service || 'সার্ভিস সিলেক্ট করুন *'}
                       </span>
                     </div>
@@ -844,28 +845,28 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                       handleServiceChange(srv);
                       setIsServiceDropdownOpen(false);
                     }}
-                    className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1 ${
+                    className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${
                       isSelected
                         ? 'bg-emerald-50 text-emerald-950 font-extrabold ring-1 ring-emerald-300 shadow-xs'
                         : 'text-gray-700 font-semibold hover:bg-emerald-50/50 hover:text-emerald-900 active:bg-gray-100'
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0 pr-2">
+                    <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                       <div
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${
                           isSelected
                             ? 'bg-emerald-600 ring-4 ring-emerald-100'
                             : 'bg-gray-300 group-hover:bg-emerald-400'
                         } transition-colors`}
                       />
-                      <span className="truncate">{srv}</span>
+                      <span className="leading-snug break-words text-left flex-1">{srv}</span>
                     </div>
                     {isSelected ? (
-                      <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-emerald-500/30">
+                      <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-emerald-500/30 ml-1">
                         <Check className="w-4 h-4 stroke-[3]" />
                       </div>
                     ) : (
-                      <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-emerald-400 shrink-0 transition-colors" />
+                      <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-emerald-400 shrink-0 transition-colors ml-1" />
                     )}
                   </button>
                 );
