@@ -1,5 +1,8 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+} from 'firebase/auth';
 import {
   getFirestore,
   collection,
@@ -58,8 +61,11 @@ const firebaseConfig = {
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
 export const auth = getAuth(app);
+
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 export const db = getFirestore(app);
 
 // ─── Firebase Cloud Messaging ─────────────────────────────────────────────────
@@ -2557,6 +2563,29 @@ class FallbackStore {
     }
   }
 
+  public async fetchCustomerOrders(userId: string): Promise<Order[]> {
+    if (!userId || !db) return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    try {
+      const q = query(
+        collection(db, 'orders'),
+        where('customerId', '==', userId),
+        limit(50)
+      );
+      const snap = await getDocs(q);
+      snap.forEach((docSnap) => {
+        const orderData = docSnap.data() as Order;
+        if (orderData && orderData.id) {
+          this.orders.set(orderData.id, orderData);
+        }
+      });
+      this.notify();
+      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    } catch (e: any) {
+      console.warn('[Firestore] fetchCustomerOrders note:', e?.message || e);
+      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    }
+  }
+
   public getShopOrdersForStore(shopId: string): ShopOrder[] {
     return Array.from(this.shopOrders.values())
       .filter((so) => so.shopId === shopId)
@@ -2725,14 +2754,14 @@ class FallbackStore {
   }
 
 
-  public async recordHelperPayback(helperId: string, amount: number, note: string) {
+  public async recordHelperPayback(helperId: string, amount: number, note: string, paymentMethod: string = 'Manual Record') {
     const txs = this.walletTransactions.get(helperId) || [];
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
       userId: helperId,
       amount: -amount,
       type: 'PAYBACK',
-      description: `Paid back commission to platform: ৳${amount} (${note})`,
+      description: `Paid back commission to platform: ৳${amount} (${paymentMethod}${note ? ` - ${note}` : ''})`,
       createdAt: new Date().toISOString(),
     };
     txs.unshift(newTx);
@@ -2746,8 +2775,8 @@ class FallbackStore {
       helperName,
       amount,
       status: 'APPROVED',
-      paymentMethod: 'Manual Record',
-      accountNumber: note,
+      paymentMethod: paymentMethod || 'Manual Record',
+      accountNumber: note || 'Admin recorded payment',
       createdAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
     };
@@ -3592,9 +3621,36 @@ class FallbackStore {
     }
     this.notify();
     try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) {}
+    try {
       await setDoc(doc(db, 'orderFeedbacks', feedback.id), cleanForFirestore(feedback));
     } catch (e: any) {
       console.warn('[Firestore] submitOrderFeedback note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteOrderFeedback(feedbackId: string) {
+    const fb = this.orderFeedbacks.get(feedbackId);
+    this.orderFeedbacks.delete(feedbackId);
+    if (fb && fb.orderId) {
+      const ord = this.orders.get(fb.orderId);
+      if (ord && ord.feedback?.id === feedbackId) {
+        delete ord.feedback;
+        this.orders.set(ord.id, ord);
+        try {
+          await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+        } catch (_) {}
+      }
+    }
+    this.notify();
+    try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) {}
+    try {
+      await deleteDoc(doc(db, 'orderFeedbacks', feedbackId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteOrderFeedback note (saved locally):', e?.message || e);
     }
   }
 

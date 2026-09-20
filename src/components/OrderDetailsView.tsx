@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, doc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
@@ -144,7 +144,33 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     };
     syncOrder();
     const unsub = fallbackStore.subscribe(syncOrder);
-    return () => unsub();
+
+    // Direct realtime document listener for immediate status update (e.g. Delivered by Helper/Admin)
+    let unsubDoc: (() => void) | undefined;
+    if (orderId && db) {
+      try {
+        unsubDoc = onSnapshot(
+          doc(db, 'orders', orderId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const updated = docSnap.data() as Order;
+              if (updated && updated.id) {
+                fallbackStore.orders.set(orderId, updated);
+                setOrder({ ...updated });
+              }
+            }
+          },
+          (err) => console.warn('[OrderDetailsView] live order doc listener note:', err)
+        );
+      } catch (e) {
+        console.warn('[OrderDetailsView] live order doc listener setup error:', e);
+      }
+    }
+
+    return () => {
+      unsub();
+      if (unsubDoc) unsubDoc();
+    };
   }, [orderId]);
 
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);

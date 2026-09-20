@@ -3,9 +3,9 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2 } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
-import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
+import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
 import { MapPickerModal } from './MapPickerModal';
 import { HelperOrderMapModal } from './HelperOrderMapModal';
@@ -597,7 +597,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const badge = getStatusBadgeInfo(order.status);
 
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
-  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
+  const urgency = getHelperUrgencyBgClass(order, isDone);
+  const isPaused = isOrderTimerPaused(order);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -994,41 +995,61 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           )}
           <div className="flex items-center space-x-2.5">
             <Clock className={`w-5 h-5 ${
-              urgency.urgencyLevel === 'red'
+              isPaused
+                ? 'text-indigo-600'
+                : urgency.urgencyLevel === 'red'
                 ? 'text-red-700 animate-spin'
                 : urgency.urgencyLevel === 'yellow'
                 ? 'text-amber-700 animate-spin-slow'
                 : 'text-red-600 animate-pulse'
             }`} />
             <span className={`text-xs font-black uppercase tracking-wider ${
-              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+              isPaused
+                ? 'text-indigo-900'
+                : urgency.urgencyLevel === 'red'
+                ? 'text-red-950'
+                : urgency.urgencyLevel === 'yellow'
+                ? 'text-amber-950'
+                : 'text-red-600'
             }`}>
-              {isDone ? 'Duration:' : 'Live:'}
+              {isDone ? 'Duration:' : isPaused ? '⏸️ Paused (Stuck):' : 'Live:'}
             </span>
             <span className={`text-xl font-black font-mono ${
-              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+              isPaused
+                ? 'text-indigo-950 font-bold'
+                : urgency.urgencyLevel === 'red'
+                ? 'text-red-950'
+                : urgency.urgencyLevel === 'yellow'
+                ? 'text-amber-950'
+                : 'text-red-600'
             }`}>
               {elapsed}
             </span>
           </div>
 
-          {!isDone && urgency.urgencyLevel === 'red' && (
+          {!isDone && !isPaused && urgency.urgencyLevel === 'red' && (
             <p className="mt-1.5 text-[11px] font-black text-red-700 bg-red-200/80 px-3 py-1 rounded-full border border-red-300 text-center animate-pulse">
               🚨 55+ মিনিট অতিক্রান্ত! দ্রুত ডেলিভারি সম্পন্ন করুন!
             </p>
           )}
 
-          {!isDone && urgency.urgencyLevel === 'yellow' && (
+          {!isDone && !isPaused && urgency.urgencyLevel === 'yellow' && (
             <p className="mt-1.5 text-[11px] font-black text-amber-900 bg-amber-200/80 px-3 py-1 rounded-full border border-amber-300 text-center">
               ⚠️ 40+ মিনিট অতিক্রান্ত! দ্রুত পৌঁছানোর চেষ্টা করুন।
             </p>
           )}
 
           {order.needDeliveryBack && order.deliveryBackTime && (
-            <div className="mt-2 flex items-center space-x-1.5 bg-indigo-100/70 px-3 py-1.5 rounded-full border border-indigo-200/60 w-full justify-center">
-              <CalendarClock className="w-3 h-3 text-indigo-600 shrink-0" />
-              <span className="text-[10px] font-extrabold text-indigo-800 text-center">
-                ⏸ Two-Way • ফিরবেন: {new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}
+            <div className={`mt-2 flex items-center space-x-1.5 px-3 py-1.5 rounded-full border w-full justify-center ${
+              isPaused
+                ? 'bg-indigo-100/90 border-indigo-300 text-indigo-900 shadow-xs'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            }`}>
+              <CalendarClock className={`w-3.5 h-3.5 shrink-0 ${isPaused ? 'text-indigo-700' : 'text-emerald-600'}`} />
+              <span className="text-[10px] font-extrabold text-center">
+                {isPaused
+                  ? `⏸️ সময় স্থগিত (টাইমার পজ করা আছে) • ফিরবেন: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`
+                  : `▶️ ২য় ধাপ রানিং • শিডিউল ছিল: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`}
               </span>
             </div>
           )}
@@ -1499,6 +1520,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         needDeliveryBack: false,
                         needReturnItems: false,
                         deliveryBackTime: undefined,
+                        deliveryBackSetAt: undefined,
                         deliveryFee: o.isFreeDelivery ? 0 : baseFee,
                         originalDeliveryFee: o.isFreeDelivery ? 0 : baseFee,
                       }));
@@ -1554,25 +1576,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <Store className="w-3.5 h-3.5 text-purple-600" />
                 <span>Requests to Shops</span>
               </h4>
-              {!isDone && (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowMapModal(true)}
-                    className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-[10px] font-bold transition-all"
-                  >
-                    Request to store
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowCustomCostModal(true)}
-                    className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-[10px] font-bold transition-all"
-                  >
-                    + Custom Cost
-                  </button>
-                </div>
-              )}
             </div>
+            {!isDone && (
+              <div className="grid grid-cols-2 gap-2 mb-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowMapModal(true)}
+                  className="w-full py-2 px-3 bg-purple-50 hover:bg-purple-100/80 active:bg-purple-200 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                >
+                  <Store className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <span>Request to store</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomCostModal(true)}
+                  className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100/80 active:bg-amber-200 text-amber-900 border border-amber-250 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                >
+                  <Plus className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>+ Custom Cost</span>
+                </button>
+              </div>
+            )}
             {shopOrders.length > 0 ? (
               <div className="space-y-2">
                 {shopOrders.map((so) => {
@@ -1582,23 +1606,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <div
                       key={so.id}
                       onClick={() => setViewRequestDetails(so)}
-                      className="bg-white hover:bg-gray-50 border border-gray-250 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all"
+                      className={`${
+                        isMyself
+                          ? 'bg-amber-50/35 hover:bg-amber-50/70 border-amber-200/80'
+                          : 'bg-purple-50/30 hover:bg-purple-50/70 border-purple-200/80'
+                      } border p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all`}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-extrabold text-xs text-gray-900">{so.shopName}</span>
-                          {!isMyself && shop && (
-                            <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200">
+                          <span className={`font-extrabold text-xs ${isMyself ? 'text-amber-950' : 'text-purple-950'}`}>
+                            {so.shopName}
+                          </span>
+                          {isMyself ? (
+                            <span className="text-[8px] font-black bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-amber-250 flex items-center gap-0.5">
+                              <Plus className="w-2.5 h-2.5 text-amber-700" />
+                              Custom Cost
+                            </span>
+                          ) : shop ? (
+                            <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200 flex items-center gap-0.5">
+                              <Store className="w-2.5 h-2.5 text-purple-600" />
                               {shop.type}
                             </span>
-                          )}
+                          ) : null}
                         </div>
                         <p className="text-[11px] text-gray-500 truncate mt-0.5" title={so.requestText}>
                           {so.requestText}
                         </p>
                       </div>
                       {isMyself ? (
-                        <span className="text-xs font-black text-purple-950 bg-purple-50 px-2.5 py-1 rounded-xl border border-purple-200 shrink-0">
+                        <span className="text-xs font-black text-amber-950 bg-amber-100 px-2.5 py-1 rounded-xl border border-amber-250 shrink-0">
                           ৳{so.price || 0}
                         </span>
                       ) : (
@@ -2063,7 +2099,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       needDeliveryBack: true,
                       needReturnItems: true,
                       deliveryBackTime: returnWhen === 'schedule' ? new Date(deliveryBackTimeInput).toISOString() : undefined,
-                      deliveryBackSetAt: new Date().toISOString(),
+                      deliveryBackSetAt: returnWhen === 'schedule' ? (o.deliveryBackSetAt || new Date().toISOString()) : undefined,
                       originalDeliveryFee: o.isFreeDelivery ? 0 : (o.originalDeliveryFee || o.deliveryFee),
                       deliveryFee: o.isFreeDelivery ? 0 : targetFee,
                     }));

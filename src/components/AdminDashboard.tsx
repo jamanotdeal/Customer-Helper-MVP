@@ -77,6 +77,7 @@ import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
+import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AsyncButton } from './ui/AsyncButton';
 import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 
@@ -387,6 +388,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
   const [withdrawalTypeFilter, setWithdrawalTypeFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'OLDEST' | 'FEE_HIGH' | 'FEE_LOW' | 'ORDERS_HIGH' | 'SPENT_HIGH'>('NEWEST');
+  const [ordersHelperFilter, setOrdersHelperFilter] = useState<string>('ALL');
+  const [feedbackSortColumn, setFeedbackSortColumn] = useState<string>('createdAt');
+  const [feedbackSortDirection, setFeedbackSortDirection] = useState<'asc' | 'desc'>('desc');
   const [fleetSortColumn, setFleetSortColumn] = useState<string | null>(null);
   const [fleetSortDirection, setFleetSortDirection] = useState<'asc' | 'desc'>('asc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -1433,9 +1437,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   };
 
+  const handleDeleteFeedback = async (feedbackId: string) => {
+    const confirmed = await showConfirm(
+      'Delete Feedback',
+      'Are you sure you want to permanently delete this customer feedback entry?',
+      'Delete',
+      'Cancel'
+    );
+    if (!confirmed) return;
+
+    try {
+      await fallbackStore.deleteOrderFeedback(feedbackId);
+      setFeedbacks((prev) => prev.filter((f) => f.id !== feedbackId));
+      if (serverFeedbacks) {
+        setServerFeedbacks((prev) => (prev ? prev.filter((f) => f.id !== feedbackId) : null));
+      }
+      setExactFeedbacksCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
+      showAlert('ফিডব্যাক ডিলিট সম্পন্ন', 'অর্ডার ফিডব্যাক সফলভাবে মুছে ফেলা হয়েছে।', 'success');
+    } catch (err: any) {
+      showAlert('Error', err?.message || 'Failed to delete feedback', 'error');
+    }
+  };
+
+  const helperOptions = React.useMemo(() => {
+    const map = new Map<string, { id: string; name: string; phone?: string }>();
+    applications.forEach((app) => {
+      if (app.userId) {
+        map.set(app.userId, {
+          id: app.userId,
+          name: app.legalName || app.userName || 'Helper',
+          phone: app.email,
+        });
+      }
+    });
+    users.forEach((u) => {
+      if (u.role === 'helper' || u.isHelper) {
+        const existing = map.get(u.uid);
+        map.set(u.uid, {
+          id: u.uid,
+          name: u.displayName || existing?.name || 'Helper',
+          phone: u.alternativePhone || existing?.phone,
+        });
+      }
+    });
+    allOrders.forEach((o) => {
+      if (o.helperId && !map.has(o.helperId)) {
+        map.set(o.helperId, {
+          id: o.helperId,
+          name: o.helperName || 'Helper',
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [applications, users, allOrders]);
+
   // --- Filtering & Sorting Helper Functions ---
 
-  // 1. Process Orders List (Search, Filter by Status, Sort by Newest default)
+  // 1. Process Orders List (Search, Filter by Status, Filter by Helper, Sort by Newest default)
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
 
@@ -1472,6 +1530,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         list = list.filter((o) => !!o.needDeliveryBack);
       } else {
         list = list.filter((o) => o.status === statusFilter);
+      }
+    }
+
+    // Helper filter
+    if (ordersHelperFilter !== 'ALL') {
+      if (ordersHelperFilter === 'UNASSIGNED') {
+        list = list.filter((o) => !o.helperId);
+      } else {
+        list = list.filter((o) => o.helperId === ordersHelperFilter || o.helperName === ordersHelperFilter);
       }
     }
 
@@ -2585,6 +2652,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
+            {/* Helper Filter (for Orders tab) */}
+            {activeTab === 'ORDERS' && (
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                <Bike className="w-4 h-4 text-purple-600 shrink-0" />
+                <select
+                  value={ordersHelperFilter}
+                  onChange={(e) => {
+                    setOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600 max-w-[200px]"
+                >
+                  <option value="ALL">All Helpers</option>
+                  <option value="UNASSIGNED">Unassigned Only</option>
+                  {helperOptions.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name} {h.phone && h.phone !== 'N/A' ? `(${h.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {activeTab === 'USERS_LIST' && (
               <>
                 <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
@@ -3416,7 +3506,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
         const ordersSource = serverOrders !== null ? serverOrders : allOrders;
         const processed = getProcessedOrders(ordersSource);
-        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL');
+        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL' || ordersHelperFilter !== 'ALL');
         // When no filter is active, always use the server count for total (even after serverOrders loaded,
         // exactTotalOrders is the authoritative number from getCountFromServer)
         const overrideOrdersCount = (!hasOrdersFilter && exactTotalOrders !== null && exactTotalOrders > processed.length) ? exactTotalOrders : undefined;
@@ -3454,12 +3544,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Sub-Filters and Date Search Controls */}
-            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Status Filter</label>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
                   className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
                 >
                   <option value="ALL">All Statuses</option>
@@ -3476,6 +3566,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Filter by Helper</label>
+                <select
+                  value={ordersHelperFilter}
+                  onChange={(e) => {
+                    setOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Helpers</option>
+                  <option value="UNASSIGNED">Unassigned Only</option>
+                  {helperOptions.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name} {h.phone && h.phone !== 'N/A' ? `(${h.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Sort By</label>
                 <select
                   value={sortBy}
@@ -3484,6 +3594,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="NEWEST">Newest First</option>
                   <option value="OLDEST">Oldest First</option>
+                  <option value="FEE_HIGH">Delivery Fee (High to Low)</option>
+                  <option value="FEE_LOW">Delivery Fee (Low to High)</option>
                 </select>
               </div>
             </div>
@@ -7286,7 +7398,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               (f.improvementComment && f.improvementComment.toLowerCase().includes(q))
           );
         }
-        filteredFeedbacks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        // Feedback sorting
+        filteredFeedbacks.sort((a, b) => {
+          let cmp = 0;
+          if (feedbackSortColumn === 'orderId') {
+            cmp = a.orderId.localeCompare(b.orderId);
+          } else if (feedbackSortColumn === 'customerName') {
+            cmp = (a.customerName || '').localeCompare(b.customerName || '');
+          } else if (feedbackSortColumn === 'helperName') {
+            cmp = (a.helperName || '').localeCompare(b.helperName || '');
+          } else if (feedbackSortColumn === 'riderRating') {
+            cmp = (a.riderRating || 0) - (b.riderRating || 0);
+          } else if (feedbackSortColumn === 'serviceRating') {
+            cmp = (a.serviceRating || 0) - (b.serviceRating || 0);
+          } else if (feedbackSortColumn === 'shopRating') {
+            cmp = (a.shopRating || 0) - (b.shopRating || 0);
+          } else if (feedbackSortColumn === 'comment') {
+            cmp = (a.improvementComment || '').localeCompare(b.improvementComment || '');
+          } else {
+            // createdAt default
+            cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          }
+          return feedbackSortDirection === 'asc' ? cmp : -cmp;
+        });
+
+        const handleFeedbackSortClick = (col: string) => {
+          if (feedbackSortColumn === col) {
+            setFeedbackSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+          } else {
+            setFeedbackSortColumn(col);
+            setFeedbackSortDirection('asc');
+          }
+        };
+
+        const renderFeedbackSortIcon = (col: string) => {
+          if (feedbackSortColumn !== col) {
+            return <ArrowUpDown className="w-3 h-3 opacity-40 inline ml-1" />;
+          }
+          return (
+            <span className="inline ml-1 font-bold text-amber-600">
+              {feedbackSortDirection === 'asc' ? '▲' : '▼'}
+            </span>
+          );
+        };
+
         const hasFeedbackFilter = Boolean(feedbackAppliedSearchQuery.trim());
         const overrideFeedbacksCount = (serverFeedbacks === null && !hasFeedbackFilter && exactFeedbacksCount !== null) ? exactFeedbacksCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks, undefined, undefined, overrideFeedbacksCount);
@@ -7317,6 +7473,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            {/* Feedback Visual Analytics & Progress Graph */}
+            <OrderFeedbackAnalytics feedbacks={feedbacksSource} />
+
             {/* Feedback List Table */}
             <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
               <div className="p-5 border-b border-gray-100 flex items-center justify-between">
@@ -7330,13 +7489,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                   <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                     <tr>
-                      <th className="py-3.5 px-5">Order ID & Customer</th>
-                      <th className="py-3.5 px-5">Rider / Helper</th>
-                      <th className="py-3.5 px-5">Rider Rating</th>
-                      <th className="py-3.5 px-5">Service Rating</th>
-                      <th className="py-3.5 px-5">Shop Rating</th>
-                      <th className="py-3.5 px-5">Customer Comment</th>
-                      <th className="py-3.5 px-5">Date</th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('orderId')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Order ID & Customer</span>
+                          {renderFeedbackSortIcon('orderId')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('helperName')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Rider / Helper</span>
+                          {renderFeedbackSortIcon('helperName')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('riderRating')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Rider Rating</span>
+                          {renderFeedbackSortIcon('riderRating')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('serviceRating')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Service Rating</span>
+                          {renderFeedbackSortIcon('serviceRating')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('shopRating')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Shop Rating</span>
+                          {renderFeedbackSortIcon('shopRating')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('comment')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Customer Comment</span>
+                          {renderFeedbackSortIcon('comment')}
+                        </div>
+                      </th>
+                      <th
+                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
+                        onClick={() => handleFeedbackSortClick('createdAt')}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>Date</span>
+                          {renderFeedbackSortIcon('createdAt')}
+                        </div>
+                      </th>
+                      <th className="py-3.5 px-5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 font-medium">
@@ -7350,13 +7566,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {fb.helperName || 'Unassigned'}
                         </td>
                         <td className="py-4 px-5 font-extrabold text-amber-600">
-                          ⭐ {fb.riderRating} / 5
+                          ⭐ {fb.riderRating}
                         </td>
                         <td className="py-4 px-5 font-extrabold text-emerald-600">
-                          ⭐ {fb.serviceRating} / 5
+                          ⭐ {fb.serviceRating}
                         </td>
                         <td className="py-4 px-5 font-extrabold text-purple-600">
-                          ⭐ {fb.shopRating} / 5
+                          {fb.shopRating ? `⭐ ${fb.shopRating}` : <span className="text-gray-400 font-normal">—</span>}
                         </td>
                         <td className="py-4 px-5">
                           {fb.improvementComment ? (
@@ -7370,8 +7586,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">
                           {new Date(fb.createdAt).toLocaleDateString()}
                         </td>
+                        <td className="py-4 px-5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteFeedback(fb.id)}
+                            className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer"
+                            title="Delete Feedback Entry"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
                       </tr>
                     ))}
+                    {paginatedItems.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
+                          <Star className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          কোনো ফিডব্যাক পাওয়া যায়নি
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

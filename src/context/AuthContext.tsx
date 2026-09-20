@@ -196,6 +196,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // that grants it has been loaded.
     setActiveModeState(savedMode === 'admin' || savedMode === 'store' ? 'customer' : savedMode);
 
+    // Hydrate cached user from local storage immediately if available to prevent flash of logged-out UI
+    if (typeof localStorage !== 'undefined') {
+      const cachedUid = localStorage.getItem('jamanot_active_user_uid');
+      if (cachedUid) {
+        const cachedProfile = fallbackStore.users.get(cachedUid);
+        if (cachedProfile) {
+          setUser(cachedProfile);
+          applyProfile(cachedProfile, savedMode);
+        }
+      }
+    }
+
     const unsubscribeStore = fallbackStore.subscribe(() => {
       setUser((prevUser) => {
         if (!prevUser) return null;
@@ -205,7 +217,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     // Loading resolves as soon as the Firebase auth state listener fires.
-    // We no longer use signInWithRedirect (popup-only), so redirect check is skipped.
     let authReady = false;
     const maybeFinishLoading = () => {
       if (authReady) {
@@ -213,15 +224,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    // Safety net: if Firebase auth stalls (e.g. network issues), unblock after 3s
+    // Safety net: if Firebase auth stalls (e.g. slow mobile network), unblock after 10s
     const safetyTimer = setTimeout(() => {
       authReady = true;
       maybeFinishLoading();
-    }, 3000);
+    }, 10000);
 
     // Firebase Auth state listener
     const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('jamanot_active_user_uid', fbUser.uid);
+        }
         // Try fetching user from Firestore first to avoid overwriting or losing the helper/store status
         try {
           await fallbackStore.fetchUserFromFirestore(fbUser.uid);
@@ -282,6 +296,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           initFcmMessaging(fbUser.uid).catch(() => {});
         }
       } else {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem('jamanot_active_user_uid');
+        }
         setUser(null);
         fallbackStore.currentUserId = null;
         fallbackStore.teardownListeners(); // Clean up all listeners on logout
@@ -591,6 +608,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await firebaseSignOut(auth);
     } catch (e) {
       // Ignored
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('jamanot_active_user_uid');
+      localStorage.removeItem('jamanot_last_active_mode');
     }
     setUser(null);
     fallbackStore.currentUserId = null;

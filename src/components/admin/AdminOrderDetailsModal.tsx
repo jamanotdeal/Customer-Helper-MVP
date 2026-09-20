@@ -448,6 +448,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       needDeliveryBack: adminTwoWayEnabled,
       needReturnItems: adminTwoWayEnabled,
       deliveryBackTime: newDeliveryBackTime,
+      deliveryBackSetAt: adminTwoWayEnabled && newDeliveryBackTime ? (currentOrder.deliveryBackSetAt || new Date().toISOString()) : undefined,
       deliveryFee: o.isFreeDelivery ? 0 : updatedFee,
       originalDeliveryFee: o.isFreeDelivery ? 0 : updatedFee,
       lastEditedBy: 'admin' as const,

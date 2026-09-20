@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Order, WithdrawalRequest } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
+import { useModal } from '../CustomModal';
 import {
   X,
   Bike,
@@ -21,6 +22,7 @@ import {
   Clock,
   MapPin,
   Search,
+  Plus,
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
@@ -35,13 +37,29 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   helperId,
   helperName,
   onClose,
-  }) => {
+}) => {
+  const { showAlert } = useModal();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'EARNINGS' | 'JOBS' | 'PAYBACKS'>('EARNINGS');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('ALL');
+
+  // Real-time store subscription
+  const [, setStoreVersion] = useState(0);
+  useEffect(() => {
+    return fallbackStore.subscribe(() => {
+      setStoreVersion((v) => v + 1);
+    });
+  }, []);
+
+  // Commission Payback Transaction Recording State
+  const [showRecordPaymentModal, setShowRecordPaymentModal] = useState(false);
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState('Cash');
+  const [payNote, setPayNote] = useState('');
+  const [isSubmittingPayback, setIsSubmittingPayback] = useState(false);
 
   // Date Range Filtering State
   const [startDate, setStartDate] = useState<string>('');
@@ -255,6 +273,27 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     currentPage * pageSize
   );
 
+  const handleRecordPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(payAmount);
+    if (isNaN(amt) || amt <= 0) {
+      showAlert('ভুল পরিমাণ', 'অনুগ্রহ করে সঠিক পেমেন্ট পরিমাণ (৳) প্রদান করুন।', 'warning');
+      return;
+    }
+    setIsSubmittingPayback(true);
+    try {
+      await fallbackStore.recordHelperPayback(helperId, amt, payNote.trim(), payMethod);
+      setIsSubmittingPayback(false);
+      setShowRecordPaymentModal(false);
+      setPayAmount('');
+      setPayNote('');
+      showAlert('লেনদেন রেকর্ড সম্পন্ন', `হেলপারের পরিশোধিত ৳${amt} সফলভাবে রেকর্ড করা হয়েছে এবং কমিশন ডিউ থেকে কমানো হয়েছে।`, 'success');
+    } catch (err: any) {
+      setIsSubmittingPayback(false);
+      showAlert('ব্যর্থ', err?.message || 'পেমেন্ট রেকর্ড করা যায়নি।', 'error');
+    }
+  };
+
   const presetLabels = {
     ALL_TIME: 'All Time',
     TODAY: 'Today',
@@ -366,12 +405,26 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
               <span className="text-lg font-black text-blue-600">৳{earningsMetrics.paidCommission}</span>
               <span className="text-[9px] text-gray-400 block">Approved Paybacks</span>
             </div>
-            <div className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs">
-              <span className="text-[10px] font-bold text-amber-700 uppercase block">Due Commission</span>
-              <span className="text-lg font-black text-amber-600">
-                ৳{activePreset === 'ALL_TIME' ? (wallet.balance || 0) : earningsMetrics.dueCommission}
-              </span>
-              <span className="text-[9px] text-amber-600/70 block">Current Balance</span>
+            <div className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-amber-700 uppercase block">Due Commission</span>
+                <span className="text-lg font-black text-amber-600">
+                  ৳{activePreset === 'ALL_TIME' ? (wallet.balance || 0) : earningsMetrics.dueCommission}
+                </span>
+                <span className="text-[9px] text-amber-600/70 block">Current Balance</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPayAmount(String(wallet.balance > 0 ? wallet.balance : ''));
+                  setShowRecordPaymentModal(true);
+                }}
+                className="mt-1.5 py-1 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95"
+                title="Record payment to reduce commission due"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Reduce Due</span>
+              </button>
             </div>
             <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
               <span className="text-[10px] font-bold text-gray-400 uppercase block">Delivered</span>
@@ -627,6 +680,26 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
             {/* TAB 3: PAYBACKS & TRANSACTIONS */}
             {activeTab === 'PAYBACKS' && (
               <div className="space-y-4">
+                <div className="p-4 bg-gradient-to-r from-amber-500/10 via-purple-500/10 to-indigo-500/10 border border-amber-200/80 rounded-2xl flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase text-amber-800 tracking-wider block">Commission Balance & Payment</span>
+                    <p className="text-xs text-gray-800 font-bold mt-0.5">
+                      Current Outstanding Due: <strong className="text-amber-700 text-sm font-black">৳{wallet.balance || 0}</strong>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPayAmount(String(wallet.balance > 0 ? wallet.balance : ''));
+                      setShowRecordPaymentModal(true);
+                    }}
+                    className="py-2 px-4 rounded-xl bg-purple-900 hover:bg-purple-950 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4 text-purple-200" />
+                    <span>Record Payment / Reduce Due</span>
+                  </button>
+                </div>
+
                 <div className="space-y-2">
                   <h4 className="font-extrabold text-xs text-gray-700 uppercase tracking-wider">
                     Commission Payback Requests ({filteredWithdrawals.length})
@@ -718,6 +791,140 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Record Commission Payment / Reduce Due Modal */}
+      {showRecordPaymentModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-gray-100">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-indigo-950 via-purple-900 to-indigo-900 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-white/10 border border-white/20">
+                  <Receipt className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base">Record Commission Payment</h3>
+                  <p className="text-[11px] text-indigo-200">Reduce commission due amount</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRecordPaymentModal(false)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Form Content */}
+            <form onSubmit={handleRecordPayment} className="p-5 space-y-4 text-xs">
+              <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase text-amber-800 block">Helper Name</span>
+                  <span className="text-xs font-black text-gray-900">{application?.legalName || helperName}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-extrabold uppercase text-amber-800 block">Current Due</span>
+                  <span className="text-base font-black text-amber-700">৳{wallet.balance || 0}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                  Payment Amount (৳) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  step="any"
+                  placeholder="e.g. 100"
+                  value={payAmount}
+                  onChange={(e) => setPayAmount(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-purple-600 focus:bg-white transition-all"
+                />
+
+                {/* Quick Presets */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  {wallet.balance > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPayAmount(String(wallet.balance))}
+                      className="px-2.5 py-1 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-[10px] transition-colors"
+                    >
+                      Full Due (৳{wallet.balance})
+                    </button>
+                  )}
+                  {[50, 100, 200, 500, 1000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setPayAmount(String(preset))}
+                      className="px-2 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold text-[10px] transition-colors"
+                    >
+                      +৳{preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-700 mb-1">Payment Method</label>
+                <select
+                  value={payMethod}
+                  onChange={(e) => setPayMethod(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-900 outline-none focus:border-purple-600 focus:bg-white transition-all"
+                >
+                  <option value="Cash">Cash (ক্যাশ গ্রহণ)</option>
+                  <option value="bKash">bKash (বিকাশ)</option>
+                  <option value="Nagad">Nagad (নগদ)</option>
+                  <option value="Rocket">Rocket (রকেট)</option>
+                  <option value="Bank Transfer">Bank Transfer (ব্যাংক)</option>
+                  <option value="Adjustment">Adjustment / Waiver (সমন্বয়)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                  Note / Trx ID / Reference
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. TrxID #8X73... or Received at office counter"
+                  value={payNote}
+                  onChange={(e) => setPayNote(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-medium text-gray-900 outline-none focus:border-purple-600 focus:bg-white transition-all"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRecordPaymentModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPayback}
+                  className="px-5 py-2.5 rounded-xl bg-purple-900 hover:bg-purple-950 disabled:opacity-50 text-white font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                >
+                  {isSubmittingPayback ? (
+                    <span>Recording...</span>
+                  ) : (
+                    <>
+                      <Receipt className="w-3.5 h-3.5" />
+                      <span>Confirm & Record</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Admin Order Details Modal */}
       {selectedOrderId && (

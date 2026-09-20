@@ -7,9 +7,32 @@ import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ChevronDown } from 'lucide-react';
+import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ChevronDown, ShoppingBag, Pill, Utensils, Shirt, Package } from 'lucide-react';
 import Link from 'next/link';
 
+
+const isOrderActive = (o: Order): boolean => {
+  if (!o) return false;
+  if (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED') return false;
+  if (o.status === 'CANCELED' || (o.status as string) === 'CANCELLED' || o.cancellationRequest?.status === 'APPROVED') return false;
+  return ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED'].includes(o.status);
+};
+
+const isOrderPending = (o: Order): boolean => {
+  if (!o) return false;
+  if (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED' || o.status === 'CANCELED' || (o.status as string) === 'CANCELLED' || o.cancellationRequest?.status === 'APPROVED') return false;
+  return o.status === 'PENDING';
+};
+
+const isOrderCompleted = (o: Order): boolean => {
+  if (!o) return false;
+  return o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
+};
+
+const isOrderCancelled = (o: Order): boolean => {
+  if (!o) return false;
+  return o.status === 'CANCELED' || (o.status as string) === 'CANCELLED' || o.cancellationRequest?.status === 'APPROVED';
+};
 
 interface CustomerHomeProps {
   initialSelectedOrderId?: string | null;
@@ -61,12 +84,46 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     };
   }, [user]);
 
+  // Real-time synchronization when active orders exist or when app returns to foreground
+  useEffect(() => {
+    if (!user) return;
+
+    const refreshOrders = () => {
+      fallbackStore.fetchCustomerOrders(user.uid).catch(() => {});
+    };
+
+    // Initial fetch from Firestore to ensure immediate freshness
+    refreshOrders();
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        refreshOrders();
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', refreshOrders);
+
+    // If customer has any running/active orders, poll every 8 seconds to catch status updates immediately
+    const hasRunning = orders.some(isOrderActive);
+    let interval: NodeJS.Timeout | null = null;
+    if (hasRunning) {
+      interval = setInterval(refreshOrders, 8000);
+    }
+
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', refreshOrders);
+      if (interval) clearInterval(interval);
+    };
+  }, [user, orders]);
+
   // Filter logic
   const filteredOrders = orders.filter((o) => {
-    if (selectedFilter === 'ACTIVE') return ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status);
-    if (selectedFilter === 'PENDING') return o.status === 'PENDING';
-    if (selectedFilter === 'COMPLETED') return o.status === 'DELIVERED';
-    if (selectedFilter === 'CANCELLED') return o.status === 'CANCELED';
+    if (selectedFilter === 'ACTIVE') return isOrderActive(o);
+    if (selectedFilter === 'PENDING') return isOrderPending(o);
+    if (selectedFilter === 'COMPLETED') return isOrderCompleted(o);
+    if (selectedFilter === 'CANCELLED') return isOrderCancelled(o);
     return true;
   });
 
@@ -112,9 +169,72 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
         }}
       />
 
-      {/* Logged Out Content: How Jamanot Works & Why Jamanot */}
+      {/* Logged Out Content: Services, How Jamanot Works & Why Jamanot */}
       {!user && (
         <div className="space-y-4 animate-in fade-in duration-300">
+          {/* Services Available / যেসব কাজ করাতে পারবেন */}
+          <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-soft">
+            <div className="flex items-center justify-between mb-3.5">
+              <h3 className="font-extrabold text-sm md:text-base text-gray-900 flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-emerald-600" />
+                <span>যেসব কাজ করাতে পারবেন</span>
+              </h3>
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-100/60">
+                সকল সার্ভিস
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 text-xs">
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-emerald-50/40 border border-gray-100 hover:border-emerald-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-1">
+                  <ShoppingBag className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">বাজার-সদাই</span>
+                <span className="text-[11px] text-gray-500 leading-tight">কাঁচাবাজার, মাছ-মাংস, গ্যাস বা নিত্য সদাই</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-blue-50/40 border border-gray-100 hover:border-blue-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center mb-1">
+                  <Pill className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">মেডিসিন আনানো</span>
+                <span className="text-[11px] text-gray-500 leading-tight">ফার্মেসি থেকে প্রেসক্রিপশন অনুযায়ী ওষুধ</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-amber-50/40 border border-gray-100 hover:border-amber-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center mb-1">
+                  <Utensils className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">খাবার আনানো</span>
+                <span className="text-[11px] text-gray-500 leading-tight">পছন্দের রেস্তোরাঁ বা দোকান থেকে খাবার</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-purple-50/40 border border-gray-100 hover:border-purple-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center mb-1">
+                  <Shirt className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">কাপড় আয়রনে পাঠানো বা আনানো</span>
+                <span className="text-[11px] text-gray-500 leading-tight">লন্ড্রি থেকে কাপড় ইস্ত্রি, ওয়াশ ও আনা-নেওয়া</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-teal-50/40 border border-gray-100 hover:border-teal-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center mb-1">
+                  <Package className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">কোনো কিছু কাউকে পাঠানো</span>
+                <span className="text-[11px] text-gray-500 leading-tight">পার্সেল, ফাইল বা প্রয়োজনীয় জিনিস পৌঁছে দেওয়া ও আনা</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-gray-50/80 hover:bg-rose-50/40 border border-gray-100 hover:border-rose-200 transition-all flex flex-col space-y-1">
+                <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center mb-1">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <span className="font-extrabold text-gray-900 text-xs sm:text-sm">অন্য যেকোনো কাজ</span>
+                <span className="text-[11px] text-gray-500 leading-tight">যা আপনাকে ঘরের বাইরে গিয়ে করতে হবে</span>
+              </div>
+            </div>
+          </div>
+
           {/* How Jamanot Works */}
           <div className="bg-emerald-50/80 border border-emerald-100 rounded-3xl p-5 text-emerald-950 shadow-soft">
             <h3 className="font-extrabold text-base mb-3 text-emerald-900 flex items-center space-x-2">
@@ -188,7 +308,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
           {/* Horizontal Scrollable Filter Chips */}
           <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-1">
             {(['ALL', 'ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED'] as const).map((filter) => {
-              const activeCount = orders.filter((o) => ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(o.status)).length;
+              const activeCount = orders.filter(isOrderActive).length;
               const isActiveChip = filter === 'ACTIVE';
               const hasActiveOrders = activeCount > 0 && isActiveChip;
               return (
