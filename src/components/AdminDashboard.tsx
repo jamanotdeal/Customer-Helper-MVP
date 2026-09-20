@@ -2000,6 +2000,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const tabsList = [
     { key: 'EXCEPTIONS', label: 'Needs Attention', icon: AlertCircle, color: 'text-amber-500' },
+    { key: 'GROWTH', label: 'Growth & Everyday Rates', icon: BarChart2, color: 'text-indigo-600' },
     { key: 'ORDERS', label: 'All Orders', icon: ShoppingBag, color: 'text-emerald-600' },
     { key: 'USERS_LIST', label: 'User Lists', icon: Users, color: 'text-purple-600' },
     { key: 'HELPERS', label: 'Helpers', icon: Bike, color: 'text-emerald-600' },
