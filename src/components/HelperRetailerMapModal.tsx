@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Shop, LocationData } from '@/types';
-import { X, Navigation, Store } from 'lucide-react';
+import { X, Navigation, Store, Filter, Check } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
@@ -46,6 +46,34 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
   const markersRef = useRef<Map<string, any>>(new Map());
   const hasFittedRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
+
+  // Category filter state (multi-select)
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+
+  // Compute all available categories from the shops
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    shops.forEach((s) => {
+      if (s.type && s.type.trim()) cats.add(s.type.trim());
+    });
+    return Array.from(cats).sort();
+  }, [shops]);
+
+  // Filtered shops based on selected categories
+  const filteredShops = useMemo(() => {
+    if (selectedCategories.length === 0) return shops;
+    return shops.filter((s) => s.type && selectedCategories.includes(s.type.trim()));
+  }, [shops, selectedCategories]);
+
+  const toggleCategory = (cat: string) => {
+    setSelectedCategories((prev) =>
+      prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
+    );
+  };
+
+  const clearCategories = () => {
+    setSelectedCategories([]);
+  };
 
   // Initialize map
   useEffect(() => {
@@ -143,7 +171,7 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
       if (!isMapAlive(map)) return;
 
       const allPoints: [number, number][] = [];
-      const currentIds = new Set(shops.map((s) => s.id));
+      const currentIds = new Set(filteredShops.map((s) => s.id));
 
       markersRef.current.forEach((marker, id) => {
         if (!currentIds.has(id)) {
@@ -153,7 +181,7 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
       });
 
       const spiderfiedShops = getSpiderfiedCoordinates(
-        shops,
+        filteredShops,
         (s) => s.location?.lat,
         (s) => s.location?.lng
       );
@@ -219,12 +247,12 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
 
     render();
     return () => { cancelled = true; };
-  }, [shops, mapReady, selectedShopIds]);
+  }, [filteredShops, mapReady, selectedShopIds]);
 
   const handleRecenter = async () => {
     if (!isMapAlive(mapInstanceRef.current)) return;
     const L = await import('leaflet');
-    const pts: [number, number][] = shops
+    const pts: [number, number][] = filteredShops
       .filter((s) => s.location?.lat && s.location?.lng)
       .map((s) => [s.location.lat!, s.location.lng!]);
 
@@ -253,7 +281,7 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
           <div>
             <h3 className="font-black text-sm text-white leading-tight">নিকটবর্তী দোকান বেছে নিন</h3>
             <p className="text-[10px] text-slate-400 font-medium">
-              {shops.length} store{shops.length !== 1 ? 's' : ''} within {radiusKm}km · Tap a pin to view & select
+              {filteredShops.length} of {shops.length} store{shops.length !== 1 ? 's' : ''} showing within {radiusKm}km · Tap a pin to view & select
             </p>
           </div>
         </div>
@@ -265,6 +293,56 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Category Multi-Select Filter Bar */}
+      {availableCategories.length > 0 && (
+        <div className="px-4 py-2.5 bg-slate-900/95 border-b border-slate-800 flex items-center gap-2 overflow-x-auto shrink-0">
+          <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-purple-300 shrink-0 mr-1">
+            <Filter className="w-3.5 h-3.5" />
+            <span>ফিল্টার:</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={clearCategories}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+              selectedCategories.length === 0
+                ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+                : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60'
+            }`}
+          >
+            {selectedCategories.length === 0 && <Check className="w-3.5 h-3.5" />}
+            <span>সব দোকান ({shops.length})</span>
+          </button>
+
+          {availableCategories.map((cat) => {
+            const isSelected = selectedCategories.includes(cat);
+            const count = shops.filter((s) => s.type && s.type.trim() === cat).length;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => toggleCategory(cat)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                  isSelected
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-400/40'
+                    : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60 hover:text-white'
+                }`}
+              >
+                {isSelected && <Check className="w-3 h-3" />}
+                <span>{cat}</span>
+                <span
+                  className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${
+                    isSelected ? 'bg-emerald-800 text-white' : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Map Legend */}
       <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/90 border-b border-slate-800 overflow-x-auto shrink-0">
@@ -299,12 +377,16 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
           </button>
         </div>
 
-        {shops.length === 0 && (
+        {filteredShops.length === 0 && (
           <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
             <div className="bg-slate-900/90 backdrop-blur-md text-white text-sm font-bold px-6 py-4 rounded-2xl border border-slate-700 text-center">
               <Store className="w-8 h-8 text-purple-400 mx-auto mb-2" />
-              <p>এই এলাকায় কোনো দোকান নেই</p>
-              <p className="text-[10px] text-slate-400 font-medium mt-1">No registered retailers within {radiusKm}km</p>
+              <p>এই ক্যাটাগরিতে কোনো দোকান পাওয়া যায়নি</p>
+              <p className="text-[10px] text-slate-400 font-medium mt-1">
+                {selectedCategories.length > 0
+                  ? 'Try selecting different categories or clear the filter'
+                  : `No registered retailers within ${radiusKm}km`}
+              </p>
             </div>
           </div>
         )}

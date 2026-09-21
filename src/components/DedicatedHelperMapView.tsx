@@ -393,7 +393,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
           allBoundsPoints.push([displayLat, displayLng]);
         }
 
-        const elapsedStr = getElapsedTime(order.createdAt);
+        const elapsedStr = getElapsedTime(order);
         const orderTitle = order.title || order.service || 'অর্ডার';
 
         const totalOrders = sortedOrders.length;
@@ -1102,7 +1102,7 @@ export const DedicatedHelperMapView: React.FC<DedicatedHelperMapViewProps> = ({
             </div>
             <div className="flex items-center gap-1.5 text-sm font-extrabold text-red-500 bg-red-950/60 px-3 py-1.5 rounded-xl border border-red-500/40 shrink-0 shadow-sm">
               <Clock className="w-4 h-4 text-red-500 animate-pulse" />
-              <span>{getElapsedTime(selectedOrder.createdAt)}</span>
+              <span>{getElapsedTime(selectedOrder)}</span>
             </div>
           </div>
 

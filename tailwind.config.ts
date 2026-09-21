@@ -53,6 +53,10 @@ const config: Config = {
           from: { transform: 'translateY(100%)', opacity: '0' },
           to:   { transform: 'translateY(0)', opacity: '1' },
         },
+        'slide-up-fade': {
+          '0%': { opacity: '0', transform: 'translateY(14px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
         'scale-in': {
           from: { transform: 'scale(0.93)', opacity: '0' },
           to:   { transform: 'scale(1)', opacity: '1' },
@@ -61,6 +65,7 @@ const config: Config = {
       animation: {
         'fade-in-up': 'fade-in-up 220ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'slide-up': 'slide-up 280ms cubic-bezier(0.16, 1, 0.3, 1) both',
+        'slide-up-fade': 'slide-up-fade 450ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'scale-in': 'scale-in 200ms cubic-bezier(0.34, 1.56, 0.64, 1) both',
       },
     },

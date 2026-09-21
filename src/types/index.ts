@@ -272,8 +272,15 @@ export interface OrderFeedback {
   riderRating: number;
   serviceRating: number;
   shopRating: number;
+  thumbsUp?: boolean;          // true = positive, false = negative (new thumbs system)
   improvementComment?: string;
   createdAt: string;
+  // Admin reply fields
+  adminReply?: string;              // Admin's reply text
+  adminReplyAt?: string;            // ISO timestamp when admin wrote the reply
+  adminReplyShowFrom?: string;      // ISO timestamp — do not show the reply before this time
+  adminReplyShowUntil?: string;     // ISO timestamp until which the reply modal can be shown to customer
+  adminReplyShownToCustomer?: boolean; // Set to true after customer has seen/dismissed the reply once
 }
 
 export type ModalButtonActionType = 'CLOSE' | 'REDIRECT';
@@ -525,6 +532,8 @@ export interface ShopOrder {
   requestText: string;       // Helper's typed order/request
   status: ShopOrderStatus;
   price?: number;            // Set by store
+  sellerName?: string;       // Custom cost seller / vendor name
+  sellerPhone?: string;      // Custom cost seller / vendor phone number
   note?: string;             // Store's note to helper
   viewedByStore?: boolean;   // Set to true when store clicks "দেখতেছি" or views the order
   createdAt: string;

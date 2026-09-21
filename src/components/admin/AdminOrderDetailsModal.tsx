@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { MapPickerModal } from '../MapPickerModal';
-import { calculateHelperCommission, calculateEstimatedFee } from '@/lib/pricing';
+import { HelperOrderMapModal } from '../HelperOrderMapModal';
+import { calculateHelperCommission, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
+import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from '../CustomModal';
 import { useAuth } from '@/context/AuthContext';
 import { formatCreatedAt, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
@@ -33,6 +35,10 @@ import {
   Plus,
   AlertCircle,
   Compass,
+  Map as MapIcon,
+  Navigation,
+  Maximize2,
+  ExternalLink,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 
@@ -62,6 +68,244 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     const unsub = fallbackStore.subscribe(sync);
     return () => unsub();
   }, [orderId]);
+
+  // Map state and refs for accurate pickup/delivery route visualization
+  const mapContainerRef = React.useRef<HTMLDivElement>(null);
+  const mapInstanceRef = React.useRef<any>(null);
+  const layersRef = React.useRef<any[]>([]);
+  const [showFullMapModal, setShowFullMapModal] = useState(false);
+  const [roadDistanceKm, setRoadDistanceKm] = useState<number | null>(null);
+
+  const helperUser = order?.helperId ? fallbackStore.users.get(order.helperId) : undefined;
+  const helperLocation = helperUser?.helperLocation;
+
+  // Initialize and update embedded Leaflet map
+  useEffect(() => {
+    if (!order) return;
+
+    let isMounted = true;
+    let timer: any = null;
+
+    const initMap = async () => {
+      if (!mapContainerRef.current) return;
+
+      const pLat = order.pickupLocation?.lat;
+      const pLng = order.pickupLocation?.lng;
+      const dLat = order.deliveryLocation?.lat;
+      const dLng = order.deliveryLocation?.lng;
+      const hLat = helperLocation?.lat;
+      const hLng = helperLocation?.lng;
+
+      // Only render if at least one coordinate is present
+      if (!pLat && !dLat && !hLat) return;
+
+      try {
+        const L = await import('leaflet');
+        if (!isMounted || !mapContainerRef.current) return;
+
+        // Ensure Leaflet CSS is present
+        if (!document.getElementById('leaflet-css-picker')) {
+          const link = document.createElement('link');
+          link.id = 'leaflet-css-picker';
+          link.rel = 'stylesheet';
+          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          document.head.appendChild(link);
+        }
+
+        // Clean existing map instance if container changed
+        if (mapInstanceRef.current) {
+          try {
+            mapInstanceRef.current.remove();
+          } catch (e) {}
+          mapInstanceRef.current = null;
+        }
+
+        const map = L.map(mapContainerRef.current, {
+          zoomControl: true,
+          scrollWheelZoom: false,
+        }).setView([pLat || dLat || hLat || 23.8759, pLng || dLng || hLng || 90.3795], 14);
+
+        mapInstanceRef.current = map;
+
+        L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+          attribution: '&copy; Google Maps Satellite',
+          maxZoom: 20,
+        }).addTo(map);
+
+        layersRef.current = [];
+        const boundsPoints: [number, number][] = [];
+
+        // 1. Pickup Marker
+        if (pLat && pLng) {
+          const pickupHtml = `
+            <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 110px; height: 50px; pointer-events: none;">
+              <div style="background: #eab308; color: #713f12; font-size: 10px; font-weight: 900; padding: 3px 6px; border-radius: 8px; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.4); white-space: nowrap;">
+                📦 Pickup Point
+              </div>
+              <div style="width: 2px; height: 10px; background: #eab308;"></div>
+              <div style="width: 12px; height: 12px; border-radius: 50%; background: #eab308; border: 2.5px solid white; box-shadow: 0 0 8px #eab308;"></div>
+            </div>
+          `;
+          const pickupMarker = L.marker([pLat, pLng], {
+            icon: L.divIcon({
+              className: 'admin-pickup-marker',
+              html: pickupHtml,
+              iconSize: [110, 50],
+              iconAnchor: [55, 48],
+            }),
+          }).addTo(map);
+          pickupMarker.bindPopup(`<b>📦 Pickup Address:</b><br/>${order.pickupLocation?.address || 'Pickup Point'}`);
+          layersRef.current.push(pickupMarker);
+          boundsPoints.push([pLat, pLng]);
+        }
+
+        // 2. Delivery Marker
+        if (dLat && dLng) {
+          const deliveryHtml = `
+            <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 110px; height: 50px; pointer-events: none;">
+              <div style="background: #10b981; color: white; font-size: 10px; font-weight: 900; padding: 3px 6px; border-radius: 8px; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.4); white-space: nowrap;">
+                🏠 Delivery Point
+              </div>
+              <div style="width: 2px; height: 10px; background: #10b981;"></div>
+              <div style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 2.5px solid white; box-shadow: 0 0 8px #10b981;"></div>
+            </div>
+          `;
+          const deliveryMarker = L.marker([dLat, dLng], {
+            icon: L.divIcon({
+              className: 'admin-delivery-marker',
+              html: deliveryHtml,
+              iconSize: [110, 50],
+              iconAnchor: [55, 48],
+            }),
+          }).addTo(map);
+          deliveryMarker.bindPopup(`<b>🏠 Delivery Address:</b><br/>${order.deliveryLocation?.address || 'Delivery Point'}`);
+          layersRef.current.push(deliveryMarker);
+          boundsPoints.push([dLat, dLng]);
+        }
+
+        // 3. Helper Marker
+        if (hLat && hLng) {
+          const helperName = helperUser?.displayName || 'Assigned Helper';
+          const helperHtml = `
+            <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 110px; height: 50px; pointer-events: none;">
+              <div style="background: #3b82f6; color: white; font-size: 10px; font-weight: 900; padding: 3px 6px; border-radius: 8px; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.4); white-space: nowrap;">
+                🛵 ${helperName}
+              </div>
+              <div style="width: 2px; height: 10px; background: #3b82f6;"></div>
+              <div style="width: 14px; height: 14px; border-radius: 50%; background: #3b82f6; border: 2.5px solid white; box-shadow: 0 0 10px #3b82f6; animation: pulse 1.5s infinite;"></div>
+            </div>
+          `;
+          const helperMarker = L.marker([hLat, hLng], {
+            icon: L.divIcon({
+              className: 'admin-helper-marker',
+              html: helperHtml,
+              iconSize: [110, 50],
+              iconAnchor: [55, 48],
+            }),
+          }).addTo(map);
+          helperMarker.bindPopup(`<b>🛵 Helper:</b><br/>${helperName}`);
+          layersRef.current.push(helperMarker);
+          boundsPoints.push([hLat, hLng]);
+        }
+
+        // Draw Road Route Polylines
+        if (pLat && pLng && dLat && dLng) {
+          fetchRoadRoute([{ lat: pLat, lng: pLng }, { lat: dLat, lng: dLng }]).then((coords) => {
+            if (!isMounted || !mapInstanceRef.current) return;
+            if (coords.length > 0) {
+              const poly = L.polyline(coords, {
+                color: '#10b981',
+                weight: 5,
+                opacity: 0.95,
+                lineCap: 'round',
+                lineJoin: 'round',
+              }).addTo(mapInstanceRef.current);
+              layersRef.current.push(poly);
+
+              // Calculate approx road distance
+              let dist = 0;
+              for (let i = 0; i < coords.length - 1; i++) {
+                const c1 = coords[i];
+                const c2 = coords[i + 1];
+                const R = 6371;
+                const dLatR = ((c2[0] - c1[0]) * Math.PI) / 180;
+                const dLonR = ((c2[1] - c1[1]) * Math.PI) / 180;
+                const a = Math.sin(dLatR / 2) ** 2 + Math.cos((c1[0] * Math.PI) / 180) * Math.cos((c2[0] * Math.PI) / 180) * Math.sin(dLonR / 2) ** 2;
+                dist += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              }
+              setRoadDistanceKm(Math.round(dist * 10) / 10);
+            }
+          });
+        }
+
+        if (hLat && hLng && pLat && pLng) {
+          fetchRoadRoute([{ lat: hLat, lng: hLng }, { lat: pLat, lng: pLng }]).then((coords) => {
+            if (!isMounted || !mapInstanceRef.current) return;
+            if (coords.length > 0) {
+              const polyH = L.polyline(coords, {
+                color: '#f59e0b',
+                weight: 4,
+                opacity: 0.9,
+                dashArray: '7, 6',
+                lineCap: 'round',
+                lineJoin: 'round',
+              }).addTo(mapInstanceRef.current);
+              layersRef.current.push(polyH);
+            }
+          });
+        }
+
+        if (boundsPoints.length > 1) {
+          map.fitBounds(L.latLngBounds(boundsPoints), { padding: [50, 50], maxZoom: 16 });
+        } else if (boundsPoints.length === 1) {
+          map.setView(boundsPoints[0], 15);
+        }
+
+        // Invalidate size once rendered
+        setTimeout(() => {
+          if (isMounted && mapInstanceRef.current) {
+            try {
+              mapInstanceRef.current.invalidateSize();
+            } catch (e) {}
+          }
+        }, 200);
+      } catch (err) {
+        console.error('[AdminOrderDetailsModal] Map render error:', err);
+      }
+    };
+
+    timer = setTimeout(initMap, 100);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+      if (mapInstanceRef.current) {
+        try {
+          mapInstanceRef.current.remove();
+        } catch (e) {}
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [
+    order?.id,
+    order?.pickupLocation?.lat,
+    order?.pickupLocation?.lng,
+    order?.deliveryLocation?.lat,
+    order?.deliveryLocation?.lng,
+    order?.helperId,
+    helperLocation?.lat,
+    helperLocation?.lng,
+  ]);
+
+  const handleOpenGoogleMapsDirections = () => {
+    const p = order?.pickupLocation;
+    const d = order?.deliveryLocation;
+    if (!d?.lat || !d?.lng) return;
+    const originStr = p?.lat && p?.lng ? `&origin=${p.lat},${p.lng}` : '';
+    const destStr = `${d.lat},${d.lng}`;
+    const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}&travelmode=driving`;
+    window.open(url, '_blank');
+  };
 
   // Admin edit modals
   const [showAdminFeeModal, setShowAdminFeeModal] = useState(false);
@@ -204,6 +448,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       needDeliveryBack: adminTwoWayEnabled,
       needReturnItems: adminTwoWayEnabled,
       deliveryBackTime: newDeliveryBackTime,
+      deliveryBackSetAt: adminTwoWayEnabled && newDeliveryBackTime ? (currentOrder.deliveryBackSetAt || new Date().toISOString()) : undefined,
       deliveryFee: o.isFreeDelivery ? 0 : updatedFee,
       originalDeliveryFee: o.isFreeDelivery ? 0 : updatedFee,
       lastEditedBy: 'admin' as const,
@@ -1008,7 +1253,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     </span>
                     <button
                       onClick={handleOpenSetPickupModal}
-                      className="p-1 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-900 transition-colors shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5"
+                      className="p-1 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-900 transition-colors shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 cursor-pointer"
                       title={order.pickupLocation?.address ? "Edit Pickup Location" : "Set Pickup Location"}
                     >
                       <Edit2 className="w-3 h-3" />
@@ -1032,7 +1277,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     </span>
                     <button
                       onClick={() => setActiveMapPicker('delivery')}
-                      className="p-1 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-800 transition-colors shrink-0"
+                      className="p-1 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-800 transition-colors shrink-0 cursor-pointer"
                       title="Edit Delivery Location"
                     >
                       <Edit2 className="w-3 h-3" />
@@ -1041,6 +1286,127 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   <p className="text-gray-900 font-medium leading-relaxed">{order.deliveryLocation?.address || 'N/A'}</p>
                 </div>
               </div>
+
+              {/* Visual Map Section for Pickup & Delivery Route */}
+              {(() => {
+                const straightDist = (order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng)
+                  ? calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng)
+                  : null;
+
+                const hasAnyCoordinates = Boolean(
+                  (order.pickupLocation?.lat && order.pickupLocation?.lng) ||
+                  (order.deliveryLocation?.lat && order.deliveryLocation?.lng) ||
+                  (helperLocation?.lat && helperLocation?.lng)
+                );
+
+                return (
+                  <div className="pt-2 border-t border-gray-100 space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center space-x-2">
+                        <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700">
+                          <MapIcon className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-xs text-gray-900 flex items-center gap-1.5">
+                            <span>Route & GPS Locations</span>
+                            <span className="text-[10px] font-bold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
+                              পিকআপ ও ডেলিভারি ম্যাপ ভিউ
+                            </span>
+                          </h4>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {straightDist !== null && (
+                          <span className="text-[11px] font-black text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200 shadow-2xs">
+                            📍 {roadDistanceKm ? `${roadDistanceKm} km (Road)` : `${straightDist.toFixed(2)} km`}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowFullMapModal(true)}
+                          className="px-2.5 py-1 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-xs flex items-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                          title="Open Full Interactive Map"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5 text-purple-700" />
+                          <span className="hidden sm:inline">Full Map</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleOpenGoogleMapsDirections}
+                          disabled={!order.deliveryLocation?.lat || !order.deliveryLocation?.lng}
+                          className="px-2.5 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs flex items-center gap-1 transition-all active:scale-95 cursor-pointer shadow-xs"
+                          title="Open Navigation in Google Maps"
+                        >
+                          <Navigation className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Google Maps</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {!hasAnyCoordinates ? (
+                      <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-center space-y-2">
+                        <p className="text-xs font-bold text-amber-950">ম্যাপে প্রদর্শনের জন্য জিপিএস কোঅর্ডিনেট নেই</p>
+                        <p className="text-[11px] text-amber-800">পিকআপ বা ডেলিভারি লোকেশন ম্যাপে পয়েন্ট করতে নিচের বাটনে চাপুন।</p>
+                        <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={handleOpenSetPickupModal}
+                            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            <span>Set Pickup GPS</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMapPicker('delivery')}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            <span>Set Delivery GPS</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative w-full h-[240px] sm:h-[280px] rounded-2xl border border-gray-200 overflow-hidden bg-slate-900 shadow-inner group">
+                        <div ref={mapContainerRef} className="w-full h-full z-10" />
+
+                        {/* Missing point badge if one is missing */}
+                        {(!order.pickupLocation?.lat || !order.pickupLocation?.lng) && (
+                          <div className="absolute top-2.5 left-2.5 z-20 bg-amber-500/90 text-white text-[10px] font-black px-2.5 py-1 rounded-xl shadow-md backdrop-blur-xs flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" />
+                            <span>Pickup GPS missing</span>
+                            <button
+                              type="button"
+                              onClick={handleOpenSetPickupModal}
+                              className="underline ml-1 cursor-pointer hover:text-amber-100 font-extrabold"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Legend overlay */}
+                        <div className="absolute bottom-2.5 left-2.5 z-20 flex items-center gap-2.5 bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700 text-[10px] font-bold text-white shadow-md">
+                          <div className="flex items-center gap-1">
+                            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block shadow-xs"></span>
+                            <span>Pickup</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shadow-xs"></span>
+                            <span>Delivery</span>
+                          </div>
+                          {helperLocation?.lat && helperLocation?.lng && (
+                            <div className="flex items-center gap-1">
+                              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block shadow-xs"></span>
+                              <span>Helper</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {order.additionalNote && (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-medium">
@@ -1138,9 +1504,13 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                               )}
                             </div>
                             <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
-                              so.status === 'HANDOVER' || so.status === 'READY'
+                              so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'DELIVERED'
                                 ? 'bg-emerald-100 text-emerald-800'
-                                : so.status === 'CANCELED'
+                                : so.status === 'ACCEPTED'
+                                ? 'bg-blue-100 text-blue-800'
+                                : so.status === 'PREPARING'
+                                ? 'bg-purple-100 text-purple-800'
+                                : so.status === 'CANCELED' || (so.status as string) === 'CANCELLED'
                                 ? 'bg-red-100 text-red-800'
                                 : 'bg-amber-100 text-amber-800'
                             }`}>
@@ -2178,6 +2548,18 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Fullscreen Interactive Map Modal */}
+      {showFullMapModal && order && (
+        <HelperOrderMapModal
+          isOpen={showFullMapModal}
+          onClose={() => setShowFullMapModal(false)}
+          order={order}
+          helperLocation={helperLocation}
+          shops={Array.from(fallbackStore.shops.values())}
+          shopOrders={fallbackStore.getShopOrdersForOrder(order.id)}
+        />
       )}
     </>
   );

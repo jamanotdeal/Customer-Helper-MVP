@@ -1,16 +1,77 @@
 import React, { useState } from 'react';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
-import { Bell, Send, X, Users, UserCheck, ShieldAlert, Sparkles, CheckCircle2, Search, Clock, Calendar, Repeat } from 'lucide-react';
+import {
+  Bell, Send, X, Users, UserCheck, ShieldAlert, Sparkles,
+  CheckCircle2, Search, Clock, Calendar, Repeat, SlidersHorizontal,
+  Filter, Coins, TrendingUp, CalendarClock, BarChart2, ChevronDown,
+} from 'lucide-react';
 import { TimePickerInput } from './TimePickerInput';
 import { AppNotification, UserProfile } from '@/types';
 
+/* ─── Types ─────────────────────────────────────────────────────────────── */
 
 interface AdminPushNotificationModalProps {
   onClose: () => void;
   editingNotification?: AppNotification | null;
   initialData?: Partial<AppNotification> | null;
 }
+
+/** Structured custom segment params (all optional / additive) */
+interface CustomSegmentFilters {
+  /** minimum total orders (inclusive) */
+  minOrders?: number;
+  /** maximum total orders (inclusive, for "low frequency" scenarios) */
+  maxOrders?: number;
+  /** last order must be within N days (0 = ignore) */
+  lastOrderWithinDays?: number;
+  /** last order must be MORE than N days ago (for inactive targeting) */
+  lastOrderOlderThanDays?: number;
+  /** weekly order rate >= this value */
+  weeklyRateGte?: number;
+  /** weekly order rate < this value (for rare-order targeting) */
+  weeklyRateLt?: number;
+  /** coin balance >= this value */
+  minCoins?: number;
+  /** coin balance <= this value */
+  maxCoins?: number;
+  /** registered within the last N days */
+  registeredWithinDays?: number;
+}
+
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+
+function encodeCustomSegment(f: CustomSegmentFilters): string {
+  const parts: string[] = [];
+  if (f.minOrders !== undefined && f.minOrders > 0) parts.push(`minOrders=${f.minOrders}`);
+  if (f.maxOrders !== undefined && f.maxOrders >= 0) parts.push(`maxOrders=${f.maxOrders}`);
+  if (f.lastOrderWithinDays !== undefined && f.lastOrderWithinDays > 0) parts.push(`lastOrderWithinDays=${f.lastOrderWithinDays}`);
+  if (f.lastOrderOlderThanDays !== undefined && f.lastOrderOlderThanDays > 0) parts.push(`lastOrderOlderThanDays=${f.lastOrderOlderThanDays}`);
+  if (f.weeklyRateGte !== undefined && f.weeklyRateGte > 0) parts.push(`weeklyRateGte=${f.weeklyRateGte}`);
+  if (f.weeklyRateLt !== undefined && f.weeklyRateLt > 0) parts.push(`weeklyRateLt=${f.weeklyRateLt}`);
+  if (f.minCoins !== undefined && f.minCoins > 0) parts.push(`minCoins=${f.minCoins}`);
+  if (f.maxCoins !== undefined && f.maxCoins >= 0) parts.push(`maxCoins=${f.maxCoins}`);
+  if (f.registeredWithinDays !== undefined && f.registeredWithinDays > 0) parts.push(`registeredWithinDays=${f.registeredWithinDays}`);
+  return `CUSTOM:${parts.join(':')}`;
+}
+
+/* ─── Filter badge label helpers ─────────────────────────────────────────── */
+
+function filterBadges(f: CustomSegmentFilters): string[] {
+  const b: string[] = [];
+  if ((f.minOrders ?? 0) > 0) b.push(`≥ ${f.minOrders} orders`);
+  if ((f.maxOrders ?? Infinity) < Infinity && f.maxOrders !== undefined) b.push(`≤ ${f.maxOrders} orders`);
+  if ((f.lastOrderWithinDays ?? 0) > 0) b.push(`Ordered last ${f.lastOrderWithinDays}d`);
+  if ((f.lastOrderOlderThanDays ?? 0) > 0) b.push(`Inactive ${f.lastOrderOlderThanDays}+ days`);
+  if ((f.weeklyRateGte ?? 0) > 0) b.push(`Weekly rate ≥ ${f.weeklyRateGte}`);
+  if ((f.weeklyRateLt ?? 0) > 0) b.push(`Weekly rate < ${f.weeklyRateLt}`);
+  if ((f.minCoins ?? 0) > 0) b.push(`Coins ≥ ${f.minCoins}`);
+  if ((f.maxCoins ?? Infinity) < Infinity && f.maxCoins !== undefined) b.push(`Coins ≤ ${f.maxCoins}`);
+  if ((f.registeredWithinDays ?? 0) > 0) b.push(`New (${f.registeredWithinDays}d)`);
+  return b;
+}
+
+/* ─── Component ──────────────────────────────────────────────────────────── */
 
 export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProps> = ({
   onClose,
@@ -34,7 +95,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     if (initialSource?.userId?.startsWith('segment:')) {
       return initialSource.userId.replace('segment:', '');
     }
-    return 'MULTIPLE_ORDERS';
+    return 'preset';
   };
 
   const getInitialUserUid = () => {
@@ -72,9 +133,12 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     return '10:00';
   };
 
+  /* ── Core state ──────────────────────────────────────────────────────────── */
   const [targetAudience, setTargetAudience] = useState<'helpers' | 'customers' | 'all' | 'specific' | 'segment'>(getInitialTarget);
-  const [selectedSegment, setSelectedSegment] = useState<string>(getInitialSegment);
-  const [selectedUserUid, setSelectedUserUid] = useState<string>(getInitialUserUid);
+  // 'preset' = classic quick dropdown; 'custom' = filter builder
+  const [segmentMode, setSegmentMode] = useState<'preset' | 'custom'>('preset');
+  const [selectedSegment, setSelectedSegment] = useState<string>(getInitialSegment());
+  const [selectedUserUid, setSelectedUserUid] = useState<string>(getInitialUserUid());
   const [searchUserQuery, setSearchUserQuery] = useState<string>('');
   const [title, setTitle] = useState<string>(initialSource?.title || '');
   const [body, setBody] = useState<string>(initialSource?.body || '');
@@ -82,7 +146,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
   const [imageUrl, setImageUrl] = useState<string>(initialSource?.imageUrl || '');
   const [isSending, setIsSending] = useState<boolean>(false);
 
-  // Scheduled Notification state
+  /* ── Schedule state ─────────────────────────────────────────────────────── */
   const [sendTiming, setSendTiming] = useState<'now' | 'scheduled'>(
     initialSource?.isScheduled || initialSource?.scheduledAt ? 'scheduled' : 'now'
   );
@@ -92,10 +156,14 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     initialSource?.repeatFrequency || 'NONE'
   );
 
+  /* ── Custom segment filter state ─────────────────────────────────────────── */
+  const [customFilters, setCustomFilters] = useState<CustomSegmentFilters>({});
+
+  /* ── User search state ───────────────────────────────────────────────────── */
   const [isSearchingUser, setIsSearchingUser] = useState<boolean>(false);
   const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
 
-  // Search registered users directly from server when query is entered
+  /* ── User search effect ─────────────────────────────────────────────────── */
   React.useEffect(() => {
     if (!searchUserQuery.trim()) {
       setSearchResults([]);
@@ -128,6 +196,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     return () => clearTimeout(timer);
   }, [searchUserQuery]);
 
+  /* ── Presets ────────────────────────────────────────────────────────────── */
   const presets = [
     { label: 'অফার বা আপডেট', title: 'জামানট বিশেষ আপডেট!', body: 'প্রিয় গ্রাহক, জামানট-এর মাধ্যমে দ্রুত ডেলিভারি সেবায় আপনাকে স্বাগতম।' },
     { label: 'হেলপার অ্যালার্ট', title: 'নতুন রিকোয়েস্ট সতর্কবার্তা!', body: 'আপনার এলাকায় নতুন অর্ডার উপলব্ধ রয়েছে। এখনই রিকোয়েস্ট চেক করুন।' },
@@ -140,23 +209,41 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     setBody(preset.body);
   };
 
+  /* ── Custom filter updater ──────────────────────────────────────────────── */
+  const updateFilter = (key: keyof CustomSegmentFilters, raw: string) => {
+    const num = raw === '' ? undefined : parseInt(raw, 10);
+    setCustomFilters((prev) => ({ ...prev, [key]: num }));
+  };
+
+  /* ── Build effective segment key ─────────────────────────────────────────── */
+  const effectiveSegmentKey = segmentMode === 'custom'
+    ? encodeCustomSegment(customFilters)
+    : selectedSegment;
+
+  /* ── Send handler ────────────────────────────────────────────────────────── */
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !body.trim()) {
-      showAlert('ভুল তথ্য', 'দয়া করে নোটিফিকেশনের শিরোনাম এবং বিস্তারিত বিবরণ লিখুন।', 'warning');
+      showAlert('ভুল তথ্য', 'দয়া করে নোটিফিকেশনের শিরোনাম এবং বিস্তারিত বিবরণ লিখুন।', 'warning');
       return;
     }
-
     if (targetAudience === 'specific' && !selectedUserUid) {
-      showAlert('ইউজার সিলেক্ট করুন', 'দয়া করে নোটিফিকেশন পাঠানোর জন্য একজন নির্দিষ্ট ইউজার সিলেক্ট করুন।', 'warning');
+      showAlert('ইউজার সিলেক্ট করুন', 'দয়া করে নোটিফিকেশন পাঠানোর জন্য একজন নির্দিষ্ট ইউজার সিলেক্ট করুন।', 'warning');
+      return;
+    }
+    if (targetAudience === 'segment' && segmentMode === 'custom' && filterBadges(customFilters).length === 0) {
+      showAlert('ফিল্টার যোগ করুন', 'অন্তত একটি অডিয়েন্স ফিল্টার সিলেক্ট করুন।', 'warning');
       return;
     }
 
     setIsSending(true);
     try {
-      const targetKey = targetAudience === 'specific' 
-        ? selectedUserUid 
-        : (targetAudience === 'segment' ? `segment:${selectedSegment}` : targetAudience);
+      const targetKey =
+        targetAudience === 'specific'
+          ? selectedUserUid
+          : targetAudience === 'segment'
+          ? `segment:${effectiveSegmentKey}`
+          : targetAudience;
 
       let scheduledAtIso: string | undefined = undefined;
       if (sendTiming === 'scheduled' && scheduledDate && scheduledTime) {
@@ -180,11 +267,11 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
           imageUrl: imageUrl.trim() || undefined,
           scheduledAt: scheduledAtIso,
           isScheduled: isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE'),
-          repeatFrequency: repeatFrequency,
+          repeatFrequency,
           repeatTime: scheduledTime,
         });
 
-        showAlert('নোটিফিকেশন আপডেট সম্পন্ন!', 'সিডিউলকৃত নোটিফিকেশনের সকল তথ্য সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
+        showAlert('নোটিফিকেশন আপডেট সম্পন্ন!', 'সিডিউলকৃত নোটিফিকেশনের সকল তথ্য সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
         onClose();
         return;
       }
@@ -204,17 +291,23 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
       if (targetAudience === 'customers') audienceLabel = 'সকল কাস্টমারদের';
       if (targetAudience === 'all') audienceLabel = 'সকল গ্রাহক ও হেলপারদের';
       if (targetAudience === 'segment') {
-        let segLabel = selectedSegment;
-        if (selectedSegment === 'MULTIPLE_ORDERS') segLabel = 'কমপক্ষে ২ বার অর্ডারকারী কাস্টমারদের';
-        else if (selectedSegment === 'WEEKLY_2_ORDERS') segLabel = 'সপ্তাহে ২+ বার অর্ডারকারী কাস্টমারদের';
-        else if (selectedSegment === 'WEEKLY_1_ORDERS') segLabel = 'সপ্তাহে ১+ বার অর্ডারকারী কাস্টমারদের';
-        else if (selectedSegment === 'RARE_ORDERS_WEEK') segLabel = 'সপ্তাহে ১ বারও অর্ডার না করা কাস্টমারদের';
-        else if (selectedSegment === 'RARE_ORDERS_MONTH') segLabel = 'মাসে ১ বারও অর্ডার না করা কাস্টমারদের';
-        else if (selectedSegment === 'INACTIVE_1_WEEK') segLabel = '১ সপ্তাহ যাবত কোনো অর্ডার না করা কাস্টমারদের';
-        else if (selectedSegment === 'INACTIVE_2_WEEKS') segLabel = '২ সপ্তাহ যাবত কোনো অর্ডার না করা কাস্টমারদের';
-        else if (selectedSegment === 'NEVER_ORDERED') segLabel = 'কখনো অর্ডার না করা কাস্টমারদের';
-        else if (selectedSegment === 'NEW_REGISTERED') segLabel = 'নতুন নিবন্ধিত গ্রাহকদের';
-        audienceLabel = `অডিয়েন্স গ্রুপ "${segLabel}"-এর কাস্টমারদের`;
+        if (segmentMode === 'custom') {
+          const badges = filterBadges(customFilters);
+          audienceLabel = `কাস্টম সেগমেন্ট [${badges.join(', ')}]-এর কাস্টমারদের`;
+        } else {
+          const segLabels: Record<string, string> = {
+            MULTIPLE_ORDERS: 'কমপক্ষে ২ বার অর্ডারকারী কাস্টমারদের',
+            WEEKLY_2_ORDERS: 'সপ্তাহে ২+ বার অর্ডারকারী কাস্টমারদের',
+            WEEKLY_1_ORDERS: 'সপ্তাহে ১+ বার অর্ডারকারী কাস্টমারদের',
+            RARE_ORDERS_WEEK: 'সপ্তাহে ১ বারও অর্ডার না করা কাস্টমারদের',
+            RARE_ORDERS_MONTH: 'মাসে ১ বারও অর্ডার না করা কাস্টমারদের',
+            INACTIVE_1_WEEK: '১ সপ্তাহ যাবত কোনো অর্ডার না করা কাস্টমারদের',
+            INACTIVE_2_WEEKS: '২ সপ্তাহ যাবত কোনো অর্ডার না করা কাস্টমারদের',
+            NEVER_ORDERED: 'কখনো অর্ডার না করা কাস্টমারদের',
+            NEW_REGISTERED: 'নতুন নিবন্ধিত গ্রাহকদের',
+          };
+          audienceLabel = `অডিয়েন্স গ্রুপ "${segLabels[selectedSegment] || selectedSegment}"-এর কাস্টমারদের`;
+        }
       }
       if (targetAudience === 'specific') {
         const u = fallbackStore.users.get(selectedUserUid);
@@ -222,22 +315,26 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
       }
 
       if (sendTiming === 'scheduled') {
-        showAlert('নোটিফিকেশন সিডিউল সম্পন্ন!', `${audienceLabel} নির্দিষ্ট সময়ে (${scheduledDate} ${scheduledTime}) পাঠানোর জন্য সিডিউল করা হয়েছে।`, 'success');
+        showAlert('নোটিফিকেশন সিডিউল সম্পন্ন!', `${audienceLabel} নির্দিষ্ট সময়ে (${scheduledDate} ${scheduledTime}) পাঠানোর জন্য সিডিউল করা হয়েছে।`, 'success');
       } else {
-        showAlert('পুশ নোটিফিকেশন প্রেরিত!', `${audienceLabel} সফলভাবে নোটিফিকেশন পাঠানো হয়েছে।`, 'success');
+        showAlert('পুশ নোটিফিকেশন প্রেরিত!', `${audienceLabel} সফলভাবে নোটিফিকেশন পাঠানো হয়েছে।`, 'success');
       }
       onClose();
     } catch (err: any) {
-      showAlert('প্রেরণ ব্যর্থ', err?.message || 'নোটিফিকেশন পাঠাতে সমস্যা হয়েছে।', 'error');
+      showAlert('প্রেরণ ব্যর্থ', err?.message || 'নোটিফিকেশন পাঠাতে সমস্যা হয়েছে।', 'error');
     } finally {
       setIsSending(false);
     }
   };
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * Render
+   * ─────────────────────────────────────────────────────────────────────── */
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Modal Header */}
+      <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+
+        {/* ── Header ── */}
         <div className="p-5 border-b border-purple-900/10 flex items-center justify-between bg-gradient-to-r from-purple-950 via-purple-900 to-purple-950 text-white">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 rounded-2xl bg-purple-800/80 border border-purple-700 shadow-md">
@@ -262,126 +359,334 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
           </button>
         </div>
 
-        {/* Modal Content Form */}
+        {/* ── Form ── */}
         <form onSubmit={handleSend} className="p-5 overflow-y-auto space-y-5 flex-1">
-          {/* Target Audience Selector */}
+
+          {/* ── 1. Target Audience tabs ── */}
           <div>
             <label className="block font-extrabold text-xs text-gray-800 mb-2 uppercase tracking-wider">
               1. Select Audience Target (কার নিকট পাঠাবেন)
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              <button
-                type="button"
-                onClick={() => setTargetAudience('helpers')}
-                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                  targetAudience === 'helpers'
-                    ? 'bg-purple-900 text-white border-purple-900 shadow-md'
-                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <UserCheck className="w-5 h-5 mb-1" />
-                <div>
-                  <div className="font-extrabold text-xs">Helpers Only</div>
-                  <div className="text-[10px] opacity-80">সকল অনুমোদিত হেলপার</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTargetAudience('customers')}
-                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                  targetAudience === 'customers'
-                    ? 'bg-purple-900 text-white border-purple-900 shadow-md'
-                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <Users className="w-5 h-5 mb-1" />
-                <div>
-                  <div className="font-extrabold text-xs">Customers</div>
-                  <div className="text-[10px] opacity-80">সকল গ্রাহকবৃন্দ</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTargetAudience('all')}
-                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                  targetAudience === 'all'
-                    ? 'bg-purple-900 text-white border-purple-900 shadow-md'
-                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <Sparkles className="w-5 h-5 mb-1" />
-                <div>
-                  <div className="font-extrabold text-xs">Everyone</div>
-                  <div className="text-[10px] opacity-80">সকল ইউজার</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTargetAudience('segment')}
-                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                  targetAudience === 'segment'
-                    ? 'bg-purple-900 text-white border-purple-900 shadow-md'
-                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <Users className="w-5 h-5 mb-1 text-amber-300" />
-                <div>
-                  <div className="font-extrabold text-xs">Segment</div>
-                  <div className="text-[10px] opacity-80">অডিয়েন্স গ্রুপ</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTargetAudience('specific')}
-                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                  targetAudience === 'specific'
-                    ? 'bg-purple-900 text-white border-purple-900 shadow-md'
-                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <ShieldAlert className="w-5 h-5 mb-1" />
-                <div>
-                  <div className="font-extrabold text-xs">Single User</div>
-                  <div className="text-[10px] opacity-80">নির্দিষ্ট ইউজার</div>
-                </div>
-              </button>
+            <div className="grid grid-cols-5 gap-2">
+              {(
+                [
+                  { key: 'helpers',  Icon: UserCheck,      label: 'Helpers Only',  sub: 'সকল অনুমোদিত হেলপার' },
+                  { key: 'customers',Icon: Users,           label: 'Customers',     sub: 'সকল গ্রাহকবৃন্দ' },
+                  { key: 'all',      Icon: Sparkles,        label: 'Everyone',      sub: 'সকল ইউজার' },
+                  { key: 'segment',  Icon: SlidersHorizontal, label: 'Segment',    sub: 'অডিয়েন্স গ্রুপ' },
+                  { key: 'specific', Icon: ShieldAlert,     label: 'Single User',   sub: 'নির্দিষ্ট ইউজার' },
+                ] as const
+              ).map(({ key, Icon, label, sub }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setTargetAudience(key)}
+                  className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
+                    targetAudience === key
+                      ? 'bg-purple-900 text-white border-purple-900 shadow-md'
+                      : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  <Icon className="w-5 h-5 mb-1" />
+                  <div>
+                    <div className="font-extrabold text-xs">{label}</div>
+                    <div className="text-[10px] opacity-80">{sub}</div>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Segment Selection if targeted */}
+          {/* ── Segment panel ── */}
           {targetAudience === 'segment' && (
-            <div className="bg-purple-50/70 p-3.5 rounded-2xl border border-purple-200 space-y-2">
-              <label className="block font-bold text-xs text-purple-950">অডিয়েন্স সেগমেন্ট নির্বাচন করুন:</label>
-              <select
-                value={selectedSegment}
-                onChange={(e) => setSelectedSegment(e.target.value)}
-                className="w-full p-3 bg-white border border-purple-200 rounded-xl text-xs font-bold focus:outline-none focus:border-purple-600 animate-in fade-in duration-200"
-              >
-                <option value="MULTIPLE_ORDERS">Ordered Multiple Times (2+ orders)</option>
-                <option value="WEEKLY_2_ORDERS">Frequent: Weekly 2+ Orders</option>
-                <option value="WEEKLY_1_ORDERS">Frequent: Weekly 1+ Orders</option>
-                <option value="RARE_ORDERS_WEEK">Low Frequency: &lt;1 order/week</option>
-                <option value="RARE_ORDERS_MONTH">Low Frequency: &lt;1 order/month</option>
-                <option value="INACTIVE_1_WEEK">Inactive: No order since 1 week</option>
-                <option value="INACTIVE_2_WEEKS">Inactive: No order since 2 weeks</option>
-                <option value="NEVER_ORDERED">Never Ordered (0 orders)</option>
-                <option value="NEW_REGISTERED">New Registered (last 7 days)</option>
-              </select>
+            <div className="bg-purple-50/70 p-4 rounded-2xl border border-purple-200 space-y-4 animate-in fade-in duration-200">
+
+              {/* Mode toggle */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSegmentMode('preset')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-extrabold border transition-all ${
+                    segmentMode === 'preset'
+                      ? 'bg-purple-900 text-white border-purple-900'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                  }`}
+                >
+                  Quick Presets
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSegmentMode('custom')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-extrabold border transition-all flex items-center justify-center gap-1.5 ${
+                    segmentMode === 'custom'
+                      ? 'bg-purple-900 text-white border-purple-900'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                  }`}
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  Custom Filter Builder
+                </button>
+              </div>
+
+              {/* ── Preset dropdown ── */}
+              {segmentMode === 'preset' && (
+                <div>
+                  <label className="block font-bold text-xs text-purple-950 mb-1.5">
+                    অডিয়েন্স সেগমেন্ট নির্বাচন করুন:
+                  </label>
+                  <select
+                    value={selectedSegment}
+                    onChange={(e) => setSelectedSegment(e.target.value)}
+                    className="w-full p-3 bg-white border border-purple-200 rounded-xl text-xs font-bold focus:outline-none focus:border-purple-600"
+                  >
+                    <optgroup label="Order Frequency">
+                      <option value="MULTIPLE_ORDERS">Ordered Multiple Times (2+ total orders)</option>
+                      <option value="WEEKLY_2_ORDERS">Frequent: Weekly 2+ Orders</option>
+                      <option value="WEEKLY_1_ORDERS">Frequent: Weekly 1+ Orders</option>
+                      <option value="RARE_ORDERS_WEEK">Low Frequency: &lt;1 order/week</option>
+                      <option value="RARE_ORDERS_MONTH">Low Frequency: &lt;1 order/month</option>
+                    </optgroup>
+                    <optgroup label="Inactivity">
+                      <option value="INACTIVE_1_WEEK">Inactive: No order since 1 week</option>
+                      <option value="INACTIVE_2_WEEKS">Inactive: No order since 2 weeks</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                      <option value="NEVER_ORDERED">Never Ordered (0 orders)</option>
+                      <option value="NEW_REGISTERED">New Registered (last 7 days)</option>
+                    </optgroup>
+                  </select>
+                </div>
+              )}
+
+              {/* ── Custom filter builder ── */}
+              {segmentMode === 'custom' && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+
+                  {/* Active badges */}
+                  {filterBadges(customFilters).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {filterBadges(customFilters).map((b, i) => (
+                        <span
+                          key={i}
+                          className="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-purple-900 text-white"
+                        >
+                          {b}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Order frequency ── */}
+                  <div className="bg-white rounded-xl border border-purple-100 p-3.5 space-y-2.5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 bg-indigo-100 rounded-lg">
+                        <BarChart2 className="w-3.5 h-3.5 text-indigo-700" />
+                      </div>
+                      <span className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Order Frequency</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Min Total Orders (≥)
+                        </label>
+                        <select
+                          value={customFilters.minOrders ?? ''}
+                          onChange={(e) => updateFilter('minOrders', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="1">≥ 1 order</option>
+                          <option value="2">≥ 2 orders</option>
+                          <option value="5">≥ 5 orders</option>
+                          <option value="10">≥ 10 orders</option>
+                          <option value="20">≥ 20 orders</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Max Total Orders (≤)
+                        </label>
+                        <select
+                          value={customFilters.maxOrders ?? ''}
+                          onChange={(e) => updateFilter('maxOrders', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="0">= 0 (never ordered)</option>
+                          <option value="1">≤ 1 order</option>
+                          <option value="3">≤ 3 orders</option>
+                          <option value="5">≤ 5 orders</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Weekly Rate (≥)
+                        </label>
+                        <select
+                          value={customFilters.weeklyRateGte ?? ''}
+                          onChange={(e) => updateFilter('weeklyRateGte', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="1">≥ 1/week</option>
+                          <option value="2">≥ 2/week</option>
+                          <option value="3">≥ 3/week</option>
+                          <option value="5">≥ 5/week</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Weekly Rate (under)
+                        </label>
+                        <select
+                          value={customFilters.weeklyRateLt ?? ''}
+                          onChange={(e) => updateFilter('weeklyRateLt', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="1">&lt; 1/week</option>
+                          <option value="2">&lt; 2/week</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Last order / recency ── */}
+                  <div className="bg-white rounded-xl border border-purple-100 p-3.5 space-y-2.5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 bg-teal-100 rounded-lg">
+                        <CalendarClock className="w-3.5 h-3.5 text-teal-700" />
+                      </div>
+                      <span className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Last Order Recency</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Ordered within last N days
+                        </label>
+                        <select
+                          value={customFilters.lastOrderWithinDays ?? ''}
+                          onChange={(e) => updateFilter('lastOrderWithinDays', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="1">Last 1 day (today)</option>
+                          <option value="3">Last 3 days</option>
+                          <option value="7">Last 7 days (1 week)</option>
+                          <option value="14">Last 14 days (2 weeks)</option>
+                          <option value="30">Last 30 days (1 month)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Inactive (no order for N+ days)
+                        </label>
+                        <select
+                          value={customFilters.lastOrderOlderThanDays ?? ''}
+                          onChange={(e) => updateFilter('lastOrderOlderThanDays', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="3">3+ days inactive</option>
+                          <option value="7">7+ days inactive</option>
+                          <option value="14">14+ days inactive</option>
+                          <option value="30">30+ days inactive</option>
+                          <option value="60">60+ days inactive</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Coins ── */}
+                  <div className="bg-white rounded-xl border border-purple-100 p-3.5 space-y-2.5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 bg-amber-100 rounded-lg">
+                        <TrendingUp className="w-3.5 h-3.5 text-amber-700" />
+                      </div>
+                      <span className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Coin Balance</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Min Coins (≥)
+                        </label>
+                        <select
+                          value={customFilters.minCoins ?? ''}
+                          onChange={(e) => updateFilter('minCoins', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="1">≥ 1 coin (has coins)</option>
+                          <option value="10">≥ 10 coins</option>
+                          <option value="25">≥ 25 coins</option>
+                          <option value="50">≥ 50 coins</option>
+                          <option value="100">≥ 100 coins</option>
+                          <option value="200">≥ 200 coins</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                          Max Coins (≤)
+                        </label>
+                        <select
+                          value={customFilters.maxCoins ?? ''}
+                          onChange={(e) => updateFilter('maxCoins', e.target.value)}
+                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="">Any</option>
+                          <option value="0">= 0 coins (no coins)</option>
+                          <option value="10">≤ 10 coins</option>
+                          <option value="25">≤ 25 coins</option>
+                          <option value="50">≤ 50 coins</option>
+                          <option value="100">≤ 100 coins</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Registration recency ── */}
+                  <div className="bg-white rounded-xl border border-purple-100 p-3.5">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 bg-emerald-100 rounded-lg">
+                        <Calendar className="w-3.5 h-3.5 text-emerald-700" />
+                      </div>
+                      <span className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Registration Recency</span>
+                    </div>
+                    <select
+                      value={customFilters.registeredWithinDays ?? ''}
+                      onChange={(e) => updateFilter('registeredWithinDays', e.target.value)}
+                      className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold focus:outline-none focus:border-purple-500"
+                    >
+                      <option value="">Any (all ages)</option>
+                      <option value="1">Registered today</option>
+                      <option value="3">Registered last 3 days</option>
+                      <option value="7">Registered last 7 days</option>
+                      <option value="14">Registered last 14 days</option>
+                      <option value="30">Registered last 30 days</option>
+                    </select>
+                  </div>
+
+                  {/* Clear all */}
+                  {filterBadges(customFilters).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomFilters({})}
+                      className="text-[11px] font-bold text-rose-500 hover:text-rose-700 underline"
+                    >
+                      Clear all filters
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Specific User Search if targeted */}
+          {/* ── Specific user search ── */}
           {targetAudience === 'specific' && (() => {
             const selectedUserObj = selectedUserUid ? fallbackStore.users.get(selectedUserUid) : null;
-
             return (
               <div className="bg-purple-50/70 p-3.5 rounded-2xl border border-purple-200 space-y-2">
                 <label className="block font-bold text-xs text-purple-950">নির্দিষ্ট ইউজার নির্বাচন করুন:</label>
-
                 {selectedUserObj ? (
                   <div className="p-3 bg-white rounded-xl border border-purple-300 flex items-center justify-between shadow-xs">
                     <div className="flex items-center space-x-2.5 overflow-hidden">
@@ -399,10 +704,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedUserUid('');
-                        setSearchUserQuery('');
-                      }}
+                      onClick={() => { setSelectedUserUid(''); setSearchUserQuery(''); }}
                       className="p-1.5 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-900 font-extrabold text-xs shrink-0 transition-colors"
                     >
                       পরিবর্তন করুন
@@ -414,26 +716,19 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                       <Search className="w-4 h-4 text-purple-400 absolute left-3 top-3" />
                       <input
                         type="text"
-                        placeholder="ইউজারের নাম, ইমেইল, আইডি বা ফোন দিয়ে খুঁজুন..."
+                        placeholder="ইউজারের নাম, ইমেইল, আইডি বা ফোন দিয়ে খুঁজুন..."
                         value={searchUserQuery}
                         onChange={(e) => setSearchUserQuery(e.target.value)}
                         className="w-full pl-9 pr-3 py-2 bg-white border border-purple-200 rounded-xl text-xs focus:outline-none focus:border-purple-600"
                       />
                     </div>
-
                     <div className="max-h-40 overflow-y-auto space-y-1 pt-1">
                       {isSearchingUser ? (
-                        <p className="text-xs text-purple-700 font-bold py-3 text-center animate-pulse">
-                          সার্ভার থেকে ইউজার খোঁজা হচ্ছে...
-                        </p>
+                        <p className="text-xs text-purple-700 font-bold py-3 text-center animate-pulse">সার্ভার থেকে ইউজার খোঁজা হচ্ছে...</p>
                       ) : !searchUserQuery.trim() ? (
-                        <p className="text-xs text-gray-500 py-3 text-center">
-                          ইউজারের নাম, ইমেইল, আইডি বা ফোন লিখে খুঁজুন...
-                        </p>
+                        <p className="text-xs text-gray-500 py-3 text-center">ইউজারের নাম, ইমেইল, আইডি বা ফোন লিখে খুঁজুন...</p>
                       ) : searchResults.length === 0 ? (
-                        <p className="text-xs text-rose-600 py-3 text-center font-semibold">
-                          সার্ভারে কোনো ইউজার পাওয়া যায়নি
-                        </p>
+                        <p className="text-xs text-rose-600 py-3 text-center font-semibold">সার্ভারে কোনো ইউজার পাওয়া যায়নি</p>
                       ) : (
                         searchResults.map((u, idx) => {
                           const userId = u.uid || `user-${idx}`;
@@ -441,10 +736,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                             <button
                               key={userId}
                               type="button"
-                              onClick={() => {
-                                setSelectedUserUid(userId);
-                                setSearchUserQuery('');
-                              }}
+                              onClick={() => { setSelectedUserUid(userId); setSearchUserQuery(''); }}
                               className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between transition-colors ${
                                 selectedUserUid === userId
                                   ? 'bg-purple-900 text-white font-bold'
@@ -457,13 +749,10 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                                   {u.email ? `${u.email} • ` : ''}{u.alternativePhone ? `${u.alternativePhone} • ` : ''}ID: {userId}
                                 </div>
                               </div>
-                              {selectedUserUid === userId ? (
-                                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                              ) : (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 shrink-0">
-                                  সিলেক্ট করুন
-                                </span>
-                              )}
+                              {selectedUserUid === userId
+                                ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+                                : <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 shrink-0">সিলেক্ট করুন</span>
+                              }
                             </button>
                           );
                         })
@@ -475,7 +764,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             );
           })()}
 
-          {/* Quick Presets */}
+          {/* ── 2. Quick Presets ── */}
           <div>
             <label className="block font-extrabold text-xs text-gray-800 mb-1.5 uppercase tracking-wider">
               2. Quick Template Presets (দ্রুত বার্তা টেমপ্লেট)
@@ -494,7 +783,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             </div>
           </div>
 
-          {/* Notification Title */}
+          {/* ── 3. Title ── */}
           <div>
             <label className="block font-extrabold text-xs text-gray-800 mb-1 uppercase tracking-wider">
               3. Title (শিরোনাম) <span className="text-rose-500">*</span>
@@ -509,7 +798,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             />
           </div>
 
-          {/* Notification Body */}
+          {/* ── 4. Body ── */}
           <div>
             <label className="block font-extrabold text-xs text-gray-800 mb-1 uppercase tracking-wider">
               4. Notification Body (বার্তা বিবরণ) <span className="text-rose-500">*</span>
@@ -517,48 +806,40 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             <textarea
               required
               rows={3}
-              placeholder="e.g. আপনার নিকটস্থ এলাকায় ১টি নতুন ডেলিভারি রিকোয়েস্ট তৈরি হয়েছে। একসেপ্ট করতে অ্যাপ খুলুন।"
+              placeholder="e.g. আপনার নিকটস্থ এলাকায় ১টি নতুন ডেলিভারি রিকোয়েস্ট তৈরি হয়েছে। একসেপ্ট করতে অ্যাপ খুলুন।"
               value={body}
               onChange={(e) => setBody(e.target.value)}
               className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-2xl text-xs font-semibold text-gray-900 focus:outline-none focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
             />
           </div>
 
-          {/* Delivery Timing & Specific Time Selector */}
+          {/* ── 5. Delivery Timing ── */}
           <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-200 space-y-3">
             <label className="block font-extrabold text-xs text-purple-950 uppercase tracking-wider flex items-center gap-1.5">
               <Clock className="w-4 h-4 text-purple-700" />
-              <span>5. Delivery Timing & Schedule Time Selector (নোটিফিকেশনের সময়কাল)</span>
+              <span>5. Delivery Timing & Schedule (নোটিফিকেশনের সময়কাল)</span>
             </label>
 
             <div className="grid grid-cols-2 gap-2 bg-white p-1 rounded-xl border border-purple-200">
               <button
                 type="button"
-                onClick={() => {
-                  setSendTiming('now');
-                  setRepeatFrequency('NONE');
-                }}
+                onClick={() => { setSendTiming('now'); setRepeatFrequency('NONE'); }}
                 className={`py-2 px-3 rounded-lg text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all ${
-                  sendTiming === 'now'
-                    ? 'bg-purple-900 text-white shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
+                  sendTiming === 'now' ? 'bg-purple-900 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Send Immediately (সরাসরি)</span>
               </button>
-
               <button
                 type="button"
                 onClick={() => setSendTiming('scheduled')}
                 className={`py-2 px-3 rounded-lg text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all ${
-                  sendTiming === 'scheduled'
-                    ? 'bg-purple-900 text-white shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
+                  sendTiming === 'scheduled' ? 'bg-purple-900 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>Schedule Specific Time (নির্দিষ্ট সময়ে)</span>
+                <span>Schedule Specific Time</span>
               </button>
             </div>
 
@@ -566,9 +847,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
               <div className="space-y-3 pt-2 animate-in fade-in duration-200">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] font-extrabold text-purple-900 uppercase block mb-1">
-                      Scheduled Date (তারিখ)
-                    </label>
+                    <label className="text-[10px] font-extrabold text-purple-900 uppercase block mb-1">Scheduled Date (তারিখ)</label>
                     <input
                       type="date"
                       value={scheduledDate}
@@ -576,10 +855,9 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                       className="w-full p-3 bg-white border border-purple-200 rounded-xl text-xs font-bold focus:border-purple-600 outline-none"
                     />
                   </div>
-
                   <div>
                     <TimePickerInput
-                      label="Exact Schedule Time (নির্দিষ্ট সময়)*"
+                      label="Exact Schedule Time (নির্দিষ্ট সময়)*"
                       value={scheduledTime}
                       onChange={(val) => setScheduledTime(val)}
                     />
@@ -597,22 +875,22 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                     className="w-full p-2.5 bg-white border border-purple-200 rounded-xl text-xs font-extrabold focus:border-purple-600"
                   >
                     <option value="NONE">One-time Only (শুধুমাত্র একবার)</option>
-                    <option value="DAILY">Repeat Daily at Exact Time (প্রতিদিন এই সময়ে)</option>
-                    <option value="WEEKLY">Repeat Weekly at Exact Time (প্রতি সপ্তাহে এই সময়ে)</option>
+                    <option value="DAILY">Repeat Daily at Exact Time (প্রতিদিন এই সময়ে)</option>
+                    <option value="WEEKLY">Repeat Weekly at Exact Time (প্রতি সপ্তাহে এই সময়ে)</option>
                   </select>
                 </div>
 
                 <p className="text-[11px] font-semibold text-purple-900 bg-purple-100/80 p-2.5 rounded-xl border border-purple-200 flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-purple-700 shrink-0" />
                   <span>
-                    নির্দিষ্ট সময়ে ({scheduledDate} {scheduledTime}) স্বয়ংক্রিয়ভাবে গ্রাহক/হেলপারদের ডিভাইসে নোটিফিকেশন পৌঁছে যাবে।
+                    নির্দিষ্ট সময়ে ({scheduledDate} {scheduledTime}) স্বয়ংক্রিয়ভাবে গ্রাহক/হেলপারদের ডিভাইসে নোটিফিকেশন পৌঁছে যাবে।
                   </span>
                 </p>
               </div>
             )}
           </div>
 
-          {/* Optional Order ID */}
+          {/* ── 6. Optional Order ID ── */}
           <div>
             <label className="block font-extrabold text-xs text-gray-800 mb-1 uppercase tracking-wider">
               6. Optional Order ID Reference (ঐচ্ছিক অর্ডার আইডি)
@@ -626,7 +904,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             />
           </div>
 
-          {/* Banner Image Input */}
+          {/* ── 7. Banner Image ── */}
           <div className="space-y-2">
             <label className="block font-extrabold text-xs text-gray-800 uppercase tracking-wider">
               7. Banner Image (ঐচ্ছিক ব্যানার ইমেজ)
@@ -648,9 +926,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                     const file = e.target.files?.[0];
                     if (file) {
                       const reader = new FileReader();
-                      reader.onloadend = () => {
-                        setImageUrl(reader.result as string);
-                      };
+                      reader.onloadend = () => setImageUrl(reader.result as string);
                       reader.readAsDataURL(file);
                     }
                   }}
@@ -672,7 +948,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             )}
           </div>
 
-          {/* Live Mobile Push Preview Card */}
+          {/* ── Live Preview ── */}
           <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-inner space-y-2">
             <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
               <span className="flex items-center space-x-1.5">
@@ -701,7 +977,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             </div>
           </div>
 
-          {/* Footer Submit Button */}
+          {/* ── Footer ── */}
           <div className="pt-2 flex items-center justify-end space-x-3 border-t border-gray-100">
             <button
               type="button"
@@ -710,7 +986,6 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             >
               Cancel
             </button>
-
             <button
               type="submit"
               disabled={isSending || !title || !body}
@@ -719,9 +994,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
               <Send className="w-4 h-4" />
               <span>
                 {isSending
-                  ? isEditMode
-                    ? 'Updating...'
-                    : 'Sending Push...'
+                  ? isEditMode ? 'Updating...' : 'Sending Push...'
                   : isEditMode
                   ? 'Save & Update Notification'
                   : sendTiming === 'scheduled'

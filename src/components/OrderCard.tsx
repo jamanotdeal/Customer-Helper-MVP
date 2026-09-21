@@ -121,7 +121,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     order.status === 'CANCELED' ||
     (order.status as string) === 'CANCELLED' ||
     order.cancellationRequest?.status === 'APPROVED';
-  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
+  const urgency = getHelperUrgencyBgClass(order, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -198,14 +198,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
 
               {/* Timer */}
               <span className={`text-xs font-black px-2.5 py-1 rounded-lg inline-flex items-center space-x-1 border shrink-0 ${
-                urgency.urgencyLevel === 'red'
+                urgency.isPaused
+                  ? 'text-indigo-900 bg-indigo-100 border-indigo-200 font-mono'
+                  : urgency.urgencyLevel === 'red'
                   ? 'text-red-950 bg-red-200 border-red-400 animate-pulse font-mono'
                   : urgency.urgencyLevel === 'yellow'
                   ? 'text-amber-950 bg-amber-200 border-amber-400 font-mono'
                   : 'text-red-800 bg-red-50 border-red-100 font-mono'
-              }`}>
-                <Clock className={`w-4 h-4 ${urgency.urgencyLevel === 'red' ? 'text-red-700 animate-spin' : 'text-red-600 animate-spin-slow'}`} />
-                <span>{elapsed}</span>
+              }`} title={urgency.isPaused ? 'Two-Way Order: Timer is paused until scheduled return' : undefined}>
+                <Clock className={`w-4 h-4 ${urgency.isPaused ? 'text-indigo-600' : urgency.urgencyLevel === 'red' ? 'text-red-700 animate-spin' : 'text-red-600 animate-spin-slow'}`} />
+                <span>{urgency.isPaused ? `⏸ ${elapsed}` : elapsed}</span>
               </span>
 
               {/* Status */}

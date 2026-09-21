@@ -3,6 +3,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Shop, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { parseStoreTypes } from '@/lib/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { MapPickerModal } from './MapPickerModal';
 import {
@@ -17,28 +18,13 @@ interface AddShopModalProps {
   onSaved?: () => void;
 }
 
-const STORE_TYPES_DEFAULT = [
-  'মুদিখানা ও সুপারশপ',
-  'ফার্মেসি ও ওষুধ',
-  'রেস্টুরেন্ট ও ফাস্টফুড',
-  'মাংস ও মাছ বাজার',
-  'ফল ও সবজির দোকান',
-  'ইলেকট্রনিক্স ও গ্যাজেট',
-  'স্টেশনারি ও বই',
-  'পোশাক ও ফ্যাশন',
-  'লন্ড্রি ও ড্রাই ক্লিনিং',
-  'অন্যান্য',
-];
-
 export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose, onSaved }) => {
   // Leaflet consumes the drag itself, so the native pull gesture must be
   // disarmed while this map is on screen.
   usePullToRefreshLock();
   const { user } = useAuth();
 
-  const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
-    ? fallbackStore.pricingSettings.storeTypes
-    : STORE_TYPES_DEFAULT;
+  const storeTypes = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
 
   const ph = fallbackStore.pricingSettings.storeFormPlaceholders || {};
 

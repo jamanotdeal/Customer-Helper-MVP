@@ -1,5 +1,8 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+} from 'firebase/auth';
 import {
   getFirestore,
   collection,
@@ -60,8 +63,11 @@ const firebaseConfig = {
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
 export const auth = getAuth(app);
+
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 export const db = getFirestore(app);
 
 // ─── Firebase Cloud Messaging ─────────────────────────────────────────────────
@@ -114,8 +120,8 @@ export async function initFcmMessaging(userId: string): Promise<string | null> {
       onMessage(_messaging, (payload) => {
         console.info('[FCM] Foreground message:', payload);
         const title = payload.notification?.title || payload.data?.title || 'Jamanot';
-        const body  = payload.notification?.body  || payload.data?.body  || '';
-        const id    = payload.data?.tag || `fcm-fg-${Date.now()}`;
+        const body = payload.notification?.body || payload.data?.body || '';
+        const id = payload.data?.tag || `fcm-fg-${Date.now()}`;
         // Reuse existing browser notification trigger
         triggerBrowserNotification({ id, title, body });
       });
@@ -423,7 +429,7 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
         if (notif.orderId) window.location.search = `?orderId=${notif.orderId}`;
       };
     }
-    
+
     // Throttling sound and vibration: only trigger if 5 seconds have passed since the last one.
     const now = Date.now();
     if (now - _lastNotifTime > 5000) {
@@ -456,7 +462,7 @@ function getSharedAudioCtx(): AudioContext | null {
       _sharedAudioCtx = new AudioContextClass();
     }
     if (_sharedAudioCtx.state === 'suspended') {
-      _sharedAudioCtx.resume().catch(() => {});
+      _sharedAudioCtx.resume().catch(() => { });
     }
     return _sharedAudioCtx;
   } catch (_) {
@@ -695,19 +701,19 @@ class FallbackStore {
         this.scheduledNotifications.set(notif.id, notif);
         try {
           await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
-        } catch (_) {}
+        } catch (_) { }
       } else if (notif.repeatFrequency === 'WEEKLY') {
         const nextDate = new Date(now + 7 * 24 * 3600 * 1000);
         notif.scheduledAt = nextDate.toISOString();
         this.scheduledNotifications.set(notif.id, notif);
         try {
           await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
-        } catch (_) {}
+        } catch (_) { }
       } else {
         this.scheduledNotifications.delete(notif.id);
         try {
           await deleteDoc(doc(db, 'scheduledNotifications', notif.id));
-        } catch (_) {}
+        } catch (_) { }
       }
       this.notify();
       this.saveLocalStore();
@@ -1198,7 +1204,7 @@ class FallbackStore {
   // ─── Tear down all active Firestore listeners ──────────────────────────────
   // Called on logout and before switching to a different role/user.
   public teardownListeners() {
-    this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) {} });
+    this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
   }
@@ -1412,7 +1418,7 @@ class FallbackStore {
       this._loadShopsCached();
       this._loadModalsCached();
 
-    // ── CUSTOMER role ─────────────────────────────────────────────────────────
+      // ── CUSTOMER role ─────────────────────────────────────────────────────────
     } else if (role === 'customer') {
       // Only this customer's orders (realtime)
       unsubs.push(
@@ -1460,7 +1466,7 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(change.doc.id)) {
-                deleteDoc(doc(db, 'rewardPrizes', change.doc.id)).catch(() => {});
+                deleteDoc(doc(db, 'rewardPrizes', change.doc.id)).catch(() => { });
                 this.rewardPrizes.delete(change.doc.id);
                 return;
               }
@@ -1513,7 +1519,7 @@ class FallbackStore {
       this._loadShopsCached();
       this._loadModalsCached();
 
-    // ── HELPER role ───────────────────────────────────────────────────────────
+      // ── HELPER role ───────────────────────────────────────────────────────────
     } else if (role === 'helper') {
       const helperGroup =
         helperType === 'dedicated' ? 'all-dedicated-helpers' : 'all-commuter-helpers';
@@ -1529,11 +1535,10 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                const existing = this.orders.get(change.doc.id);
-                // If not this helper's own order, remove from available pool
-                if (!existing || existing.helperId !== userId) {
-                  this.orders.delete(change.doc.id);
-                }
+                // Always remove: if the doc was hard-deleted by admin, we must clear it.
+                // If it merely changed status (leaving this query scope), the second
+                // listener (helperId == userId, all statuses) will keep/re-add it.
+                this.orders.delete(change.doc.id);
               } else {
                 this.orders.set(change.doc.id, change.doc.data() as Order);
               }
@@ -1652,9 +1657,9 @@ class FallbackStore {
         )
       );
 
-    // ── ADMIN role ────────────────────────────────────────────────────────────
+      // ── ADMIN role ────────────────────────────────────────────────────────────
     } else if (role === 'admin') {
-      // All orders (most recent 100, realtime — used for Needs Attention; full list fetched on-demand in ORDERS tab)
+      // ── REALTIME: orders (most recent 100 — Needs Attention section) ─────────
       unsubs.push(
         onSnapshot(
           query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100)),
@@ -1672,123 +1677,25 @@ class FallbackStore {
         )
       );
 
-      // All users (up to 500, realtime)
+      // ── REALTIME: reward claims (for Needs Attention pending badges) ──────────
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'users'), limit(500)),
+          query(collection(db, 'rewardClaims'), orderBy('createdAt', 'desc'), limit(200)),
           (snapshot) => {
+            const currentIds = new Set(snapshot.docs.map((d) => d.id));
+            for (const key of Array.from(this.rewardClaims.keys())) {
+              if (!currentIds.has(key)) this.rewardClaims.delete(key);
+            }
             snapshot.docs.forEach((docSnap) => {
-              const u = docSnap.data() as UserProfile;
-              this.users.set(u.uid, u);
+              this.rewardClaims.set(docSnap.id, docSnap.data() as RewardClaim);
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Admin users sync note:', err)
+          (err) => console.warn('[Firestore] Admin rewardClaims sync note:', err)
         )
       );
 
-      // All wallets (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'wallets'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              const w = docSnap.data() as Wallet;
-              this.wallets.set(w.userId, w);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin wallets sync note:', err)
-        )
-      );
-
-      // Wallet transactions (up to 500, realtime)
-      unsubs.push(
-        onSnapshot(
-          query(collection(db, 'walletTransactions'), limit(500)),
-          (snapshot) => {
-            const map = new Map<string, WalletTransaction[]>();
-            snapshot.docs.forEach((docSnap) => {
-              const tx = docSnap.data() as WalletTransaction;
-              const list = map.get(tx.userId) || [];
-              list.push(tx);
-              map.set(tx.userId, list);
-            });
-            map.forEach((list, key) => {
-              list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-              this.walletTransactions.set(key, list);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin walletTransactions sync note:', err)
-        )
-      );
-
-      // All withdrawals (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'withdrawals'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              const wd = docSnap.data() as WithdrawalRequest;
-              this.withdrawals.set(wd.id, wd);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin withdrawals sync note:', err)
-        )
-      );
-
-      // All helper applications (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'helperApplications'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              const a = docSnap.data() as HelperApplication;
-              this.helperApplications.set(a.id, a);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin helperApplications sync note:', err)
-        )
-      );
-
-      // All store applications (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'storeApplications'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              const a = docSnap.data() as StoreApplication;
-              this.storeApplications.set(a.id, a);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin storeApplications sync note:', err)
-        )
-      );
-
-      // Scheduled notifications (realtime for admin)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'scheduledNotifications'),
-          (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === 'removed') {
-                this.scheduledNotifications.delete(change.doc.id);
-              } else {
-                this.scheduledNotifications.set(change.doc.id, change.doc.data() as AppNotification);
-              }
-            });
-            this.notify();
-            this.saveLocalStore();
-          },
-          (err) => console.warn('[Firestore] Admin scheduledNotifications sync note:', err)
-        )
-      );
-
-      // Notifications (up to 300, realtime for admin)
+      // ── REALTIME: notifications (admin push history + incoming) ──────────────
       unsubs.push(
         onSnapshot(
           query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(300)),
@@ -1807,121 +1714,170 @@ class FallbackStore {
         )
       );
 
-      // Order feedbacks (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'orderFeedbacks'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              const fb = docSnap.data() as OrderFeedback;
-              this.orderFeedbacks.set(fb.id, fb);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin orderFeedbacks sync note:', err)
-        )
-      );
-
-      // Fee suggestions (realtime)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'feeSuggestions'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              this.feeSuggestions.set(docSnap.id, docSnap.data() as FeeSuggestion);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin feeSuggestions sync note:', err)
-        )
-      );
-
-      // Custom modals (realtime for admin, so they see changes immediately)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'customModals'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin customModals sync note:', err)
-        )
-      );
-
-      // Reward prizes (realtime for admin)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'rewardPrizes'),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(docSnap.id)) {
-                deleteDoc(doc(db, 'rewardPrizes', docSnap.id)).catch(() => {});
-                this.rewardPrizes.delete(docSnap.id);
-                return;
-              }
-              this.rewardPrizes.set(docSnap.id, docSnap.data() as RewardPrize);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin rewardPrizes sync note:', err)
-        )
-      );
-
-      // Reward claims (realtime for admin)
-      unsubs.push(
-        onSnapshot(
-          query(collection(db, 'rewardClaims'), orderBy('createdAt', 'desc'), limit(200)),
-          (snapshot) => {
-            const currentIds = new Set(snapshot.docs.map((d) => d.id));
-            for (const key of Array.from(this.rewardClaims.keys())) {
-              if (!currentIds.has(key)) this.rewardClaims.delete(key);
-            }
-            snapshot.docs.forEach((docSnap) => {
-              this.rewardClaims.set(docSnap.id, docSnap.data() as RewardClaim);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin rewardClaims sync note:', err)
-        )
-      );
-
-      // Shops (realtime for admin, limited to 20)
-      unsubs.push(
-        onSnapshot(
-          query(collection(db, 'shops'), limit(20)),
-          (snapshot) => {
-            snapshot.docs.forEach((docSnap) => {
-              this.shops.set(docSnap.id, docSnap.data() as Shop);
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin shops sync note:', err)
-        )
-      );
-
-      // All shop orders (realtime for admin)
-      unsubs.push(
-        onSnapshot(
-          query(collection(db, 'shopOrders'), limit(500)),
-          (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === 'removed') {
-                this.shopOrders.delete(change.doc.id);
-              } else {
-                this.shopOrders.set(change.doc.id, change.doc.data() as ShopOrder);
-              }
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Admin shopOrders sync note:', err)
-        )
-      );
+      // ── ONE-TIME FETCH: everything else loaded once on mount ─────────────────
+      // Remaining collections (users, wallets, walletTransactions, withdrawals,
+      // helperApplications, storeApplications, orderFeedbacks, feeSuggestions,
+      // customModals, rewardPrizes, shops, shopOrders, scheduledNotifications)
+      // are NOT kept as realtime listeners. They are fetched once here and
+      // re-fetched on demand when the admin clicks "Refresh" or takes an action.
+      this._adminInitialFetch();
     }
 
     this._unsubListeners = unsubs;
     console.info(`[Firestore] Listeners initialized for role=${role}, uid=${userId}, listeners=${unsubs.length}`);
+  }
+
+  // ── Admin one-time & on-demand fetch helpers ─────────────────────────────
+  //
+  // Collections that are NOT realtime-subscribed for admin are loaded here:
+  // users, wallets, walletTransactions, withdrawals, helperApplications,
+  // storeApplications, orderFeedbacks, feeSuggestions, customModals,
+  // rewardPrizes, shops, shopOrders, scheduledNotifications.
+  //
+  // Called once after initListenersForRole (admin). Also called by
+  // refreshAdminData() when the admin clicks a "Refresh" button.
+  private async _adminInitialFetch() {
+    try {
+      await Promise.all([
+        this._fetchAdminUsers(),
+        this._fetchAdminWithdrawals(),
+        this._fetchAdminHelperApplications(),
+        this._fetchAdminStoreApplications(),
+        this._fetchAdminOrderFeedbacks(),
+        this._fetchAdminFeeSuggestions(),
+        this._fetchAdminCustomModals(),
+        this._fetchAdminRewardPrizes(),
+        this._fetchAdminShops(),
+        this._fetchAdminShopOrders(),
+        this._fetchAdminWallets(),
+        this._fetchAdminWalletTransactions(),
+        this._fetchAdminScheduledNotifications(),
+      ]);
+      this.notify();
+    } catch (err) {
+      console.warn('[Firestore] Admin initial fetch error:', err);
+    }
+  }
+
+  // Public: called by AdminDashboard when admin clicks "Refresh" on a tab,
+  // or automatically after an admin action updates a collection.
+  // Pass a specific collection name to refresh only that subset, or omit
+  // to refresh all non-realtime admin collections.
+  public async refreshAdminData(
+    subset?: 'users' | 'withdrawals' | 'helperApplications' | 'storeApplications' |
+      'orderFeedbacks' | 'feeSuggestions' | 'customModals' | 'rewardPrizes' |
+      'shops' | 'shopOrders' | 'wallets' | 'walletTransactions' | 'scheduledNotifications' | 'all'
+  ): Promise<void> {
+    try {
+      const target = subset ?? 'all';
+      if (target === 'all') {
+        await this._adminInitialFetch();
+        return;
+      }
+      switch (target) {
+        case 'users': await this._fetchAdminUsers(); break;
+        case 'withdrawals': await this._fetchAdminWithdrawals(); break;
+        case 'helperApplications': await this._fetchAdminHelperApplications(); break;
+        case 'storeApplications': await this._fetchAdminStoreApplications(); break;
+        case 'orderFeedbacks': await this._fetchAdminOrderFeedbacks(); break;
+        case 'feeSuggestions': await this._fetchAdminFeeSuggestions(); break;
+        case 'customModals': await this._fetchAdminCustomModals(); break;
+        case 'rewardPrizes': await this._fetchAdminRewardPrizes(); break;
+        case 'shops': await this._fetchAdminShops(); break;
+        case 'shopOrders': await this._fetchAdminShopOrders(); break;
+        case 'wallets': await this._fetchAdminWallets(); break;
+        case 'walletTransactions': await this._fetchAdminWalletTransactions(); break;
+        case 'scheduledNotifications': await this._fetchAdminScheduledNotifications(); break;
+      }
+      this.notify();
+    } catch (err) {
+      console.warn('[Firestore] refreshAdminData error:', err);
+    }
+  }
+
+  private async _fetchAdminUsers() {
+    const snap = await getDocs(query(collection(db, 'users'), limit(500)));
+    snap.docs.forEach((d) => { const u = d.data() as UserProfile; this.users.set(u.uid, u); });
+  }
+
+  private async _fetchAdminWithdrawals() {
+    const snap = await getDocs(collection(db, 'withdrawals'));
+    snap.docs.forEach((d) => { const w = d.data() as WithdrawalRequest; this.withdrawals.set(w.id, w); });
+  }
+
+  private async _fetchAdminHelperApplications() {
+    const snap = await getDocs(collection(db, 'helperApplications'));
+    snap.docs.forEach((d) => { const a = d.data() as HelperApplication; this.helperApplications.set(a.id, a); });
+  }
+
+  private async _fetchAdminStoreApplications() {
+    const snap = await getDocs(collection(db, 'storeApplications'));
+    snap.docs.forEach((d) => { const a = d.data() as StoreApplication; this.storeApplications.set(a.id, a); });
+  }
+
+  private async _fetchAdminOrderFeedbacks() {
+    const snap = await getDocs(collection(db, 'orderFeedbacks'));
+    snap.docs.forEach((d) => { const f = d.data() as OrderFeedback; this.orderFeedbacks.set(f.id, f); });
+  }
+
+  private async _fetchAdminFeeSuggestions() {
+    const snap = await getDocs(collection(db, 'feeSuggestions'));
+    snap.docs.forEach((d) => { this.feeSuggestions.set(d.id, d.data() as FeeSuggestion); });
+  }
+
+  private async _fetchAdminCustomModals() {
+    const snap = await getDocs(collection(db, 'customModals'));
+    snap.docs.forEach((d) => { const c = d.data() as AdminCustomModalConfig; this.customModals.set(c.id, c); });
+  }
+
+  private async _fetchAdminRewardPrizes() {
+    const snap = await getDocs(collection(db, 'rewardPrizes'));
+    snap.docs.forEach((d) => {
+      if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
+        deleteDoc(doc(db, 'rewardPrizes', d.id)).catch(() => { });
+        this.rewardPrizes.delete(d.id);
+        return;
+      }
+      this.rewardPrizes.set(d.id, d.data() as RewardPrize);
+    });
+  }
+
+  private async _fetchAdminShops() {
+    const snap = await getDocs(collection(db, 'shops'));
+    snap.docs.forEach((d) => { const s = d.data() as Shop; this.shops.set(d.id, s); });
+  }
+
+  private async _fetchAdminShopOrders() {
+    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(500)));
+    snap.docs.forEach((d) => { this.shopOrders.set(d.id, d.data() as ShopOrder); });
+  }
+
+  private async _fetchAdminWallets() {
+    const snap = await getDocs(collection(db, 'wallets'));
+    snap.docs.forEach((d) => { const w = d.data() as Wallet; this.wallets.set(w.userId, w); });
+  }
+
+  private async _fetchAdminWalletTransactions() {
+    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(500)));
+    const map = new Map<string, WalletTransaction[]>();
+    snap.docs.forEach((d) => {
+      const tx = d.data() as WalletTransaction;
+      const list = map.get(tx.userId) || [];
+      list.push(tx);
+      map.set(tx.userId, list);
+    });
+    map.forEach((list, key) => {
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      this.walletTransactions.set(key, list);
+    });
+  }
+
+  private async _fetchAdminScheduledNotifications() {
+    const snap = await getDocs(collection(db, 'scheduledNotifications'));
+    // Clear and reload to reflect deletions
+    this.scheduledNotifications.clear();
+    snap.docs.forEach((d) => { this.scheduledNotifications.set(d.id, d.data() as AppNotification); });
+    this.saveLocalStore();
   }
 
   public subscribe(listener: Listener): () => void {
@@ -2215,8 +2171,8 @@ class FallbackStore {
       rule === 'dedicated_first'
         ? 'all-dedicated-helpers'
         : rule === 'both_simultaneous'
-        ? 'all-helpers'
-        : 'all-commuter-helpers';
+          ? 'all-helpers'
+          : 'all-commuter-helpers';
 
     const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
 
@@ -2475,7 +2431,7 @@ class FallbackStore {
     if (
       (updated.lastEditedBy === 'helper' || updated.lastEditedBy === 'admin') &&
       (existing.deliveryLocation.address !== updated.deliveryLocation.address ||
-       existing.pickupLocation?.address !== updated.pickupLocation?.address)
+        existing.pickupLocation?.address !== updated.pickupLocation?.address)
     ) {
       const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
       const isDeliveryChanged = existing.deliveryLocation.address !== updated.deliveryLocation.address;
@@ -2507,7 +2463,7 @@ class FallbackStore {
           import('./storage').then(({ addSavedDeliveryAddress }) => {
             addSavedDeliveryAddress(updated.customerId, updated.deliveryLocation);
           });
-          saveCustomerSavedAddressToFirestore(updated.customerId, updated.deliveryLocation).catch(() => {});
+          saveCustomerSavedAddressToFirestore(updated.customerId, updated.deliveryLocation).catch(() => { });
         } catch (e) {
           console.warn('[Firestore] Error saving updated address to customer history:', e);
         }
@@ -2522,7 +2478,7 @@ class FallbackStore {
               saveServicePickupLocation(updated.service, updated.pickupLocation!, updated.customerId);
             }
           });
-          saveCustomerPickupAddressToFirestore(updated.customerId, updated.pickupLocation, updated.service).catch(() => {});
+          saveCustomerPickupAddressToFirestore(updated.customerId, updated.pickupLocation, updated.service).catch(() => { });
         } catch (e) {
           console.warn('[Firestore] Error saving updated pickup address to customer history:', e);
         }
@@ -2535,8 +2491,8 @@ class FallbackStore {
       existing.lastEditedAt !== updated.lastEditedAt &&
       updated.customerId &&
       (JSON.stringify(existing.items) !== JSON.stringify(updated.items) ||
-       existing.title !== updated.title ||
-       existing.additionalNote !== updated.additionalNote)
+        existing.title !== updated.title ||
+        existing.additionalNote !== updated.additionalNote)
     ) {
       const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
       this.addNotification({
@@ -2565,7 +2521,7 @@ class FallbackStore {
         if (existing.deliveryFee !== updated.deliveryFee) changes.push('ডেলিভারি ফি');
         if (JSON.stringify(existing.items) !== JSON.stringify(updated.items)) changes.push('পণ্য তালিকা');
         if (existing.deliveryLocation.address !== updated.deliveryLocation.address || existing.pickupLocation?.address !== updated.pickupLocation?.address) changes.push('ঠিকানা');
-        
+
         const changeDesc = changes.length > 0 ? changes.join(', ') + ' পরিবর্তন করা হয়েছে।' : 'তথ্য পরিবর্তন করা হয়েছে।';
         this.addNotification({
           id: coalescedNotifId('admin-change', updated.id),
@@ -2724,7 +2680,7 @@ class FallbackStore {
           };
           this.orders.set(srcId, updatedSrc);
           try {
-            setDoc(doc(db, 'orders', srcId), cleanForFirestore(updatedSrc), { merge: true }).catch(() => {});
+            setDoc(doc(db, 'orders', srcId), cleanForFirestore(updatedSrc), { merge: true }).catch(() => { });
           } catch (e) {
             console.warn('[Firestore] error updating source due payment status:', e);
           }
@@ -3032,6 +2988,39 @@ class FallbackStore {
     }
   }
 
+  public async fetchCustomerOrders(userId: string): Promise<Order[]> {
+    if (!userId || !db) return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    try {
+      const q = query(
+        collection(db, 'orders'),
+        where('customerId', '==', userId),
+        limit(50)
+      );
+      const snap = await getDocs(q);
+      // Collect the IDs that actually exist in Firestore
+      const firestoreIds = new Set<string>();
+      snap.forEach((docSnap) => {
+        const orderData = docSnap.data() as Order;
+        if (orderData && orderData.id) {
+          this.orders.set(orderData.id, orderData);
+          firestoreIds.add(orderData.id);
+        }
+      });
+      // Evict any locally-cached orders for this customer that no longer exist in Firestore
+      // (e.g. deleted by admin). This prevents deleted orders from persisting in the UI.
+      for (const [id, order] of Array.from(this.orders.entries())) {
+        if (order.customerId === userId && !firestoreIds.has(id)) {
+          this.orders.delete(id);
+        }
+      }
+      this.notify();
+      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    } catch (e: any) {
+      console.warn('[Firestore] fetchCustomerOrders note:', e?.message || e);
+      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    }
+  }
+
   public getShopOrdersForStore(shopId: string): ShopOrder[] {
     return Array.from(this.shopOrders.values())
       .filter((so) => so.shopId === shopId)
@@ -3041,7 +3030,7 @@ class FallbackStore {
   public getHelperWallet(helperId: string): Wallet {
     const allOrders = Array.from(this.orders.values());
     const helperOrders = allOrders.filter(
-      (o) => o.helperId === helperId && o.status === 'DELIVERED'
+      (o) => o.helperId === helperId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
     );
     // All approved withdrawals are the single source of truth for paid commission.
     // Manual paybacks recorded by admin also create an APPROVED withdrawal record.
@@ -3123,9 +3112,9 @@ class FallbackStore {
     const updatedWallet: Wallet = {
       userId: helperId,
       totalEarned: (existing?.totalEarned ?? 0) + helperShare,
-      balance:     (existing?.balance     ?? 0) + platformShare,
+      balance: (existing?.balance ?? 0) + platformShare,
       totalPaidCommission: existing?.totalPaidCommission ?? 0,
-      totalWithdrawn:      existing?.totalWithdrawn      ?? 0,
+      totalWithdrawn: existing?.totalWithdrawn ?? 0,
       updatedAt: new Date().toISOString(),
     };
     this.wallets.set(helperId, updatedWallet);
@@ -3166,9 +3155,9 @@ class FallbackStore {
     const updatedWallet: Wallet = {
       userId: helperId,
       totalEarned: Math.max(0, (existing?.totalEarned ?? 0) + diffHelperShare),
-      balance:     Math.max(0, (existing?.balance     ?? 0) + diffPlatformShare),
+      balance: Math.max(0, (existing?.balance ?? 0) + diffPlatformShare),
       totalPaidCommission: existing?.totalPaidCommission ?? 0,
-      totalWithdrawn:      existing?.totalWithdrawn      ?? 0,
+      totalWithdrawn: existing?.totalWithdrawn ?? 0,
       updatedAt: new Date().toISOString(),
     };
     this.wallets.set(helperId, updatedWallet);
@@ -3200,14 +3189,14 @@ class FallbackStore {
   }
 
 
-  public async recordHelperPayback(helperId: string, amount: number, note: string) {
+  public async recordHelperPayback(helperId: string, amount: number, note: string, paymentMethod: string = 'Manual Record') {
     const txs = this.walletTransactions.get(helperId) || [];
     const newTx: WalletTransaction = {
       id: `tx-${Date.now()}`,
       userId: helperId,
       amount: -amount,
       type: 'PAYBACK',
-      description: `Paid back commission to platform: ৳${amount} (${note})`,
+      description: `Paid back commission to platform: ৳${amount} (${paymentMethod}${note ? ` - ${note}` : ''})`,
       createdAt: new Date().toISOString(),
     };
     txs.unshift(newTx);
@@ -3221,8 +3210,8 @@ class FallbackStore {
       helperName,
       amount,
       status: 'APPROVED',
-      paymentMethod: 'Manual Record',
-      accountNumber: note,
+      paymentMethod: paymentMethod || 'Manual Record',
+      accountNumber: note || 'Admin recorded payment',
       createdAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
     };
@@ -3232,10 +3221,10 @@ class FallbackStore {
     const existing = this.wallets.get(helperId);
     const updatedWallet: Wallet = {
       userId: helperId,
-      totalEarned:         existing?.totalEarned         ?? 0,
-      balance:             Math.max(0, (existing?.balance ?? 0) - amount),
+      totalEarned: existing?.totalEarned ?? 0,
+      balance: Math.max(0, (existing?.balance ?? 0) - amount),
       totalPaidCommission: (existing?.totalPaidCommission ?? 0) + amount,
-      totalWithdrawn:      (existing?.totalWithdrawn      ?? 0) + amount,
+      totalWithdrawn: (existing?.totalWithdrawn ?? 0) + amount,
       updatedAt: new Date().toISOString(),
     };
     this.wallets.set(helperId, updatedWallet);
@@ -3329,7 +3318,7 @@ class FallbackStore {
       this.walletTransactions.set(req.helperId, txs);
       try {
         await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
-      } catch (e) {}
+      } catch (e) { }
     } else if (oldStatus === 'APPROVED' && newStatus === 'APPROVED' && oldAmount !== newAmount) {
       // Amount changed while remaining approved
       const diff = newAmount - oldAmount;
@@ -3395,7 +3384,7 @@ class FallbackStore {
       if (o.helperId === oldUid) { o.helperId = newUid; changed = true; }
       if (changed) {
         this.orders.set(o.id, o);
-        try { setDoc(doc(db, 'orders', o.id), cleanForFirestore(o), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'orders', o.id), cleanForFirestore(o), { merge: true }); } catch (_) { }
       }
     });
 
@@ -3404,7 +3393,7 @@ class FallbackStore {
       if (app.userId === oldUid) {
         app.userId = newUid;
         this.helperApplications.set(app.id, app);
-        try { setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'helperApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) { }
       }
     });
 
@@ -3413,7 +3402,7 @@ class FallbackStore {
       if (app.userId === oldUid) {
         app.userId = newUid;
         this.storeApplications.set(app.id, app);
-        try { setDoc(doc(db, 'storeApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'storeApplications', app.id), cleanForFirestore(app), { merge: true }); } catch (_) { }
       }
     });
 
@@ -3423,7 +3412,7 @@ class FallbackStore {
       this.wallets.delete(oldUid);
       const updatedWallet = { ...oldWallet, userId: newUid };
       this.wallets.set(newUid, updatedWallet);
-      try { setDoc(doc(db, 'wallets', newUid), cleanForFirestore(updatedWallet)); } catch (_) {}
+      try { setDoc(doc(db, 'wallets', newUid), cleanForFirestore(updatedWallet)); } catch (_) { }
     }
 
     // 5. Wallet Transactions
@@ -3433,7 +3422,7 @@ class FallbackStore {
       const updatedTxs = oldTxs.map((tx) => ({ ...tx, userId: newUid }));
       this.walletTransactions.set(newUid, updatedTxs);
       updatedTxs.forEach((tx) => {
-        try { setDoc(doc(db, 'walletTransactions', tx.id), cleanForFirestore(tx), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'walletTransactions', tx.id), cleanForFirestore(tx), { merge: true }); } catch (_) { }
       });
     }
 
@@ -3442,7 +3431,7 @@ class FallbackStore {
       if (w.helperId === oldUid) {
         w.helperId = newUid;
         this.withdrawals.set(w.id, w);
-        try { setDoc(doc(db, 'withdrawals', w.id), cleanForFirestore(w), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'withdrawals', w.id), cleanForFirestore(w), { merge: true }); } catch (_) { }
       }
     });
 
@@ -3461,7 +3450,7 @@ class FallbackStore {
       if (fb.helperId === oldUid) { fb.helperId = newUid; changed = true; }
       if (changed) {
         this.orderFeedbacks.set(fb.id, fb);
-        try { setDoc(doc(db, 'orderFeedbacks', fb.id), cleanForFirestore(fb), { merge: true }); } catch (_) {}
+        try { setDoc(doc(db, 'orderFeedbacks', fb.id), cleanForFirestore(fb), { merge: true }); } catch (_) { }
       }
     });
 
@@ -3528,18 +3517,21 @@ class FallbackStore {
   public doesUserMatchSegment(u: UserProfile, segName: string): boolean {
     const userOrders = Array.from(this.orders.values()).filter((o) => o.customerId === u.uid);
     const orderCount = userOrders.length;
-    const lastOrder = orderCount > 0 
-      ? [...userOrders].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] 
+    const lastOrder = orderCount > 0
+      ? [...userOrders].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
       : null;
-    const daysSinceLastOrder = lastOrder 
-      ? Math.floor((Date.now() - new Date(lastOrder.createdAt).getTime()) / (24 * 3600 * 1000)) 
+    const daysSinceLastOrder = lastOrder
+      ? Math.floor((Date.now() - new Date(lastOrder.createdAt).getTime()) / (24 * 3600 * 1000))
       : null;
 
-    const userCreatedTime = u.createdAt ? new Date(u.createdAt).getTime() : (orderCount > 0 ? new Date(userOrders[orderCount - 1].createdAt).getTime() : Date.now());
+    const userCreatedTime = u.createdAt
+      ? new Date(u.createdAt).getTime()
+      : (orderCount > 0 ? new Date(userOrders[orderCount - 1].createdAt).getTime() : Date.now());
     const weeksElapsed = Math.max(1, (Date.now() - userCreatedTime) / (7 * 24 * 3600 * 1000));
     const weeklyOrderRate = orderCount / weeksElapsed;
     const monthlyOrderRate = orderCount / (weeksElapsed / 4.33);
 
+    // ── Preset segments ──────────────────────────────────────────────────────
     if (segName === 'MULTIPLE_ORDERS') return orderCount >= 2;
     if (segName === 'WEEKLY_2_ORDERS') return weeklyOrderRate >= 2;
     if (segName === 'WEEKLY_1_ORDERS') return weeklyOrderRate >= 1;
@@ -3552,6 +3544,47 @@ class FallbackStore {
       const registeredDaysAgo = Math.floor((Date.now() - userCreatedTime) / (24 * 3600 * 1000));
       return registeredDaysAgo <= 7;
     }
+
+    // ── Custom compound segment (CUSTOM:key=val:key=val:...) ─────────────────
+    // Encoded by the AdminPushNotificationModal filter builder.
+    // All specified conditions must pass (AND logic).
+    if (segName.startsWith('CUSTOM:')) {
+      const params = segName.slice('CUSTOM:'.length).split(':');
+      const parsed: Record<string, number> = {};
+      for (const p of params) {
+        const [k, v] = p.split('=');
+        if (k && v !== undefined) parsed[k] = parseFloat(v);
+      }
+
+      const coinBalance = typeof u.coins === 'number' ? u.coins : 0;
+      const registeredDaysAgo = Math.floor((Date.now() - userCreatedTime) / (24 * 3600 * 1000));
+
+      // minOrders: total orders >= N
+      if (parsed.minOrders !== undefined && orderCount < parsed.minOrders) return false;
+      // maxOrders: total orders <= N
+      if (parsed.maxOrders !== undefined && orderCount > parsed.maxOrders) return false;
+      // lastOrderWithinDays: must have ordered within the last N days
+      if (parsed.lastOrderWithinDays !== undefined) {
+        if (daysSinceLastOrder === null || daysSinceLastOrder > parsed.lastOrderWithinDays) return false;
+      }
+      // lastOrderOlderThanDays: last order must be more than N days ago (inactive targeting)
+      if (parsed.lastOrderOlderThanDays !== undefined) {
+        if (daysSinceLastOrder === null || daysSinceLastOrder < parsed.lastOrderOlderThanDays) return false;
+      }
+      // weeklyRateGte: weekly order rate >= N
+      if (parsed.weeklyRateGte !== undefined && weeklyOrderRate < parsed.weeklyRateGte) return false;
+      // weeklyRateLt: weekly order rate < N
+      if (parsed.weeklyRateLt !== undefined && weeklyOrderRate >= parsed.weeklyRateLt) return false;
+      // minCoins: coin balance >= N
+      if (parsed.minCoins !== undefined && coinBalance < parsed.minCoins) return false;
+      // maxCoins: coin balance <= N
+      if (parsed.maxCoins !== undefined && coinBalance > parsed.maxCoins) return false;
+      // registeredWithinDays: user registered within last N days
+      if (parsed.registeredWithinDays !== undefined && registeredDaysAgo > parsed.registeredWithinDays) return false;
+
+      return true; // all conditions passed
+    }
+
     return false;
   }
 
@@ -3823,12 +3856,12 @@ class FallbackStore {
       this.scheduledNotifications.set(notif.id, notif);
       try {
         await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif), { merge: true });
-      } catch (_) {}
+      } catch (_) { }
     } else {
       this.scheduledNotifications.delete(notif.id);
       try {
         await deleteDoc(doc(db, 'scheduledNotifications', notif.id));
-      } catch (_) {}
+      } catch (_) { }
     }
     this.notify();
     this.saveLocalStore();
@@ -4063,7 +4096,7 @@ class FallbackStore {
       this.storeApplications.set(storeApp.id, updatedApp);
       try {
         await setDoc(doc(db, 'storeApplications', storeApp.id), cleanForFirestore(updatedApp), { merge: true });
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // Update owner user profile if present
@@ -4080,7 +4113,7 @@ class FallbackStore {
           lastActiveMode: isApproved ? 'store' : (storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode),
         };
         this.users.set(existing.ownerUserId, updatedUser);
-        try { await this.saveUser(updatedUser); } catch (_) {}
+        try { await this.saveUser(updatedUser); } catch (_) { }
       }
     }
 
@@ -4111,9 +4144,74 @@ class FallbackStore {
     }
     this.notify();
     try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) { }
+    try {
       await setDoc(doc(db, 'orderFeedbacks', feedback.id), cleanForFirestore(feedback));
     } catch (e: any) {
       console.warn('[Firestore] submitOrderFeedback note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteOrderFeedback(feedbackId: string) {
+    const fb = this.orderFeedbacks.get(feedbackId);
+    this.orderFeedbacks.delete(feedbackId);
+    if (fb && fb.orderId) {
+      const ord = this.orders.get(fb.orderId);
+      if (ord && ord.feedback?.id === feedbackId) {
+        delete ord.feedback;
+        this.orders.set(ord.id, ord);
+        try {
+          await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+        } catch (_) { }
+      }
+    }
+    this.notify();
+    try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) { }
+    try {
+      await deleteDoc(doc(db, 'orderFeedbacks', feedbackId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteOrderFeedback note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async updateOrderFeedbackReply(feedbackId: string, replyText: string, showUntil?: string, showFrom?: string) {
+    const fb = this.orderFeedbacks.get(feedbackId);
+    if (!fb) return;
+    const updated: OrderFeedback = {
+      ...fb,
+      adminReply: replyText,
+      adminReplyAt: new Date().toISOString(),
+      adminReplyShowFrom: showFrom || undefined,
+      adminReplyShowUntil: showUntil || undefined,
+      adminReplyShownToCustomer: false, // reset so customer sees it again
+    };
+    this.orderFeedbacks.set(feedbackId, updated);
+    this.notify();
+    try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) { }
+    try {
+      await setDoc(doc(db, 'orderFeedbacks', feedbackId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateOrderFeedbackReply error:', e?.message || e);
+    }
+  }
+
+  public async markFeedbackReplyShown(feedbackId: string) {
+    const fb = this.orderFeedbacks.get(feedbackId);
+    if (!fb) return;
+    const updated: OrderFeedback = { ...fb, adminReplyShownToCustomer: true };
+    this.orderFeedbacks.set(feedbackId, updated);
+    try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) { }
+    try {
+      await setDoc(doc(db, 'orderFeedbacks', feedbackId), { adminReplyShownToCustomer: true }, { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] markFeedbackReplyShown error:', e?.message || e);
     }
   }
 
@@ -4442,15 +4540,15 @@ class FallbackStore {
         delta > 0
           ? `🎁 +${delta} জামানত কয়েন যোগ হয়েছে!`
           : delta < 0
-          ? `🪙 ${delta} জামানত কয়েন সমন্বয় করা হয়েছে`
-          : `🪙 জামানত কয়েন আপডেট করা হয়েছে`;
+            ? `🪙 ${delta} জামানত কয়েন সমন্বয় করা হয়েছে`
+            : `🪙 জামানত কয়েন আপডেট করা হয়েছে`;
 
       const notifBody =
         delta > 0
           ? `এডমিন আপনার অ্যাকাউন্টে +${delta} কয়েন যোগ করেছেন। বর্তমান কয়েন ব্যালেন্স: ${cleanCoins} কয়েন।${reason ? ` (নোট: ${reason})` : ''}`
           : delta < 0
-          ? `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স সমন্বয় করে ${cleanCoins} কয়েন নির্ধারণ করেছেন (${delta} কয়েন)।${reason ? ` (নোট: ${reason})` : ''}`
-          : `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স ${cleanCoins} কয়েন নিশ্চিত করেছেন।${reason ? ` (নোট: ${reason})` : ''}`;
+            ? `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স সমন্বয় করে ${cleanCoins} কয়েন নির্ধারণ করেছেন (${delta} কয়েন)।${reason ? ` (নোট: ${reason})` : ''}`
+            : `এডমিন আপনার অ্যাকাউন্টের কয়েন ব্যালেন্স ${cleanCoins} কয়েন নিশ্চিত করেছেন।${reason ? ` (নোট: ${reason})` : ''}`;
 
       await this.addNotification({
         id: `notif-${Date.now()}-coins-adj`,
@@ -4567,7 +4665,7 @@ class FallbackStore {
         lastActiveMode: 'store',
       };
       this.users.set(existing.userId, updatedUser);
-      try { await this.saveUser(updatedUser); } catch (_) {}
+      try { await this.saveUser(updatedUser); } catch (_) { }
     } else {
       // Owner's profile document is missing — still persist the store flags so the
       // owner lands on the store dashboard the next time they sign in.
@@ -4585,7 +4683,7 @@ class FallbackStore {
           }),
           { merge: true }
         );
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // Notify store owner that application was approved (Requirement 4)
@@ -4642,7 +4740,7 @@ class FallbackStore {
     if (existing && existing.status === 'APPROVED') {
       const shopId = `store-${existing.userId}`;
       this.shops.delete(shopId);
-      try { await deleteDoc(doc(db, 'shops', shopId)); } catch (_) {}
+      try { await deleteDoc(doc(db, 'shops', shopId)); } catch (_) { }
 
       const storeOwner = await this.getUserForUpdate(existing.userId);
       if (storeOwner) {
@@ -4654,7 +4752,7 @@ class FallbackStore {
           lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
         };
         this.users.set(existing.userId, updatedUser);
-        try { await this.saveUser(updatedUser); } catch (_) {}
+        try { await this.saveUser(updatedUser); } catch (_) { }
       }
     }
     this.storeApplications.delete(appId);
@@ -4678,7 +4776,7 @@ class FallbackStore {
     };
     this.users.set(userId, updatedUser);
     this.notify();
-    try { await this.saveUser(updatedUser); } catch (_) {}
+    try { await this.saveUser(updatedUser); } catch (_) { }
   }
 
   public async getAllOrders(): Promise<Order[]> {

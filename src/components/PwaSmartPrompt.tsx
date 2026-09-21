@@ -58,6 +58,51 @@ export const isPwaInstalled = (): boolean => {
   );
 };
 
+// Check if device is iOS (iPhone/iPad/iPod)
+export const isIosDevice = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const ua = window.navigator.userAgent || '';
+  return /iphone|ipad|ipod/i.test(ua) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+};
+
+// Check if current browser environment supports PWA installation
+export const isPwaSupported = (): boolean => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+
+  // 1. Service Worker is a hard requirement for PWA
+  if (!('serviceWorker' in navigator)) return false;
+
+  // 2. Chromium-based browsers with native install prompt support
+  if ('onbeforeinstallprompt' in window || globalDeferredPrompt) {
+    return true;
+  }
+
+  const ua = navigator.userAgent || navigator.vendor || '';
+
+  // 3. iOS devices (iPhone, iPad, iPod) - Safari/WebKit supports Add to Home Screen PWA
+  if (isIosDevice()) {
+    return true;
+  }
+
+  // 4. Android devices (Chrome, Samsung Internet, Firefox Android, Opera, etc.) support PWA
+  const isAndroid = /android/i.test(ua);
+  if (isAndroid) {
+    return true;
+  }
+
+  // 5. Desktop Safari 17+ on macOS Sonoma supports PWA ("Add to Dock")
+  const isMacSafari = /Macintosh/i.test(ua) && /Safari/i.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/i.test(ua);
+  if (isMacSafari) {
+    const versionMatch = ua.match(/Version\/(\d+)/i);
+    const safariVersion = versionMatch ? parseInt(versionMatch[1], 10) : 0;
+    if (safariVersion >= 17) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 // Detect if user is running inside an in-app browser (FB, Messenger, Instagram, TikTok, etc.)
 export const isInAppBrowser = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -67,14 +112,9 @@ export const isInAppBrowser = (): boolean => {
   );
 };
 
-// Check if device is iOS (iPhone/iPad/iPod)
-export const isIosDevice = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
-};
-
 export const PwaSmartPrompt: React.FC = () => {
   const [isStandalone, setIsStandalone] = useState<boolean>(true);
+  const [isSupported, setIsSupported] = useState<boolean>(false);
   const [isInstalledPreviously, setIsInstalledPreviously] = useState<boolean>(false);
   const [isFloatingBarDismissed, setIsFloatingBarDismissed] = useState<boolean>(false);
   const [isInApp, setIsInApp] = useState<boolean>(false);
@@ -90,11 +130,19 @@ export const PwaSmartPrompt: React.FC = () => {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    const supported = isPwaSupported();
+    setIsSupported(supported);
+
     const standalone = isPwaInstalled();
     setIsStandalone(standalone);
 
     const prevInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true';
     setIsInstalledPreviously(prevInstalled);
+
+    // If browser doesn't support PWA, or already installed, nothing more to do
+    if (!supported || standalone || prevInstalled) {
+      return;
+    }
 
     // Check modern browser installed related apps API
     if ('getInstalledRelatedApps' in navigator) {
@@ -120,6 +168,7 @@ export const PwaSmartPrompt: React.FC = () => {
 
     const handlePromptAvail = () => {
       setHasPrompt(true);
+      setIsSupported(true);
     };
 
     const handleInstallSuccess = () => {
@@ -134,27 +183,25 @@ export const PwaSmartPrompt: React.FC = () => {
     window.addEventListener('pwa-install-available', handlePromptAvail);
     window.addEventListener('pwa-installed-success', handleInstallSuccess);
 
-    // ONLY auto-show install modal if NOT standalone AND NOT previously installed
-    if (!standalone && !prevInstalled) {
-      const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
-      const now = Date.now();
-      const oneDay = 24 * 60 * 60 * 1000;
-      const shouldAutoShow = !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
+    // ONLY auto-show install modal if supported AND NOT standalone AND NOT previously installed
+    const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const shouldAutoShow = !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
 
-      if (shouldAutoShow) {
-        const timer = setTimeout(() => {
-          // Double check if installed state changed in the interim
-          const isNowInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true' || isPwaInstalled();
-          if (!isNowInstalled) {
-            setShowPromptModal(true);
-          }
-        }, 2000);
-        return () => {
-          clearTimeout(timer);
-          window.removeEventListener('pwa-install-available', handlePromptAvail);
-          window.removeEventListener('pwa-installed-success', handleInstallSuccess);
-        };
-      }
+    if (shouldAutoShow) {
+      const timer = setTimeout(() => {
+        // Double check if installed state changed in the interim
+        const isNowInstalled = localStorage.getItem('jamanot_pwa_installed') === 'true' || isPwaInstalled();
+        if (!isNowInstalled && isPwaSupported()) {
+          setShowPromptModal(true);
+        }
+      }, 2000);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('pwa-install-available', handlePromptAvail);
+        window.removeEventListener('pwa-installed-success', handleInstallSuccess);
+      };
     }
 
     return () => {
@@ -249,50 +296,15 @@ export const PwaSmartPrompt: React.FC = () => {
     }
   };
 
-  // If already in standalone PWA, do not render anything
-  if (isStandalone) return null;
+  // If browser does not support PWA, already in standalone PWA, or previously installed on device, do not render anything
+  if (!isSupported || isStandalone || isInstalledPreviously) return null;
 
   // If admin turned off PWA install prompts
   if (!isEnabled) return null;
 
   return (
     <>
-      {/* 1. Floating Open App Banner if app was already installed on device but user visited in browser */}
-      {isInstalledPreviously && !isFloatingBarDismissed && !showPromptModal && (
-        <div className="fixed bottom-20 left-4 right-4 z-40 max-w-md mx-auto animate-in slide-in-from-bottom-5 duration-300">
-          <div className="bg-slate-900/95 backdrop-blur-md text-white px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center shrink-0 shadow-sm">
-                <Smartphone className="w-4 h-4 text-white" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black text-white truncate">জামানত অ্যাপ ইনস্টল করা আছে</p>
-                <p className="text-[10px] text-emerald-300 truncate font-medium">ফুলস্ক্রিন ও দ্রুত ব্যবহারের জন্য অ্যাপ খুলুন</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={handleOpenApp}
-                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition-all active:scale-95 shadow-md flex items-center gap-1 cursor-pointer"
-              >
-                <span>ওপেন করুন</span>
-                <ExternalLink className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsFloatingBarDismissed(true)}
-                className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-                aria-label="Close"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. Main PWA Installation Modal (Single clean modal as requested) */}
+      {/* Main PWA Installation Modal (Single clean modal for uninstalled users) */}
       {showPromptModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-emerald-100 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4">

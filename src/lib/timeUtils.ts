@@ -56,7 +56,22 @@ export interface OrderTimeInfo {
   needDeliveryBack?: boolean;
   deliveryBackTime?: string;
   deliveryBackSetAt?: string;
-  statusHistory?: { status: string; timestamp: string }[];
+  statusHistory?: { status: string; timestamp: string; note?: string; actor?: string }[];
+  editHistory?: { timestamp: string; changes?: { field: string; oldValue?: any; newValue?: any }[] }[];
+  acceptedAt?: string;
+  onTheWayAt?: string;
+  arrivedAt?: string;
+}
+
+export function isOrderTimerPaused(order: OrderTimeInfo): boolean {
+  if (!order || !order.needDeliveryBack || !order.deliveryBackTime) return false;
+  if (order.status === 'DELIVERED' || order.status === 'CANCELED' || (order.status as string) === 'CANCELLED') return false;
+
+  const pauseEndMs = new Date(order.deliveryBackTime).getTime();
+  if (isNaN(pauseEndMs)) return false;
+
+  const now = Date.now();
+  return now < pauseEndMs;
 }
 
 export function getOrderEffectiveElapsedMs(order: OrderTimeInfo, targetEndMs?: number): number {
@@ -68,8 +83,8 @@ export function getOrderEffectiveElapsedMs(order: OrderTimeInfo, targetEndMs?: n
   if (end === undefined) {
     if (order.status === 'DELIVERED' && order.deliveredAt) {
       end = new Date(order.deliveredAt).getTime();
-    } else if (order.status === 'CANCELED' || order.status === 'CANCELLED') {
-      const cancelHist = order.statusHistory?.find((h) => h.status === 'CANCELED' || h.status === 'CANCELLED')?.timestamp;
+    } else if (order.status === 'CANCELED' || (order.status as string) === 'CANCELLED') {
+      const cancelHist = order.statusHistory?.find((h) => h.status === 'CANCELED' || (h.status as string) === 'CANCELLED')?.timestamp;
       const cancelTimeStr = order.cancelledAt || cancelHist || order.updatedAt;
       end = cancelTimeStr ? new Date(cancelTimeStr).getTime() : Date.now();
     } else {
@@ -82,8 +97,36 @@ export function getOrderEffectiveElapsedMs(order: OrderTimeInfo, targetEndMs?: n
 
   // Subtract paused window for Two-Way scheduled return
   if (order.needDeliveryBack && order.deliveryBackTime) {
-    const pauseStartStr = order.deliveryBackSetAt || order.updatedAt;
-    const pauseStartMs = pauseStartStr ? new Date(pauseStartStr).getTime() : NaN;
+    let pauseStartMs = NaN;
+    if (order.deliveryBackSetAt) {
+      pauseStartMs = new Date(order.deliveryBackSetAt).getTime();
+    }
+    // Fallback search from editHistory if deliveryBackSetAt was omitted
+    if (isNaN(pauseStartMs) && order.editHistory && Array.isArray(order.editHistory)) {
+      const edit = order.editHistory.find((e) =>
+        e.changes?.some((c) => c.field === 'Two-Way Delivery' || c.field === 'needDeliveryBack')
+      );
+      if (edit?.timestamp) {
+        pauseStartMs = new Date(edit.timestamp).getTime();
+      }
+    }
+    // Fallback search from statusHistory
+    if (isNaN(pauseStartMs) && order.statusHistory && Array.isArray(order.statusHistory)) {
+      const sh = order.statusHistory.find((s) =>
+        s.note?.toLowerCase().includes('two-way') || s.note?.toLowerCase().includes('টু-ওয়ে')
+      );
+      if (sh?.timestamp) {
+        pauseStartMs = new Date(sh.timestamp).getTime();
+      }
+    }
+    // Fallback to acceptedAt or updatedAt or createdAt
+    if (isNaN(pauseStartMs)) {
+      const fallbackTime = order.arrivedAt || order.onTheWayAt || order.acceptedAt || order.updatedAt;
+      if (fallbackTime) {
+        pauseStartMs = new Date(fallbackTime).getTime();
+      }
+    }
+
     const pauseEndMs = new Date(order.deliveryBackTime).getTime();
 
     if (!isNaN(pauseStartMs) && !isNaN(pauseEndMs) && pauseEndMs > pauseStartMs) {
@@ -193,16 +236,18 @@ export function getOrderAcceptanceDurationText(order: {
 
 /**
  * Psychological color urgency styling for helper view based on order duration:
+ * - When order timer is paused (Two-Way return scheduled): soft indigo paused style
  * - < 40 min: normal
  * - 40 to 54 min: soft yellow background
  * - >= 55 min: soft red background
  */
-export function getHelperUrgencyBgClass(createdAtStr: string, isDone?: boolean): {
+export function getHelperUrgencyBgClass(createdAtStrOrOrder: string | OrderTimeInfo, isDone?: boolean): {
   bgClass: string;
   borderClass: string;
   badgeClass: string;
   timerClass: string;
   urgencyLevel: 'normal' | 'yellow' | 'red';
+  isPaused?: boolean;
 } {
   if (isDone) {
     return {
@@ -211,9 +256,24 @@ export function getHelperUrgencyBgClass(createdAtStr: string, isDone?: boolean):
       badgeClass: 'bg-gray-100 text-gray-700 border-gray-200',
       timerClass: 'bg-gray-100 text-gray-700 border-gray-200',
       urgencyLevel: 'normal',
+      isPaused: false,
     };
   }
-  const mins = getElapsedMinutes(createdAtStr);
+
+  const isPaused = typeof createdAtStrOrOrder === 'object' && isOrderTimerPaused(createdAtStrOrOrder);
+  const mins = getElapsedMinutes(createdAtStrOrOrder);
+
+  if (isPaused) {
+    return {
+      bgClass: 'bg-indigo-50/70 border-indigo-200 ring-1 ring-indigo-200',
+      borderClass: 'border-indigo-300',
+      badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200 font-bold',
+      timerClass: 'bg-indigo-100 text-indigo-900 border-indigo-200 font-black',
+      urgencyLevel: 'normal',
+      isPaused: true,
+    };
+  }
+
   if (mins >= 55) {
     return {
       bgClass: 'bg-red-50/95 border-red-300 shadow-md shadow-red-100/60 ring-2 ring-red-200',
@@ -221,6 +281,7 @@ export function getHelperUrgencyBgClass(createdAtStr: string, isDone?: boolean):
       badgeClass: 'bg-red-200 text-red-900 border-red-300 font-black',
       timerClass: 'bg-red-200 text-red-900 border-red-300 font-black animate-pulse',
       urgencyLevel: 'red',
+      isPaused: false,
     };
   }
   if (mins >= 40) {
@@ -230,6 +291,7 @@ export function getHelperUrgencyBgClass(createdAtStr: string, isDone?: boolean):
       badgeClass: 'bg-amber-200 text-amber-900 border-amber-300 font-black',
       timerClass: 'bg-amber-200 text-amber-900 border-amber-300 font-black',
       urgencyLevel: 'yellow',
+      isPaused: false,
     };
   }
   return {
@@ -238,6 +300,7 @@ export function getHelperUrgencyBgClass(createdAtStr: string, isDone?: boolean):
     badgeClass: 'bg-red-50 text-red-800 border-red-100 font-black',
     timerClass: 'bg-red-50 text-red-800 border-red-100 font-black',
     urgencyLevel: 'normal',
+    isPaused: false,
   };
 }
 

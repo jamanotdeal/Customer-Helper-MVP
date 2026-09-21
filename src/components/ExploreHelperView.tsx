@@ -399,7 +399,7 @@ export const ExploreHelperView: React.FC = () => {
         allBoundsPoints.push([deliveryLat, deliveryLng]);
 
         const orderTitle = order.service || order.title || 'errand';
-        const elapsedStr = getElapsedTime(order.createdAt);
+        const elapsedStr = getElapsedTime(order);
 
         const overlapBadgeHtml = hasOverlap
           ? `<span style="background:#f59e0b;color:#000;font-size:9px;font-weight:900;padding:1px 4px;border-radius:6px;margin-left:3px;">${overlapIndex}/${overlapCount}</span>`
@@ -621,7 +621,7 @@ export const ExploreHelperView: React.FC = () => {
           ) : (
             unacceptedOrders.map((order) => {
               const distanceKm = getOrderMinDistanceKm(user?.helperLocation, order);
-              const elapsed = getElapsedTime(order.createdAt);
+              const elapsed = getElapsedTime(order);
               return (
                 <div
                   key={order.id}

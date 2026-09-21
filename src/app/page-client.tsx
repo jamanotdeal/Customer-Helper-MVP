@@ -26,8 +26,9 @@ import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
 import { getReadiness, requestStep, openSettings, STEP_COPY, type PermissionStep } from '@/lib/permissions';
 
-import { Order } from '@/types';
+import { Order, OrderFeedback } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
+import { FeedbackReplyModal } from '@/components/FeedbackReplyModal';
 import { CoinRewardModal } from '@/components/CoinRewardModal';
 import { getCoinsForService } from '@/lib/pricing';
 import { CustomModalInjector } from '@/components/CustomModalInjector';
@@ -44,6 +45,7 @@ export default function PageClient() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
+  const [pendingReplyFeedback, setPendingReplyFeedback] = useState<OrderFeedback | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
 
   const handleSelectOrder = (orderId: string) => {
@@ -163,6 +165,40 @@ export default function PageClient() {
     return () => unsub();
   }, [user, activeMode]);
 
+  // Check for admin replies to customer's feedback (one-time, time-windowed)
+  useEffect(() => {
+    if (!user || (activeMode as string) !== 'customer') {
+      setPendingReplyFeedback(null);
+      return;
+    }
+
+    const checkPendingReplies = () => {
+      const now = Date.now();
+      const allFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
+      const pending = allFeedbacks.find((fb) => {
+        if (fb.customerId !== user.uid) return false;
+        if (!fb.adminReply) return false;
+        if (fb.adminReplyShownToCustomer) return false;
+        // Check start time — if showFrom is set, must not show before that time
+        if (fb.adminReplyShowFrom) {
+          const from = new Date(fb.adminReplyShowFrom).getTime();
+          if (now < from) return false;
+        }
+        // Check time window — if showUntil is set, must be in the future
+        if (fb.adminReplyShowUntil) {
+          const until = new Date(fb.adminReplyShowUntil).getTime();
+          if (now > until) return false;
+        }
+        return true;
+      });
+      setPendingReplyFeedback(pending || null);
+    };
+
+    checkPendingReplies();
+    const unsub = fallbackStore.subscribe(checkPendingReplies);
+    return () => unsub();
+  }, [user, activeMode]);
+
 
 
   // Status bar: white ground with dark icons, matching AppHeader's bg-white/95.
@@ -199,7 +235,7 @@ export default function PageClient() {
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           console.log('ServiceWorker registered:', reg.scope);
-          reg.update().catch(() => {});
+          reg.update().catch(() => { });
         })
         .catch((err) => console.warn('ServiceWorker registration note:', err));
     }
@@ -207,7 +243,7 @@ export default function PageClient() {
     if (user) {
       runPermissionLadder();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Sequentially prompts every missing permission via popup. Required steps
@@ -421,7 +457,7 @@ export default function PageClient() {
       window.removeEventListener('visibilitychange', checkQueryParam);
       window.removeEventListener('popstate', checkQueryParam);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, activeMode, activeTab]);
 
   const isAdminView = Boolean(
@@ -542,39 +578,39 @@ export default function PageClient() {
         {/* Main Content Skeleton */}
         <main className="flex-1 w-full">
           <div className="content-container p-4 pb-24 space-y-4">
-          {/* Form Card Skeleton */}
-          <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
-            <div className="space-y-2 text-center">
-              <div className="w-40 h-5 rounded-xl bg-gray-200 animate-pulse mx-auto" />
-              <div className="w-56 h-3.5 rounded-lg bg-gray-100 animate-pulse mx-auto" />
-              <div className="w-44 h-3 rounded-lg bg-gray-100 animate-pulse mx-auto" />
-            </div>
-            <div className="w-full h-12 rounded-2xl bg-emerald-100 animate-pulse" />
-          </div>
-
-          {/* Info cards skeleton */}
-          <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-5 space-y-3">
-            <div className="w-36 h-4 rounded-lg bg-emerald-200 animate-pulse" />
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl">
-                <div className="w-7 h-7 rounded-full bg-emerald-100 animate-pulse shrink-0" />
-                <div className="flex-1 h-4 rounded-lg bg-gray-100 animate-pulse" />
+            {/* Form Card Skeleton */}
+            <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
+              <div className="space-y-2 text-center">
+                <div className="w-40 h-5 rounded-xl bg-gray-200 animate-pulse mx-auto" />
+                <div className="w-56 h-3.5 rounded-lg bg-gray-100 animate-pulse mx-auto" />
+                <div className="w-44 h-3 rounded-lg bg-gray-100 animate-pulse mx-auto" />
               </div>
-            ))}
-          </div>
+              <div className="w-full h-12 rounded-2xl bg-emerald-100 animate-pulse" />
+            </div>
 
-          <div className="bg-white border border-gray-100 rounded-3xl p-5 space-y-3">
-            <div className="w-24 h-4 rounded-lg bg-gray-200 animate-pulse" />
-            <div className="grid grid-cols-2 gap-3">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="p-3.5 rounded-2xl bg-gray-50 space-y-2">
-                  <div className="w-5 h-5 rounded-lg bg-gray-200 animate-pulse" />
-                  <div className="w-16 h-3 rounded bg-gray-200 animate-pulse" />
-                  <div className="w-24 h-2.5 rounded bg-gray-100 animate-pulse" />
+            {/* Info cards skeleton */}
+            <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-5 space-y-3">
+              <div className="w-36 h-4 rounded-lg bg-emerald-200 animate-pulse" />
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl">
+                  <div className="w-7 h-7 rounded-full bg-emerald-100 animate-pulse shrink-0" />
+                  <div className="flex-1 h-4 rounded-lg bg-gray-100 animate-pulse" />
                 </div>
               ))}
             </div>
-          </div>
+
+            <div className="bg-white border border-gray-100 rounded-3xl p-5 space-y-3">
+              <div className="w-24 h-4 rounded-lg bg-gray-200 animate-pulse" />
+              <div className="grid grid-cols-2 gap-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="p-3.5 rounded-2xl bg-gray-50 space-y-2">
+                    <div className="w-5 h-5 rounded-lg bg-gray-200 animate-pulse" />
+                    <div className="w-16 h-3 rounded bg-gray-200 animate-pulse" />
+                    <div className="w-24 h-2.5 rounded bg-gray-100 animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </main>
 
@@ -632,9 +668,7 @@ export default function PageClient() {
       {/* Customer Coin Earning Celebration Modal (Triggered BEFORE Feedback) */}
       {coinRewardOrder && (
         <CoinRewardModal
-          order={coinRewardOrder}
           earnedCoins={coinRewardOrder.coinsAwarded || getCoinsForService(coinRewardOrder.service, fallbackStore.pricingSettings)}
-          totalCoins={user?.coins}
           onClose={() => {
             if (typeof localStorage !== 'undefined') {
               localStorage.setItem(`coin_reward_seen_${coinRewardOrder.id}`, 'true');
@@ -675,6 +709,18 @@ export default function PageClient() {
               localStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
             }
             setFeedbackOrder(null);
+          }}
+        />
+      )}
+
+      {/* Admin Reply to Customer Feedback — one-time modal, time-windowed */}
+      {pendingReplyFeedback && !feedbackOrder && !coinRewardOrder && (
+        <FeedbackReplyModal
+          feedback={pendingReplyFeedback}
+          onClose={async () => {
+            const fb = pendingReplyFeedback;
+            setPendingReplyFeedback(null);
+            await fallbackStore.markFeedbackReplyShown(fb.id);
           }}
         />
       )}

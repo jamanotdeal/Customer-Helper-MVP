@@ -1,12 +1,12 @@
 import { PricingSettings } from '@/types';
 
 export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
-  'চাল, ডাল, তেল, তরকারি বা ঘরের বাজার...',
-  'লন্ড্রির কাপড় পাঠানো বা দোকান থেকে আনা...',
-  'পছন্দের রেস্তোরাঁ থেকে গরম খাবার...',
-  'যেকোনো জরুরি পার্সেল এক স্থান থেকে অন্য স্থানে...',
-  'ফার্মেসি থেকে জরুরি প্রয়োজনীয় ওষুধ...',
-  'অন্য যেকোনো কাজ যা আপনার প্রয়োজন...',
+  'বাজার-সদাই করে দিতে হবে (গ্যাস, চাল-ডাল, মাছ-মাংস, শাকসবজি)?',
+  'লন্ড্রিতে কাপড় দিয়ে আসতে হবে বা নিয়ে আসতে হবে?',
+  'খাবার আনতে হবে?',
+  'পার্সেল রিসিভ করতে হবে বা ডেলিভারি দিতে হবে?',
+  'মেডিসিন আনতে হবে?',
+  'অন্য কোনো কিছু?',
 ];
 
 /**
@@ -69,17 +69,45 @@ export const DEFAULT_SERVICES: string[] = [
 ];
 
 export const DEFAULT_STORE_TYPES: string[] = [
-  'Grocery & Supermarket',
-  'Pharmacy & Medicine',
-  'Restaurant & Fast Food',
-  'Meat & Fish Market',
-  'Fruits & Vegetables',
-  'Electronics & Gadgets',
-  'Stationery & Books',
-  'Clothing & Fashion',
-  'Laundry & Dry Cleaning',
-  'Other',
+  'মুদিখানা ও সুপারশপ',
+  'ফার্মেসি ও ওষুধ',
+  'রেস্টুরেন্ট ও ফাস্টফুড',
+  'মাংস ও মাছ বাজার',
+  'ফল ও সবজির দোকান',
+  'ইলেকট্রনিক্স ও গ্যাজেট',
+  'স্টেশনারি ও বই',
+  'পোশাক ও ফ্যাশন',
+  'লন্ড্রি ও ড্রাই ক্লিনিং',
+  'অন্যান্য',
 ];
+
+/**
+ * Splits and sanitizes store types if provided as a single string,
+ * delimited by newlines, or separated by '&'.
+ */
+export const parseStoreTypes = (rawTypes?: string[] | string | null): string[] => {
+  if (!rawTypes) return DEFAULT_STORE_TYPES;
+  const items = Array.isArray(rawTypes) ? rawTypes : [rawTypes];
+  const parsed: string[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== 'string') continue;
+    const lines = item.split(/\r?\n/);
+    for (const line of lines) {
+      if (line.includes('&')) {
+        const parts = line.split('&').map((p) => p.trim()).filter(Boolean);
+        parsed.push(...parts);
+      } else {
+        const trimmed = line.trim();
+        if (trimmed) {
+          parsed.push(trimmed);
+        }
+      }
+    }
+  }
+
+  return parsed.length > 0 ? parsed : DEFAULT_STORE_TYPES;
+};
 
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   rules: [
@@ -272,9 +300,9 @@ export function calculateDistanceKm(
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }

@@ -1,14 +1,16 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
+import { fallbackStore, db } from '@/lib/firebase';
+import { collection, doc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
+  ShoppingBag, Store,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
@@ -142,18 +144,83 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     };
     syncOrder();
     const unsub = fallbackStore.subscribe(syncOrder);
-    return () => unsub();
+
+    // Direct realtime document listener for immediate status update (e.g. Delivered by Helper/Admin)
+    let unsubDoc: (() => void) | undefined;
+    if (orderId && db) {
+      try {
+        unsubDoc = onSnapshot(
+          doc(db, 'orders', orderId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const updated = docSnap.data() as Order;
+              if (updated && updated.id) {
+                fallbackStore.orders.set(orderId, updated);
+                setOrder({ ...updated });
+              }
+            }
+          },
+          (err) => console.warn('[OrderDetailsView] live order doc listener note:', err)
+        );
+      } catch (e) {
+        console.warn('[OrderDetailsView] live order doc listener setup error:', e);
+      }
+    }
+
+    return () => {
+      unsub();
+      if (unsubDoc) unsubDoc();
+    };
   }, [orderId]);
 
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
 
   useEffect(() => {
     setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
-    if (orderId) {
+    const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+    const unsubStore = fallbackStore.subscribe(sync);
+
+    // Preload shops if not yet cached
+    if (fallbackStore.shops.size === 0 && db) {
+      getDocs(collection(db, 'shops'))
+        .then((snap) => {
+          snap.forEach((docSnap) => {
+            fallbackStore.shops.set(docSnap.id, docSnap.data() as Shop);
+          });
+          setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+        })
+        .catch((e) => console.warn('[OrderDetailsView] load shops note:', e));
+    }
+
+    let unsubFirestore: (() => void) | undefined;
+    if (orderId && db) {
+      try {
+        const q = query(collection(db, 'shopOrders'), where('parentOrderId', '==', orderId));
+        unsubFirestore = onSnapshot(
+          q,
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                fallbackStore.shopOrders.delete(change.doc.id);
+              } else {
+                const so = change.doc.data() as ShopOrder;
+                fallbackStore.shopOrders.set(so.id, so);
+              }
+            });
+            setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
+          },
+          (err) => console.warn('[Firestore] ShopOrders realtime sync note:', err)
+        );
+      } catch (e) {
+        console.warn('[Firestore] ShopOrders listener setup error:', e);
+      }
       fallbackStore.fetchShopOrdersForOrder(orderId, order?.helperId, order?.helperName);
     }
-    const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
-    return fallbackStore.subscribe(sync);
+
+    return () => {
+      unsubStore();
+      if (unsubFirestore) unsubFirestore();
+    };
   }, [orderId, order?.helperId, order?.helperName]);
 
   const distanceKm = (order?.pickupLocation?.lat && order?.pickupLocation?.lng && order?.deliveryLocation?.lat && order?.deliveryLocation?.lng)
@@ -406,8 +473,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const canCancel = (order.status === 'PENDING' || order.status === 'ACCEPTED') && user?.uid === order.customerId;
   const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED';
   const isDelivered = order.status === 'DELIVERED';
+  const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
   const isCanceled = (order.status as string) === 'CANCELED';
-  const totalPayable = (order.productCost || 0) + (order.isFreeDelivery ? 0 : (order.deliveryFee || 0));
+
+  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED');
+  const totalShopOrdersCost = validShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
+  const effectiveProductCost = totalShopOrdersCost > 0 ? totalShopOrdersCost : (order.productCost || 0);
+  const effectiveDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
+  const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : 0;
+  const effectiveReturnFee = (estdPricing && estdPricing.returnFee > 0) ? estdPricing.returnFee : 0;
+  const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
+  const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment;
 
   return (
     <div className="w-full bg-gray-50 min-h-screen pb-24 animate-in fade-in duration-200">
@@ -463,15 +539,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </p>
 
           {/* Quick cost summary */}
-          {(order.productCost !== undefined || order.deliveryFee > 0 || order.isFreeDelivery) && (
+          {(effectiveProductCost > 0 || order.deliveryFee > 0 || order.isFreeDelivery) && (
             <div className="mt-4 flex items-center space-x-3">
-              {order.productCost !== undefined && (
+              {effectiveProductCost > 0 && (
                 <div
                   onClick={scrollToCalculationSummary}
                   className="bg-white/10 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/20 transition-all"
                 >
                   <p className="text-[10px] text-white/60 font-semibold">Product</p>
-                  <p className="text-sm font-black">৳{order.productCost}</p>
+                  <p className="text-sm font-black">৳{effectiveProductCost}</p>
                 </div>
               )}
               {order.isFreeDelivery ? (
@@ -491,13 +567,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   <p className="text-sm font-black">৳{order.deliveryFee}</p>
                 </div>
               ) : null}
-              {totalPayable > 0 && (
+              {grandTotalPayable > 0 && (
                 <div
                   onClick={scrollToCalculationSummary}
                   className="bg-white/20 border border-white/30 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/30 transition-all"
                 >
                   <p className="text-[10px] text-white/70 font-semibold">Total</p>
-                  <p className="text-sm font-black">৳{totalPayable}</p>
+                  <p className="text-sm font-black">৳{grandTotalPayable}</p>
                 </div>
               )}
             </div>
@@ -731,6 +807,24 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
+        {/* ── ADDRESSES ── */}
+        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
+          <div>
+            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
+            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
+              <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-gray-900">{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</p>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
+            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
+              <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
+            </div>
+          </div>
+        </div>
+
         {/* ── CALCULATION SUMMARY ── */}
         {estdPricing && (
           <div ref={calculationSummaryRef} className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3 animate-in fade-in duration-200">
@@ -742,7 +836,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <div className="flex items-center justify-between">
                 <span className="text-gray-500 font-bold">Product cost</span>
                 <span className="text-sm font-black text-gray-900">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)}
+                  ৳{effectiveProductCost}
                 </span>
               </div>
 
@@ -800,16 +894,239 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   )}
                 </div>
                 <span className="text-base font-black text-emerald-850">
-                  ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
+                  ৳{effectiveDeliveryFee}
                 </span>
               </div>
 
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
                 <span className="font-bold text-gray-900 text-sm">Total Payable Amount (মোট বিল)</span>
                 <span className="text-base font-black text-emerald-800">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
+                  ৳{grandTotalPayable}
                 </span>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── PURCHASED ITEMS & STORE COST DETAILS (FROM ARRIVED STATUS ONWARDS) ── */}
+        {isArrivedOrDelivered && (validShopOrders.length > 0 || effectiveProductCost > 0 || (order.selectedShopIds && order.selectedShopIds.length > 0)) && (
+          <div className="bg-white rounded-3xl border border-gray-150 p-4 shadow-soft space-y-3 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-extrabold text-gray-500 uppercase tracking-wider flex items-center space-x-1.5">
+                <ShoppingBag className="w-3.5 h-3.5 text-purple-600" />
+                <span>খরচের Details</span>
+              </h3>
+              <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200">
+                মোট ৳{effectiveProductCost}
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {validShopOrders.length > 0 ? (
+                validShopOrders.map((so) => {
+                  const isMyself = so.shopId === 'myself';
+                  const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+                  const storeDisplayName = isMyself
+                    ? (so.sellerName || 'সরাসরি ক্রয় / নিজস্ব কেনাকাটা')
+                    : (so.shopName || shop?.name || so.sellerName || 'দোকান');
+
+                  const ownerNum = !isMyself ? (shop?.whatsapp || '') : '';
+                  const ownerName = shop?.contactPerson;
+
+                  const managerNum = !isMyself ? (shop?.managerWhatsapp || '') : '';
+                  const managerName = shop?.managerName;
+
+                  const customSellerNum = isMyself ? (so.sellerPhone || '') : (!ownerNum && !managerNum ? (so.sellerPhone || '') : '');
+
+                  return (
+                    <div
+                      key={so.id}
+                      className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5"
+                    >
+                      {/* Store / Seller Name & Product Cost */}
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                          <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
+                            <Store className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="font-extrabold text-xs text-gray-900 leading-tight block">
+                              {storeDisplayName}
+                            </span>
+                            {isMyself && (
+                              <span className="text-[9px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.2 rounded-md border border-purple-200 inline-block mt-0.5">
+                                Custom Cost (কাস্টম খরচ)
+                              </span>
+                            )}
+                            {!isMyself && shop?.type && (
+                              <span className="text-[9px] font-bold text-gray-600 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
+                                {shop.type}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
+                            ৳{so.price || 0}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Store Numbers (Manager + Owner or Custom Seller) */}
+                      {(ownerNum || managerNum || customSellerNum) && (
+                        <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                          {ownerNum && (
+                            <a
+                              href={`tel:${ownerNum}`}
+                              className="text-[10px] font-bold text-emerald-800 hover:text-emerald-900 flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200/80 transition-all active:scale-95 shadow-2xs"
+                              title="কল করুন"
+                            >
+                              <Phone className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                              <span className="font-mono font-black">{ownerNum}</span>
+                            </a>
+                          )}
+
+                          {managerNum && (
+                            <a
+                              href={`tel:${managerNum}`}
+                              className="text-[10px] font-bold text-blue-800 hover:text-blue-900 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200/80 transition-all active:scale-95 shadow-2xs"
+                              title="কল করুন"
+                            >
+                              <Phone className="w-2.5 h-2.5 text-blue-600 shrink-0" />
+                              <span className="font-mono font-black">{managerNum}</span>
+                            </a>
+                          )}
+
+                          {customSellerNum && (
+                            <a
+                              href={`tel:${customSellerNum}`}
+                              className="text-[10px] font-bold text-purple-800 hover:text-purple-900 flex items-center gap-1 bg-purple-50 hover:bg-purple-100 px-2 py-0.5 rounded-lg border border-purple-200/80 transition-all active:scale-95 shadow-2xs"
+                              title="কল করুন"
+                            >
+                              <Phone className="w-2.5 h-2.5 text-purple-600 shrink-0" />
+                              <span className="font-mono font-black">{customSellerNum}</span>
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Item Details */}
+                      {so.requestText && (
+                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
+                          <p className="text-gray-800 font-semibold leading-relaxed">
+                            {so.requestText}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                /* Fallback if productCost exists but no shopOrders breakdown */
+                (() => {
+                  const shopList = (order.selectedShopIds && order.selectedShopIds.length > 0)
+                    ? order.selectedShopIds.map(id => fallbackStore.shops.get(id) || { id, name: id, whatsapp: '', managerWhatsapp: '', type: '' } as any)
+                    : [];
+
+                  if (shopList.length > 0) {
+                    return shopList.map((shop, idx) => (
+                      <div key={shop.id || idx} className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                            <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
+                              <Store className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <span className="font-extrabold text-xs text-gray-900 leading-tight block">
+                                {shop.name}
+                              </span>
+                              {shop.type && (
+                                <span className="text-[9px] font-bold text-gray-600 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
+                                  {shop.type}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
+                              ৳{effectiveProductCost}
+                            </span>
+                          </div>
+                        </div>
+
+                        {(shop.whatsapp || shop.managerWhatsapp) && (
+                          <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                            {shop.whatsapp && (
+                              <a
+                                href={`tel:${shop.whatsapp}`}
+                                className="text-[10px] font-bold text-emerald-800 hover:text-emerald-900 flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200/80 transition-all active:scale-95 shadow-2xs"
+                                title="কল করুন"
+                              >
+                                <Phone className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                <span className="font-mono font-black">{shop.whatsapp}</span>
+                              </a>
+                            )}
+                            {shop.managerWhatsapp && (
+                              <a
+                                href={`tel:${shop.managerWhatsapp}`}
+                                className="text-[10px] font-bold text-blue-800 hover:text-blue-900 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200/80 transition-all active:scale-95 shadow-2xs"
+                                title="কল করুন"
+                              >
+                                <Phone className="w-2.5 h-2.5 text-blue-600 shrink-0" />
+                                <span className="font-mono font-black">{shop.managerWhatsapp}</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
+                          <p className="text-gray-800 font-semibold leading-relaxed">
+                            {order.items && order.items.length > 0
+                              ? order.items.map((it) => it.name).join(', ')
+                              : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                          </p>
+                        </div>
+                      </div>
+                    ));
+                  }
+
+                  return (
+                    <div className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                          <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
+                            <Store className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="font-extrabold text-xs text-gray-900 leading-tight block">
+                              {order.pickupLocation?.address || 'দোকান / বিক্রেতা'}
+                            </span>
+                            <span className="text-[9px] font-bold text-gray-500 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
+                              বিক্রেতা / দোকান
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
+                            ৳{effectiveProductCost}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
+                        <p className="text-gray-800 font-semibold leading-relaxed">
+                          {order.items && order.items.length > 0
+                            ? order.items.map((it) => it.name).join(', ')
+                            : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
             </div>
           </div>
         )}
@@ -946,24 +1263,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             )}
           </div>
         )}
-
-        {/* ── ADDRESSES AT THE END ── */}
-        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-          <div>
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-              <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</p>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-              <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
-            </div>
-          </div>
-        </div>
 
         {/* ── DANGER ZONE / CANCEL BUTTON ── */}
         {canCancel && (

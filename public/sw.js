@@ -65,10 +65,10 @@ try {
     console.log('[SW] FCM background message received:', payload);
 
     const title = payload.notification?.title || payload.data?.title || 'Jamanot';
-    const body  = payload.notification?.body  || payload.data?.body  || '';
-    const icon  = payload.notification?.icon  || '/Jamanot-Logo.png';
-    const tag   = payload.data?.tag           || `fcm-${Date.now()}`;
-    const url   = payload.data?.url           || '/';
+    const body = payload.notification?.body || payload.data?.body || '';
+    const icon = payload.notification?.icon || '/Jamanot-Logo.png';
+    const tag = payload.data?.tag || `fcm-${Date.now()}`;
+    const url = payload.data?.url || '/';
     const image = payload.notification?.image || payload.data?.image || undefined;
 
     self.registration.showNotification(title, {

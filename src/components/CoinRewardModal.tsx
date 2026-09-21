@@ -2,21 +2,16 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Order } from '@/types';
 import { Sparkles, Coins, Gift, ArrowRight, X } from 'lucide-react';
 
 interface CoinRewardModalProps {
-  order: Order;
   earnedCoins: number;
-  totalCoins?: number;
   onClose: () => void;
   onContinueToFeedback: () => void;
 }
 
 export const CoinRewardModal: React.FC<CoinRewardModalProps> = ({
-  order,
   earnedCoins,
-  totalCoins,
   onClose,
   onContinueToFeedback,
 }) => {
@@ -70,27 +65,7 @@ export const CoinRewardModal: React.FC<CoinRewardModalProps> = ({
             <span>+{earnedCoins}</span>
             <span className="text-lg font-bold text-amber-800">Coins</span>
           </div>
-
-          {order.service && (
-            <p className="text-xs text-amber-900/80 mt-1 font-medium line-clamp-1">
-              সার্ভিস: <strong className="font-bold">{order.service}</strong>
-            </p>
-          )}
-
-          {typeof totalCoins === 'number' && (
-            <div className="mt-3 pt-2.5 border-t border-amber-200/60 flex items-center justify-between text-xs font-semibold text-amber-900">
-              <span>মোট জমানো কয়েন:</span>
-              <span className="font-extrabold text-amber-800 px-2 py-0.5 rounded-lg bg-white/80 border border-amber-300/60">
-                🪙 {totalCoins} Coins
-              </span>
-            </div>
-          )}
         </div>
-
-        {/* Motivational subtext */}
-        <p className="text-xs text-gray-600 leading-relaxed mb-5">
-          জমানো কয়েন দিয়ে পরবর্তীতে <strong>১০০% ফ্রি ডেলিভারি</strong> অথবা আকর্ষণীয় গিফট ক্লেইম করুন!
-        </p>
 
         {/* Action Button: Chains to Feedback Popup */}
         <div className="space-y-2">

@@ -3,9 +3,9 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2 } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
-import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime } from '@/lib/timeUtils';
+import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from './CustomModal';
@@ -331,6 +331,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showCustomCostModal, setShowCustomCostModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [customProductCost, setCustomProductCost] = useState('');
+  const [customSellerName, setCustomSellerName] = useState('');
+  const [customSellerPhone, setCustomSellerPhone] = useState('');
   const [isSubmittingCustomCost, setIsSubmittingCustomCost] = useState(false);
   const [checkedNoteItems, setCheckedNoteItems] = useState<Record<number, boolean>>({});
   const [checkedSubItems, setCheckedSubItems] = useState<Record<string, boolean>>({});
@@ -556,25 +558,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const handleOpenGoogleMapsDirection = () => {
-    let originStr = '';
-    if (helperLocation && helperLocation.lat && helperLocation.lng) {
-      originStr = `&origin=${helperLocation.lat},${helperLocation.lng}`;
-    }
+    const pLat = order.pickupLocation?.lat;
+    const pLng = order.pickupLocation?.lng;
     const destLat = order.deliveryLocation?.lat;
     const destLng = order.deliveryLocation?.lng;
+
+    let originStr = '';
+    if (pLat && pLng) {
+      originStr = `&origin=${pLat},${pLng}`;
+    } else if (order.pickupLocation?.address) {
+      originStr = `&origin=${encodeURIComponent(order.pickupLocation.address)}`;
+    }
+
     const destStr = destLat && destLng ? `${destLat},${destLng}` : encodeURIComponent(order.deliveryLocation?.address || '');
     
-    let waypointsStr = '';
-    if (order.pickupLocation) {
-      const pLat = order.pickupLocation.lat;
-      const pLng = order.pickupLocation.lng;
-      if (pLat && pLng) {
-        waypointsStr = `&waypoints=${pLat},${pLng}`;
-      } else if (order.pickupLocation.address) {
-        waypointsStr = `&waypoints=${encodeURIComponent(order.pickupLocation.address)}`;
-      }
-    }
-    const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}${waypointsStr}&travelmode=driving`;
+    const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}&travelmode=driving`;
     window.open(url, '_blank');
   };
 
@@ -600,7 +598,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const badge = getStatusBadgeInfo(order.status);
 
   const isDone = order.status === 'DELIVERED' || order.status === 'CANCELED';
-  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
+  const urgency = getHelperUrgencyBgClass(order, isDone);
+  const isPaused = isOrderTimerPaused(order);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -992,41 +991,61 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           )}
           <div className="flex items-center space-x-2.5">
             <Clock className={`w-5 h-5 ${
-              urgency.urgencyLevel === 'red'
+              isPaused
+                ? 'text-indigo-600'
+                : urgency.urgencyLevel === 'red'
                 ? 'text-red-700 animate-spin'
                 : urgency.urgencyLevel === 'yellow'
                 ? 'text-amber-700 animate-spin-slow'
                 : 'text-red-600 animate-pulse'
             }`} />
             <span className={`text-xs font-black uppercase tracking-wider ${
-              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+              isPaused
+                ? 'text-indigo-900'
+                : urgency.urgencyLevel === 'red'
+                ? 'text-red-950'
+                : urgency.urgencyLevel === 'yellow'
+                ? 'text-amber-950'
+                : 'text-red-600'
             }`}>
-              {isDone ? 'Duration:' : 'Live:'}
+              {isDone ? 'Duration:' : isPaused ? '⏸️ Paused (Stuck):' : 'Live:'}
             </span>
             <span className={`text-xl font-black font-mono ${
-              urgency.urgencyLevel === 'red' ? 'text-red-950' : urgency.urgencyLevel === 'yellow' ? 'text-amber-950' : 'text-red-600'
+              isPaused
+                ? 'text-indigo-950 font-bold'
+                : urgency.urgencyLevel === 'red'
+                ? 'text-red-950'
+                : urgency.urgencyLevel === 'yellow'
+                ? 'text-amber-950'
+                : 'text-red-600'
             }`}>
               {elapsed}
             </span>
           </div>
 
-          {!isDone && urgency.urgencyLevel === 'red' && (
+          {!isDone && !isPaused && urgency.urgencyLevel === 'red' && (
             <p className="mt-1.5 text-[11px] font-black text-red-700 bg-red-200/80 px-3 py-1 rounded-full border border-red-300 text-center animate-pulse">
               🚨 55+ মিনিট অতিক্রান্ত! দ্রুত ডেলিভারি সম্পন্ন করুন!
             </p>
           )}
 
-          {!isDone && urgency.urgencyLevel === 'yellow' && (
+          {!isDone && !isPaused && urgency.urgencyLevel === 'yellow' && (
             <p className="mt-1.5 text-[11px] font-black text-amber-900 bg-amber-200/80 px-3 py-1 rounded-full border border-amber-300 text-center">
               ⚠️ 40+ মিনিট অতিক্রান্ত! দ্রুত পৌঁছানোর চেষ্টা করুন।
             </p>
           )}
 
           {order.needDeliveryBack && order.deliveryBackTime && (
-            <div className="mt-2 flex items-center space-x-1.5 bg-indigo-100/70 px-3 py-1.5 rounded-full border border-indigo-200/60 w-full justify-center">
-              <CalendarClock className="w-3 h-3 text-indigo-600 shrink-0" />
-              <span className="text-[10px] font-extrabold text-indigo-800 text-center">
-                ⏸ Two-Way • ফিরবেন: {new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}
+            <div className={`mt-2 flex items-center space-x-1.5 px-3 py-1.5 rounded-full border w-full justify-center ${
+              isPaused
+                ? 'bg-indigo-100/90 border-indigo-300 text-indigo-900 shadow-xs'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            }`}>
+              <CalendarClock className={`w-3.5 h-3.5 shrink-0 ${isPaused ? 'text-indigo-700' : 'text-emerald-600'}`} />
+              <span className="text-[10px] font-extrabold text-center">
+                {isPaused
+                  ? `⏸️ সময় স্থগিত (টাইমার পজ করা আছে) • ফিরবেন: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`
+                  : `▶️ ২য় ধাপ রানিং • শিডিউল ছিল: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`}
               </span>
             </div>
           )}
@@ -1497,6 +1516,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         needDeliveryBack: false,
                         needReturnItems: false,
                         deliveryBackTime: undefined,
+                        deliveryBackSetAt: undefined,
                         deliveryFee: o.isFreeDelivery ? 0 : baseFee,
                         originalDeliveryFee: o.isFreeDelivery ? 0 : baseFee,
                       }));
@@ -1552,25 +1572,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <Store className="w-3.5 h-3.5 text-purple-600" />
                 <span>Requests to Shops</span>
               </h4>
-              {!isDone && (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowMapModal(true)}
-                    className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-[10px] font-bold transition-all"
-                  >
-                    Request to store
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowCustomCostModal(true)}
-                    className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-[10px] font-bold transition-all"
-                  >
-                    + Custom Cost
-                  </button>
-                </div>
-              )}
             </div>
+            {!isDone && (
+              <div className="grid grid-cols-2 gap-2 mb-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowMapModal(true)}
+                  className="w-full py-2 px-3 bg-purple-50 hover:bg-purple-100/80 active:bg-purple-200 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                >
+                  <Store className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <span>Request to store</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomCostModal(true)}
+                  className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100/80 active:bg-amber-200 text-amber-900 border border-amber-250 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                >
+                  <Plus className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>+ Custom Cost</span>
+                </button>
+              </div>
+            )}
             {shopOrders.length > 0 ? (
               <div className="space-y-2">
                 {shopOrders.map((so) => {
@@ -1580,23 +1602,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <div
                       key={so.id}
                       onClick={() => setViewRequestDetails(so)}
-                      className="bg-white hover:bg-gray-50 border border-gray-250 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all"
+                      className={`${
+                        isMyself
+                          ? 'bg-amber-50/35 hover:bg-amber-50/70 border-amber-200/80'
+                          : 'bg-purple-50/30 hover:bg-purple-50/70 border-purple-200/80'
+                      } border p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all`}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-extrabold text-xs text-gray-900">{so.shopName}</span>
-                          {!isMyself && shop && (
-                            <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200">
+                          <span className={`font-extrabold text-xs ${isMyself ? 'text-amber-950' : 'text-purple-950'}`}>
+                            {so.shopName}
+                          </span>
+                          {isMyself ? (
+                            <span className="text-[8px] font-black bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-amber-250 flex items-center gap-0.5">
+                              <Plus className="w-2.5 h-2.5 text-amber-700" />
+                              Custom Cost
+                            </span>
+                          ) : shop ? (
+                            <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200 flex items-center gap-0.5">
+                              <Store className="w-2.5 h-2.5 text-purple-600" />
                               {shop.type}
                             </span>
-                          )}
+                          ) : null}
                         </div>
                         <p className="text-[11px] text-gray-500 truncate mt-0.5" title={so.requestText}>
                           {so.requestText}
                         </p>
                       </div>
                       {isMyself ? (
-                        <span className="text-xs font-black text-purple-950 bg-purple-50 px-2.5 py-1 rounded-xl border border-purple-200 shrink-0">
+                        <span className="text-xs font-black text-amber-950 bg-amber-100 px-2.5 py-1 rounded-xl border border-amber-250 shrink-0">
                           ৳{so.price || 0}
                         </span>
                       ) : (
@@ -1607,7 +1641,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             so.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
                             so.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
                             so.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                            'bg-red-100 text-red-800 border-red-250'
+                            so.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                            so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                            'bg-gray-100 text-gray-700 border-gray-250'
                           }`}>
                             {so.status === 'PREPARING' ? 'Processing' : so.status}
                           </span>
@@ -2059,7 +2095,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       needDeliveryBack: true,
                       needReturnItems: true,
                       deliveryBackTime: returnWhen === 'schedule' ? new Date(deliveryBackTimeInput).toISOString() : undefined,
-                      deliveryBackSetAt: new Date().toISOString(),
+                      deliveryBackSetAt: returnWhen === 'schedule' ? (o.deliveryBackSetAt || new Date().toISOString()) : undefined,
                       originalDeliveryFee: o.isFreeDelivery ? 0 : (o.originalDeliveryFee || o.deliveryFee),
                       deliveryFee: o.isFreeDelivery ? 0 : targetFee,
                     }));
@@ -2783,10 +2819,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       {viewRequestDetails && (() => {
         const isMyself = viewRequestDetails.shopId === 'myself';
         const shop = !isMyself ? fallbackStore.shops.get(viewRequestDetails.shopId) : null;
-        const contactNum = shop?.whatsapp || shop?.managerWhatsapp || '';
+        const contactNum = isMyself
+          ? (viewRequestDetails.sellerPhone || '')
+          : (shop?.whatsapp || shop?.managerWhatsapp || '');
         return (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100">
+            <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
               <button
                 type="button"
                 onClick={() => setViewRequestDetails(null)}
@@ -2799,16 +2837,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <Store className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="font-black text-base text-gray-900 leading-tight">{viewRequestDetails.shopName}</h3>
-                  {!isMyself && (
+                  <h3 className="font-black text-base text-gray-900 leading-tight">
+                    {isMyself ? (viewRequestDetails.sellerName || 'Custom Cost / নিজের কেনা') : viewRequestDetails.shopName}
+                  </h3>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
-                      {shop?.type || 'Store'}
+                      {isMyself ? 'Direct Purchase' : (shop?.type || 'Store')}
                     </span>
-                  )}
+                    {!isMyself && viewRequestDetails.status && (
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                        viewRequestDetails.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
+                        viewRequestDetails.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
+                        viewRequestDetails.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
+                        viewRequestDetails.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
+                        viewRequestDetails.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                        viewRequestDetails.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                        viewRequestDetails.status === 'CANCELED' || (viewRequestDetails.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                        'bg-gray-100 text-gray-700 border-gray-250'
+                      }`}>
+                        {viewRequestDetails.status === 'PREPARING' ? 'Processing' : viewRequestDetails.status}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {shop?.description && (
+              {!isMyself && shop?.description && (
                 <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-xl border border-gray-100 leading-relaxed font-medium">
                   {shop.description}
                 </p>
@@ -2817,7 +2871,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {/* Edit inputs */}
               <div className="space-y-3 pt-1">
                 <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details</label>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details (পণ্যের বিবরণ)</label>
                   <textarea
                     value={viewRequestDetails.requestText}
                     disabled={isDone}
@@ -2837,16 +2891,43 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
                   />
                 </div>
+
+                {isMyself && (
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতা / দোকানের নাম (Seller Name)</label>
+                      <input
+                        type="text"
+                        value={viewRequestDetails.sellerName || ''}
+                        disabled={isDone}
+                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
+                        placeholder="যেমন: ভাই ভাই স্টোর"
+                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number)</label>
+                      <input
+                        type="tel"
+                        value={viewRequestDetails.sellerPhone || ''}
+                        disabled={isDone}
+                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerPhone: e.target.value })}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
-              {!isMyself && contactNum && (
+              {contactNum && (
                 <div className="flex items-center space-x-2 pt-1">
                   <a
                     href={`tel:${contactNum}`}
                     className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
                   >
                     <Phone className="w-3.5 h-3.5" />
-                    <span>Call Manager</span>
+                    <span>{isMyself ? 'Call Seller' : 'Call Manager'}</span>
                   </a>
                   <a
                     href={`https://wa.me/880${contactNum.replace(/^0/, '')}`}
@@ -2883,6 +2964,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         ...so,
                         requestText: viewRequestDetails.requestText.trim(),
                         price: viewRequestDetails.price,
+                        sellerName: viewRequestDetails.sellerName?.trim() || undefined,
+                        sellerPhone: viewRequestDetails.sellerPhone?.trim() || undefined,
                       }), 'helper');
                       setViewRequestDetails(null);
                     }}
@@ -2900,7 +2983,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       {/* Enter Custom Cost Modal */}
       {showCustomCostModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 relative">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 relative max-h-[90vh] overflow-y-auto">
             <button
               type="button"
               onClick={() => setShowCustomCostModal(false)}
@@ -2908,12 +2991,28 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
-            <h3 className="font-bold text-base text-gray-900">Add Custom Cost</h3>
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                <Store className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-gray-900">Add Custom Cost</h3>
+                <p className="text-[11px] text-gray-500 font-medium">হেলপারের নিজস্ব কেনা পণ্যের কস্ট ও বিক্রেতার তথ্য</p>
+              </div>
+            </div>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
                 if (isSubmittingCustomCost) return;
                 if (!customProductName.trim() || !customProductCost.trim()) return;
+                if (!customSellerName.trim()) {
+                  showAlert('বিক্রেতার নাম আবশ্যক', 'অনুগ্রহ করে যেখান থেকে কিনেছেন সেই দোকান বা বিক্রেতার নাম লিখুন।', 'warning');
+                  return;
+                }
+                if (!customSellerPhone.trim()) {
+                  showAlert('বিক্রেতার মোবাইল নম্বর আবশ্যক', 'অনুগ্রহ করে বিক্রেতার মোবাইল নম্বর লিখুন যাতে কাস্টমার যাচাই করতে পারেন।', 'warning');
+                  return;
+                }
                 setIsSubmittingCustomCost(true);
                 try {
                   const cost = parseFloat(customProductCost) || 0;
@@ -2925,6 +3024,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     helperId: order.helperId || '',
                     helperName: order.helperName || 'Helper',
                     requestText: customProductName.trim(),
+                    sellerName: customSellerName.trim(),
+                    sellerPhone: customSellerPhone.trim(),
                     status: 'ACCEPTED',
                     price: cost,
                     createdAt: new Date().toISOString(),
@@ -2935,6 +3036,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   setShowCustomCostModal(false);
                   setCustomProductName('');
                   setCustomProductCost('');
+                  setCustomSellerName('');
+                  setCustomSellerPhone('');
                 } finally {
                   setIsSubmittingCustomCost(false);
                 }
@@ -2942,7 +3045,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               className="space-y-3"
             >
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name (পণ্যের নাম) *</label>
                 <input
                   type="text"
                   value={customProductName}
@@ -2953,13 +3056,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (৳)</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (দাম - ৳) *</label>
                 <input
                   type="number"
                   step="0.01"
                   value={customProductCost}
                   onChange={(e) => setCustomProductCost(e.target.value)}
                   placeholder="যেমন: ১২০"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতা / দোকানের নাম (Seller Name) *</label>
+                <input
+                  type="text"
+                  value={customSellerName}
+                  onChange={(e) => setCustomSellerName(e.target.value)}
+                  placeholder="যেমন: আল-মদিনা স্টোর বা করিম ভাই"
+                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number) *</label>
+                <input
+                  type="tel"
+                  value={customSellerPhone}
+                  onChange={(e) => setCustomSellerPhone(e.target.value)}
+                  placeholder="01XXXXXXXXX"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
                   required
                 />

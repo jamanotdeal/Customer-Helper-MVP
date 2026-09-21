@@ -8,20 +8,25 @@ import { useModal } from './CustomModal';
 import { calculateHelperCommission } from '@/lib/pricing';
 import {
   Wallet as WalletIcon,
-  ArrowUpRight,
-  ArrowDownLeft,
   Calendar,
-  Filter,
   DollarSign,
-  TrendingUp,
   ChevronDown,
+  X,
+  ShoppingBag,
+  MapPin,
+  Clock,
+  Sparkles,
+  ArrowRight,
+  TrendingUp,
+  Receipt,
+  Info,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const HelperWallet: React.FC = () => {
   const { user } = useAuth();
   const { showAlert } = useModal();
   const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
   
@@ -31,8 +36,10 @@ export const HelperWallet: React.FC = () => {
   const [accountNumber, setAccountNumber] = useState('01812345678');
   const [submitting, setSubmitting] = useState(false);
 
-  // Pagination / Day-by-Day history for Wallet Ledger
-  const [daysToLoad, setDaysToLoad] = useState<number>(1);
+  // Modal for viewing order items & earnings breakdown
+  const [showOrdersBreakdownModal, setShowOrdersBreakdownModal] = useState<boolean>(false);
+  const [modalOrdersList, setModalOrdersList] = useState<Order[]>([]);
+  const [modalTitle, setModalTitle] = useState<string>('');
 
   const getPaymentInstructions = () => {
     const settings = fallbackStore.pricingSettings;
@@ -104,7 +111,7 @@ export const HelperWallet: React.FC = () => {
   };
 
   // Exact Date and Time Formatter (e.g., "08 Aug 2026, 05:47 PM")
-  const formatExactDateTime = (dateStr: string | number) => {
+  const formatExactDateTime = (dateStr?: string | number) => {
     if (!dateStr) return '';
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return '';
@@ -133,15 +140,7 @@ export const HelperWallet: React.FC = () => {
   useEffect(() => {
     const syncWallet = () => {
       if (user) {
-        // ── Source of truth for lifetime totals: the Firestore wallet document ──
-        // This is written additively on every order completion and payback,
-        // so it's always accurate regardless of how many orders the helper has.
-        // We NEVER recompute totals from the local order cache (getHelperWallet)
-        // because it's query-limited and gives wrong results with many orders.
         const firestoreWallet = fallbackStore.wallets.get(user.uid);
-
-        // Use the Firestore wallet if available; otherwise start with zeroes
-        // (will be replaced by the real document once the first order completes).
         const w: Wallet = firestoreWallet ?? {
           userId: user.uid,
           totalEarned: 0,
@@ -151,19 +150,15 @@ export const HelperWallet: React.FC = () => {
           updatedAt: new Date().toISOString(),
         };
 
-        const txs = fallbackStore.walletTransactions.get(user.uid) || [];
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
 
-        // Delivered orders are still needed for the date-range / Today breakdowns
-        // (we need per-order detail for filtering by date). Lifetime totals come
-        // from the wallet document above, not from summing these orders.
+        // Fetch all delivered/completed orders of this helper
         const allOrders = Array.from(fallbackStore.orders.values());
         const helperOrders = allOrders.filter(
-          (o) => o.helperId === user.uid && o.status === 'DELIVERED'
+          (o) => o.helperId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
         );
 
         setWallet({ ...w });
-        setTransactions([...txs]);
         setWithdrawals([...wds]);
         setDeliveredOrders(helperOrders);
       }
@@ -175,49 +170,6 @@ export const HelperWallet: React.FC = () => {
       unsub();
     };
   }, [user]);
-
-
-  // Filtered Transactions & Withdrawals based on selected Date Range
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
-      const t = new Date(tx.createdAt).getTime();
-      if (isNaN(t)) return true;
-      if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
-      if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
-      return true;
-    });
-  }, [transactions, startDate, endDate]);
-
-  // Group filtered transactions by local date (YYYY-MM-DD) sorted descending
-  const groupedTransactionsByDay = useMemo(() => {
-    const map = new Map<string, WalletTransaction[]>();
-    filteredTransactions.forEach((tx) => {
-      const d = new Date(tx.createdAt);
-      const dateKey = isNaN(d.getTime()) ? 'Unknown' : getLocalYYYYMMDD(d);
-      if (!map.has(dateKey)) {
-        map.set(dateKey, []);
-      }
-      map.get(dateKey)!.push(tx);
-    });
-    // Distinct sorted dates (newest first)
-    const sortedDates = Array.from(map.keys()).sort((a, b) => (a < b ? 1 : -1));
-    return { map, sortedDates };
-  }, [filteredTransactions]);
-
-  const visibleDates = useMemo(() => {
-    return groupedTransactionsByDay.sortedDates.slice(0, daysToLoad);
-  }, [groupedTransactionsByDay, daysToLoad]);
-
-  const visibleTransactions = useMemo(() => {
-    const list: WalletTransaction[] = [];
-    visibleDates.forEach((dateKey) => {
-      const dayTxs = groupedTransactionsByDay.map.get(dateKey) || [];
-      list.push(...dayTxs);
-    });
-    return list;
-  }, [visibleDates, groupedTransactionsByDay]);
-
-  const hasMoreDays = daysToLoad < groupedTransactionsByDay.sortedDates.length;
 
   const filteredWithdrawals = useMemo(() => {
     return withdrawals.filter((w) => {
@@ -231,30 +183,49 @@ export const HelperWallet: React.FC = () => {
 
   // Filtered Delivered Orders based on selected Date Range
   const filteredOrders = useMemo(() => {
-    return deliveredOrders.filter((ord) => {
-      const orderDate = ord.deliveredAt || ord.createdAt;
-      const t = new Date(orderDate).getTime();
-      if (isNaN(t)) return true;
-      if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
-      if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
-      return true;
-    });
+    return deliveredOrders
+      .filter((ord) => {
+        const orderDate = ord.deliveredAt || ord.updatedAt || ord.createdAt;
+        const t = new Date(orderDate).getTime();
+        if (isNaN(t)) return true;
+        if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
+        if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
+        const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+        return timeB - timeA;
+      });
   }, [deliveredOrders, startDate, endDate]);
+
+  // Compute Financials helper for any order
+  const getOrderFinancials = (o: Order) => {
+    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
+    const baseFeeForHelper = o.isFreeDelivery
+      ? Math.max(o.originalDeliveryFee || 0, minFee)
+      : Math.max(o.deliveryFee || 0, minFee);
+    const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
+    const platformShare = baseFeeForHelper - helperShare;
+    return {
+      baseFeeForHelper,
+      helperShare,
+      platformShare,
+    };
+  };
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
     let earned = 0;
+    let totalCollected = 0;
     let commissionDue = 0;
     let paidCommission = 0;
 
-    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
     filteredOrders.forEach((o) => {
-      const baseFeeForHelper = o.isFreeDelivery
-        ? Math.max(o.originalDeliveryFee || 0, minFee)
-        : Math.max(o.deliveryFee || 0, minFee);
-      const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
+      const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
       earned += helperShare;
-      commissionDue += (baseFeeForHelper - helperShare);
+      totalCollected += baseFeeForHelper;
+      commissionDue += platformShare;
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -263,8 +234,44 @@ export const HelperWallet: React.FC = () => {
       }
     });
 
-    return { earned, commissionDue, paidCommission };
+    return { earned, totalCollected, commissionDue, paidCommission, count: filteredOrders.length };
   }, [filteredOrders, filteredWithdrawals]);
+
+  // Today's Metrics (local timezone date matching)
+  const todayMetrics = useMemo(() => {
+    const todayStr = getTodayStr(); // Local YYYY-MM-DD
+    let earnedToday = 0;
+    let collectedToday = 0;
+    let commissionDueToday = 0;
+    const todayOrders: Order[] = [];
+
+    deliveredOrders.forEach((o) => {
+      const orderDate = o.deliveredAt || o.updatedAt || o.createdAt;
+      const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
+      if (orderLocalStr === todayStr) {
+        const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
+        earnedToday += helperShare;
+        collectedToday += baseFeeForHelper;
+        commissionDueToday += platformShare;
+        todayOrders.push(o);
+      }
+    });
+
+    todayOrders.sort((a, b) => {
+      const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
+      const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+      return timeB - timeA;
+    });
+
+    return { earnedToday, collectedToday, commissionDueToday, countToday: todayOrders.length, todayOrders };
+  }, [deliveredOrders]);
+
+  // Filtered commission due (for display in filtered views)
+  const displayCommissionDue = activePreset === 'TODAY'
+    ? todayMetrics.commissionDueToday
+    : activePreset === 'ALL_TIME'
+    ? (wallet?.balance || 0)
+    : rangeMetrics.commissionDue;
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
@@ -308,35 +315,18 @@ export const HelperWallet: React.FC = () => {
     await showAlert('অনুরোধ সফল', 'কমিশন পরিশোধের তথ্য ভেরিফিকেশনের জন্য অ্যাডমিনের কাছে পাঠানো হয়েছে।', 'success');
   };
 
-  // Today's Metrics (local timezone date matching)
-  const todayMetrics = useMemo(() => {
-    const todayStr = getTodayStr(); // Local YYYY-MM-DD
-    let earnedToday = 0;
-    let commissionDueToday = 0;
-
-    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
-    deliveredOrders.forEach((o) => {
-      const orderDate = o.deliveredAt || o.createdAt;
-      const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
-      if (orderLocalStr === todayStr) {
-        const baseFeeForHelper = o.isFreeDelivery
-          ? Math.max(o.originalDeliveryFee || 0, minFee)
-          : Math.max(o.deliveryFee || 0, minFee);
-        const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
-        earnedToday += helperShare;
-        commissionDueToday += (baseFeeForHelper - helperShare);
-      }
-    });
-
-    return { earnedToday, commissionDueToday };
-  }, [deliveredOrders]);
-
   const presetLabels = {
     ALL_TIME: 'All Times',
     TODAY: 'Today',
     LAST_7: 'Last 7 Days',
     THIS_MONTH: 'This Month',
     CUSTOM: 'Custom'
+  };
+
+  const openOrdersBreakdown = (orders: Order[], title: string) => {
+    setModalOrdersList(orders);
+    setModalTitle(title);
+    setShowOrdersBreakdownModal(true);
   };
 
   return (
@@ -348,7 +338,7 @@ export const HelperWallet: React.FC = () => {
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
               <WalletIcon className="w-5 h-5 text-indigo-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings & Wallet</span>
           </div>
 
           {/* Filter Dropdown */}
@@ -383,16 +373,6 @@ export const HelperWallet: React.FC = () => {
           </div>
         </div>
 
-        <div className="mb-5 flex flex-col gap-1">
-          <span className="text-xs text-indigo-200 block">Today's Earnings (আজকের আয়)</span>
-          <h2 className="text-4xl font-black text-white tracking-tight">
-            ৳{todayMetrics.earnedToday}
-          </h2>
-          <span className="text-xs text-indigo-300 font-semibold block mt-1">
-            Commission to Payback: ৳{wallet?.balance || 0}
-          </span>
-        </div>
-
         {/* Custom Date Pickers */}
         {activePreset === 'CUSTOM' && (
           <div className="grid grid-cols-2 gap-2 text-[11px] font-bold mb-4 p-3 bg-white/5 border border-white/10 rounded-2xl animate-in fade-in duration-200">
@@ -423,49 +403,123 @@ export const HelperWallet: React.FC = () => {
           </div>
         )}
 
-        {/* 4 Stats Grid */}
+        {/* Main Earnings & Total Collected Block */}
+        <div
+          onClick={() => {
+            if (activePreset === 'TODAY') {
+              openOrdersBreakdown(todayMetrics.todayOrders, "Today's Orders Breakdown (আজকের আয়)");
+            } else {
+              openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Orders Breakdown (${presetLabels[activePreset]} আয়)`);
+            }
+          }}
+          className="mb-5 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group relative"
+          title="অর্ডারের বিবরণ দেখতে ট্যাপ করুন"
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-indigo-200 font-bold block">
+              {activePreset === 'TODAY' ? "Today's Total Income (আজকের নিট আয়)" : `${presetLabels[activePreset]} Total Income (${presetLabels[activePreset]} নিট আয়)`}
+            </span>
+            <span className="text-[10px] text-indigo-300 font-bold bg-indigo-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 group-hover:bg-indigo-500/30 transition-colors">
+              <span>অর্ডারের তালিকা দেখুন</span>
+              <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+            </span>
+          </div>
+
+          <h2 className="text-4xl font-black text-white tracking-tight flex items-baseline gap-1">
+            ৳{activePreset === 'TODAY' ? todayMetrics.earnedToday : rangeMetrics.earned}
+          </h2>
+
+          {/* Total Collected Amount under Total Income Number */}
+          <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-col gap-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-indigo-200 font-semibold flex items-center gap-1">
+                <Receipt className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Total Collected Amount (মোট সংগৃহীত চার্জ):</span>
+              </span>
+              <span className="font-extrabold text-indigo-100 text-sm">
+                ৳{activePreset === 'TODAY' ? todayMetrics.collectedToday : rangeMetrics.totalCollected}
+              </span>
+            </div>
+            <span className="text-[10px] text-indigo-300/80 font-normal">
+              *কমিশন কাটার পূর্বের মোট ডেলিভারি চার্জ (Sum of charges without deducting commission)
+            </span>
+          </div>
+
+          <div className="mt-2 text-xs text-amber-300 font-semibold flex items-center justify-between">
+            <span>
+              {activePreset === 'ALL_TIME'
+                ? 'বকেয়া কমিশন (Commission to Payback):'
+                : `${presetLabels[activePreset]} Commission Due:`}
+            </span>
+            <span className="font-extrabold text-amber-200">৳{displayCommissionDue}</span>
+          </div>
+        </div>
+
+        {/* 4 Stats Grid - Clickable to view details */}
         <div className="grid grid-cols-2 gap-2.5 mb-5 text-white/90">
-          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
-            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              {activePreset === 'ALL_TIME' ? 'Total Earned' : 'Earned'}
-            </span>
+          <div
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Total Earned Orders`)}
+            className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+                {activePreset === 'ALL_TIME' ? 'Total Income' : 'Income'}
+              </span>
+              <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
+            </div>
             <span className="text-base font-black text-white block truncate">
-              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.earned}
+              ৳{rangeMetrics.earned}
             </span>
+            <span className="text-[9px] text-indigo-300 font-medium block">হেলপার নিট আয়</span>
           </div>
           
-          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
-            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              Total Commission
-            </span>
+          <div
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Total Collected Orders`)}
+            className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+                Total Collected
+              </span>
+              <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
+            </div>
             <span className="text-base font-black text-white block truncate">
-              ৳{activePreset === 'ALL_TIME' 
-                ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
-                : rangeMetrics.commissionDue}
+              ৳{rangeMetrics.totalCollected}
             </span>
+            <span className="text-[9px] text-indigo-300 font-medium block">মোট সংগৃহীত চার্জ</span>
+          </div>
+
+          <div
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Platform Commission Orders`)}
+            className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
+                Total Commission
+              </span>
+              <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
+            </div>
+            <span className="text-base font-black text-indigo-200 block truncate">
+              ৳{rangeMetrics.commissionDue}
+            </span>
+            <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম শেয়ার</span>
           </div>
 
           <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
             <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              Paid Commission
-            </span>
-            <span className="text-base font-black text-emerald-300 block truncate">
-              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
-            </span>
-          </div>
-
-          <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
-            <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              Due Commission
+              {activePreset === 'ALL_TIME' ? 'Due Commission' : `${presetLabels[activePreset]} Commission`}
             </span>
             <span className="text-base font-black text-amber-300 block truncate">
-              ৳{activePreset === 'ALL_TIME' ? (wallet?.balance || 0) : Math.max(0, rangeMetrics.commissionDue - rangeMetrics.paidCommission)}
+              ৳{displayCommissionDue}
+            </span>
+            <span className="text-[9px] text-amber-300/80 font-medium block">
+              {activePreset === 'ALL_TIME' ? 'পরিশোধযোগ্য বকেয়া' : 'এই সময়ের কমিশন'}
             </span>
           </div>
         </div>
 
         {hasPendingPayback && (
-          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-250 text-xs font-semibold">
+          <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-semibold">
             ⏳ আপনার ৳{pendingPayback.amount} commission payback অনুরোধ অ্যাডমিনের পর্যালোচনায় আছে।
           </div>
         )}
@@ -493,8 +547,8 @@ export const HelperWallet: React.FC = () => {
           {hasPendingPayback
             ? 'Payback Pending Admin Approval'
             : canPayback
-            ? 'Pay Commission to Platform'
-            : 'No Due Commission'}
+            ? 'Pay Commission to Platform (বকেয়া কমিশন পরিশোধ করুন)'
+            : 'No Due Commission (কোনো বকেয়া নেই)'}
         </button>
       </div>
 
@@ -532,59 +586,148 @@ export const HelperWallet: React.FC = () => {
         </div>
       )}
 
-      {/* Immutable Transaction Ledger */}
-      <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-            Wallet Ledger ({filteredTransactions.length})
-          </h3>
-        </div>
-        {visibleTransactions.length === 0 ? (
-          <p className="text-xs text-gray-400 text-center py-4">কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</p>
-        ) : (
-          <>
-            <div className="space-y-2.5">
-              {visibleTransactions.map((tx) => (
-                <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50/70 border border-gray-100 text-xs">
-                  <div className="flex items-center space-x-3">
-                    <div
-                      className={`p-2 rounded-xl ${
-                        tx.amount > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                      }`}
-                    >
-                      {tx.amount > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
-                    </div>
-                    <div>
-                      <span className="font-bold text-gray-900 block">{tx.description}</span>
-                      <span className="text-[10px] font-semibold text-gray-500 block">
-                        {formatExactDateTime(tx.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className={`font-black text-sm ${
-                      tx.amount > 0 ? 'text-emerald-700' : 'text-red-600'
-                    }`}
-                  >
-                    {tx.amount > 0 ? `+৳${tx.amount}` : `-৳${Math.abs(tx.amount)}`}
-                  </span>
+      {/* Helper Earnings Orders Breakdown Popup Modal */}
+      {showOrdersBreakdownModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-white/10 text-indigo-200">
+                  <ShoppingBag className="w-5 h-5" />
                 </div>
-              ))}
-            </div>
-            {hasMoreDays && (
-              <div className="pt-3 border-t border-gray-100 text-center">
-                <button
-                  type="button"
-                  onClick={() => setDaysToLoad((prev) => prev + 1)}
-                  className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 active:scale-98 text-gray-800 rounded-2xl text-xs font-black transition-all select-none shadow-xs"
-                >
-                  পূর্ববর্তী ১ দিনের ইতিহাস দেখুন (Load Previous Day)
-                </button>
+                <div>
+                  <h3 className="font-extrabold text-sm text-white">{modalTitle || 'আয়ের বিবরণ (Orders Breakdown)'}</h3>
+                  <p className="text-[11px] text-indigo-200">মোট {modalOrdersList.length}টি ডেলিভারি অর্ডার</p>
+                </div>
               </div>
-            )}
-          </>
-        )}
-      </div>
+              <button
+                onClick={() => setShowOrdersBreakdownModal(false)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Summary KPI Header */}
+            {modalOrdersList.length > 0 && (() => {
+              let totalOrdersCollected = 0;
+              let totalOrdersEarned = 0;
+              let totalOrdersCommission = 0;
+              modalOrdersList.forEach((o) => {
+                const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
+                totalOrdersCollected += baseFeeForHelper;
+                totalOrdersEarned += helperShare;
+                totalOrdersCommission += platformShare;
+              });
+
+              return (
+                <div className="p-3.5 bg-indigo-50/70 border-b border-indigo-100 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="p-2 bg-white rounded-xl border border-indigo-100 shadow-xs">
+                    <span className="text-[10px] font-bold text-gray-500 block">মোট চার্জ</span>
+                    <span className="text-sm font-black text-indigo-950">৳{totalOrdersCollected}</span>
+                  </div>
+                  <div className="p-2 bg-emerald-50 rounded-xl border border-emerald-200 shadow-xs">
+                    <span className="text-[10px] font-bold text-emerald-800 block">আপনার আয়</span>
+                    <span className="text-sm font-black text-emerald-700">৳{totalOrdersEarned}</span>
+                  </div>
+                  <div className="p-2 bg-white rounded-xl border border-indigo-100 shadow-xs">
+                    <span className="text-[10px] font-bold text-gray-500 block">কমিশন</span>
+                    <span className="text-sm font-black text-indigo-900">৳{totalOrdersCommission}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Orders List Area */}
+            <div className="p-4 overflow-y-auto space-y-2.5 flex-1 text-xs">
+              {modalOrdersList.length === 0 ? (
+                <div className="py-12 text-center text-gray-400 space-y-2">
+                  <ShoppingBag className="w-10 h-10 mx-auto text-gray-300" />
+                  <p className="font-bold text-gray-600">এই সময়সীমার মধ্যে কোনো সম্পন্ন ডেলিভারি পাওয়া যায়নি।</p>
+                </div>
+              ) : (
+                modalOrdersList.map((ord) => {
+                  const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(ord);
+                  const itemsSummary = ord.items && ord.items.length > 0
+                    ? ord.items.map((i) => `${i.name}${i.qty ? ` (${i.qty})` : ''}`).join(', ')
+                    : ord.title || 'ডেলিভারি অর্ডার';
+
+                  return (
+                    <div
+                      key={ord.id}
+                      className="p-3.5 rounded-2xl bg-white border border-gray-200/80 shadow-xs hover:border-emerald-300 transition-all space-y-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-extrabold text-gray-900 text-xs">#{ord.id}</span>
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800">
+                              Delivered
+                            </span>
+                            {ord.isFreeDelivery && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-blue-100 text-blue-700">
+                                Free Delivery
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-bold text-gray-800 mt-1 text-xs line-clamp-2">{itemsSummary}</p>
+                          <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1 mt-0.5">
+                            <Clock className="w-3 h-3 text-gray-400" />
+                            <span>{formatExactDateTime(ord.deliveredAt || ord.updatedAt || ord.createdAt)}</span>
+                          </span>
+                        </div>
+
+                        {/* Earnings Breakdown Badge on Right */}
+                        <div className="text-right shrink-0 bg-emerald-50 border border-emerald-200/70 p-2 rounded-xl min-w-[95px]">
+                          <span className="text-[9px] font-extrabold text-emerald-800 block uppercase">হেলপার আয়</span>
+                          <span className="text-sm font-black text-emerald-700 block">+৳{helperShare}</span>
+                          <span className="text-[9px] text-gray-500 font-semibold block mt-0.5">
+                            চার্জ: ৳{baseFeeForHelper}
+                          </span>
+                          <span className="text-[9px] text-indigo-700 font-semibold block">
+                            ফি: ৳{platformShare}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Route & Customer Details */}
+                      {(ord.pickupLocation?.address || ord.deliveryLocation?.address) && (
+                        <div className="pt-2 border-t border-gray-100 text-[11px] text-gray-600 space-y-1">
+                          {ord.pickupLocation?.address && (
+                            <div className="flex items-start gap-1.5 truncate">
+                              <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-50 px-1 py-0.5 rounded shrink-0">Pickup:</span>
+                              <span className="truncate">{ord.pickupLocation.address}</span>
+                            </div>
+                          )}
+                          {ord.deliveryLocation?.address && (
+                            <div className="flex items-start gap-1.5 truncate">
+                              <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-50 px-1 py-0.5 rounded shrink-0">Delivery:</span>
+                              <span className="truncate">{ord.deliveryLocation.address}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowOrdersBreakdownModal(false)}
+                className="py-2.5 px-5 rounded-2xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs transition-all active:scale-95 shadow-sm"
+              >
+                বন্ধ করুন (Close)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Withdrawal Form Modal */}
       {showWithdrawModal && (

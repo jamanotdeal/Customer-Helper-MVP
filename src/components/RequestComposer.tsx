@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order } from '@/types';
@@ -70,7 +71,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     fallbackStore.pricingSettings.services || DEFAULT_SERVICES
   );
   const [isServiceDropdownOpen, setIsServiceDropdownOpen] = useState(false);
-  const serviceDropdownRef = useRef<HTMLDivElement>(null);
 
   // Field validation errors
   const [errors, setErrors] = useState<{
@@ -80,20 +80,18 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     altPhone?: string;
   }>({});
 
-  // Close service dropdown on click outside
+  // Close service modal on Escape key
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      if (serviceDropdownRef.current && !serviceDropdownRef.current.contains(event.target as Node)) {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isServiceDropdownOpen) {
         setIsServiceDropdownOpen(false);
       }
     };
     if (isServiceDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
+      window.addEventListener('keydown', handleKeyDown);
     }
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isServiceDropdownOpen]);
 
@@ -221,7 +219,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return () => clearInterval(timer);
   }, [placeholders]);
 
-  const currentPlaceholder = placeholders[placeholderIndex] || 'কী করতে হবে? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে...';
+  const rawPlaceholder = placeholders[placeholderIndex] || 'আপনাকে কীভাবে Help করতে পারি? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে';
+  const currentPlaceholder = rawPlaceholder.replace(/(\.{2,}|…)$/, '').trim();
 
   // Handle focus / click on main input (Guard unauthenticated users)
   const handleInputInteract = () => {
@@ -433,13 +432,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             onClick={handleInputInteract}
             className="w-full text-center mb-4 group outline-none"
           >
-            <h2 className="font-extrabold text-lg text-gray-900 mb-1">কী করতে হবে?</h2>
-            <p
-              key={placeholderIndex}
-              className="text-sm font-semibold text-emerald-600 animate-in fade-in duration-500 min-h-[1.25rem] mt-1"
-            >
-              {currentPlaceholder}
-            </p>
+            <h2 className="font-extrabold text-lg text-gray-900 mb-1">আপনাকে কীভাবে Help করতে পারি?</h2>
+            <div className="min-h-[2.75rem] sm:min-h-[2.5rem] flex items-center justify-center my-1.5 relative select-none w-full px-2 max-w-xl mx-auto transition-all duration-300">
+              <p
+                key={placeholderIndex}
+                className="text-[15px] sm:text-base font-bold text-emerald-600 animate-slide-up-fade px-2 text-center break-words whitespace-normal leading-relaxed w-full"
+              >
+                {currentPlaceholder}
+              </p>
+            </div>
             <p className="text-[11px] text-gray-400 mt-1">আপনার কাজটি বলুন — আমরা বাকিটা সামলে নেব।</p>
           </button>
 
@@ -449,33 +450,27 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             {isExpanded && user && (
               <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
 
-                {/* Custom Service Selection Dropdown */}
-                <div className={`relative ${isServiceDropdownOpen ? 'z-50' : 'z-10'}`} ref={serviceDropdownRef}>
-                  {/* Full body dark backdrop overlay */}
-                  {isServiceDropdownOpen && (
-                    <div
-                      className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 animate-in fade-in duration-200"
-                      onClick={() => setIsServiceDropdownOpen(false)}
-                      aria-hidden="true"
-                    />
-                  )}
-
+                {/* Service Selection Trigger Button */}
+                <div className="relative">
                   <button
                     type="button"
-                    onClick={() => setIsServiceDropdownOpen((prev) => !prev)}
-                    className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm transition-all duration-200 cursor-pointer select-none relative ${
+                    onClick={() => setIsServiceDropdownOpen(true)}
+                    className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm sm:text-base transition-all duration-200 cursor-pointer select-none ${
                       isServiceDropdownOpen
-                        ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl z-50'
+                        ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl'
                         : errors.service
                         ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
                         : 'border-gray-200 bg-white hover:border-emerald-300'
                     }`}
-                    aria-haspopup="listbox"
+                    aria-haspopup="dialog"
                     aria-expanded={isServiceDropdownOpen}
                   >
-                    <span className={service ? 'text-gray-900 font-bold truncate' : 'text-gray-400 font-medium'}>
-                      {service || 'সার্ভিস সিলেক্ট করুন *'}
-                    </span>
+                    <div className="flex items-start sm:items-center gap-2.5 flex-1 min-w-0 pr-2">
+                      <Sparkles className={`w-4 h-4 shrink-0 mt-0.5 sm:mt-0 ${service ? 'text-emerald-600' : 'text-gray-400'}`} />
+                      <span className={`text-left leading-snug break-words ${service ? 'text-gray-900 font-bold' : 'text-gray-400 font-medium'}`}>
+                        {service || 'সার্ভিস সিলেক্ট করুন *'}
+                      </span>
+                    </div>
                     <ChevronDown
                       className={`w-4 h-4 transition-transform duration-200 shrink-0 ml-2 ${
                         isServiceDropdownOpen ? 'rotate-180 text-emerald-600' : 'text-gray-400'
@@ -488,41 +483,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       <span>{errors.service}</span>
                     </p>
-                  )}
-
-                  {/* Dropdown Options Menu */}
-                  {isServiceDropdownOpen && (
-                    <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-3xl shadow-2xl shadow-black/25 border border-emerald-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-                      <div className="max-h-[520px] overflow-y-auto overscroll-contain divide-y divide-gray-100">
-                        {services.map((srv) => {
-                          const isSelected = service === srv;
-                          return (
-                            <button
-                              key={srv}
-                              type="button"
-                              onClick={() => {
-                                handleServiceChange(srv);
-                                setIsServiceDropdownOpen(false);
-                              }}
-                              className={`w-full px-4 py-3.5 text-left text-xs sm:text-sm flex items-center justify-between transition-all cursor-pointer group ${
-                                isSelected
-                                  ? 'bg-emerald-50/90 text-emerald-950 font-extrabold'
-                                  : 'text-gray-700 font-semibold hover:bg-emerald-50/40 hover:text-emerald-900 active:bg-gray-100'
-                              }`}
-                            >
-                              <span className="truncate pr-2">{srv}</span>
-                              {isSelected ? (
-                                <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-emerald-500/30">
-                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                </div>
-                              ) : (
-                                <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-emerald-400 shrink-0 transition-colors" />
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
                   )}
                 </div>
 
@@ -845,6 +805,76 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             </button>
           </div>
         </div>
+      )}
+
+      {/* Service Selection Modal (Centered, 80vh height, scrollable) */}
+      {isServiceDropdownOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[99990] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200"
+          style={{ backgroundColor: 'rgba(0,0,0,0.60)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsServiceDropdownOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg md:max-w-xl h-[80vh] max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-emerald-100 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0 bg-white">
+              <h3 className="font-extrabold text-base sm:text-lg text-gray-900">সার্ভিস সিলেক্ট করুন</h3>
+              <button
+                type="button"
+                onClick={() => setIsServiceDropdownOpen(false)}
+                className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:bg-rose-100 hover:text-rose-700 border border-rose-200/60 active:scale-95 transition-all cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Scrollable List of Services */}
+            <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-gray-100 p-2 sm:p-3">
+              {services.map((srv) => {
+                const isSelected = service === srv;
+                return (
+                  <button
+                    key={srv}
+                    type="button"
+                    onClick={() => {
+                      handleServiceChange(srv);
+                      setIsServiceDropdownOpen(false);
+                    }}
+                    className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${
+                      isSelected
+                        ? 'bg-emerald-50 text-emerald-950 font-extrabold ring-1 ring-emerald-300 shadow-xs'
+                        : 'text-gray-700 font-semibold hover:bg-emerald-50/50 hover:text-emerald-900 active:bg-gray-100'
+                    }`}
+                  >
+                    <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                      <div
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${
+                          isSelected
+                            ? 'bg-emerald-600 ring-4 ring-emerald-100'
+                            : 'bg-gray-300 group-hover:bg-emerald-400'
+                        } transition-colors`}
+                      />
+                      <span className="leading-snug break-words text-left flex-1">{srv}</span>
+                    </div>
+                    {isSelected ? (
+                      <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-emerald-500/30 ml-1">
+                        <Check className="w-4 h-4 stroke-[3]" />
+                      </div>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-emerald-400 shrink-0 transition-colors ml-1" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -12,18 +12,7 @@ interface StoreApplicationModalProps {
   onClose: () => void;
 }
 
-const STORE_TYPES_DEFAULT = [
-  'মুদিখানা ও সুপারশপ',
-  'ফার্মেসি ও ওষুধ',
-  'রেস্টুরেন্ট ও ফাস্টফুড',
-  'মাংস ও মাছ বাজার',
-  'ফল ও সবজির দোকান',
-  'ইলেকট্রনিক্স ও গ্যাজেট',
-  'স্টেশনারি ও বই',
-  'পোশাক ও ফ্যাশন',
-  'লন্ড্রি ও ড্রাই ক্লিনিং',
-  'অন্যান্য',
-];
+import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 
 export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ onClose }) => {
   // Leaflet consumes the drag itself, so the native pull gesture must be
@@ -31,9 +20,9 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
   usePullToRefreshLock();
   const { user, submitStoreApplication, cancelStoreApplication } = useAuth();
 
-  const storeTypes = fallbackStore.pricingSettings.storeTypes?.length
-    ? fallbackStore.pricingSettings.storeTypes
-    : STORE_TYPES_DEFAULT;
+  const [storeTypes, setStoreTypes] = useState<string[]>(() =>
+    parseStoreTypes(fallbackStore.pricingSettings.storeTypes)
+  );
 
   // Admin-configurable placeholders with defaults
   const ph = fallbackStore.pricingSettings.storeFormPlaceholders || {};
@@ -52,6 +41,8 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
   useEffect(() => {
     const unsub = fallbackStore.subscribe(() => {
       setLatestApp(getLatestApp());
+      const currentTypes = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
+      setStoreTypes(currentTypes);
     });
     return () => unsub();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -59,7 +50,10 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
 
   // Form fields
   const [storeName, setStoreName] = useState('');
-  const [storeType, setStoreType] = useState(storeTypes[0] || '');
+  const [storeType, setStoreType] = useState(() => {
+    const types = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
+    return types[0] || '';
+  });
   const [storeDescription, setStoreDescription] = useState('');
   const [ownerName, setOwnerName] = useState(user?.displayName || '');
   const [ownerWhatsapp, setOwnerWhatsapp] = useState(user?.alternativePhone || '');
@@ -438,6 +432,9 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
                 {storeTypes.map((t) => (
                   <option key={t} value={t}>{t}</option>
                 ))}
+                {storeType && !storeTypes.includes(storeType) && (
+                  <option value={storeType}>{storeType}</option>
+                )}
               </select>
             </div>
 

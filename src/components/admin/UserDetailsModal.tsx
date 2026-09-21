@@ -144,7 +144,10 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   };
   const allOrders = Array.from(fallbackStore.orders.values());
   const helperApp = Array.from(fallbackStore.helperApplications.values()).find((a) => a.userId === userId);
-  const wallet = fallbackStore.getHelperWallet(userId);
+  // Use the live stored wallet (maintained incrementally by creditHelperEarning) as
+  // the primary source of truth. Fall back to the recomputed version only when no
+  // stored wallet exists yet (e.g. helper has zero completed orders).
+  const wallet = fallbackStore.wallets.get(userId) ?? fallbackStore.getHelperWallet(userId);
   const walletTxs = fallbackStore.walletTransactions.get(userId) || [];
 
   if (!user) {

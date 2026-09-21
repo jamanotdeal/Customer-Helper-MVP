@@ -35,7 +35,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     (order.status as string) === 'CANCELLED' ||
     order.cancellationRequest?.status === 'APPROVED';
   const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
-  const urgency = getHelperUrgencyBgClass(order.createdAt, isDone);
+  const urgency = getHelperUrgencyBgClass(order, isDone);
 
   // Shared 1-second clock — see useSecondTick.
   const tick = useSecondTick(!isDone);

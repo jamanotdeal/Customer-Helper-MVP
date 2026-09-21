@@ -26,6 +26,8 @@ import {
   RefreshCw,
   Search,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   Filter,
   User,
   ChevronRight,
@@ -52,6 +54,9 @@ import {
   Gift,
   Coins,
   Square,
+  ThumbsUp,
+  ThumbsDown,
+  Send,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -75,7 +80,17 @@ import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
+import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AsyncButton } from './ui/AsyncButton';
+import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
+import {
+  exportUsersToCSV,
+  exportUsersToPDF,
+  exportOrdersToCSV,
+  exportOrdersToPDF,
+  exportFeedbackToCSV,
+  exportFeedbackToPDF,
+} from '@/lib/exportUtils';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -373,10 +388,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [serverFeedbacks, setServerFeedbacks] = useState<OrderFeedback[] | null>(null);
   const [serverCustomModals, setServerCustomModals] = useState<AdminCustomModalConfig[] | null>(null);
   const [isFetchingServer, setIsFetchingServer] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const [shopsCategoryFilter, setShopsCategoryFilter] = useState<string>('ALL');
+  const [usersCoinsFilter, setUsersCoinsFilter] = useState<string>('ALL');
+  const [usersMinCoins, setUsersMinCoins] = useState<string>('');
+  const [usersMaxCoins, setUsersMaxCoins] = useState<string>('');
+  const [usersSortByCoins, setUsersSortByCoins] = useState<'NONE' | 'HIGH_TO_LOW' | 'LOW_TO_HIGH'>('NONE');
+  const [usersSortColumn, setUsersSortColumn] = useState<'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE' | null>(null);
+  const [usersSortDirection, setUsersSortDirection] = useState<'asc' | 'desc'>('desc');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<string>('ALL');
   const [withdrawalTypeFilter, setWithdrawalTypeFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'OLDEST' | 'FEE_HIGH' | 'FEE_LOW' | 'ORDERS_HIGH' | 'SPENT_HIGH'>('NEWEST');
+  const [ordersHelperFilter, setOrdersHelperFilter] = useState<string>('ALL');
+  const [feedbackSortColumn, setFeedbackSortColumn] = useState<string>('createdAt');
+  const [feedbackSortDirection, setFeedbackSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [replyingToFeedbackId, setReplyingToFeedbackId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState<string>('');
+  const [replyShowUntil, setReplyShowUntil] = useState<string>('');
+  const [replyShowFrom, setReplyShowFrom] = useState<string>('');
+  const [savingReply, setSavingReply] = useState<boolean>(false);
   const [fleetSortColumn, setFleetSortColumn] = useState<string | null>(null);
   const [fleetSortDirection, setFleetSortDirection] = useState<'asc' | 'desc'>('asc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -585,7 +617,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setRocketInstructions(settings.rocketInstructions || '');
       setBankInstructions(settings.bankInstructions || '');
       setCashInstructions(settings.cashInstructions || '');
-      setStoreTypesText((settings.storeTypes || []).join('\n'));
+      setStoreTypesText(parseStoreTypes(settings.storeTypes).join('\n'));
 
       // Store form placeholders sync
       const sfp = settings.storeFormPlaceholders || {};
@@ -722,12 +754,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, currentPage, pageSize, users.length]);
+  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortByCoins, currentPage, pageSize, users.length]);
 
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || statusFilter !== 'ALL');
+      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= shops.length;
       if (!hasFilter && !needsPageFetch) {
         setServerShops(null);
@@ -746,7 +778,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, shopsAppliedSearchQuery, statusFilter, currentPage, pageSize, shops.length]);
+  }, [activeTab, shopsAppliedSearchQuery, shopsCategoryFilter, statusFilter, currentPage, pageSize, shops.length]);
 
   useEffect(() => {
     const fetchWithdrawals = async () => {
@@ -880,6 +912,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     fetchOverallAdminData();
   }, []);
+
+  // On-demand refresh — called by the Refresh button or automatically after admin actions.
+  // Subset targets a specific collection; omitting it refreshes all non-realtime collections.
+  const handleAdminRefresh = async (
+    subset?: Parameters<typeof fallbackStore.refreshAdminData>[0]
+  ) => {
+    setIsRefreshing(true);
+    try {
+      await fallbackStore.refreshAdminData(subset);
+      // Sync local state from the updated store
+      setUsers(Array.from(fallbackStore.users.values()));
+      setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
+      setApplications(Array.from(fallbackStore.helperApplications.values()));
+      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+      setShops(Array.from(fallbackStore.shops.values()));
+      setFeedbacks(Array.from(fallbackStore.orderFeedbacks.values()));
+      setCustomModals(Array.from(fallbackStore.customModals.values()));
+      setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
+      setLastRefreshedAt(new Date());
+    } catch (err) {
+      console.error('Error refreshing admin data:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     const fetchExactCounts = async () => {
@@ -1326,9 +1383,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       rocketInstructions: rocketInstructions.trim() || undefined,
       bankInstructions: bankInstructions.trim() || undefined,
       cashInstructions: cashInstructions.trim() || undefined,
-      storeTypes: storeTypesText.split('\n').map(s => s.trim()).filter(Boolean).length > 0
-        ? storeTypesText.split('\n').map(s => s.trim()).filter(Boolean)
-        : undefined,
+      storeTypes: parseStoreTypes(storeTypesText),
       // Store form placeholders
       storeFormPlaceholders: {
         storeName: storeFormPh.storeName.trim() || undefined,
@@ -1425,9 +1480,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   };
 
+  const handleDeleteFeedback = async (feedbackId: string) => {
+    const confirmed = await showConfirm(
+      'Delete Feedback',
+      'Are you sure you want to permanently delete this customer feedback entry?',
+      'Delete',
+      'Cancel'
+    );
+    if (!confirmed) return;
+
+    try {
+      await fallbackStore.deleteOrderFeedback(feedbackId);
+      setFeedbacks((prev) => prev.filter((f) => f.id !== feedbackId));
+      if (serverFeedbacks) {
+        setServerFeedbacks((prev) => (prev ? prev.filter((f) => f.id !== feedbackId) : null));
+      }
+      setExactFeedbacksCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
+      showAlert('ফিডব্যাক ডিলিট সম্পন্ন', 'অর্ডার ফিডব্যাক সফলভাবে মুছে ফেলা হয়েছে।', 'success');
+    } catch (err: any) {
+      showAlert('Error', err?.message || 'Failed to delete feedback', 'error');
+    }
+  };
+
+  const helperOptions = React.useMemo(() => {
+    const map = new Map<string, { id: string; name: string; phone?: string }>();
+    applications.forEach((app) => {
+      if (app.userId) {
+        map.set(app.userId, {
+          id: app.userId,
+          name: app.legalName || app.userName || 'Helper',
+          phone: app.email,
+        });
+      }
+    });
+    users.forEach((u) => {
+      if (u.role === 'helper' || u.isHelper) {
+        const existing = map.get(u.uid);
+        map.set(u.uid, {
+          id: u.uid,
+          name: u.displayName || existing?.name || 'Helper',
+          phone: u.alternativePhone || existing?.phone,
+        });
+      }
+    });
+    allOrders.forEach((o) => {
+      if (o.helperId && !map.has(o.helperId)) {
+        map.set(o.helperId, {
+          id: o.helperId,
+          name: o.helperName || 'Helper',
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [applications, users, allOrders]);
+
   // --- Filtering & Sorting Helper Functions ---
 
-  // 1. Process Orders List (Search, Filter by Status, Sort by Newest default)
+  // 1. Process Orders List (Search, Filter by Status, Filter by Helper, Sort by Newest default)
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
 
@@ -1464,6 +1573,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         list = list.filter((o) => !!o.needDeliveryBack);
       } else {
         list = list.filter((o) => o.status === statusFilter);
+      }
+    }
+
+    // Helper filter
+    if (ordersHelperFilter !== 'ALL') {
+      if (ordersHelperFilter === 'UNASSIGNED') {
+        list = list.filter((o) => !o.helperId);
+      } else {
+        list = list.filter((o) => o.helperId === ordersHelperFilter || o.helperName === ordersHelperFilter);
       }
     }
 
@@ -1820,11 +1938,91 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       list = list.filter((item) => item.segments.includes(audienceFilter));
     }
 
-    list.sort((a, b) => {
-      if (sortBy === 'OLDEST') return new Date(a.user.createdAt).getTime() - new Date(b.user.createdAt).getTime();
-      if (sortBy === 'ORDERS_HIGH') return b.totalOrdersCount - a.totalOrdersCount;
-      return new Date(b.user.createdAt).getTime() - new Date(a.user.createdAt).getTime();
-    });
+    // Coins filter
+    if (usersCoinsFilter === 'HAS_COINS') {
+      list = list.filter((item) => (item.user.coins || 0) > 0);
+    } else if (usersCoinsFilter === 'COINS_50_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 50);
+    } else if (usersCoinsFilter === 'COINS_100_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 100);
+    } else if (usersCoinsFilter === 'COINS_500_PLUS') {
+      list = list.filter((item) => (item.user.coins || 0) >= 500);
+    } else if (usersCoinsFilter === 'NO_COINS') {
+      list = list.filter((item) => (item.user.coins || 0) === 0);
+    } else if (usersCoinsFilter === 'CUSTOM') {
+      if (usersMinCoins !== '') {
+        const minVal = parseFloat(usersMinCoins) || 0;
+        list = list.filter((item) => (item.user.coins || 0) >= minVal);
+      }
+      if (usersMaxCoins !== '') {
+        const maxVal = parseFloat(usersMaxCoins) || 0;
+        list = list.filter((item) => (item.user.coins || 0) <= maxVal);
+      }
+    }
+
+    if (usersSortColumn) {
+      list.sort((a, b) => {
+        let comparison = 0;
+        switch (usersSortColumn) {
+          case 'NAME': {
+            const nameA = (a.user.displayName || a.user.email || a.user.uid || '').toLowerCase();
+            const nameB = (b.user.displayName || b.user.email || b.user.uid || '').toLowerCase();
+            comparison = nameA.localeCompare(nameB);
+            break;
+          }
+          case 'ROLE': {
+            const roleRank = (u: UserProfile) => (u.isSuperAdmin ? '0' : u.isAdmin ? '1' : u.isHelper ? '2' : u.role || '3');
+            comparison = roleRank(a.user).localeCompare(roleRank(b.user));
+            break;
+          }
+          case 'COINS': {
+            comparison = (a.user.coins || 0) - (b.user.coins || 0);
+            break;
+          }
+          case 'ORDERS': {
+            comparison = a.totalOrdersCount - b.totalOrdersCount;
+            break;
+          }
+          case 'ACTIVITY': {
+            const actA = a.activeDel ? 2 : a.activeReq ? 1 : 0;
+            const actB = b.activeDel ? 2 : b.activeReq ? 1 : 0;
+            comparison = actA - actB;
+            break;
+          }
+          case 'SEGMENTS': {
+            const segA = (a.segments || []).join(',');
+            const segB = (b.segments || []).join(',');
+            comparison = segA.localeCompare(segB);
+            break;
+          }
+          case 'STATUS': {
+            const statA = a.user.isBlocked ? 'blocked' : 'active';
+            const statB = b.user.isBlocked ? 'blocked' : 'active';
+            comparison = statA.localeCompare(statB);
+            break;
+          }
+          case 'DATE': {
+            const dateA = new Date(a.user.createdAt || 0).getTime();
+            const dateB = new Date(b.user.createdAt || 0).getTime();
+            comparison = dateA - dateB;
+            break;
+          }
+          default:
+            comparison = 0;
+        }
+        return usersSortDirection === 'asc' ? comparison : -comparison;
+      });
+    } else if (usersSortByCoins === 'HIGH_TO_LOW') {
+      list.sort((a, b) => (b.user.coins || 0) - (a.user.coins || 0));
+    } else if (usersSortByCoins === 'LOW_TO_HIGH') {
+      list.sort((a, b) => (a.user.coins || 0) - (b.user.coins || 0));
+    } else {
+      list.sort((a, b) => {
+        if (sortBy === 'OLDEST') return new Date(a.user.createdAt).getTime() - new Date(b.user.createdAt).getTime();
+        if (sortBy === 'ORDERS_HIGH') return b.totalOrdersCount - a.totalOrdersCount;
+        return new Date(b.user.createdAt).getTime() - new Date(a.user.createdAt).getTime();
+      });
+    }
 
     return list;
   };
@@ -1843,6 +2041,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const isAdmin = currentUser?.isAdmin;
   const isNormalAdmin = isAdmin && !isSuperAdmin;
 
+  // GROWTH is intentionally excluded — it is Super Admin only and cannot be granted to normal admins
   const tabsList = [
     { key: 'EXCEPTIONS', label: 'Needs Attention', icon: AlertCircle, color: 'text-amber-500' },
     { key: 'ORDERS', label: 'All Orders', icon: ShoppingBag, color: 'text-emerald-600' },
@@ -1861,6 +2060,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   ];
 
   const isTabAllowed = (tabKey: string) => {
+    // GROWTH is Super Admin only — normal admins can never access it
+    if (tabKey === 'GROWTH') return Boolean(isSuperAdmin);
     if (isSuperAdmin) return true;
     return allowedAdminTabs.includes(tabKey);
   };
@@ -2402,7 +2603,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
-            {/* Search Box */}
+            {/* Top row: Search + action buttons */}
             <div className="flex gap-2 w-full">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
@@ -2429,6 +2630,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isFetchingServer && <RefreshCw className="w-3 h-3 animate-spin" />}
                 {isFetchingServer ? 'Loading...' : 'Search'}
               </button>
+              {/* Refresh button — visible on all non-realtime, non-settings tabs */}
+              {(['ORDERS', 'USERS_LIST', 'CUSTOMERS', 'HELPERS', 'WITHDRAWALS', 'SHOPS', 'FEEDBACK', 'CUSTOM_MODALS', 'REWARDS', 'REVENUE', 'GROWTH'] as string[]).includes(activeTab) && (
+                <button
+                  id="admin-refresh-btn"
+                  onClick={() => handleAdminRefresh()}
+                  disabled={isRefreshing}
+                  title={lastRefreshedAt ? `Last refreshed: ${lastRefreshedAt.toLocaleTimeString()}` : 'Refresh data'}
+                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white font-extrabold text-xs rounded-2xl shadow-md transition-all active:scale-95 shrink-0 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  {isRefreshing ? 'Refreshing...' : lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}
+                </button>
+              )}
             </div>
 
             {/* Date Range Filter — Orders tab only */}
@@ -2493,6 +2707,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <option value="ARRIVED">Arrived</option>
                   <option value="DELIVERED">Delivered</option>
                   <option value="CANCELED">Canceled</option>
+                </select>
+              </div>
+            )}
+
+            {/* Helper Filter (for Orders tab) */}
+            {activeTab === 'ORDERS' && (
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-600">
+                <Bike className="w-4 h-4 text-purple-600 shrink-0" />
+                <select
+                  value={ordersHelperFilter}
+                  onChange={(e) => {
+                    setOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 focus:outline-none focus:border-purple-600 max-w-[200px]"
+                >
+                  <option value="ALL">All Helpers</option>
+                  <option value="UNASSIGNED">Unassigned Only</option>
+                  {helperOptions.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name} {h.phone && h.phone !== 'N/A' ? `(${h.phone})` : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
             )}
@@ -3328,7 +3565,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
         const ordersSource = serverOrders !== null ? serverOrders : allOrders;
         const processed = getProcessedOrders(ordersSource);
-        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL');
+        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL' || ordersHelperFilter !== 'ALL');
         // When no filter is active, always use the server count for total (even after serverOrders loaded,
         // exactTotalOrders is the authoritative number from getCountFromServer)
         const overrideOrdersCount = (!hasOrdersFilter && exactTotalOrders !== null && exactTotalOrders > processed.length) ? exactTotalOrders : undefined;
@@ -3342,7 +3579,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
                 <p className="text-xs text-gray-500">Select multiple orders to batch delete or manage</p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 {selectedOrderIds.length > 0 && (
                   <AsyncButton
                     onClick={handleBulkDeleteOrders}
@@ -3353,6 +3590,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span>Delete Selected ({selectedOrderIds.length})</span>
                   </AsyncButton>
                 )}
+                {/* Export Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => exportOrdersToCSV(processed)}
+                    title="Export visible orders to Excel (CSV)"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    onClick={() => exportOrdersToPDF(processed)}
+                    title="Export visible orders to PDF"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                  </button>
+                </div>
                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 flex items-center gap-2 flex-wrap">
                   <span>{exactTotalOrders !== null ? exactTotalOrders.toLocaleString() : totalItems} total orders</span>
                   {exactTotalCollection !== null && (
@@ -3366,12 +3622,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Sub-Filters and Date Search Controls */}
-            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Status Filter</label>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
                   className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
                 >
                   <option value="ALL">All Statuses</option>
@@ -3388,6 +3644,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Filter by Helper</label>
+                <select
+                  value={ordersHelperFilter}
+                  onChange={(e) => {
+                    setOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Helpers</option>
+                  <option value="UNASSIGNED">Unassigned Only</option>
+                  {helperOptions.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name} {h.phone && h.phone !== 'N/A' ? `(${h.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Sort By</label>
                 <select
                   value={sortBy}
@@ -3396,6 +3672,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="NEWEST">Newest First</option>
                   <option value="OLDEST">Oldest First</option>
+                  <option value="FEE_HIGH">Delivery Fee (High to Low)</option>
+                  <option value="FEE_LOW">Delivery Fee (Low to High)</option>
                 </select>
               </div>
             </div>
@@ -3601,26 +3879,163 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
         const processed = getProcessedUsersList();
-        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
+        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null);
         const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
 
+        const handleUserColumnSort = (col: 'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE') => {
+          if (usersSortColumn === col) {
+            setUsersSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+          } else {
+            setUsersSortColumn(col);
+            if (col === 'NAME' || col === 'ROLE' || col === 'STATUS') {
+              setUsersSortDirection('asc');
+            } else {
+              setUsersSortDirection('desc');
+            }
+          }
+          setCurrentPage(1);
+        };
+
+        const renderUserSortHeader = (
+          label: string,
+          col: 'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE',
+          extraClass = ''
+        ) => {
+          const isActive = usersSortColumn === col;
+          return (
+            <th
+              onClick={() => handleUserColumnSort(col)}
+              className={`py-3.5 px-5 cursor-pointer select-none transition-colors group hover:bg-purple-100/70 hover:text-purple-950 ${
+                isActive ? 'bg-purple-100/80 text-purple-950 font-black' : ''
+              } ${extraClass}`}
+              title={`Click to sort by ${label} (${isActive ? (usersSortDirection === 'asc' ? 'Ascending' : 'Descending') : 'Click to Sort'})`}
+            >
+              <div className="flex items-center space-x-1.5">
+                <span>{label}</span>
+                <span className="inline-flex shrink-0">
+                  {isActive ? (
+                    usersSortDirection === 'asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-purple-700" />
+                    ) : (
+                      <ArrowDown className="w-3.5 h-3.5 text-purple-700" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="w-3 h-3 text-gray-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+                  )}
+                </span>
+              </div>
+            </th>
+          );
+        };
+
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
               <h3 className="font-extrabold text-base text-gray-900">Registered Users Master List</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Export Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => exportUsersToCSV(processed, 'users_list')}
+                    title="Export visible users to Excel (CSV)"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    onClick={() => exportUsersToPDF(processed, 'Users List')}
+                    title="Export visible users to PDF"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                  </button>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
+                  {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
+                </span>
+              </div>
             </div>
 
-            {/* Date Range Filter Bar */}
+            {/* Date & Coins Filter Bar */}
             <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center space-x-2">
                 <Calendar className="w-4 h-4 text-purple-700" />
-                <span className="font-extrabold text-gray-900">Filter by Registration Date Range</span>
+                <span className="font-extrabold text-gray-900">Filter Users (Date & Coins)</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Coins Filter Dropdown */}
+                <div className="flex items-center space-x-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <Coins className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">Coins:</span>
+                  <select
+                    value={usersCoinsFilter}
+                    onChange={(e) => {
+                      setUsersCoinsFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px] cursor-pointer"
+                  >
+                    <option value="ALL">All Coins</option>
+                    <option value="HAS_COINS">Has Coins (&gt; 0)</option>
+                    <option value="COINS_50_PLUS">50+ Coins</option>
+                    <option value="COINS_100_PLUS">100+ Coins</option>
+                    <option value="COINS_500_PLUS">500+ Coins</option>
+                    <option value="NO_COINS">0 Coins</option>
+                    <option value="CUSTOM">Custom Range...</option>
+                  </select>
+                </div>
+
+                {/* Custom Coins Range */}
+                {usersCoinsFilter === 'CUSTOM' && (
+                  <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl px-2 py-0.5">
+                    <input
+                      type="number"
+                      placeholder="Min"
+                      value={usersMinCoins}
+                      onChange={(e) => {
+                        setUsersMinCoins(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-14 text-center font-extrabold text-[11px] text-gray-800 outline-none"
+                    />
+                    <span className="text-gray-400 text-[10px]">-</span>
+                    <input
+                      type="number"
+                      placeholder="Max"
+                      value={usersMaxCoins}
+                      onChange={(e) => {
+                        setUsersMaxCoins(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-14 text-center font-extrabold text-[11px] text-gray-800 outline-none"
+                    />
+                  </div>
+                )}
+
+                {/* Sort by Coins */}
+                <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
+                  <span className="text-gray-400 text-[10px] uppercase font-bold">Sort:</span>
+                  <select
+                    value={usersSortByCoins}
+                    onChange={(e) => {
+                      setUsersSortByCoins(e.target.value as any);
+                      if (e.target.value !== 'NONE') {
+                        setUsersSortColumn(null);
+                      }
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px] cursor-pointer"
+                  >
+                    <option value="NONE">Default Order</option>
+                    <option value="HIGH_TO_LOW">Coins: High to Low</option>
+                    <option value="LOW_TO_HIGH">Coins: Low to High</option>
+                  </select>
+                </div>
+
+                {/* Registration Date Range */}
                 <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-xl px-2.5 py-1">
                   <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
                   <input
@@ -3639,13 +4054,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="bg-transparent text-gray-800 font-extrabold focus:outline-none text-[11px]"
                   />
                 </div>
-                {(usersStartDate || usersEndDate) && (
+                {(usersStartDate || usersEndDate || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null) && (
                   <button
                     onClick={() => {
                       setUsersStartDate('');
                       setUsersEndDate('');
+                      setUsersCoinsFilter('ALL');
+                      setUsersMinCoins('');
+                      setUsersMaxCoins('');
+                      setUsersSortByCoins('NONE');
+                      setUsersSortColumn(null);
+                      setUsersSortDirection('desc');
+                      setCurrentPage(1);
                     }}
-                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all"
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 font-bold transition-all cursor-pointer"
                   >
                     Clear
                   </button>
@@ -3657,13 +4079,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                 <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                   <tr>
-                    <th className="py-3.5 px-5">User Profile</th>
-                    <th className="py-3.5 px-5">Role & Badges</th>
-                    <th className="py-3.5 px-5">Reward Coins (কয়েন)</th>
-                    <th className="py-3.5 px-5">Order Stats & Patterns</th>
-                    <th className="py-3.5 px-5">Live Current Running State</th>
-                    <th className="py-3.5 px-5">Audience Segments</th>
-                    <th className="py-3.5 px-5">Status</th>
+                    {renderUserSortHeader('User Profile', 'NAME')}
+                    {renderUserSortHeader('Role & Badges', 'ROLE')}
+                    {renderUserSortHeader('Reward Coins (কয়েন)', 'COINS')}
+                    {renderUserSortHeader('Order Stats & Patterns', 'ORDERS')}
+                    {renderUserSortHeader('Live Current Running State', 'ACTIVITY')}
+                    {renderUserSortHeader('Audience Segments', 'SEGMENTS')}
+                    {renderUserSortHeader('Status', 'STATUS')}
                     <th className="py-3.5 px-5 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -6265,7 +6687,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 8: SHOPS TAB --- */}
       {activeTab === 'SHOPS' && isTabAllowed('SHOPS') && (() => {
         const shopsSource = serverShops !== null ? serverShops : shops;
+        const predefinedCategories = parseStoreTypes(fallbackStore.pricingSettings.storeTypes);
+        const dynamicCats = new Set<string>(predefinedCategories);
+        shopsSource.forEach((s) => {
+          if (s.type && s.type.trim()) dynamicCats.add(s.type.trim());
+        });
+        const allShopCategories = Array.from(dynamicCats).sort();
+
         let filteredShops = [...shopsSource];
+        if (shopsCategoryFilter !== 'ALL') {
+          filteredShops = filteredShops.filter((s) => (s.type || '').trim() === shopsCategoryFilter.trim());
+        }
         if (shopsAppliedSearchQuery.trim()) {
           const q = shopsAppliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
@@ -6278,7 +6710,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
         filteredShops.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim());
+        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL');
         const overrideShopsCount = (serverShops === null && !hasShopsFilter && exactShopsCount !== null) ? exactShopsCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops, undefined, undefined, overrideShopsCount);
 
@@ -6293,13 +6725,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div>
                   <h3 className="font-extrabold text-base text-gray-900">Registered Store / Shop List</h3>
                   <span className="text-xs font-bold text-purple-700">
-                    {totalItems} stores registered
+                    {totalItems} stores {shopsCategoryFilter !== 'ALL' ? `(${shopsCategoryFilter})` : 'registered'}
                   </span>
                 </div>
               </div>
 
-              {/* Sub-view Toggles & Add Shop Button */}
+              {/* Sub-view Toggles & Category Filter & Add Shop Button */}
               <div className="flex items-center space-x-2 flex-wrap gap-2">
+                {/* Category Dropdown Filter */}
+                <div className="flex items-center space-x-1.5 bg-gray-100 border border-gray-200 rounded-2xl px-3 py-1.5">
+                  <Filter className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                  <span className="text-gray-500 text-[11px] font-bold">Category:</span>
+                  <select
+                    value={shopsCategoryFilter}
+                    onChange={(e) => {
+                      setShopsCategoryFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer max-w-[170px] truncate"
+                  >
+                    <option value="ALL">All Categories ({shopsSource.length})</option>
+                    {allShopCategories.map((cat) => {
+                      const count = shopsSource.filter((s) => (s.type || '').trim() === cat.trim()).length;
+                      return (
+                        <option key={cat} value={cat}>
+                          {cat} ({count})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {shopsCategoryFilter !== 'ALL' && (
+                  <button
+                    onClick={() => {
+                      setShopsCategoryFilter('ALL');
+                      setCurrentPage(1);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 text-xs font-bold transition-all"
+                  >
+                    Clear Filter
+                  </button>
+                )}
+
                 <div className="flex bg-gray-100 p-1 rounded-2xl">
                   <button
                     type="button"
@@ -7007,15 +7475,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 9: ORDER FEEDBACK TAB --- */}
       {activeTab === 'FEEDBACK' && isTabAllowed('FEEDBACK') && (() => {
         const totalFeedbacks = feedbacks.length;
-        const avgRider = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.riderRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
-        const avgService = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.serviceRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
-        const avgShop = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.shopRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
+
+        // Thumbs-based sentiment counts
+        const newStyleFbs = feedbacks.filter((f) => f.thumbsUp !== undefined);
+        const thumbsUpCount = newStyleFbs.filter((f) => f.thumbsUp === true).length;
+        const thumbsDownCount = newStyleFbs.filter((f) => f.thumbsUp === false).length;
+        const satisfactionPercent = newStyleFbs.length > 0
+          ? Math.round((thumbsUpCount / newStyleFbs.length) * 100)
+          : null;
+
+        // Legacy star averages (for old-style feedbacks without thumbsUp)
+        const oldStyleFbs = feedbacks.filter((f) => f.thumbsUp === undefined);
+        const avgRiderLegacy = oldStyleFbs.length > 0
+          ? (oldStyleFbs.reduce((s, f) => s + f.riderRating, 0) / oldStyleFbs.length).toFixed(1)
+          : null;
 
         const feedbacksSource = serverFeedbacks !== null ? serverFeedbacks : feedbacks;
         let filteredFeedbacks = [...feedbacksSource];
@@ -7026,95 +7499,293 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               f.orderId.toLowerCase().includes(q) ||
               (f.customerName && f.customerName.toLowerCase().includes(q)) ||
               (f.helperName && f.helperName.toLowerCase().includes(q)) ||
-              (f.improvementComment && f.improvementComment.toLowerCase().includes(q))
+              (f.improvementComment && f.improvementComment.toLowerCase().includes(q)) ||
+              (f.adminReply && f.adminReply.toLowerCase().includes(q))
           );
         }
-        filteredFeedbacks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        filteredFeedbacks.sort((a, b) => {
+          let cmp = 0;
+          if (feedbackSortColumn === 'orderId') {
+            cmp = a.orderId.localeCompare(b.orderId);
+          } else if (feedbackSortColumn === 'customerName') {
+            cmp = (a.customerName || '').localeCompare(b.customerName || '');
+          } else if (feedbackSortColumn === 'helperName') {
+            cmp = (a.helperName || '').localeCompare(b.helperName || '');
+          } else if (feedbackSortColumn === 'sentiment') {
+            const aVal = a.thumbsUp === true ? 1 : a.thumbsUp === false ? -1 : 0;
+            const bVal = b.thumbsUp === true ? 1 : b.thumbsUp === false ? -1 : 0;
+            cmp = aVal - bVal;
+          } else if (feedbackSortColumn === 'comment') {
+            cmp = (a.improvementComment || '').localeCompare(b.improvementComment || '');
+          } else {
+            cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          }
+          return feedbackSortDirection === 'asc' ? cmp : -cmp;
+        });
+
+        const handleFeedbackSortClick = (col: string) => {
+          if (feedbackSortColumn === col) {
+            setFeedbackSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+          } else {
+            setFeedbackSortColumn(col);
+            setFeedbackSortDirection('asc');
+          }
+        };
+
+        const renderFeedbackSortIcon = (col: string) => {
+          if (feedbackSortColumn !== col) return <ArrowUpDown className="w-3 h-3 opacity-40 inline ml-1" />;
+          return <span className="inline ml-1 font-bold text-amber-600">{feedbackSortDirection === 'asc' ? '▲' : '▼'}</span>;
+        };
+
         const hasFeedbackFilter = Boolean(feedbackAppliedSearchQuery.trim());
         const overrideFeedbacksCount = (serverFeedbacks === null && !hasFeedbackFilter && exactFeedbacksCount !== null) ? exactFeedbacksCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks, undefined, undefined, overrideFeedbacksCount);
 
+        const handleSaveReply = async () => {
+          if (!replyingToFeedbackId || !replyText.trim()) return;
+          setSavingReply(true);
+          try {
+            await fallbackStore.updateOrderFeedbackReply(
+              replyingToFeedbackId,
+              replyText.trim(),
+              replyShowUntil ? new Date(replyShowUntil).toISOString() : undefined,
+              replyShowFrom ? new Date(replyShowFrom).toISOString() : undefined
+            );
+            const patch = {
+              adminReply: replyText.trim(),
+              adminReplyAt: new Date().toISOString(),
+              adminReplyShowFrom: replyShowFrom ? new Date(replyShowFrom).toISOString() : undefined,
+              adminReplyShowUntil: replyShowUntil ? new Date(replyShowUntil).toISOString() : undefined,
+              adminReplyShownToCustomer: false,
+            };
+            setFeedbacks((prev) => prev.map((f) => f.id === replyingToFeedbackId ? { ...f, ...patch } : f));
+            if (serverFeedbacks) setServerFeedbacks((prev) => prev ? prev.map((f) => f.id === replyingToFeedbackId ? { ...f, ...patch } : f) : null);
+            setReplyingToFeedbackId(null);
+            setReplyText('');
+            setReplyShowFrom('');
+            setReplyShowUntil('');
+          } catch (err: any) {
+            console.error('Reply save failed:', err);
+          } finally {
+            setSavingReply(false);
+          }
+        };
+
         return (
           <div className="space-y-6">
-            {/* Feedback Analysis Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
-              <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200">
-                <span className="text-xs font-extrabold text-amber-800 uppercase block">Rider Behavior Avg</span>
-                <span className="text-3xl font-black text-amber-900 mt-1 block">⭐ {avgRider}</span>
-                <span className="text-[10px] text-amber-700 font-bold block mt-1">based on {totalFeedbacks} ratings</span>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+              <div className="p-5 rounded-3xl bg-emerald-50 border border-emerald-200 flex flex-col items-center">
+                <ThumbsUp className="w-6 h-6 text-emerald-600 mb-1" />
+                <span className="text-3xl font-black text-emerald-900 mt-1 block">{thumbsUpCount}</span>
+                <span className="text-[10px] text-emerald-700 font-bold block mt-1 uppercase">Positive 👍</span>
               </div>
-              <div className="p-5 rounded-3xl bg-emerald-50 border border-emerald-200">
-                <span className="text-xs font-extrabold text-emerald-800 uppercase block">Service Quality Avg</span>
-                <span className="text-3xl font-black text-emerald-900 mt-1 block">⭐ {avgService}</span>
-                <span className="text-[10px] text-emerald-700 font-bold block mt-1">overall delivery quality</span>
+              <div className="p-5 rounded-3xl bg-red-50 border border-red-200 flex flex-col items-center">
+                <ThumbsDown className="w-6 h-6 text-red-600 mb-1" />
+                <span className="text-3xl font-black text-red-900 mt-1 block">{thumbsDownCount}</span>
+                <span className="text-[10px] text-red-700 font-bold block mt-1 uppercase">Negative 👎</span>
               </div>
-              <div className="p-5 rounded-3xl bg-purple-50 border border-purple-200">
-                <span className="text-xs font-extrabold text-purple-800 uppercase block">Shop Product Quality</span>
-                <span className="text-3xl font-black text-purple-900 mt-1 block">⭐ {avgShop}</span>
-                <span className="text-[10px] text-purple-700 font-bold block mt-1">store product satisfaction</span>
+              <div className="p-5 rounded-3xl bg-indigo-50 border border-indigo-200 flex flex-col items-center">
+                <span className="text-3xl font-black text-indigo-900 mt-1 block">
+                  {satisfactionPercent !== null ? `${satisfactionPercent}%` : '—'}
+                </span>
+                <span className="text-[10px] text-indigo-700 font-bold block mt-1 uppercase">Satisfaction Rate</span>
+                {avgRiderLegacy && <span className="text-[9px] text-indigo-500 block">Legacy avg: ⭐{avgRiderLegacy}</span>}
               </div>
-              <div className="p-5 rounded-3xl bg-indigo-50 border border-indigo-200">
-                <span className="text-xs font-extrabold text-indigo-800 uppercase block">Total Reviews</span>
-                <span className="text-3xl font-black text-indigo-900 mt-1 block">{totalFeedbacks}</span>
-                <span className="text-[10px] text-indigo-700 font-bold block mt-1">customer responses</span>
+              <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200 flex flex-col items-center">
+                <span className="text-3xl font-black text-amber-900 mt-1 block">{totalFeedbacks}</span>
+                <span className="text-[10px] text-amber-700 font-bold block mt-1 uppercase">Total Reviews</span>
               </div>
             </div>
 
-            {/* Feedback List Table */}
+            {/* Visual Analytics */}
+            <OrderFeedbackAnalytics feedbacks={feedbacksSource} />
+
+            {/* Feedback Table */}
             <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
                 <h3 className="font-extrabold text-base text-gray-900">Customer Order Feedback Entries</h3>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-800">
-                  {totalItems} total feedbacks
-                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => exportFeedbackToCSV(filteredFeedbacks)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm">
+                      <Download className="w-3.5 h-3.5" /><span>Excel</span>
+                    </button>
+                    <button onClick={() => exportFeedbackToPDF(filteredFeedbacks)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm">
+                      <Download className="w-3.5 h-3.5" /><span>PDF</span>
+                    </button>
+                  </div>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-800">{totalItems} total feedbacks</span>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                   <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                     <tr>
-                      <th className="py-3.5 px-5">Order ID & Customer</th>
-                      <th className="py-3.5 px-5">Rider / Helper</th>
-                      <th className="py-3.5 px-5">Rider Rating</th>
-                      <th className="py-3.5 px-5">Service Rating</th>
-                      <th className="py-3.5 px-5">Shop Rating</th>
-                      <th className="py-3.5 px-5">Customer Comment</th>
-                      <th className="py-3.5 px-5">Date</th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('orderId')}>
+                        <div className="flex items-center space-x-1"><span>Order & Customer</span>{renderFeedbackSortIcon('orderId')}</div>
+                      </th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('helperName')}>
+                        <div className="flex items-center space-x-1"><span>Rider</span>{renderFeedbackSortIcon('helperName')}</div>
+                      </th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('sentiment')}>
+                        <div className="flex items-center space-x-1"><span>Sentiment</span>{renderFeedbackSortIcon('sentiment')}</div>
+                      </th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('comment')}>
+                        <div className="flex items-center space-x-1"><span>Comment</span>{renderFeedbackSortIcon('comment')}</div>
+                      </th>
+                      <th className="py-3.5 px-5">Admin Reply</th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('createdAt')}>
+                        <div className="flex items-center space-x-1"><span>Date</span>{renderFeedbackSortIcon('createdAt')}</div>
+                      </th>
+                      <th className="py-3.5 px-5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 font-medium">
                     {paginatedItems.map((fb) => (
-                      <tr key={fb.id} className="hover:bg-gray-50/80 transition-colors">
-                        <td className="py-4 px-5">
-                          <div className="font-extrabold text-gray-900">#{fb.orderId}</div>
-                          <div className="text-[11px] text-gray-500">{fb.customerName}</div>
-                        </td>
-                        <td className="py-4 px-5 font-bold text-gray-800">
-                          {fb.helperName || 'Unassigned'}
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-amber-600">
-                          ⭐ {fb.riderRating} / 5
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-emerald-600">
-                          ⭐ {fb.serviceRating} / 5
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-purple-600">
-                          ⭐ {fb.shopRating} / 5
-                        </td>
-                        <td className="py-4 px-5">
-                          {fb.improvementComment ? (
-                            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-semibold max-w-xs text-[11px]">
-                              &ldquo;{fb.improvementComment}&rdquo;
+                      <React.Fragment key={fb.id}>
+                        <tr className="hover:bg-gray-50/80 transition-colors">
+                          <td className="py-4 px-5">
+                            <div className="font-extrabold text-gray-900">#{fb.orderId}</div>
+                            <div className="text-[11px] text-gray-500">{fb.customerName}</div>
+                          </td>
+                          <td className="py-4 px-5 font-bold text-gray-800">{fb.helperName || 'Unassigned'}</td>
+                          <td className="py-4 px-5">
+                            {fb.thumbsUp === true ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[11px]">
+                                <ThumbsUp className="w-3.5 h-3.5" /> ভালো ছিল
+                              </span>
+                            ) : fb.thumbsUp === false ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[11px]">
+                                <ThumbsDown className="w-3.5 h-3.5" /> ভালো না
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-amber-600 font-extrabold text-xs">
+                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                                {fb.riderRating}/5
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5">
+                            {fb.improvementComment ? (
+                              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-semibold max-w-xs text-[11px]">&ldquo;{fb.improvementComment}&rdquo;</div>
+                            ) : (
+                              <span className="text-gray-400 italic">No comment</span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 max-w-[180px]">
+                            {fb.adminReply ? (
+                              <div className="space-y-1">
+                                <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 font-semibold text-[11px] line-clamp-2">{fb.adminReply}</div>
+                                {fb.adminReplyShowUntil && (
+                                  <div className="text-[10px] text-gray-400 font-mono">Until: {new Date(fb.adminReplyShowUntil).toLocaleString()}</div>
+                                )}
+                                <div className={`text-[10px] font-bold ${fb.adminReplyShownToCustomer ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {fb.adminReplyShownToCustomer ? '✓ Seen by customer' : '⏳ Pending'}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-gray-300 italic text-[11px]">No reply yet</span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">{new Date(fb.createdAt).toLocaleDateString()}</td>
+                          <td className="py-4 px-5 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (replyingToFeedbackId === fb.id) {
+                                    setReplyingToFeedbackId(null); setReplyText(''); setReplyShowUntil('');
+                                  } else {
+                                    setReplyingToFeedbackId(fb.id);
+                                    setReplyText(fb.adminReply || '');
+                                    setReplyShowFrom(fb.adminReplyShowFrom ? new Date(fb.adminReplyShowFrom).toISOString().slice(0, 16) : '');
+                                    setReplyShowUntil(fb.adminReplyShowUntil ? new Date(fb.adminReplyShowUntil).toISOString().slice(0, 16) : '');
+                                  }
+                                }}
+                                className={`p-1.5 rounded-xl transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer ${replyingToFeedbackId === fb.id ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600'}`}
+                                title="Reply to this feedback"
+                              >
+                                <MessageSquare className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFeedback(fb.id)}
+                                className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer"
+                                title="Delete Feedback Entry"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                          ) : (
-                            <span className="text-gray-400 italic">No comment provided</span>
-                          )}
-                        </td>
-                        <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">
-                          {new Date(fb.createdAt).toLocaleDateString()}
+                          </td>
+                        </tr>
+                        {/* Inline Reply Drawer */}
+                        {replyingToFeedbackId === fb.id && (
+                          <tr>
+                            <td colSpan={7} className="px-5 pb-5 pt-1 bg-indigo-50/50">
+                              <div className="border border-indigo-200 rounded-2xl p-4 space-y-3 bg-white shadow-xs">
+                                <div className="flex items-center gap-2 text-indigo-800 font-extrabold text-xs">
+                                  <Send className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Reply to #{fb.orderId} — {fb.customerName}</span>
+                                </div>
+                                <textarea
+                                  value={replyText}
+                                  onChange={(e) => setReplyText(e.target.value)}
+                                  placeholder="Customer-এর feedback-এর জবাবে আপনার response লিখুন..."
+                                  rows={3}
+                                  className="w-full p-3 rounded-xl border border-indigo-200 focus:border-indigo-400 bg-indigo-50/40 outline-none text-xs font-medium text-gray-900 placeholder:text-gray-400 resize-none transition-colors"
+                                />
+                                <div className="flex items-end gap-3 flex-wrap">
+                                  <div className="flex-1 min-w-[180px]">
+                                    <label className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">
+                                      Show From — blank = show immediately
+                                    </label>
+                                    <input
+                                      type="datetime-local"
+                                      value={replyShowFrom}
+                                      onChange={(e) => setReplyShowFrom(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-xl border border-emerald-200 focus:border-emerald-400 bg-white outline-none text-xs font-medium text-gray-900 transition-colors"
+                                    />
+                                  </div>
+                                  <div className="flex-1 min-w-[180px]">
+                                    <label className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider block mb-1">
+                                      Show Until — blank = indefinitely until customer sees it
+                                    </label>
+                                    <input
+                                      type="datetime-local"
+                                      value={replyShowUntil}
+                                      onChange={(e) => setReplyShowUntil(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-indigo-400 bg-white outline-none text-xs font-medium text-gray-900 transition-colors"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <button type="button" onClick={() => { setReplyingToFeedbackId(null); setReplyText(''); setReplyShowFrom(''); setReplyShowUntil(''); }} className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-xs">Cancel</button>
+                                    <button
+                                      type="button"
+                                      disabled={!replyText.trim() || savingReply}
+                                      onClick={handleSaveReply}
+                                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-sm transition-all active:scale-95"
+                                    >
+                                      <Send className="w-3.5 h-3.5" />
+                                      {savingReply ? 'Saving...' : 'Send Reply'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                    {paginatedItems.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                          <Star className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          কোনো ফিডব্যাক পাওয়া যায়নি
                         </td>
                       </tr>
-                    ))}
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -7125,10 +7796,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 totalItems={totalItems}
                 pageSize={pageSize}
                 onPageChange={(p) => setCurrentPage(p)}
-                onPageSizeChange={(s) => {
-                  setPageSize(s);
-                  setCurrentPage(1);
-                }}
+                onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
               />
             </div>
           </div>
