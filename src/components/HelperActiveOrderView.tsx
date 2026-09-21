@@ -1969,7 +1969,68 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </div>
           </div>
 
-          {/* 7. PRIVATE NOTE SECTION (Customer cannot see this) */}
+          {/* 7. DUE PAYMENT MANAGEMENT (Helper) */}
+          {(isAcceptedByThisHelper || isDone) && (
+            <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট (Due Payment)</h3>
+                    <p className="text-[11px] text-gray-500 font-medium">
+                      পরবর্তী অর্ডারে যুক্ত করার জন্য কাস্টমারের বাকি পেমেন্ট রেকর্ড
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={openHelperDueModal}
+                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1 cursor-pointer"
+                >
+                  <FileEdit className="w-3.5 h-3.5" />
+                  <span>{order.duePayment ? 'এডিট করুন' : '+ বাকি যোগ করুন'}</span>
+                </button>
+              </div>
+
+              {order.duePayment ? (
+                <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between font-bold">
+                    <span className="text-purple-900">বাকি পরিমাণ:</span>
+                    <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-600 font-semibold">স্ট্যাটাস:</span>
+                    <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                      {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত (PAID)' : '⚠️ বকেয়া (UNPAID)'}
+                    </span>
+                  </div>
+                  {order.duePayment.note && (
+                    <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
+                      <strong>কারণ/নোট:</strong> {order.duePayment.note}
+                    </div>
+                  )}
+                  {order.duePayment.addedByName && (
+                    <div className="text-[10px] text-gray-500 italic">
+                      যোগ করেছেন: {order.duePayment.addedByName} ({order.duePayment.addedBy})
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 rounded-2xl bg-gray-50 border border-dashed border-gray-200 text-center flex flex-col items-center justify-center space-y-1">
+                  <p className="text-xs text-gray-600 font-semibold">
+                    কাস্টমারের কি কোনো টাকা বাকি আছে?
+                  </p>
+                  <p className="text-[10px] text-gray-400">
+                    বাকি থাকলে <strong className="text-purple-700 font-bold">"+ বাকি যোগ করুন"</strong> চাপ দিয়ে যুক্ত করুন। পরবর্তী অর্ডারে এটি কাস্টমারের সাথে যোগ হবে।
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}
           <div className="pt-2 border-t border-gray-100 space-y-1.5 animate-in fade-in">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1 text-purple-950 font-extrabold text-[10px]">

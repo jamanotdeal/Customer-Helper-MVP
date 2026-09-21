@@ -1131,8 +1131,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) ── */}
-        {isDelivered && (
+        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) OR DISPLAY (CUSTOMER) ── */}
+        {isDelivered && (order.duePayment || user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
           <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -1140,7 +1140,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 <div>
                   <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট (Due Payment)</h3>
                   <p className="text-[11px] text-gray-500 font-medium">
-                    পরবর্তী অর্ডারে যুক্ত করার জন্য কাস্টমারের বাকি পেমেন্ট রেকর্ড
+                    {order.duePayment
+                      ? 'এই অর্ডারের বকেয়া বাকি পেমেন্টের বিবরণ'
+                      : 'পরবর্তী অর্ডারে যুক্ত করার জন্য কাস্টমারের বাকি পেমেন্ট রেকর্ড'}
                   </p>
                 </div>
               </div>
