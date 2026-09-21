@@ -89,7 +89,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     if (!user) return;
 
     const refreshOrders = () => {
-      fallbackStore.fetchCustomerOrders(user.uid).catch(() => {});
+      fallbackStore.fetchCustomerOrders(user.uid).catch(() => { });
     };
 
     // Initial fetch from Firestore to ensure immediate freshness

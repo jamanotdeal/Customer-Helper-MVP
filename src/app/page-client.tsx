@@ -18,8 +18,9 @@ import {
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
 
-import { Order } from '@/types';
+import { Order, OrderFeedback } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
+import { FeedbackReplyModal } from '@/components/FeedbackReplyModal';
 import { CoinRewardModal } from '@/components/CoinRewardModal';
 import { getCoinsForService } from '@/lib/pricing';
 import { CustomModalInjector } from '@/components/CustomModalInjector';
@@ -36,6 +37,7 @@ export default function PageClient() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
+  const [pendingReplyFeedback, setPendingReplyFeedback] = useState<OrderFeedback | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
 
   const handleSelectOrder = (orderId: string) => {
@@ -152,6 +154,40 @@ export default function PageClient() {
 
     checkDeliveredOrderPopups();
     const unsub = fallbackStore.subscribe(checkDeliveredOrderPopups);
+    return () => unsub();
+  }, [user, activeMode]);
+
+  // Check for admin replies to customer's feedback (one-time, time-windowed)
+  useEffect(() => {
+    if (!user || (activeMode as string) !== 'customer') {
+      setPendingReplyFeedback(null);
+      return;
+    }
+
+    const checkPendingReplies = () => {
+      const now = Date.now();
+      const allFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
+      const pending = allFeedbacks.find((fb) => {
+        if (fb.customerId !== user.uid) return false;
+        if (!fb.adminReply) return false;
+        if (fb.adminReplyShownToCustomer) return false;
+        // Check start time — if showFrom is set, must not show before that time
+        if (fb.adminReplyShowFrom) {
+          const from = new Date(fb.adminReplyShowFrom).getTime();
+          if (now < from) return false;
+        }
+        // Check time window — if showUntil is set, must be in the future
+        if (fb.adminReplyShowUntil) {
+          const until = new Date(fb.adminReplyShowUntil).getTime();
+          if (now > until) return false;
+        }
+        return true;
+      });
+      setPendingReplyFeedback(pending || null);
+    };
+
+    checkPendingReplies();
+    const unsub = fallbackStore.subscribe(checkPendingReplies);
     return () => unsub();
   }, [user, activeMode]);
 
@@ -461,9 +497,7 @@ export default function PageClient() {
       {/* Customer Coin Earning Celebration Modal (Triggered BEFORE Feedback) */}
       {coinRewardOrder && (
         <CoinRewardModal
-          order={coinRewardOrder}
           earnedCoins={coinRewardOrder.coinsAwarded || getCoinsForService(coinRewardOrder.service, fallbackStore.pricingSettings)}
-          totalCoins={user?.coins}
           onClose={() => {
             if (typeof localStorage !== 'undefined') {
               localStorage.setItem(`coin_reward_seen_${coinRewardOrder.id}`, 'true');
@@ -504,6 +538,18 @@ export default function PageClient() {
               localStorage.setItem(`feedback_dismissed_${feedbackOrder.id}`, 'true');
             }
             setFeedbackOrder(null);
+          }}
+        />
+      )}
+
+      {/* Admin Reply to Customer Feedback — one-time modal, time-windowed */}
+      {pendingReplyFeedback && !feedbackOrder && !coinRewardOrder && (
+        <FeedbackReplyModal
+          feedback={pendingReplyFeedback}
+          onClose={async () => {
+            const fb = pendingReplyFeedback;
+            setPendingReplyFeedback(null);
+            await fallbackStore.markFeedbackReplyShown(fb.id);
           }}
         />
       )}

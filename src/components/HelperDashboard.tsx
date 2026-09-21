@@ -170,6 +170,45 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   // Alarm state for sound/vibration loop
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
 
+  // Pre-warmed AudioContext — created once on first user gesture so it is
+  // never in a 'suspended' state when the alarm needs to fire.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  // Pre-warm AudioContext on the very first user interaction so subsequent
+  // alarm plays are never blocked by the browser autoplay policy.
+  useEffect(() => {
+    const warm = () => {
+      if (audioCtxRef.current) return; // already created
+      try {
+        const AC = window.AudioContext || (window as any).webkitAudioContext;
+        if (AC) {
+          audioCtxRef.current = new AC();
+          // Play a silent node to unlock the context
+          const buf = audioCtxRef.current.createBuffer(1, 1, 22050);
+          const src = audioCtxRef.current.createBufferSource();
+          src.buffer = buf;
+          src.connect(audioCtxRef.current.destination);
+          src.start(0);
+        }
+      } catch (_) { }
+      // Remove listeners after first interaction
+      window.removeEventListener('touchstart', warm);
+      window.removeEventListener('touchend', warm);
+      window.removeEventListener('click', warm);
+      window.removeEventListener('keydown', warm);
+    };
+    window.addEventListener('touchstart', warm, { once: true, passive: true });
+    window.addEventListener('touchend', warm, { once: true, passive: true });
+    window.addEventListener('click', warm, { once: true });
+    window.addEventListener('keydown', warm, { once: true });
+    return () => {
+      window.removeEventListener('touchstart', warm);
+      window.removeEventListener('touchend', warm);
+      window.removeEventListener('click', warm);
+      window.removeEventListener('keydown', warm);
+    };
+  }, []);
+
   useEffect(() => {
     if (newOrderIds.size > 0) {
       setIsAlarmPlaying(true);
@@ -178,85 +217,118 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     }
   }, [newOrderIds]);
 
-  // Audio Context and Vibration looping
+  // ── Helper: fire one beep via the pre-warmed AudioContext ──────────────────
+  const playBeep = useRef<() => void>(() => { });
+  useEffect(() => {
+    playBeep.current = () => {
+      // Vibrate
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([500, 250, 500, 250, 500]);
+      }
+      // AudioContext tone
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      try {
+        if (ctx.state === 'suspended') ctx.resume();
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc1.type = 'sawtooth';
+        osc1.frequency.setValueAtTime(880, ctx.currentTime);
+        osc2.type = 'sine';
+        osc2.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.8);
+        osc1.connect(gain);
+        osc2.connect(gain);
+        gain.connect(ctx.destination);
+        osc1.start(); osc2.start();
+        osc1.stop(ctx.currentTime + 0.8);
+        osc2.stop(ctx.currentTime + 0.8);
+      } catch (e) {
+        console.warn('Oscillator failed:', e);
+      }
+    };
+  });
+
+  // ── Helper: ask the Service Worker to show an OS notification (plays sound
+  //    even when the app is minimised / screen locked on Android PWA) ──────────
+  const sendSwAlarmNotification = useRef<(orderCount: number) => void>(() => { });
+  useEffect(() => {
+    sendSwAlarmNotification.current = (orderCount: number) => {
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.ready.then((reg) => {
+        reg.showNotification('🚨 নতুন অর্ডার এসেছে!', {
+          body: orderCount > 1
+            ? `${orderCount}টি নতুন রিকুয়েস্ট অপেক্ষা করছে।`
+            : 'একটি নতুন ডেলিভারি রিকুয়েস্ট আসছে।',
+          icon: '/Jamanot-Logo.png',
+          badge: '/Jamanot-Logo.png',
+          tag: 'new-order-alarm',
+          renotify: true,
+          // silent: false lets the OS play its own alert sound
+          vibrate: [500, 250, 500, 250, 500, 250, 500],
+          data: { url: '/' },
+          actions: [{ action: 'open', title: 'অর্ডার দেখুন' }],
+        } as any).catch(() => { });
+      }).catch(() => { });
+    };
+  });
+
+  // ── Main alarm loop (foreground) ───────────────────────────────────────────
   useEffect(() => {
     if (!isAlarmPlaying) return;
 
     let active = true;
-    let audioCtx: AudioContext | null = null;
-    let intervalId: any = null;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
-    const startAlarm = () => {
-      try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContextClass) {
-          audioCtx = new AudioContextClass();
-        }
-      } catch (e) {
-        console.warn('AudioContext init failed:', e);
+    // If the page is hidden right now, fire an SW notification immediately so
+    // the OS plays its sound. We also do this every time the alarm re-triggers.
+    const maybeSendSwNotification = () => {
+      if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        sendSwAlarmNotification.current(newOrderIds.size);
       }
-
-      const triggerAlert = () => {
-        if (!active) return;
-
-        // Vibrate: heavy pulse pattern
-        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          navigator.vibrate([500, 250, 500, 250, 500]);
-        }
-
-        // Sound: loud dual tone beep
-        if (audioCtx) {
-          try {
-            if (audioCtx.state === 'suspended') {
-              audioCtx.resume();
-            }
-            const osc1 = audioCtx.createOscillator();
-            const osc2 = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc1.type = 'sawtooth';
-            osc1.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
-            osc2.type = 'sine';
-            osc2.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
-
-            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
-
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc1.start();
-            osc2.start();
-            osc1.stop(audioCtx.currentTime + 0.8);
-            osc2.stop(audioCtx.currentTime + 0.8);
-          } catch (e) {
-            console.warn('Oscillator failed:', e);
-          }
-        }
-      };
-
-      // Initial fire
-      triggerAlert();
-
-      // Repeat alert every 1.5 seconds
-      intervalId = setInterval(triggerAlert, 1500);
     };
 
-    startAlarm();
+    // Initial fire
+    playBeep.current();
+    maybeSendSwNotification();
 
-    // Auto stop after 60 seconds (to avoid battery drainage if they left their phone)
+    // Repeat every 1.5 s while in foreground; SW notification every ~5 s
+    let swTickCount = 0;
+    intervalId = setInterval(() => {
+      if (!active) return;
+      if (!document.hidden) {
+        playBeep.current();
+      } else {
+        // Still hidden — re-send SW notification every ~5 ticks (~7.5 s)
+        swTickCount++;
+        if (swTickCount % 5 === 0) {
+          maybeSendSwNotification();
+        }
+      }
+    }, 1500);
+
+    // When the user brings the tab back to foreground, immediately play the
+    // tone so they hear it even if they missed the notification sound.
+    const onVisible = () => {
+      if (!active) return;
+      if (!document.hidden) {
+        playBeep.current();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    // Auto stop after 90 seconds
     const timeoutId = setTimeout(() => {
       setIsAlarmPlaying(false);
-    }, 60000);
+    }, 90000);
 
     return () => {
       active = false;
       if (intervalId) clearInterval(intervalId);
       if (timeoutId) clearTimeout(timeoutId);
-      if (audioCtx) {
-        audioCtx.close().catch(() => { });
-      }
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [isAlarmPlaying]);
 
@@ -860,8 +932,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             setNewOrderIds(new Set());
           }}
           className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${activeTab === 'NEW'
-              ? 'bg-white text-emerald-800 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'bg-white text-emerald-800 shadow-sm'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           <span>New{visibleAvailable.length > 0 && ` (${visibleAvailable.length})`}</span>
@@ -875,10 +947,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         <button
           onClick={() => { setActiveTab('ACTIVE'); setActiveVisibleCount(PAGE_SIZE); }}
           className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'ACTIVE'
-              ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-              : filteredActiveOrders.length > 0
-                ? 'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
-                : 'text-gray-600 hover:text-gray-900'
+            ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
+            : filteredActiveOrders.length > 0
+              ? 'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
+              : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           {filteredActiveOrders.length > 0 && (
@@ -898,8 +970,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         <button
           onClick={() => { setActiveTab('SCHEDULED'); setScheduledVisibleCount(PAGE_SIZE); }}
           className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'SCHEDULED'
-              ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           <span>Scheduled{filteredScheduledOrders.length > 0 && ` (${filteredScheduledOrders.length})`}</span>
@@ -908,8 +980,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         <button
           onClick={() => { setActiveTab('COMPLETED'); setCompletedVisibleCount(PAGE_SIZE); }}
           className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'COMPLETED'
-              ? 'bg-white text-emerald-800 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'bg-white text-emerald-800 shadow-sm'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           <span>Completed{filteredCompletedOrders.length > 0 && ` (${filteredCompletedOrders.length})`}</span>
@@ -998,8 +1070,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   type="button"
                   onClick={() => setViewMode('LIST')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'LIST'
-                      ? 'bg-white text-emerald-800 shadow-xs font-black'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-white text-emerald-800 shadow-xs font-black'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
@@ -1009,8 +1081,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                   type="button"
                   onClick={() => setViewMode('MAP')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'MAP'
-                      ? 'bg-emerald-600 text-white shadow-xs font-black'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-emerald-600 text-white shadow-xs font-black'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Map className="w-3.5 h-3.5" />
@@ -1027,8 +1099,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 type="button"
                 onClick={() => setTwoWayOnly((prev) => !prev)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-extrabold border transition-all ${twoWayOnly
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200'
-                    : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200'
+                  : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
                   }`}
               >
                 <RotateCcw className={`w-3 h-3 ${twoWayOnly ? 'text-white' : 'text-indigo-500'}`} />
@@ -1097,8 +1169,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 type="button"
                 onClick={() => setStatusFilter(pill.value as any)}
                 className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${statusFilter === pill.value
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                   }`}
               >
                 {pill.label}
@@ -1196,8 +1268,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 type="button"
                 onClick={() => handleSetPresetDate('today')}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${startDate === getLocalDateString(new Date().toISOString()) && endDate === getLocalDateString(new Date().toISOString())
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
               >
                 আজ
@@ -1220,8 +1292,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 type="button"
                 onClick={() => setShowCustomRange((prev) => !prev)}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${showCustomRange
-                    ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
               >
                 Custom

@@ -266,6 +266,13 @@ export const HelperWallet: React.FC = () => {
     return { earnedToday, collectedToday, commissionDueToday, countToday: todayOrders.length, todayOrders };
   }, [deliveredOrders]);
 
+  // Filtered commission due (for display in filtered views)
+  const displayCommissionDue = activePreset === 'TODAY'
+    ? todayMetrics.commissionDueToday
+    : activePreset === 'ALL_TIME'
+    ? (wallet?.balance || 0)
+    : rangeMetrics.commissionDue;
+
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
   const canPayback = (wallet?.balance || 0) > 0 && !hasPendingPayback;
@@ -439,8 +446,12 @@ export const HelperWallet: React.FC = () => {
           </div>
 
           <div className="mt-2 text-xs text-amber-300 font-semibold flex items-center justify-between">
-            <span>বকেয়া কমিশন (Commission to Payback):</span>
-            <span className="font-extrabold text-amber-200">৳{wallet?.balance || 0}</span>
+            <span>
+              {activePreset === 'ALL_TIME'
+                ? 'বকেয়া কমিশন (Commission to Payback):'
+                : `${presetLabels[activePreset]} Commission Due:`}
+            </span>
+            <span className="font-extrabold text-amber-200">৳{displayCommissionDue}</span>
           </div>
         </div>
 
@@ -496,12 +507,14 @@ export const HelperWallet: React.FC = () => {
 
           <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
             <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              Due Commission
+              {activePreset === 'ALL_TIME' ? 'Due Commission' : `${presetLabels[activePreset]} Commission`}
             </span>
             <span className="text-base font-black text-amber-300 block truncate">
-              ৳{wallet?.balance || 0}
+              ৳{displayCommissionDue}
             </span>
-            <span className="text-[9px] text-amber-300/80 font-medium block">পরিশোধযোগ্য বকেয়া</span>
+            <span className="text-[9px] text-amber-300/80 font-medium block">
+              {activePreset === 'ALL_TIME' ? 'পরিশোধযোগ্য বকেয়া' : 'এই সময়ের কমিশন'}
+            </span>
           </div>
         </div>
 

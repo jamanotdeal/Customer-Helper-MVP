@@ -1028,10 +1028,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             className={`flex flex-col items-center relative z-10 flex-1 ${canChangeStatus ? 'cursor-pointer group' : ''}`}
                           >
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${state === 'COMPLETED'
-                                ? 'bg-emerald-600 text-white shadow-sm'
-                                : state === 'CURRENT'
-                                  ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                                  : 'bg-gray-100 text-gray-400 border border-gray-200'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : state === 'CURRENT'
+                                ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                                : 'bg-gray-100 text-gray-400 border border-gray-200'
                               } ${canChangeStatus ? 'group-hover:scale-110 transition-transform' : ''}`}>
                               {state === 'COMPLETED' ? (
                                 <Check className="w-3.5 h-3.5" />
@@ -1237,8 +1237,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           <button
             onClick={() => { setLocalActiveTab('ORDERS'); }}
             className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${localActiveTab === 'ORDERS'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-emerald-600 text-white shadow-md'
+              : 'text-gray-600 hover:text-gray-900'
               }`}
           >
             <Package className="w-3.5 h-3.5" />
@@ -1248,8 +1248,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           <button
             onClick={() => { setLocalActiveTab('MY_REQUESTS'); setMyRequestsVisibleCount(PAGE_SIZE); }}
             className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${localActiveTab === 'MY_REQUESTS'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-emerald-600 text-white shadow-md'
+              : 'text-gray-600 hover:text-gray-900'
               }`}
           >
             <ShoppingBag className="w-3.5 h-3.5" />
@@ -1920,8 +1920,8 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
                       key={i}
                       onClick={() => setCurrentIdx(i)}
                       className={`rounded-full transition-all ${i === safeIdx
-                          ? 'w-5 h-2 bg-red-500'
-                          : 'w-2 h-2 bg-gray-300 hover:bg-gray-400'
+                        ? 'w-5 h-2 bg-red-500'
+                        : 'w-2 h-2 bg-gray-300 hover:bg-gray-400'
                         }`}
                     />
                   ))}

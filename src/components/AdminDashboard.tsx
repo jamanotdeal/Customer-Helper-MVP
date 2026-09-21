@@ -54,6 +54,9 @@ import {
   Gift,
   Coins,
   Square,
+  ThumbsUp,
+  ThumbsDown,
+  Send,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -80,6 +83,14 @@ import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AsyncButton } from './ui/AsyncButton';
 import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
+import {
+  exportUsersToCSV,
+  exportUsersToPDF,
+  exportOrdersToCSV,
+  exportOrdersToPDF,
+  exportFeedbackToCSV,
+  exportFeedbackToPDF,
+} from '@/lib/exportUtils';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -377,6 +388,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [serverFeedbacks, setServerFeedbacks] = useState<OrderFeedback[] | null>(null);
   const [serverCustomModals, setServerCustomModals] = useState<AdminCustomModalConfig[] | null>(null);
   const [isFetchingServer, setIsFetchingServer] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [shopsCategoryFilter, setShopsCategoryFilter] = useState<string>('ALL');
   const [usersCoinsFilter, setUsersCoinsFilter] = useState<string>('ALL');
   const [usersMinCoins, setUsersMinCoins] = useState<string>('');
@@ -391,6 +404,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [ordersHelperFilter, setOrdersHelperFilter] = useState<string>('ALL');
   const [feedbackSortColumn, setFeedbackSortColumn] = useState<string>('createdAt');
   const [feedbackSortDirection, setFeedbackSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [replyingToFeedbackId, setReplyingToFeedbackId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState<string>('');
+  const [replyShowUntil, setReplyShowUntil] = useState<string>('');
+  const [replyShowFrom, setReplyShowFrom] = useState<string>('');
+  const [savingReply, setSavingReply] = useState<boolean>(false);
   const [fleetSortColumn, setFleetSortColumn] = useState<string | null>(null);
   const [fleetSortDirection, setFleetSortDirection] = useState<'asc' | 'desc'>('asc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -894,6 +912,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     fetchOverallAdminData();
   }, []);
+
+  // On-demand refresh — called by the Refresh button or automatically after admin actions.
+  // Subset targets a specific collection; omitting it refreshes all non-realtime collections.
+  const handleAdminRefresh = async (
+    subset?: Parameters<typeof fallbackStore.refreshAdminData>[0]
+  ) => {
+    setIsRefreshing(true);
+    try {
+      await fallbackStore.refreshAdminData(subset);
+      // Sync local state from the updated store
+      setUsers(Array.from(fallbackStore.users.values()));
+      setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
+      setApplications(Array.from(fallbackStore.helperApplications.values()));
+      setStoreApplications(Array.from(fallbackStore.storeApplications.values()));
+      setShops(Array.from(fallbackStore.shops.values()));
+      setFeedbacks(Array.from(fallbackStore.orderFeedbacks.values()));
+      setCustomModals(Array.from(fallbackStore.customModals.values()));
+      setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
+      setLastRefreshedAt(new Date());
+    } catch (err) {
+      console.error('Error refreshing admin data:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     const fetchExactCounts = async () => {
@@ -1998,9 +2041,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const isAdmin = currentUser?.isAdmin;
   const isNormalAdmin = isAdmin && !isSuperAdmin;
 
+  // GROWTH is intentionally excluded — it is Super Admin only and cannot be granted to normal admins
   const tabsList = [
     { key: 'EXCEPTIONS', label: 'Needs Attention', icon: AlertCircle, color: 'text-amber-500' },
-    { key: 'GROWTH', label: 'Growth & Everyday Rates', icon: BarChart2, color: 'text-indigo-600' },
     { key: 'ORDERS', label: 'All Orders', icon: ShoppingBag, color: 'text-emerald-600' },
     { key: 'USERS_LIST', label: 'User Lists', icon: Users, color: 'text-purple-600' },
     { key: 'HELPERS', label: 'Helpers', icon: Bike, color: 'text-emerald-600' },
@@ -2017,6 +2060,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   ];
 
   const isTabAllowed = (tabKey: string) => {
+    // GROWTH is Super Admin only — normal admins can never access it
+    if (tabKey === 'GROWTH') return Boolean(isSuperAdmin);
     if (isSuperAdmin) return true;
     return allowedAdminTabs.includes(tabKey);
   };
@@ -2558,7 +2603,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-soft flex flex-col gap-3">
-            {/* Search Box */}
+            {/* Top row: Search + action buttons */}
             <div className="flex gap-2 w-full">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
@@ -2585,6 +2630,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isFetchingServer && <RefreshCw className="w-3 h-3 animate-spin" />}
                 {isFetchingServer ? 'Loading...' : 'Search'}
               </button>
+              {/* Refresh button — visible on all non-realtime, non-settings tabs */}
+              {(['ORDERS', 'USERS_LIST', 'CUSTOMERS', 'HELPERS', 'WITHDRAWALS', 'SHOPS', 'FEEDBACK', 'CUSTOM_MODALS', 'REWARDS', 'REVENUE', 'GROWTH'] as string[]).includes(activeTab) && (
+                <button
+                  id="admin-refresh-btn"
+                  onClick={() => handleAdminRefresh()}
+                  disabled={isRefreshing}
+                  title={lastRefreshedAt ? `Last refreshed: ${lastRefreshedAt.toLocaleTimeString()}` : 'Refresh data'}
+                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white font-extrabold text-xs rounded-2xl shadow-md transition-all active:scale-95 shrink-0 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  {isRefreshing ? 'Refreshing...' : lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}
+                </button>
+              )}
             </div>
 
             {/* Date Range Filter — Orders tab only */}
@@ -3521,7 +3579,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
                 <p className="text-xs text-gray-500">Select multiple orders to batch delete or manage</p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 {selectedOrderIds.length > 0 && (
                   <AsyncButton
                     onClick={handleBulkDeleteOrders}
@@ -3532,6 +3590,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span>Delete Selected ({selectedOrderIds.length})</span>
                   </AsyncButton>
                 )}
+                {/* Export Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => exportOrdersToCSV(processed)}
+                    title="Export visible orders to Excel (CSV)"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    onClick={() => exportOrdersToPDF(processed)}
+                    title="Export visible orders to PDF"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                  </button>
+                </div>
                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 flex items-center gap-2 flex-wrap">
                   <span>{exactTotalOrders !== null ? exactTotalOrders.toLocaleString() : totalItems} total orders</span>
                   {exactTotalCollection !== null && (
@@ -3854,11 +3931,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
               <h3 className="font-extrabold text-base text-gray-900">Registered Users Master List</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Export Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => exportUsersToCSV(processed, 'users_list')}
+                    title="Export visible users to Excel (CSV)"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    onClick={() => exportUsersToPDF(processed, 'Users List')}
+                    title="Export visible users to PDF"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                  </button>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
+                  {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
+                </span>
+              </div>
             </div>
 
             {/* Date & Coins Filter Bar */}
@@ -7377,15 +7475,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 9: ORDER FEEDBACK TAB --- */}
       {activeTab === 'FEEDBACK' && isTabAllowed('FEEDBACK') && (() => {
         const totalFeedbacks = feedbacks.length;
-        const avgRider = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.riderRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
-        const avgService = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.serviceRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
-        const avgShop = totalFeedbacks > 0
-          ? (feedbacks.reduce((sum, f) => sum + f.shopRating, 0) / totalFeedbacks).toFixed(1)
-          : '0.0';
+
+        // Thumbs-based sentiment counts
+        const newStyleFbs = feedbacks.filter((f) => f.thumbsUp !== undefined);
+        const thumbsUpCount = newStyleFbs.filter((f) => f.thumbsUp === true).length;
+        const thumbsDownCount = newStyleFbs.filter((f) => f.thumbsUp === false).length;
+        const satisfactionPercent = newStyleFbs.length > 0
+          ? Math.round((thumbsUpCount / newStyleFbs.length) * 100)
+          : null;
+
+        // Legacy star averages (for old-style feedbacks without thumbsUp)
+        const oldStyleFbs = feedbacks.filter((f) => f.thumbsUp === undefined);
+        const avgRiderLegacy = oldStyleFbs.length > 0
+          ? (oldStyleFbs.reduce((s, f) => s + f.riderRating, 0) / oldStyleFbs.length).toFixed(1)
+          : null;
 
         const feedbacksSource = serverFeedbacks !== null ? serverFeedbacks : feedbacks;
         let filteredFeedbacks = [...feedbacksSource];
@@ -7396,11 +7499,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               f.orderId.toLowerCase().includes(q) ||
               (f.customerName && f.customerName.toLowerCase().includes(q)) ||
               (f.helperName && f.helperName.toLowerCase().includes(q)) ||
-              (f.improvementComment && f.improvementComment.toLowerCase().includes(q))
+              (f.improvementComment && f.improvementComment.toLowerCase().includes(q)) ||
+              (f.adminReply && f.adminReply.toLowerCase().includes(q))
           );
         }
 
-        // Feedback sorting
         filteredFeedbacks.sort((a, b) => {
           let cmp = 0;
           if (feedbackSortColumn === 'orderId') {
@@ -7409,16 +7512,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             cmp = (a.customerName || '').localeCompare(b.customerName || '');
           } else if (feedbackSortColumn === 'helperName') {
             cmp = (a.helperName || '').localeCompare(b.helperName || '');
-          } else if (feedbackSortColumn === 'riderRating') {
-            cmp = (a.riderRating || 0) - (b.riderRating || 0);
-          } else if (feedbackSortColumn === 'serviceRating') {
-            cmp = (a.serviceRating || 0) - (b.serviceRating || 0);
-          } else if (feedbackSortColumn === 'shopRating') {
-            cmp = (a.shopRating || 0) - (b.shopRating || 0);
+          } else if (feedbackSortColumn === 'sentiment') {
+            const aVal = a.thumbsUp === true ? 1 : a.thumbsUp === false ? -1 : 0;
+            const bVal = b.thumbsUp === true ? 1 : b.thumbsUp === false ? -1 : 0;
+            cmp = aVal - bVal;
           } else if (feedbackSortColumn === 'comment') {
             cmp = (a.improvementComment || '').localeCompare(b.improvementComment || '');
           } else {
-            // createdAt default
             cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
           }
           return feedbackSortDirection === 'asc' ? cmp : -cmp;
@@ -7434,176 +7534,255 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         };
 
         const renderFeedbackSortIcon = (col: string) => {
-          if (feedbackSortColumn !== col) {
-            return <ArrowUpDown className="w-3 h-3 opacity-40 inline ml-1" />;
-          }
-          return (
-            <span className="inline ml-1 font-bold text-amber-600">
-              {feedbackSortDirection === 'asc' ? '▲' : '▼'}
-            </span>
-          );
+          if (feedbackSortColumn !== col) return <ArrowUpDown className="w-3 h-3 opacity-40 inline ml-1" />;
+          return <span className="inline ml-1 font-bold text-amber-600">{feedbackSortDirection === 'asc' ? '▲' : '▼'}</span>;
         };
 
         const hasFeedbackFilter = Boolean(feedbackAppliedSearchQuery.trim());
         const overrideFeedbacksCount = (serverFeedbacks === null && !hasFeedbackFilter && exactFeedbacksCount !== null) ? exactFeedbacksCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredFeedbacks, undefined, undefined, overrideFeedbacksCount);
 
+        const handleSaveReply = async () => {
+          if (!replyingToFeedbackId || !replyText.trim()) return;
+          setSavingReply(true);
+          try {
+            await fallbackStore.updateOrderFeedbackReply(
+              replyingToFeedbackId,
+              replyText.trim(),
+              replyShowUntil ? new Date(replyShowUntil).toISOString() : undefined,
+              replyShowFrom ? new Date(replyShowFrom).toISOString() : undefined
+            );
+            const patch = {
+              adminReply: replyText.trim(),
+              adminReplyAt: new Date().toISOString(),
+              adminReplyShowFrom: replyShowFrom ? new Date(replyShowFrom).toISOString() : undefined,
+              adminReplyShowUntil: replyShowUntil ? new Date(replyShowUntil).toISOString() : undefined,
+              adminReplyShownToCustomer: false,
+            };
+            setFeedbacks((prev) => prev.map((f) => f.id === replyingToFeedbackId ? { ...f, ...patch } : f));
+            if (serverFeedbacks) setServerFeedbacks((prev) => prev ? prev.map((f) => f.id === replyingToFeedbackId ? { ...f, ...patch } : f) : null);
+            setReplyingToFeedbackId(null);
+            setReplyText('');
+            setReplyShowFrom('');
+            setReplyShowUntil('');
+          } catch (err: any) {
+            console.error('Reply save failed:', err);
+          } finally {
+            setSavingReply(false);
+          }
+        };
+
         return (
           <div className="space-y-6">
-            {/* Feedback Analysis Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
-              <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200">
-                <span className="text-xs font-extrabold text-amber-800 uppercase block">Rider Behavior Avg</span>
-                <span className="text-3xl font-black text-amber-900 mt-1 block">⭐ {avgRider}</span>
-                <span className="text-[10px] text-amber-700 font-bold block mt-1">based on {totalFeedbacks} ratings</span>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+              <div className="p-5 rounded-3xl bg-emerald-50 border border-emerald-200 flex flex-col items-center">
+                <ThumbsUp className="w-6 h-6 text-emerald-600 mb-1" />
+                <span className="text-3xl font-black text-emerald-900 mt-1 block">{thumbsUpCount}</span>
+                <span className="text-[10px] text-emerald-700 font-bold block mt-1 uppercase">Positive 👍</span>
               </div>
-              <div className="p-5 rounded-3xl bg-emerald-50 border border-emerald-200">
-                <span className="text-xs font-extrabold text-emerald-800 uppercase block">Service Quality Avg</span>
-                <span className="text-3xl font-black text-emerald-900 mt-1 block">⭐ {avgService}</span>
-                <span className="text-[10px] text-emerald-700 font-bold block mt-1">overall delivery quality</span>
+              <div className="p-5 rounded-3xl bg-red-50 border border-red-200 flex flex-col items-center">
+                <ThumbsDown className="w-6 h-6 text-red-600 mb-1" />
+                <span className="text-3xl font-black text-red-900 mt-1 block">{thumbsDownCount}</span>
+                <span className="text-[10px] text-red-700 font-bold block mt-1 uppercase">Negative 👎</span>
               </div>
-              <div className="p-5 rounded-3xl bg-purple-50 border border-purple-200">
-                <span className="text-xs font-extrabold text-purple-800 uppercase block">Shop Product Quality</span>
-                <span className="text-3xl font-black text-purple-900 mt-1 block">⭐ {avgShop}</span>
-                <span className="text-[10px] text-purple-700 font-bold block mt-1">store product satisfaction</span>
+              <div className="p-5 rounded-3xl bg-indigo-50 border border-indigo-200 flex flex-col items-center">
+                <span className="text-3xl font-black text-indigo-900 mt-1 block">
+                  {satisfactionPercent !== null ? `${satisfactionPercent}%` : '—'}
+                </span>
+                <span className="text-[10px] text-indigo-700 font-bold block mt-1 uppercase">Satisfaction Rate</span>
+                {avgRiderLegacy && <span className="text-[9px] text-indigo-500 block">Legacy avg: ⭐{avgRiderLegacy}</span>}
               </div>
-              <div className="p-5 rounded-3xl bg-indigo-50 border border-indigo-200">
-                <span className="text-xs font-extrabold text-indigo-800 uppercase block">Total Reviews</span>
-                <span className="text-3xl font-black text-indigo-900 mt-1 block">{totalFeedbacks}</span>
-                <span className="text-[10px] text-indigo-700 font-bold block mt-1">customer responses</span>
+              <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200 flex flex-col items-center">
+                <span className="text-3xl font-black text-amber-900 mt-1 block">{totalFeedbacks}</span>
+                <span className="text-[10px] text-amber-700 font-bold block mt-1 uppercase">Total Reviews</span>
               </div>
             </div>
 
-            {/* Feedback Visual Analytics & Progress Graph */}
+            {/* Visual Analytics */}
             <OrderFeedbackAnalytics feedbacks={feedbacksSource} />
 
-            {/* Feedback List Table */}
+            {/* Feedback Table */}
             <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
                 <h3 className="font-extrabold text-base text-gray-900">Customer Order Feedback Entries</h3>
-                <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-800">
-                  {totalItems} total feedbacks
-                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => exportFeedbackToCSV(filteredFeedbacks)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm">
+                      <Download className="w-3.5 h-3.5" /><span>Excel</span>
+                    </button>
+                    <button onClick={() => exportFeedbackToPDF(filteredFeedbacks)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm">
+                      <Download className="w-3.5 h-3.5" /><span>PDF</span>
+                    </button>
+                  </div>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 text-amber-800">{totalItems} total feedbacks</span>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs text-gray-600 min-w-[750px]">
                   <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
                     <tr>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('orderId')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Order ID & Customer</span>
-                          {renderFeedbackSortIcon('orderId')}
-                        </div>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('orderId')}>
+                        <div className="flex items-center space-x-1"><span>Order & Customer</span>{renderFeedbackSortIcon('orderId')}</div>
                       </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('helperName')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Rider / Helper</span>
-                          {renderFeedbackSortIcon('helperName')}
-                        </div>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('helperName')}>
+                        <div className="flex items-center space-x-1"><span>Rider</span>{renderFeedbackSortIcon('helperName')}</div>
                       </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('riderRating')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Rider Rating</span>
-                          {renderFeedbackSortIcon('riderRating')}
-                        </div>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('sentiment')}>
+                        <div className="flex items-center space-x-1"><span>Sentiment</span>{renderFeedbackSortIcon('sentiment')}</div>
                       </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('serviceRating')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Service Rating</span>
-                          {renderFeedbackSortIcon('serviceRating')}
-                        </div>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('comment')}>
+                        <div className="flex items-center space-x-1"><span>Comment</span>{renderFeedbackSortIcon('comment')}</div>
                       </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('shopRating')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Shop Rating</span>
-                          {renderFeedbackSortIcon('shopRating')}
-                        </div>
-                      </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('comment')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Customer Comment</span>
-                          {renderFeedbackSortIcon('comment')}
-                        </div>
-                      </th>
-                      <th
-                        className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none transition-colors"
-                        onClick={() => handleFeedbackSortClick('createdAt')}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Date</span>
-                          {renderFeedbackSortIcon('createdAt')}
-                        </div>
+                      <th className="py-3.5 px-5">Admin Reply</th>
+                      <th className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none" onClick={() => handleFeedbackSortClick('createdAt')}>
+                        <div className="flex items-center space-x-1"><span>Date</span>{renderFeedbackSortIcon('createdAt')}</div>
                       </th>
                       <th className="py-3.5 px-5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 font-medium">
                     {paginatedItems.map((fb) => (
-                      <tr key={fb.id} className="hover:bg-gray-50/80 transition-colors">
-                        <td className="py-4 px-5">
-                          <div className="font-extrabold text-gray-900">#{fb.orderId}</div>
-                          <div className="text-[11px] text-gray-500">{fb.customerName}</div>
-                        </td>
-                        <td className="py-4 px-5 font-bold text-gray-800">
-                          {fb.helperName || 'Unassigned'}
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-amber-600">
-                          ⭐ {fb.riderRating}
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-emerald-600">
-                          ⭐ {fb.serviceRating}
-                        </td>
-                        <td className="py-4 px-5 font-extrabold text-purple-600">
-                          {fb.shopRating ? `⭐ ${fb.shopRating}` : <span className="text-gray-400 font-normal">—</span>}
-                        </td>
-                        <td className="py-4 px-5">
-                          {fb.improvementComment ? (
-                            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-semibold max-w-xs text-[11px]">
-                              &ldquo;{fb.improvementComment}&rdquo;
+                      <React.Fragment key={fb.id}>
+                        <tr className="hover:bg-gray-50/80 transition-colors">
+                          <td className="py-4 px-5">
+                            <div className="font-extrabold text-gray-900">#{fb.orderId}</div>
+                            <div className="text-[11px] text-gray-500">{fb.customerName}</div>
+                          </td>
+                          <td className="py-4 px-5 font-bold text-gray-800">{fb.helperName || 'Unassigned'}</td>
+                          <td className="py-4 px-5">
+                            {fb.thumbsUp === true ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[11px]">
+                                <ThumbsUp className="w-3.5 h-3.5" /> ভালো ছিল
+                              </span>
+                            ) : fb.thumbsUp === false ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[11px]">
+                                <ThumbsDown className="w-3.5 h-3.5" /> ভালো না
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-amber-600 font-extrabold text-xs">
+                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                                {fb.riderRating}/5
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5">
+                            {fb.improvementComment ? (
+                              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 font-semibold max-w-xs text-[11px]">&ldquo;{fb.improvementComment}&rdquo;</div>
+                            ) : (
+                              <span className="text-gray-400 italic">No comment</span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 max-w-[180px]">
+                            {fb.adminReply ? (
+                              <div className="space-y-1">
+                                <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 font-semibold text-[11px] line-clamp-2">{fb.adminReply}</div>
+                                {fb.adminReplyShowUntil && (
+                                  <div className="text-[10px] text-gray-400 font-mono">Until: {new Date(fb.adminReplyShowUntil).toLocaleString()}</div>
+                                )}
+                                <div className={`text-[10px] font-bold ${fb.adminReplyShownToCustomer ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {fb.adminReplyShownToCustomer ? '✓ Seen by customer' : '⏳ Pending'}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-gray-300 italic text-[11px]">No reply yet</span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">{new Date(fb.createdAt).toLocaleDateString()}</td>
+                          <td className="py-4 px-5 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (replyingToFeedbackId === fb.id) {
+                                    setReplyingToFeedbackId(null); setReplyText(''); setReplyShowUntil('');
+                                  } else {
+                                    setReplyingToFeedbackId(fb.id);
+                                    setReplyText(fb.adminReply || '');
+                                    setReplyShowFrom(fb.adminReplyShowFrom ? new Date(fb.adminReplyShowFrom).toISOString().slice(0, 16) : '');
+                                    setReplyShowUntil(fb.adminReplyShowUntil ? new Date(fb.adminReplyShowUntil).toISOString().slice(0, 16) : '');
+                                  }
+                                }}
+                                className={`p-1.5 rounded-xl transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer ${replyingToFeedbackId === fb.id ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600'}`}
+                                title="Reply to this feedback"
+                              >
+                                <MessageSquare className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFeedback(fb.id)}
+                                className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer"
+                                title="Delete Feedback Entry"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                          ) : (
-                            <span className="text-gray-400 italic">No comment provided</span>
-                          )}
-                        </td>
-                        <td className="py-4 px-5 text-gray-400 font-mono text-[11px]">
-                          {new Date(fb.createdAt).toLocaleDateString()}
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteFeedback(fb.id)}
-                            className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 transition-colors shadow-xs active:scale-95 inline-flex items-center justify-center cursor-pointer"
-                            title="Delete Feedback Entry"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
+                          </td>
+                        </tr>
+                        {/* Inline Reply Drawer */}
+                        {replyingToFeedbackId === fb.id && (
+                          <tr>
+                            <td colSpan={7} className="px-5 pb-5 pt-1 bg-indigo-50/50">
+                              <div className="border border-indigo-200 rounded-2xl p-4 space-y-3 bg-white shadow-xs">
+                                <div className="flex items-center gap-2 text-indigo-800 font-extrabold text-xs">
+                                  <Send className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Reply to #{fb.orderId} — {fb.customerName}</span>
+                                </div>
+                                <textarea
+                                  value={replyText}
+                                  onChange={(e) => setReplyText(e.target.value)}
+                                  placeholder="Customer-এর feedback-এর জবাবে আপনার response লিখুন..."
+                                  rows={3}
+                                  className="w-full p-3 rounded-xl border border-indigo-200 focus:border-indigo-400 bg-indigo-50/40 outline-none text-xs font-medium text-gray-900 placeholder:text-gray-400 resize-none transition-colors"
+                                />
+                                <div className="flex items-end gap-3 flex-wrap">
+                                  <div className="flex-1 min-w-[180px]">
+                                    <label className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">
+                                      Show From — blank = show immediately
+                                    </label>
+                                    <input
+                                      type="datetime-local"
+                                      value={replyShowFrom}
+                                      onChange={(e) => setReplyShowFrom(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-xl border border-emerald-200 focus:border-emerald-400 bg-white outline-none text-xs font-medium text-gray-900 transition-colors"
+                                    />
+                                  </div>
+                                  <div className="flex-1 min-w-[180px]">
+                                    <label className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider block mb-1">
+                                      Show Until — blank = indefinitely until customer sees it
+                                    </label>
+                                    <input
+                                      type="datetime-local"
+                                      value={replyShowUntil}
+                                      onChange={(e) => setReplyShowUntil(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-indigo-400 bg-white outline-none text-xs font-medium text-gray-900 transition-colors"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <button type="button" onClick={() => { setReplyingToFeedbackId(null); setReplyText(''); setReplyShowFrom(''); setReplyShowUntil(''); }} className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-xs">Cancel</button>
+                                    <button
+                                      type="button"
+                                      disabled={!replyText.trim() || savingReply}
+                                      onClick={handleSaveReply}
+                                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-sm transition-all active:scale-95"
+                                    >
+                                      <Send className="w-3.5 h-3.5" />
+                                      {savingReply ? 'Saving...' : 'Send Reply'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     ))}
                     {paginatedItems.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
+                        <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
                           <Star className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                          কোনো ফিডব্যাক পাওয়া যায়নি
+                          কোনো ফিডব্যাক পাওয়া যায়নি
                         </td>
                       </tr>
                     )}
@@ -7617,10 +7796,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 totalItems={totalItems}
                 pageSize={pageSize}
                 onPageChange={(p) => setCurrentPage(p)}
-                onPageSizeChange={(s) => {
-                  setPageSize(s);
-                  setCurrentPage(1);
-                }}
+                onPageSizeChange={(s) => { setPageSize(s); setCurrentPage(1); }}
               />
             </div>
           </div>

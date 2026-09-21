@@ -19,8 +19,13 @@ import {
   Truck,
   Percent,
   X,
+  Download,
 } from 'lucide-react';
 import { AsyncButton } from '../ui/AsyncButton';
+import {
+  exportRewardClaimsToCSV,
+  exportRewardClaimsToPDF,
+} from '@/lib/exportUtils';
 
 export const AdminRewardsManager: React.FC = () => {
   const { showAlert, showConfirm } = useModal();
@@ -619,6 +624,28 @@ export const AdminRewardsManager: React.FC = () => {
                   {st === 'ALL' ? 'সকল' : st === 'PENDING' ? 'অপেক্ষমাণ' : st === 'APPROVED' ? 'অনুমোদিত' : 'বাতিল'}
                 </button>
               ))}
+            </div>
+
+            {/* Export Buttons */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => exportRewardClaimsToCSV(filteredClaims)}
+                title="Export reward claims to Excel (CSV)"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => exportRewardClaimsToPDF(filteredClaims)}
+                title="Export reward claims to PDF"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>PDF</span>
+              </button>
             </div>
           </div>
 
