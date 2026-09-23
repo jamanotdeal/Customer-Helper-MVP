@@ -7,13 +7,10 @@ import {
   Compass,
   Copy,
   Check,
-  X,
   Share2,
   MoreVertical,
-  AlertTriangle,
-  Sparkles,
-  Smartphone,
-  ChevronRight,
+  Globe,
+  ShieldAlert,
 } from 'lucide-react';
 import Image from 'next/image';
 
@@ -29,10 +26,7 @@ export const InAppBrowserModal: React.FC = () => {
   }>({ isInApp: false, appName: '', isAndroid: false, isIos: false });
 
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>(fallbackStore.pricingSettings);
-  const [isOpen, setIsOpen] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [showIosGuide, setShowIosGuide] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -45,39 +39,14 @@ export const InAppBrowserModal: React.FC = () => {
     const info = detectInAppBrowser();
     setInAppInfo(info);
 
-    if (info.isInApp) {
-      // Check if dismissed in this session
-      const sessionDismissed = sessionStorage.getItem('jamanot_inapp_dismissed') === 'true';
-      if (!sessionDismissed) {
-        // Auto-show modal after a short smooth delay if enabled
-        const timer = setTimeout(() => {
-          if (fallbackStore.pricingSettings.inAppBrowserPromptEnabled !== false) {
-            setIsOpen(true);
-          }
-        }, 800);
-        return () => {
-          clearTimeout(timer);
-          unsub();
-        };
-      } else {
-        setIsDismissed(true);
-      }
+    // Prevent background scrolling while in in-app browser barrier
+    if (info.isInApp && fallbackStore.pricingSettings.inAppBrowserPromptEnabled !== false) {
+      document.body.style.overflow = 'hidden';
     }
 
-    // Allow other components (like AuthContext when Google login is clicked) to open this modal
-    const handleTrigger = (e?: any) => {
-      if (fallbackStore.pricingSettings.inAppBrowserPromptEnabled !== false) {
-        setIsOpen(true);
-        if (e?.detail?.showIosGuide) {
-          setShowIosGuide(true);
-        }
-      }
-    };
-
-    window.addEventListener('show-inapp-browser-prompt', handleTrigger);
     return () => {
       unsub();
-      window.removeEventListener('show-inapp-browser-prompt', handleTrigger);
+      document.body.style.overflow = '';
     };
   }, []);
 
@@ -85,17 +54,13 @@ export const InAppBrowserModal: React.FC = () => {
   if (!inAppInfo.isInApp || !isEnabled) return null;
 
   const promptTitle = pricingSettings.inAppBrowserPromptTitle || 'ব্রাউজারে ওপেন করুন';
-  const promptSubtitle = pricingSettings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari for the Best Experience';
+  const promptSubtitle = pricingSettings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari';
   const promptMessage =
     pricingSettings.inAppBrowserPromptMessage ||
-    'ফেসবুক বা মেসেঞ্জারের ভেতর গুগল অ্যাকাউন্ট লগইন সরাসরি ব্লক হতে পারে বা বারবার লগইন চাইতে পারে। Chrome বা Safari ব্রাউজারে খুললে ১-ক্লিকে লগইন, লাইভ ট্র্যাকিং এবং অফলাইন সুবিধা সচল থাকবে।';
+    'লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।';
 
   const handleOpenBrowser = () => {
-    if (inAppInfo.isAndroid) {
-      openInExternalBrowser();
-    } else {
-      setShowIosGuide(true);
-    }
+    openInExternalBrowser();
   };
 
   const handleCopyLink = async () => {
@@ -104,183 +69,158 @@ export const InAppBrowserModal: React.FC = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
     } else {
-      alert(`লিংক: ${window.location.origin}`);
+      try {
+        navigator.clipboard.writeText(window.location.origin);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+      } catch (_) {
+        alert(`লিংক: ${window.location.origin}`);
+      }
     }
   };
 
-  const handleDismiss = () => {
-    setIsOpen(false);
-    setIsDismissed(true);
-    try {
-      sessionStorage.setItem('jamanot_inapp_dismissed', 'true');
-    } catch (_) {}
-  };
-
   return (
-    <>
-      {/* Subtle Persistent Top Warning Banner when modal is dismissed */}
-      {isDismissed && !isOpen && (
-        <div className="fixed top-0 left-0 right-0 z-40 bg-gradient-to-r from-amber-600 via-amber-700 to-amber-600 text-white px-3 py-2 text-xs font-semibold shadow-md flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 truncate">
-            <AlertTriangle className="w-4 h-4 text-amber-200 shrink-0 animate-pulse" />
-            <span className="truncate">
-              {inAppInfo.appName} ব্রাউজার: লগইন ও সেরা সুবিধার জন্য Chrome/Safari-তে খুলুন
-            </span>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="In-App Browser Warning"
+      className="fixed inset-0 z-[999999] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 select-none touch-manipulation"
+    >
+      <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-amber-200/90 overflow-hidden relative animate-in fade-in zoom-in-95 duration-200 p-5 space-y-4">
+        
+        {/* Header & Logo */}
+        <div className="flex items-center gap-3.5">
+          <div className="relative w-12 h-12 rounded-2xl overflow-hidden shadow-md border border-emerald-200 bg-emerald-700 flex items-center justify-center shrink-0">
+            <Image
+              src="/Jamanot-Logo.png"
+              alt="Jamanot"
+              fill
+              className="object-cover"
+              priority
+            />
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={() => setIsOpen(true)}
-              className="bg-white text-amber-900 hover:bg-amber-50 active:scale-95 px-2.5 py-1 rounded-full font-bold text-[11px] transition-all flex items-center gap-1 cursor-pointer shadow-xs"
-            >
-              <span>খুলুন</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => setIsDismissed(false)}
-              className="text-amber-200 hover:text-white p-1 rounded-full transition-colors"
-              aria-label="Close banner"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+          <div className="min-w-0 flex-1">
+            <div className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full mb-1">
+              <Compass className="w-3 h-3 text-amber-700" />
+              <span>{inAppInfo.appName || 'ইন-অ্যাপ'} ব্রাউজার</span>
+            </div>
+            <h3 className="font-extrabold text-base text-gray-900 leading-tight">
+              {promptTitle}
+            </h3>
+            <p className="text-[11px] text-gray-500 font-medium">
+              {promptSubtitle}
+            </p>
           </div>
         </div>
-      )}
 
-      {/* Main In-App Browser Alert Modal */}
-      {isOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-amber-200/80 overflow-hidden relative animate-in slide-in-from-bottom-8 duration-300 p-5 space-y-4 max-h-[92vh] overflow-y-auto">
-            
-            {/* Dismiss Close Button */}
-            <button
-              onClick={handleDismiss}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
-              aria-label="Close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+        {/* Short & Clean Notice */}
+        <div className="p-3 rounded-2xl bg-amber-50/80 border border-amber-200/70 flex items-start gap-2.5">
+          <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-950 font-semibold leading-relaxed">
+            {promptMessage}
+          </p>
+        </div>
 
-            {/* Header & Logo */}
-            <div className="flex items-start gap-3.5 pr-8">
-              <div className="relative w-13 h-13 rounded-2xl overflow-hidden shadow-md border border-emerald-200 bg-emerald-700 flex items-center justify-center shrink-0">
-                <Image
-                  src="/Jamanot-Logo.png"
-                  alt="Jamanot"
-                  fill
-                  className="object-cover"
-                />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <Compass className="w-3 h-3 text-amber-700" />
-                    {inAppInfo.appName || 'ইন-অ্যাপ'} ব্রাউজার সনাক্ত
-                  </span>
-                </div>
-                <h3 className="font-extrabold text-base text-gray-900 leading-tight mt-1">
-                  {promptTitle}
-                </h3>
-                <p className="text-[11px] text-gray-500 font-medium mt-0.5">
-                  {promptSubtitle}
-                </p>
-              </div>
+        {/* iOS Specific Quick 2-Step Guide */}
+        {inAppInfo.isIos && (
+          <div className="p-3 rounded-2xl bg-slate-900 text-white space-y-2 text-xs">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-[11px]">
+              <Globe className="w-3.5 h-3.5" />
+              <span>Safari ব্রাউজারে খোলার নিয়ম:</span>
             </div>
-
-            {/* Important Notice Box */}
-            <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200/70 space-y-2">
-              <div className="flex items-start gap-2 text-amber-900 text-xs font-bold leading-snug">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>লগইন ও নির্বিঘ্ন সেবার জন্য জরুরি তথ্য:</span>
-              </div>
-              <div className="text-[12px] text-amber-950/85 font-medium leading-relaxed whitespace-pre-line">
-                {promptMessage}
-              </div>
-            </div>
-
-            {/* iOS Step Guide if expanded or on iOS */}
-            {showIosGuide && (
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white space-y-3 shadow-md animate-in fade-in duration-200">
-                <div className="flex items-center gap-2 text-emerald-400 font-extrabold text-xs">
-                  <Smartphone className="w-4 h-4" />
-                  <span>আইফোন / আইপ্যাড (Safari) ওপেন করার নিয়ম:</span>
-                </div>
-                <div className="space-y-2 text-xs text-gray-200">
-                  <div className="flex items-center gap-2.5 bg-white/10 p-2.5 rounded-xl">
-                    <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
-                      1
-                    </span>
-                    <span className="flex items-center gap-1.5 flex-wrap">
-                      স্ক্রিনের নিচে বা উপরে <Share2 className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>Share</strong> অথবা <MoreVertical className="w-3.5 h-3.5 text-emerald-400 inline" /> <strong>(•••)</strong> বাটনে চাপ দিন
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2.5 bg-white/10 p-2.5 rounded-xl">
-                    <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[11px] shrink-0">
-                      2
-                    </span>
-                    <span className="flex items-center gap-1.5 flex-wrap">
-                      মেনু থেকে <strong>&quot;Open in Safari&quot;</strong> (সাফারিতে ওপেন করুন) অপশনটি চাপুন
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="space-y-2 pt-1">
-              {/* Primary Action Button */}
-              <button
-                type="button"
-                onClick={handleOpenBrowser}
-                className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <ExternalLink className="w-4 h-4" />
-                <span>
-                  {inAppInfo.isAndroid
-                    ? 'Chrome ব্রাউজারে ওপেন করুন (Open in Chrome)'
-                    : showIosGuide
-                    ? 'Safari-তে লিংক ওপেন করুন'
-                    : 'Safari ব্রাউজারে ওপেন করার নিয়ম'}
+            <div className="space-y-1.5 text-[11px] text-gray-200">
+              <div className="flex items-center gap-2 bg-white/10 px-2.5 py-1.5 rounded-xl">
+                <span className="w-4.5 h-4.5 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[10px] shrink-0">
+                  ১
                 </span>
-              </button>
-
-              {/* Copy Link Button */}
-              <button
-                type="button"
-                onClick={handleCopyLink}
-                className="w-full py-3 px-4 rounded-2xl bg-gray-100 hover:bg-gray-200 active:scale-98 text-gray-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-600" />
-                    <span className="text-emerald-700 font-extrabold">লিংক কপি হয়েছে! ব্রাউজারে পেস্ট করুন</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4 text-gray-600" />
-                    <span>ওয়েবসাইট লিংক কপি করুন (Copy Link)</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Bottom Dismiss Option */}
-            <div className="pt-1 flex items-center justify-between text-xs font-semibold text-gray-500">
-              <button
-                type="button"
-                onClick={handleDismiss}
-                className="text-gray-400 hover:text-gray-600 py-1 px-2 transition-colors cursor-pointer"
-              >
-                এখানেই চালিয়ে যান (Continue anyway)
-              </button>
-              <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
-                <Sparkles className="w-3 h-3 text-emerald-600" />
-                <span>Fast & Secure</span>
+                <span>
+                  নিচে বা উপরে <Share2 className="w-3 h-3 text-emerald-400 inline mx-0.5" /> বা <MoreVertical className="w-3 h-3 text-emerald-400 inline mx-0.5" /> <strong>(•••)</strong> চাপুন
+                </span>
+              </div>
+              <div className="flex items-center gap-2 bg-white/10 px-2.5 py-1.5 rounded-xl">
+                <span className="w-4.5 h-4.5 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-[10px] shrink-0">
+                  ২
+                </span>
+                <span>
+                  <strong>&quot;Open in Safari&quot;</strong> সিলেক্ট করুন
+                </span>
               </div>
             </div>
-
           </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="space-y-2 pt-1">
+          {/* Main Action for Android or general */}
+          {inAppInfo.isAndroid ? (
+            <button
+              type="button"
+              onClick={handleOpenBrowser}
+              className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>Chrome ব্রাউজারে খুলুন</span>
+            </button>
+          ) : inAppInfo.isIos ? (
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-200" />
+                  <span>লিংক কপি হয়েছে! সাফারিতে পেস্ট করুন</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  <span>লিংক কপি করে Safari-তে খুলুন</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleOpenBrowser}
+              className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>ব্রাউজারে ওপেন করুন</span>
+            </button>
+          )}
+
+          {/* Secondary Copy Button (shown if not iOS copy button) */}
+          {!inAppInfo.isIos && (
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="w-full py-2.5 px-4 rounded-2xl bg-gray-100 hover:bg-gray-200 active:scale-98 text-gray-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-emerald-700 font-bold">লিংক কপি হয়েছে!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-gray-600" />
+                  <span>লিংক কপি করুন (Copy Link)</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
-      )}
-    </>
+
+        {/* Bottom Lock & Security Badge */}
+        <div className="text-center pt-0.5">
+          <span className="text-[10px] text-gray-600 font-medium tracking-tight">
+            🔒 নিরবচ্ছিন্ন ও নিরাপদ সেবার জন্য ব্রাউজারে খোলা আবশ্যক
+          </span>
+        </div>
+
+      </div>
+    </div>
   );
 };
+

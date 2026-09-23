@@ -441,15 +441,42 @@ class FallbackStore {
   private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
   private _addressesCachedAt = 0; // epoch ms when serverAddresses were last fetched
   private _listenersRole: string | null = null; // e.g. 'helper:uid123'
+  // Always-on pricing listener — started immediately so unauthenticated users
+  // (e.g. in-app browser visitors) always see the latest admin settings.
+  private _unsubPricingListener: (() => void) | null = null;
 
   constructor() {
     this.loadFromLocalStorage();
     // Fix 2: Pre-populate known notif IDs from sessionStorage to survive page refreshes.
     this._hydrateKnownNotifIds();
-    // NOTE: Firestore listeners are NOT started here.
-    // AuthContext calls initListenersForRole() after login so we know the user's role.
+    // Start a lightweight always-on pricing listener so admin settings are
+    // always live even for unauthenticated / pre-login users.
+    this._startPricingListener();
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
+  }
+
+  // ─── Always-on pricing listener ───────────────────────────────────────────
+  // Starts a Firestore snapshot on settings/pricing immediately so that any
+  // visitor (including unauthenticated in-app browser users) sees the latest
+  // admin-set values without needing to log in first.
+  private _startPricingListener() {
+    if (typeof window === 'undefined') return;
+    try {
+      const unsub = onSnapshot(
+        doc(db, 'settings', 'pricing'),
+        (docSnap) => {
+          if (docSnap.exists()) {
+            this.pricingSettings = docSnap.data() as PricingSettings;
+            this.notify();
+          }
+        },
+        (err) => console.warn('[Firestore] PricingSettings (global) sync note:', err)
+      );
+      this._unsubPricingListener = unsub;
+    } catch (err) {
+      console.warn('[Firestore] Could not start global pricing listener:', err);
+    }
   }
 
   // ─── Fix 2: sessionStorage helpers for _knownNotifIds ────────────────────
@@ -936,19 +963,9 @@ class FallbackStore {
 
     const unsubs: (() => void)[] = [];
 
-    // ── Pricing settings: single doc, tiny cost, always needed ────────────────
-    unsubs.push(
-      onSnapshot(
-        doc(db, 'settings', 'pricing'),
-        (docSnap) => {
-          if (docSnap.exists()) {
-            this.pricingSettings = docSnap.data() as PricingSettings;
-            this.notify();
-          }
-        },
-        (err) => console.warn('[Firestore] PricingSettings sync note:', err)
-      )
-    );
+    // ── Pricing settings: handled by the always-on _startPricingListener() ───
+    // No need to add another snapshot here; the global one already keeps
+    // pricingSettings live for all users including unauthenticated visitors.
 
     // ── Server Addresses: realtime sync so address text updates reflect instantly across all clients ──
     unsubs.push(

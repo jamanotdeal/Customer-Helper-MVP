@@ -217,9 +217,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // In-App Browser (Facebook/Messenger) Prompt Admin Controls
   const [inAppBrowserPromptEnabled, setInAppBrowserPromptEnabled] = useState<boolean>(true);
   const [inAppBrowserPromptTitle, setInAppBrowserPromptTitle] = useState<string>('ব্রাউজারে ওপেন করুন');
-  const [inAppBrowserPromptSubtitle, setInAppBrowserPromptSubtitle] = useState<string>('Open in Chrome or Safari for the Best Experience');
+  const [inAppBrowserPromptSubtitle, setInAppBrowserPromptSubtitle] = useState<string>('Open in Chrome or Safari');
   const [inAppBrowserPromptMessage, setInAppBrowserPromptMessage] = useState<string>(
-    'ফেসবুক বা মেসেঞ্জারের ভেতর গুগল অ্যাকাউন্ট লগইন সরাসরি ব্লক হতে পারে বা বারবার লগইন চাইতে পারে। Chrome বা Safari ব্রাউজারে খুললে ১-ক্লিকে লগইন, লাইভ ট্র্যাকিং এবং অফলাইন সুবিধা সচল থাকবে।'
+    'লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।'
   );
 
   // Permission Alert Modal Content Controls
@@ -667,10 +667,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setPwaInstallButtonText(settings.pwaInstallButtonText || 'Install Jamanot');
       setInAppBrowserPromptEnabled(settings.inAppBrowserPromptEnabled !== false);
       setInAppBrowserPromptTitle(settings.inAppBrowserPromptTitle || 'ব্রাউজারে ওপেন করুন');
-      setInAppBrowserPromptSubtitle(settings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari for the Best Experience');
+      setInAppBrowserPromptSubtitle(settings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari');
       setInAppBrowserPromptMessage(
         settings.inAppBrowserPromptMessage ||
-        'ফেসবুক বা মেসেঞ্জারের ভেতর গুগল অ্যাকাউন্ট লগইন সরাসরি ব্লক হতে পারে বা বারবার লগইন চাইতে পারে। Chrome বা Safari ব্রাউজারে খুললে ১-ক্লিকে লগইন, লাইভ ট্র্যাকিং এবং অফলাইন সুবিধা সচল থাকবে।'
+        'লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।'
       );
       setLocPermModalTitle(settings.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)');
       setLocPermModalBody(
@@ -6859,7 +6859,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={inAppBrowserPromptSubtitle}
                   onChange={(e) => setInAppBrowserPromptSubtitle(e.target.value)}
-                  placeholder="Open in Chrome or Safari for the Best Experience"
+                  placeholder="Open in Chrome or Safari"
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
                 />
               </div>
@@ -6872,7 +6872,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <textarea
                 value={inAppBrowserPromptMessage}
                 onChange={(e) => setInAppBrowserPromptMessage(e.target.value)}
-                placeholder="ফেসবুক বা মেসেঞ্জারের ভেতর গুগল অ্যাকাউন্ট লগইন সরাসরি ব্লক হতে পারে বা বারবার লগইন চাইতে পারে। Chrome বা Safari ব্রাউজারে খুললে ১-ক্লিকে লগইন, লাইভ ট্র্যাকিং এবং অফলাইন সুবিধা সচল থাকবে।"
+                placeholder="লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।"
                 rows={3}
                 className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
               />
