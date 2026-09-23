@@ -5,7 +5,7 @@
  * - PDF: styled HTML table opened in new window + window.print()
  */
 
-import { Order, UserProfile, OrderFeedback, RewardClaim } from '@/types';
+import { Order, UserProfile, OrderFeedback, RewardClaim, ShopOrder } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Core helpers
@@ -383,3 +383,62 @@ export function exportRewardClaimsToPDF(claims: RewardClaim[]): void {
   ];
   printHTMLTable('Admin — Coins & Reward Claims', CLAIM_HEADERS, rows, summary);
 }
+
+// ---------------------------------------------------------------------------
+// Store / Shop Orders Export
+// ---------------------------------------------------------------------------
+
+const SHOP_ORDER_HEADERS = [
+  '#',
+  'Store Order ID',
+  'Parent Order ID',
+  'Shop Name',
+  'Helper Name',
+  'Request / Items',
+  'Price (৳)',
+  'Seller Name',
+  'Seller Phone',
+  'Status',
+  'Store Note',
+  'Created At',
+  'Updated At',
+];
+
+function shopOrdersToRows(shopOrders: ShopOrder[]): (string | number)[][] {
+  return shopOrders.map((so, i) => [
+    i + 1,
+    so.id,
+    so.parentOrderId || '',
+    so.shopName || '',
+    so.helperName || '',
+    so.itemsWithPrice && so.itemsWithPrice.length > 0
+      ? so.itemsWithPrice.map((it) => `${it.name}${it.unit ? ` (${it.unit})` : ''}: ৳${it.price ?? 0}`).join('; ')
+      : (so.requestText || ''),
+    so.price !== undefined && so.price !== null ? so.price : 0,
+    so.sellerName || '',
+    so.sellerPhone || '',
+    so.status,
+    so.note || '',
+    fmtDate(so.createdAt),
+    fmtDate(so.updatedAt),
+  ]);
+}
+
+export function exportShopOrdersToCSV(shopOrders: ShopOrder[]): void {
+  const rows = shopOrdersToRows(shopOrders);
+  const csv = buildCSV(SHOP_ORDER_HEADERS, rows);
+  downloadCSV(`admin_store_orders_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+}
+
+export function exportShopOrdersToPDF(shopOrders: ShopOrder[]): void {
+  const rows = shopOrdersToRows(shopOrders);
+  const delivered = shopOrders.filter((so) => so.status === 'DELIVERED');
+  const totalPrice = shopOrders.reduce((s, so) => s + (so.price ?? 0), 0);
+  const summary = [
+    `Total Store Orders: ${shopOrders.length}`,
+    `Delivered: ${delivered.length}   Canceled: ${shopOrders.filter((so) => so.status === 'CANCELED').length}   Pending: ${shopOrders.filter((so) => so.status === 'PENDING').length}   Preparing: ${shopOrders.filter((so) => so.status === 'PREPARING').length}   Ready: ${shopOrders.filter((so) => so.status === 'READY').length}   Handover: ${shopOrders.filter((so) => so.status === 'HANDOVER').length}`,
+    `Total Store Orders Value: ৳${totalPrice.toLocaleString()}`,
+  ];
+  printHTMLTable('Admin — All Store Orders', SHOP_ORDER_HEADERS, rows, summary);
+}
+

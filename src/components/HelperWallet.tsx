@@ -23,6 +23,8 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
+import { PaginationControl } from './admin/PaginationControl';
+
 export const HelperWallet: React.FC = () => {
   const { user } = useAuth();
   const { showAlert } = useModal();
@@ -40,6 +42,14 @@ export const HelperWallet: React.FC = () => {
   const [showOrdersBreakdownModal, setShowOrdersBreakdownModal] = useState<boolean>(false);
   const [modalOrdersList, setModalOrdersList] = useState<Order[]>([]);
   const [modalTitle, setModalTitle] = useState<string>('');
+
+  // Pagination for Orders Breakdown Modal
+  const [breakdownCurrentPage, setBreakdownCurrentPage] = useState<number>(1);
+  const [breakdownPageSize, setBreakdownPageSize] = useState<number>(10);
+
+  // Pagination for Paybacks / Withdrawals ("পরিশোধের ইতিহাস")
+  const [withdrawalsCurrentPage, setWithdrawalsCurrentPage] = useState<number>(1);
+  const [withdrawalsPageSize, setWithdrawalsPageSize] = useState<number>(5);
 
   const getPaymentInstructions = () => {
     const settings = fallbackStore.pricingSettings;
@@ -90,6 +100,7 @@ export const HelperWallet: React.FC = () => {
 
   const handlePresetSelect = (preset: 'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM') => {
     setActivePreset(preset);
+    setWithdrawalsCurrentPage(1);
     if (preset === 'CUSTOM') {
       setShowCustomPicker((prev) => !prev);
       return;
@@ -181,6 +192,21 @@ export const HelperWallet: React.FC = () => {
     });
   }, [withdrawals, startDate, endDate]);
 
+  const withdrawalsTotalPages = useMemo(() => {
+    return Math.ceil(filteredWithdrawals.length / withdrawalsPageSize) || 1;
+  }, [filteredWithdrawals.length, withdrawalsPageSize]);
+
+  const paginatedWithdrawals = useMemo(() => {
+    const start = (withdrawalsCurrentPage - 1) * withdrawalsPageSize;
+    return filteredWithdrawals.slice(start, start + withdrawalsPageSize);
+  }, [filteredWithdrawals, withdrawalsCurrentPage, withdrawalsPageSize]);
+
+  useEffect(() => {
+    if (withdrawalsCurrentPage > withdrawalsTotalPages) {
+      setWithdrawalsCurrentPage(Math.max(1, withdrawalsTotalPages));
+    }
+  }, [withdrawalsCurrentPage, withdrawalsTotalPages]);
+
   // Filtered Delivered Orders based on selected Date Range
   const filteredOrders = useMemo(() => {
     return deliveredOrders
@@ -198,6 +224,21 @@ export const HelperWallet: React.FC = () => {
         return timeB - timeA;
       });
   }, [deliveredOrders, startDate, endDate]);
+
+  const breakdownTotalPages = useMemo(() => {
+    return Math.ceil(modalOrdersList.length / breakdownPageSize) || 1;
+  }, [modalOrdersList.length, breakdownPageSize]);
+
+  const paginatedModalOrders = useMemo(() => {
+    const start = (breakdownCurrentPage - 1) * breakdownPageSize;
+    return modalOrdersList.slice(start, start + breakdownPageSize);
+  }, [modalOrdersList, breakdownCurrentPage, breakdownPageSize]);
+
+  useEffect(() => {
+    if (breakdownCurrentPage > breakdownTotalPages) {
+      setBreakdownCurrentPage(Math.max(1, breakdownTotalPages));
+    }
+  }, [breakdownCurrentPage, breakdownTotalPages]);
 
   // Compute Financials helper for any order
   const getOrderFinancials = (o: Order) => {
@@ -326,6 +367,7 @@ export const HelperWallet: React.FC = () => {
   const openOrdersBreakdown = (orders: Order[], title: string) => {
     setModalOrdersList(orders);
     setModalTitle(title);
+    setBreakdownCurrentPage(1);
     setShowOrdersBreakdownModal(true);
   };
 
@@ -338,7 +380,7 @@ export const HelperWallet: React.FC = () => {
             <div className="p-2 rounded-2xl bg-white/20 backdrop-blur-xs">
               <WalletIcon className="w-5 h-5 text-indigo-300" />
             </div>
-            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Earnings & Wallet</span>
+            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-100">Wallet</span>
           </div>
 
           {/* Filter Dropdown */}
@@ -384,6 +426,7 @@ export const HelperWallet: React.FC = () => {
                 onChange={(e) => {
                   setStartDate(e.target.value);
                   setActivePreset('CUSTOM');
+                  setWithdrawalsCurrentPage(1);
                 }}
                 className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
               />
@@ -396,6 +439,7 @@ export const HelperWallet: React.FC = () => {
                 onChange={(e) => {
                   setEndDate(e.target.value);
                   setActivePreset('CUSTOM');
+                  setWithdrawalsCurrentPage(1);
                 }}
                 className="bg-transparent text-white font-extrabold focus:outline-none text-[11px] w-full"
               />
@@ -407,9 +451,9 @@ export const HelperWallet: React.FC = () => {
         <div
           onClick={() => {
             if (activePreset === 'TODAY') {
-              openOrdersBreakdown(todayMetrics.todayOrders, "Today's Orders Breakdown (আজকের আয়)");
+              openOrdersBreakdown(todayMetrics.todayOrders, "Today's Orders Breakdown");
             } else {
-              openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Orders Breakdown (${presetLabels[activePreset]} আয়)`);
+              openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Orders Breakdown`);
             }
           }}
           className="mb-5 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group relative"
@@ -417,10 +461,10 @@ export const HelperWallet: React.FC = () => {
         >
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs text-indigo-200 font-bold block">
-              {activePreset === 'TODAY' ? "Today's Total Income (আজকের নিট আয়)" : `${presetLabels[activePreset]} Total Income (${presetLabels[activePreset]} নিট আয়)`}
+              {activePreset === 'TODAY' ? "আজকের নিট আয়" : `${presetLabels[activePreset]} নিট আয়`}
             </span>
             <span className="text-[10px] text-indigo-300 font-bold bg-indigo-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 group-hover:bg-indigo-500/30 transition-colors">
-              <span>অর্ডারের তালিকা দেখুন</span>
+              <span>অর্ডার দেখুন</span>
               <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
             </span>
           </div>
@@ -430,26 +474,21 @@ export const HelperWallet: React.FC = () => {
           </h2>
 
           {/* Total Collected Amount under Total Income Number */}
-          <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-col gap-1">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-indigo-200 font-semibold flex items-center gap-1">
-                <Receipt className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Total Collected Amount (মোট সংগৃহীত চার্জ):</span>
-              </span>
-              <span className="font-extrabold text-indigo-100 text-sm">
-                ৳{activePreset === 'TODAY' ? todayMetrics.collectedToday : rangeMetrics.totalCollected}
-              </span>
-            </div>
-            <span className="text-[10px] text-indigo-300/80 font-normal">
-              *কমিশন কাটার পূর্বের মোট ডেলিভারি চার্জ (Sum of charges without deducting commission)
+          <div className="mt-2.5 pt-2.5 border-t border-white/10 flex items-center justify-between text-xs">
+            <span className="text-indigo-200 font-semibold flex items-center gap-1">
+              <Receipt className="w-3.5 h-3.5 text-indigo-400" />
+              <span>মোট সংগৃহীত চার্জ:</span>
+            </span>
+            <span className="font-extrabold text-indigo-100 text-sm">
+              ৳{activePreset === 'TODAY' ? todayMetrics.collectedToday : rangeMetrics.totalCollected}
             </span>
           </div>
 
           <div className="mt-2 text-xs text-amber-300 font-semibold flex items-center justify-between">
             <span>
               {activePreset === 'ALL_TIME'
-                ? 'বকেয়া কমিশন (Commission to Payback):'
-                : `${presetLabels[activePreset]} Commission Due:`}
+                ? 'বকেয়া কমিশন:'
+                : `${presetLabels[activePreset]} Commission:`}
             </span>
             <span className="font-extrabold text-amber-200">৳{displayCommissionDue}</span>
           </div>
@@ -470,7 +509,7 @@ export const HelperWallet: React.FC = () => {
             <span className="text-base font-black text-white block truncate">
               ৳{rangeMetrics.earned}
             </span>
-            <span className="text-[9px] text-indigo-300 font-medium block">হেলপার নিট আয়</span>
+            <span className="text-[9px] text-indigo-300 font-medium block">নিট আয়</span>
           </div>
           
           <div
@@ -486,7 +525,7 @@ export const HelperWallet: React.FC = () => {
             <span className="text-base font-black text-white block truncate">
               ৳{rangeMetrics.totalCollected}
             </span>
-            <span className="text-[9px] text-indigo-300 font-medium block">মোট সংগৃহীত চার্জ</span>
+            <span className="text-[9px] text-indigo-300 font-medium block">মোট চার্জ</span>
           </div>
 
           <div
@@ -495,14 +534,14 @@ export const HelperWallet: React.FC = () => {
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-                Total Commission
+                Platform Fee
               </span>
               <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
             </div>
             <span className="text-base font-black text-indigo-200 block truncate">
               ৳{rangeMetrics.commissionDue}
             </span>
-            <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম শেয়ার</span>
+            <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম ফি</span>
           </div>
 
           <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
@@ -520,7 +559,7 @@ export const HelperWallet: React.FC = () => {
 
         {hasPendingPayback && (
           <div className="mb-4 p-3 rounded-2xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-semibold">
-            ⏳ আপনার ৳{pendingPayback.amount} commission payback অনুরোধ অ্যাডমিনের পর্যালোচনায় আছে।
+            ⏳ আপনার ৳{pendingPayback.amount} কমিশন পরিশোধের অনুরোধ পর্যালোচনায় আছে।
           </div>
         )}
 
@@ -545,10 +584,10 @@ export const HelperWallet: React.FC = () => {
           }`}
         >
           {hasPendingPayback
-            ? 'Payback Pending Admin Approval'
+            ? 'অনুরোধ পর্যালোচনায় আছে'
             : canPayback
-            ? 'Pay Commission to Platform (বকেয়া কমিশন পরিশোধ করুন)'
-            : 'No Due Commission (কোনো বকেয়া নেই)'}
+            ? 'বকেয়া কমিশন পরিশোধ করুন'
+            : 'কোনো বকেয়া নেই'}
         </button>
       </div>
 
@@ -557,11 +596,11 @@ export const HelperWallet: React.FC = () => {
         <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-              Payback History ({filteredWithdrawals.length})
+              পরিশোধের ইতিহাস ({filteredWithdrawals.length})
             </h3>
           </div>
           <div className="space-y-2">
-            {filteredWithdrawals.map((w) => (
+            {paginatedWithdrawals.map((w) => (
               <div key={w.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 text-xs">
                 <div>
                   <span className="font-bold text-gray-900 block">৳{w.amount} ({w.paymentMethod})</span>
@@ -583,6 +622,21 @@ export const HelperWallet: React.FC = () => {
               </div>
             ))}
           </div>
+
+          <PaginationControl
+            currentPage={withdrawalsCurrentPage}
+            totalPages={withdrawalsTotalPages}
+            totalItems={filteredWithdrawals.length}
+            pageSize={withdrawalsPageSize}
+            pageSizeOptions={[5, 10, 20, 50]}
+            colorScheme="indigo"
+            onPageChange={(p) => setWithdrawalsCurrentPage(p)}
+            onPageSizeChange={(s) => {
+              setWithdrawalsPageSize(s);
+              setWithdrawalsCurrentPage(1);
+            }}
+            className="pt-2 px-0 bg-transparent border-t border-gray-100 rounded-none shadow-none"
+          />
         </div>
       )}
 
@@ -597,7 +651,7 @@ export const HelperWallet: React.FC = () => {
                   <ShoppingBag className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-sm text-white">{modalTitle || 'আয়ের বিবরণ (Orders Breakdown)'}</h3>
+                  <h3 className="font-extrabold text-sm text-white">{modalTitle || 'আয়ের বিবরণ'}</h3>
                   <p className="text-[11px] text-indigo-200">মোট {modalOrdersList.length}টি ডেলিভারি অর্ডার</p>
                 </div>
               </div>
@@ -642,13 +696,13 @@ export const HelperWallet: React.FC = () => {
 
             {/* Orders List Area */}
             <div className="p-4 overflow-y-auto space-y-2.5 flex-1 text-xs">
-              {modalOrdersList.length === 0 ? (
+              {paginatedModalOrders.length === 0 ? (
                 <div className="py-12 text-center text-gray-400 space-y-2">
                   <ShoppingBag className="w-10 h-10 mx-auto text-gray-300" />
                   <p className="font-bold text-gray-600">এই সময়সীমার মধ্যে কোনো সম্পন্ন ডেলিভারি পাওয়া যায়নি।</p>
                 </div>
               ) : (
-                modalOrdersList.map((ord) => {
+                paginatedModalOrders.map((ord) => {
                   const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(ord);
                   const itemsSummary = ord.items && ord.items.length > 0
                     ? ord.items.map((i) => `${i.name}${i.qty ? ` (${i.qty})` : ''}`).join(', ')
@@ -681,7 +735,7 @@ export const HelperWallet: React.FC = () => {
 
                         {/* Earnings Breakdown Badge on Right */}
                         <div className="text-right shrink-0 bg-emerald-50 border border-emerald-200/70 p-2 rounded-xl min-w-[95px]">
-                          <span className="text-[9px] font-extrabold text-emerald-800 block uppercase">হেলপার আয়</span>
+                          <span className="text-[9px] font-extrabold text-emerald-800 block uppercase">আয়</span>
                           <span className="text-sm font-black text-emerald-700 block">+৳{helperShare}</span>
                           <span className="text-[9px] text-gray-500 font-semibold block mt-0.5">
                             চার্জ: ৳{baseFeeForHelper}
@@ -715,6 +769,24 @@ export const HelperWallet: React.FC = () => {
               )}
             </div>
 
+            {/* Modal Pagination Controls */}
+            {modalOrdersList.length > 0 && (
+              <PaginationControl
+                currentPage={breakdownCurrentPage}
+                totalPages={breakdownTotalPages}
+                totalItems={modalOrdersList.length}
+                pageSize={breakdownPageSize}
+                pageSizeOptions={[5, 10, 20, 50]}
+                colorScheme="indigo"
+                onPageChange={(p) => setBreakdownCurrentPage(p)}
+                onPageSizeChange={(s) => {
+                  setBreakdownPageSize(s);
+                  setBreakdownCurrentPage(1);
+                }}
+                className="bg-gray-50 border-t border-gray-100 rounded-none shadow-none"
+              />
+            )}
+
             {/* Modal Footer */}
             <div className="p-3 bg-gray-50 border-t border-gray-100 flex justify-end">
               <button
@@ -722,7 +794,7 @@ export const HelperWallet: React.FC = () => {
                 onClick={() => setShowOrdersBreakdownModal(false)}
                 className="py-2.5 px-5 rounded-2xl bg-indigo-900 hover:bg-indigo-950 text-white font-extrabold text-xs transition-all active:scale-95 shadow-sm"
               >
-                বন্ধ করুন (Close)
+                বন্ধ করুন
               </button>
             </div>
           </div>
@@ -733,11 +805,11 @@ export const HelperWallet: React.FC = () => {
       {showWithdrawModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
-            <h3 className="font-bold text-lg text-gray-900">কমিশন পরিশোধের অনুরোধ (Payback)</h3>
+            <h3 className="font-bold text-lg text-gray-900">কমিশন পরিশোধ</h3>
             <form onSubmit={handlePaybackSubmit} className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">
-                  Payback Amount (৳) ( বকেয়া কমিশন: ৳{wallet?.balance} )
+                  পরিশোধের পরিমাণ (বকেয়া: ৳{wallet?.balance})
                 </label>
                 <input
                   type="number"
@@ -748,11 +820,11 @@ export const HelperWallet: React.FC = () => {
                   className="w-full p-3.5 rounded-2xl border border-gray-200 font-extrabold text-base focus:border-emerald-500 outline-none"
                   required
                 />
-                <p className="text-[10px] text-gray-500 mt-1 font-bold">minimum payback is {minWithdrawal}BDT</p>
+                <p className="text-[10px] text-gray-500 mt-1 font-bold">সর্বনিম্ন ৳{minWithdrawal}</p>
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">Payment Method</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">পেমেন্ট মাধ্যম</label>
                 <div className="flex flex-wrap gap-2">
                   {(['bKash', 'Nagad', 'Rocket', 'Bank', 'Cash'] as const).map((method) => (
                     <button
@@ -773,16 +845,16 @@ export const HelperWallet: React.FC = () => {
 
               {/* Payment Method Specific Instructions */}
               <div className="p-3.5 bg-indigo-50 border border-indigo-100 rounded-2xl text-[11px] font-semibold text-indigo-950 leading-relaxed">
-                <span className="font-bold text-indigo-900 block mb-1">Instructions (নির্দেশাবলী):</span>
+                <span className="font-bold text-indigo-900 block mb-1">নির্দেশনা:</span>
                 {getPaymentInstructions()}
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Note (optional)</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">নোট / বিবরণ (ঐচ্ছিক)</label>
                 <textarea
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
-                  placeholder="Transaction id or anything for clearification"
+                  placeholder="Transaction ID / বিবরণ লিখুন..."
                   rows={3}
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm focus:border-emerald-500 outline-none resize-none"
                 />

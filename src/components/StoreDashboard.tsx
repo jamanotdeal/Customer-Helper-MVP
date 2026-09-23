@@ -10,35 +10,63 @@ import { OrderCard } from './OrderCard';
 import { StoreWallet } from './StoreWallet';
 import {
   Store, PlusCircle, Package, ShoppingBag,
-  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare, CheckCircle2, Bell
+  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare, CheckCircle2, Bell, Loader2
 } from 'lucide-react';
-import { ShopOrder, ShopOrderStatus } from '@/types';
+import { ShopOrder, ShopOrderStatus, ShopOrderItemPrice } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
+import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 
 
-// Timer component to display live elapsed time
+// Helper to suppress "বাজার-সদাই করে দিন" service label in Store Mode
+const formatServiceName = (name?: string) => {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (trimmed === 'বাজার-সদাই করে দিন' || trimmed.includes('বাজার-সদাই করে দিন') || trimmed === 'বাজার-সদাই') {
+    return '';
+  }
+  return trimmed;
+};
+
+// Helper to divide request text by comma or extract saved items with price & unit
+const parseShopOrderItems = (shopOrder: ShopOrder | null): { name: string; unit: string; price: string }[] => {
+  if (!shopOrder) return [];
+  if (shopOrder.itemsWithPrice && shopOrder.itemsWithPrice.length > 0) {
+    return shopOrder.itemsWithPrice.map((item) => ({
+      name: item.name,
+      unit: item.unit || '',
+      price: item.price !== undefined && item.price !== null ? String(item.price) : '',
+    }));
+  }
+  if (!shopOrder.requestText) return [];
+  const splitItems = shopOrder.requestText
+    .split(/,|\n/)
+    .map((s) => s.replace(/^["'\s]+|["'\s]+$/g, '').trim())
+    .filter(Boolean);
+
+  if (splitItems.length > 0) {
+    return splitItems.map((name) => ({
+      name,
+      unit: '',
+      price: '',
+    }));
+  }
+  return [{
+    name: shopOrder.requestText.trim(),
+    unit: '',
+    price: shopOrder.price !== undefined && shopOrder.price !== null ? String(shopOrder.price) : '',
+  }];
+};
+
+// Live counterup timer component matching format "1h 16m 03s"
 const OrderTimer: React.FC<{ createdAt: string; className?: string; hideIcon?: boolean }> = ({ createdAt, className, hideIcon }) => {
-  const [elapsed, setElapsed] = useState('');
+  const [elapsed, setElapsed] = useState(() => getLiveElapsedTimeHMS(createdAt));
 
   useEffect(() => {
-    const updateTimer = () => {
-      const diffMs = Date.now() - new Date(createdAt).getTime();
-      const diffSecs = Math.max(0, Math.floor(diffMs / 1000));
-      const diffMins = Math.floor(diffSecs / 60);
-      const diffHours = Math.floor(diffMins / 60);
-
-      if (diffMins < 1) {
-        setElapsed('Just now');
-      } else if (diffHours < 1) {
-        setElapsed(`${diffMins}m ago`);
-      } else {
-        const remainingMins = diffMins % 60;
-        setElapsed(`${diffHours}h ${remainingMins}m ago`);
-      }
-    };
-    updateTimer();
-    const interval = setInterval(updateTimer, 30000);
+    setElapsed(getLiveElapsedTimeHMS(createdAt));
+    const interval = setInterval(() => {
+      setElapsed(getLiveElapsedTimeHMS(createdAt));
+    }, 1000);
     return () => clearInterval(interval);
   }, [createdAt]);
 
@@ -164,7 +192,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Pricing & note state inside details view
   const [costInput, setCostInput] = useState('');
   const [noteInput, setNoteInput] = useState('');
+  const [itemPrices, setItemPrices] = useState<{ name: string; unit: string; price: string }[]>([]);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastLoadedShopOrderIdRef = useRef<string | null>(null);
   const [updatingCost, setUpdatingCost] = useState(false);
+  const [updatingNote, setUpdatingNote] = useState(false);
 
   // Completed/Finished shop orders paginated loading state
   const [completedShopOrders, setCompletedShopOrders] = useState<ShopOrder[]>([]);
@@ -443,11 +476,19 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Reset inputs when selected shop order changes
   useEffect(() => {
     if (currentShopOrder) {
-      setCostInput(currentShopOrder.price !== undefined && currentShopOrder.price !== null ? String(currentShopOrder.price) : '');
-      setNoteInput(currentShopOrder.note || '');
+      if (lastLoadedShopOrderIdRef.current !== currentShopOrder.id) {
+        lastLoadedShopOrderIdRef.current = currentShopOrder.id;
+        setCostInput(currentShopOrder.price !== undefined && currentShopOrder.price !== null ? String(currentShopOrder.price) : '');
+        setNoteInput(currentShopOrder.note || '');
+        setItemPrices(parseShopOrderItems(currentShopOrder));
+        setAutoSaveStatus('idle');
+      }
     } else {
+      lastLoadedShopOrderIdRef.current = null;
       setCostInput('');
       setNoteInput('');
+      setItemPrices([]);
+      setAutoSaveStatus('idle');
     }
   }, [currentShopOrder]);
 
@@ -712,6 +753,135 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Pricing Alert Modal State
   const [showPriceAlertModal, setShowPriceAlertModal] = useState(false);
 
+  // Total calculated cost from items
+  const totalCalculatedCost = useMemo(() => {
+    return itemPrices.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
+  }, [itemPrices]);
+
+  // Check if all divided items have both valid pricing (> 0) and unit specified
+  const isAllItemsComplete = useMemo(() => {
+    if (itemPrices.length === 0) return false;
+    return itemPrices.every(
+      (item) =>
+        item.price.trim() !== '' &&
+        !isNaN(parseFloat(item.price)) &&
+        parseFloat(item.price) > 0 &&
+        item.unit.trim() !== ''
+    );
+  }, [itemPrices]);
+
+  const persistItemPrices = async (soId: string, itemsToSave: { name: string; unit: string; price: string }[]) => {
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    if (targetSo) {
+      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
+      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
+        return;
+      }
+    }
+
+    const structuredItems: ShopOrderItemPrice[] = itemsToSave.map((it) => ({
+      name: it.name,
+      unit: it.unit.trim() || undefined,
+      price: it.price.trim() !== '' && !isNaN(parseFloat(it.price)) ? parseFloat(it.price) : undefined,
+    }));
+    const calculatedSum = structuredItems.reduce((sum, it) => sum + (it.price || 0), 0);
+    const hasAnyPrice = structuredItems.some((it) => it.price !== undefined && it.price > 0);
+
+    try {
+      await fallbackStore.updateShopOrder(soId, (prev) => {
+        // Requirement: when store adds pricing of any item then automatically this order status should move into processing (PREPARING)
+        const shouldAutoMoveToPreparing = hasAnyPrice && (prev.status === 'PENDING' || prev.status === 'ACCEPTED');
+        const nextStatus = shouldAutoMoveToPreparing ? 'PREPARING' : prev.status;
+        const history = shouldAutoMoveToPreparing
+          ? [
+              ...prev.statusHistory,
+              {
+                status: 'PREPARING' as ShopOrderStatus,
+                timestamp: new Date().toISOString(),
+                actor: user?.displayName || 'Store',
+                note: 'Auto moved to processing upon adding item pricing.',
+              },
+            ]
+          : prev.statusHistory;
+
+        return {
+          ...prev,
+          status: nextStatus,
+          itemsWithPrice: structuredItems,
+          price: calculatedSum > 0 ? calculatedSum : prev.price,
+          statusHistory: history,
+        };
+      }, 'store');
+    } catch (err) {
+      console.error('Failed to auto-save item prices:', err);
+    }
+  };
+
+  const handleItemFieldChange = (index: number, field: 'name' | 'unit' | 'price', val: string) => {
+    const next = [...itemPrices];
+    if (next[index]) {
+      next[index] = { ...next[index], [field]: val };
+    }
+    setItemPrices(next);
+
+    if (!currentShopOrder) return;
+    const soId = currentShopOrder.id;
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    setAutoSaveStatus('saving');
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      await persistItemPrices(soId, next);
+      setAutoSaveStatus('saved');
+      setTimeout(() => {
+        setAutoSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev));
+      }, 2000);
+    }, 600);
+  };
+
+  const handleSaveItemPrices = async (soId: string) => {
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    if (targetSo) {
+      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
+      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
+        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর দাম পরিবর্তন করা যাবে না।', 'warning');
+        return;
+      }
+    }
+
+    setUpdatingCost(true);
+    try {
+      await persistItemPrices(soId, itemPrices);
+      showAlert('সফল', 'আইটেমগুলোর মূল্য সফলভাবে সংরক্ষণ করা হয়েছে।', 'success');
+    } finally {
+      setUpdatingCost(false);
+    }
+  };
+
+  const handleSaveNote = async (soId: string) => {
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    if (targetSo) {
+      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
+      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
+        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর নোট পরিবর্তন করা যাবে না।', 'warning');
+        return;
+      }
+    }
+
+    setUpdatingNote(true);
+    try {
+      await fallbackStore.updateShopOrder(soId, (prev) => ({
+        ...prev,
+        note: noteInput.trim() || undefined,
+      }), 'store');
+      showAlert('সফল', 'ব্যক্তিগত নোট সফলভাবে সংরক্ষণ করা হয়েছে।', 'success');
+    } finally {
+      setUpdatingNote(false);
+    }
+  };
+
   // Handle operations
   const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
     if (newStatus === 'DELIVERED') {
@@ -730,22 +900,39 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
     }
 
+    // Requirement: To pass the Processing (PREPARING) status (e.g. to READY or HANDOVER), store MUST add pricing and unit for all items!
+    if (['READY', 'HANDOVER'].includes(newStatus)) {
+      if (!isAllItemsComplete) {
+        showAlert(
+          'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
+          'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+          'warning'
+        );
+        return;
+      }
+    }
+
     if (newStatus === 'HANDOVER') {
-      const effectivePrice = costInput ? parseFloat(costInput) : targetSo?.price;
+      const effectivePrice = totalCalculatedCost > 0 ? totalCalculatedCost : targetSo?.price;
       if (!effectivePrice || effectivePrice <= 0) {
         setShowPriceAlertModal(true);
         return;
       }
     }
 
-    // Automatically save price & note when status moves
-    const currentPrice = costInput ? parseFloat(costInput) : undefined;
+    const structuredItems: ShopOrderItemPrice[] = itemPrices.map((it) => ({
+      name: it.name,
+      unit: it.unit.trim() || undefined,
+      price: it.price.trim() !== '' && !isNaN(parseFloat(it.price)) ? parseFloat(it.price) : undefined,
+    }));
+    const calculatedSum = structuredItems.reduce((sum, it) => sum + (it.price || 0), 0);
     const currentNote = noteInput.trim() || undefined;
 
     await fallbackStore.updateShopOrder(soId, (prev) => ({
       ...prev,
       status: newStatus,
-      price: currentPrice !== undefined ? currentPrice : prev.price,
+      itemsWithPrice: structuredItems.length > 0 ? structuredItems : prev.itemsWithPrice,
+      price: calculatedSum > 0 ? calculatedSum : prev.price,
       note: actorNote !== undefined ? actorNote : (currentNote || prev.note),
       statusHistory: [
         ...prev.statusHistory,
@@ -760,22 +947,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   };
 
   const handleUpdateCostAndNote = async (soId: string) => {
-    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
-    if (targetSo) {
-      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
-      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
-        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর তথ্য বা দাম পরিবর্তন করা যাবে না।', 'warning');
-        return;
-      }
+    await handleSaveItemPrices(soId);
+    if (noteInput.trim()) {
+      await handleSaveNote(soId);
     }
-
-    setUpdatingCost(true);
-    await fallbackStore.updateShopOrder(soId, (prev) => ({
-      ...prev,
-      price: costInput ? parseFloat(costInput) : undefined,
-      note: noteInput.trim() || undefined,
-    }), 'store');
-    setUpdatingCost(false);
   };
 
   const handleCancelOrderClick = (soId: string) => {
@@ -874,42 +1049,97 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           </div>
 
           <div className="max-w-md mx-auto p-4 space-y-5">
-            {/* DYNAMIC URGENCIES TIMER BLOCK */}
-            <div className="bg-gradient-to-br from-red-100 via-rose-50 to-red-100 border-2 border-red-400 shadow-md shadow-red-100 rounded-2xl py-3 px-4 flex flex-col items-center justify-center space-y-1 transition-all text-center">
-              <div className="flex items-center justify-center space-x-2 flex-wrap">
-                <Clock className="w-4 h-4 text-red-600 animate-pulse shrink-0" />
-                <span className="text-xs font-black uppercase tracking-wider text-red-950">
-                  Requested:
-                </span>
-                <span className="text-sm font-extrabold text-red-950">
-                  {formatOrderDateTime(currentShopOrder.createdAt)}
-                </span>
-              </div>
-              <div className="text-xs font-black text-red-700 flex items-center justify-center">
-                <span>(</span>
-                <OrderTimer createdAt={currentShopOrder.createdAt} className="text-red-700 text-xs font-black" hideIcon />
-                <span>)</span>
-              </div>
+            {/* TOP LIVE TIMER BLOCK */}
+            <div className="bg-gradient-to-br from-red-50 via-rose-50/60 to-red-50 border border-red-200/80 shadow-xs rounded-2xl py-3 px-4 flex items-center justify-center space-x-2.5 transition-all text-center">
+              <Clock className="w-5 h-5 text-red-600 animate-pulse shrink-0" />
+              <OrderTimer createdAt={currentShopOrder.createdAt} className="text-red-700 text-base sm:text-lg font-black tracking-wide" hideIcon />
             </div>
 
             {currentShopOrder.status === 'PENDING' ? (
               <>
-                {/* Service Type (Order details) */}
+                {/* Order Items & Pricing Card (Divided by comma) */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-                      {getParentOrder(currentShopOrder.parentOrderId)?.service || 'Request Details'}
+                      {formatServiceName(getParentOrder(currentShopOrder.parentOrderId)?.service) || 'অর্ডার আইটেমসমূহ (Order Items)'}
                     </h3>
                   </div>
-                  <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                    {currentShopOrder.requestText
-                      ? currentShopOrder.requestText
-                        .replace(/^["'\s]+|["'\s]+$/g, '')
-                        .trim()
-                        .replace(/[ \t]+/g, ' ')
-                        .replace(/\n\s*\n+/g, '\n')
-                      : ''}
-                  </div>
+
+                  {itemPrices.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {itemPrices.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-gray-50/80 p-2.5 rounded-2xl border border-gray-200/80"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="font-bold text-xs text-gray-800 break-words">
+                              {item.name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="w-16 sm:w-18 shrink-0">
+                              <input
+                                type="text"
+                                placeholder="ইউনিট *"
+                                value={item.unit}
+                                disabled={isCanceled || isDelivered}
+                                onChange={(e) => handleItemFieldChange(idx, 'unit', e.target.value)}
+                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
+                                className="w-full px-1.5 py-1 bg-white border border-gray-200 rounded-xl text-[11px] font-semibold outline-none focus:border-emerald-500 disabled:opacity-70 text-gray-900 placeholder:text-gray-400 text-center"
+                              />
+                            </div>
+                            <div className="relative w-16 sm:w-18 shrink-0">
+                              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-[11px] font-bold pointer-events-none">
+                                ৳
+                              </span>
+                              <input
+                                type="number"
+                                placeholder="মূল্য *"
+                                value={item.price}
+                                disabled={isCanceled || isDelivered}
+                                onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
+                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
+                                className="w-full pl-4 pr-1.5 py-1 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Total Cost Sum Row */}
+                      <div className="flex items-center justify-between p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
+                            মোট পণ্য মূল্য (Total Cost):
+                          </span>
+                          {autoSaveStatus === 'saving' && (
+                            <span className="text-[11px] font-bold text-amber-600 animate-pulse flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> সংরক্ষণ হচ্ছে...
+                            </span>
+                          )}
+                          {autoSaveStatus === 'saved' && (
+                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
+                              <Check className="w-3 h-3" /> সংরক্ষিত
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-sm font-black text-emerald-900 font-mono">
+                          ৳{totalCalculatedCost}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
+                      {currentShopOrder.requestText
+                        ? currentShopOrder.requestText
+                          .replace(/^["'\s]+|["'\s]+$/g, '')
+                          .trim()
+                          .replace(/[ \t]+/g, ' ')
+                          .replace(/\n\s*\n+/g, '\n')
+                        : ''}
+                    </div>
+                  )}
                 </div>
 
                 {/* Helper Contact Details */}
@@ -945,6 +1175,33 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         <span>WhatsApp</span>
                       </a>
                     </div>
+                  )}
+                </div>
+
+                {/* Requirement 4: Store Private Note Card (Right after Helper Contact Details) */}
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
+                      <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
+                    </label>
+                    <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
+                  </div>
+                  <textarea
+                    placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
+                    value={noteInput}
+                    disabled={isCanceled || isDelivered}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
+                  />
+                  {!isCanceled && !isDelivered && (
+                    <button
+                      onClick={() => handleSaveNote(currentShopOrder.id)}
+                      disabled={updatingNote}
+                      className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs flex items-center justify-center gap-1"
+                    >
+                      <span>{updatingNote ? 'Saving Note...' : 'নোট সংরক্ষণ করুন (Save Note)'}</span>
+                    </button>
                   )}
                 </div>
 
@@ -1015,10 +1272,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             key={step.status}
                             onClick={() => {
                               if (canChangeStatus) {
-                                if (step.status === 'HANDOVER') {
-                                  const effectivePrice = costInput ? parseFloat(costInput) : (currentShopOrder.price || 0);
-                                  if (!effectivePrice || effectivePrice <= 0) {
-                                    setShowPriceAlertModal(true);
+                                if (step.status === 'HANDOVER' || step.status === 'READY') {
+                                  if (!isAllItemsComplete) {
+                                    showAlert(
+                                      'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
+                                      'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                      'warning'
+                                    );
                                     return;
                                   }
                                 }
@@ -1060,7 +1320,17 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                           </button>
                         ) : currentShopOrder.status === 'PREPARING' ? (
                           <button
-                            onClick={() => handleUpdateStatus(currentShopOrder.id, 'READY')}
+                            onClick={() => {
+                              if (!isAllItemsComplete) {
+                                showAlert(
+                                  'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
+                                  'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                  'warning'
+                                );
+                                return;
+                              }
+                              handleUpdateStatus(currentShopOrder.id, 'READY');
+                            }}
                             className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
                           >
                             রেডি হয়ে গেছে
@@ -1068,9 +1338,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         ) : currentShopOrder.status === 'READY' ? (
                           <button
                             onClick={() => {
-                              const effectivePrice = costInput ? parseFloat(costInput) : (currentShopOrder.price || 0);
-                              if (!effectivePrice || effectivePrice <= 0) {
-                                setShowPriceAlertModal(true);
+                              if (!isAllItemsComplete) {
+                                showAlert(
+                                  'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
+                                  'হস্তান্তর করার পূর্বে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                  'warning'
+                                );
                                 return;
                               }
                               handleUpdateStatus(currentShopOrder.id, 'HANDOVER');
@@ -1085,77 +1358,94 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   </div>
                 )}
 
-                {/* Service Type Card including Pricing */}
+                {/* Requirement 1 & 2: Order Items Card with Comma Divided Items and Pricing */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-                      {getParentOrder(currentShopOrder.parentOrderId)?.service || 'Request Details'}
+                      {formatServiceName(getParentOrder(currentShopOrder.parentOrderId)?.service) || 'আইটেম ও মূল্য তালিকা (Items & Pricing)'}
                     </h3>
-                  </div>
-                  <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                    {currentShopOrder.requestText
-                      ? currentShopOrder.requestText
-                        .replace(/^["'\s]+|["'\s]+$/g, '')
-                        .trim()
-                        .replace(/[ \t]+/g, ' ')
-                        .replace(/\n\s*\n+/g, '\n')
-                      : ''}
-                  </div>
-
-                  {/* Product Cost Forms & Store Private Note inside Request Details block */}
-                  <div className="space-y-4 border-t border-gray-100 pt-3">
-                    {/* Price input line */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Product Price (৳)</label>
-                        {isDelivered && (
-                          <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
-                            Completed Order Pricing
-                          </span>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 text-base font-bold">৳</span>
-                        <input
-                          type="number"
-                          placeholder="দামের পরিমাণ..."
-                          value={costInput}
-                          disabled={isCanceled || isDelivered}
-                          onChange={(e) => setCostInput(e.target.value)}
-                          className="w-full pl-7 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-lg font-black outline-none focus:border-emerald-500 disabled:opacity-70"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Private Store Note Box */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
-                          <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
-                        </label>
-                        <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
-                      </div>
-                      <textarea
-                        placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
-                        value={noteInput}
-                        disabled={isCanceled || isDelivered}
-                        onChange={(e) => setNoteInput(e.target.value)}
-                        rows={3}
-                        className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
-                      />
-                    </div>
-
-                    {/* Single update button */}
-                    {!isCanceled && !isDelivered && (
-                      <button
-                        onClick={() => handleUpdateCostAndNote(currentShopOrder.id)}
-                        disabled={updatingCost}
-                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm"
-                      >
-                        {updatingCost ? 'Saving...' : 'Update Note & Price'}
-                      </button>
+                    {isDelivered && (
+                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                        Completed Order Pricing
+                      </span>
                     )}
                   </div>
+
+                  {itemPrices.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {itemPrices.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-gray-50/80 p-2.5 rounded-2xl border border-gray-200/80"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="font-bold text-xs text-gray-800 break-words">
+                              {item.name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="w-16 sm:w-18 shrink-0">
+                              <input
+                                 type="text"
+                                 placeholder="ইউনিট *"
+                                 value={item.unit}
+                                 disabled={isCanceled || isDelivered}
+                                 onChange={(e) => handleItemFieldChange(idx, 'unit', e.target.value)}
+                                 onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
+                                 className="w-full px-1.5 py-1 bg-white border border-gray-200 rounded-xl text-[11px] font-semibold outline-none focus:border-emerald-500 disabled:opacity-70 text-gray-900 placeholder:text-gray-400 text-center"
+                              />
+                            </div>
+                            <div className="relative w-16 sm:w-18 shrink-0">
+                              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-[11px] font-bold pointer-events-none">
+                                ৳
+                              </span>
+                              <input
+                                type="number"
+                                placeholder="মূল্য *"
+                                value={item.price}
+                                disabled={isCanceled || isDelivered}
+                                onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
+                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
+                                className="w-full pl-4 pr-1.5 py-1 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Total Cost Sum Row */}
+                      <div className="flex items-center justify-between p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
+                            মোট পণ্য মূল্য (Total Cost):
+                          </span>
+                          {autoSaveStatus === 'saving' && (
+                            <span className="text-[11px] font-bold text-amber-600 animate-pulse flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> সংরক্ষণ হচ্ছে...
+                            </span>
+                          )}
+                          {autoSaveStatus === 'saved' && (
+                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
+                              <Check className="w-3 h-3" /> সংরক্ষিত
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-sm font-black text-emerald-900 font-mono">
+                          ৳{totalCalculatedCost}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
+                      {currentShopOrder.requestText
+                        ? currentShopOrder.requestText
+                          .replace(/^["'\s]+|["'\s]+$/g, '')
+                          .trim()
+                          .replace(/[ \t]+/g, ' ')
+                          .replace(/\n\s*\n+/g, '\n')
+                        : ''}
+                    </div>
+                  )}
                 </div>
 
                 {/* Helper Contact Details (right after Request Details block) */}
@@ -1191,6 +1481,33 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         <span>WhatsApp</span>
                       </a>
                     </div>
+                  )}
+                </div>
+
+                {/* Requirement 4: Store Private Note Card (Right after Helper Contact Details) */}
+                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
+                      <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
+                    </label>
+                    <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
+                  </div>
+                  <textarea
+                    placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
+                    value={noteInput}
+                    disabled={isCanceled || isDelivered}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
+                  />
+                  {!isCanceled && !isDelivered && (
+                    <button
+                      onClick={() => handleSaveNote(currentShopOrder.id)}
+                      disabled={updatingNote}
+                      className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs flex items-center justify-center gap-1"
+                    >
+                      <span>{updatingNote ? 'Saving Note...' : 'নোট সংরক্ষণ করুন (Save Note)'}</span>
+                    </button>
                   )}
                 </div>
 
@@ -1392,7 +1709,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   {(ordersSubTab === 'COMPLETED' ? filteredShopOrders : filteredShopOrders.slice(0, storeVisibleCount)).map((so) => {
                     const parentStatus = getParentOrderStatus(so.parentOrderId);
                     const parentOrder = getParentOrder(so.parentOrderId);
-                    const serviceName = parentOrder?.service || parentOrder?.title;
+                    const rawServiceName = parentOrder?.service || parentOrder?.title;
+                    const serviceName = formatServiceName(rawServiceName);
                     const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
                     const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
 
@@ -1441,7 +1759,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             {serviceName || 'Store Order'}
                           </h5>
                           <p className="text-xs text-gray-600 font-medium truncate">
-                            {so.requestText}
+                            {so.itemsWithPrice && so.itemsWithPrice.length > 0
+                              ? so.itemsWithPrice.map((i) => `${i.name}${i.price !== undefined ? ` (৳${i.price})` : ''}`).join(', ')
+                              : so.requestText}
                           </p>
                         </div>
 

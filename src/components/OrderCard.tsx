@@ -4,6 +4,7 @@ import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, Pack
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { calculateDistanceKm } from '@/lib/pricing';
 import { AsyncButton } from './ui/AsyncButton';
+import { fallbackStore } from '@/lib/firebase';
 
 interface OrderCardProps {
   order: Order;
@@ -103,7 +104,7 @@ const getCardAccent = (status: OrderStatus) => {
 };
 
 export const OrderCard: React.FC<OrderCardProps> = ({
-  order,
+  order: rawOrder,
   onClick,
   showDuration = false,
   isNew = false,
@@ -111,6 +112,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   customerView = false,
   helperActiveView = false,
 }) => {
+  const order = fallbackStore.resolveOrderLocations(rawOrder);
   const badge = getStatusBadgeInfo(order.status);
   const accent = getCardAccent(order.status);
   const BadgeIcon = badge.icon;

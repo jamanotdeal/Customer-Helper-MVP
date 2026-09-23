@@ -2,6 +2,8 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
+  setPersistence,
+  browserLocalPersistence,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -20,6 +22,7 @@ import {
   arrayUnion,
   writeBatch,
   increment,
+  deleteField,
 } from 'firebase/firestore';
 import {
   getMessaging,
@@ -47,6 +50,8 @@ import {
   RewardPrize,
   RewardClaim,
   CoinTransaction,
+  ServerAddress,
+  LocationData,
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isHelperEligibleForOrder } from './geofenceUtils';
@@ -63,6 +68,12 @@ const firebaseConfig = {
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 export const auth = getAuth(app);
+
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn('[Firebase] Persistence init note:', err?.message);
+  });
+}
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -405,6 +416,7 @@ class FallbackStore {
   public rewardPrizes: Map<string, RewardPrize> = new Map();
   public rewardClaims: Map<string, RewardClaim> = new Map();
   public coinTransactions: Map<string, CoinTransaction[]> = new Map();
+  public serverAddresses: Map<string, ServerAddress> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
 
   // Set by AuthContext when a user logs in/out so the Firestore
@@ -427,6 +439,7 @@ class FallbackStore {
   private _unsubListeners: (() => void)[] = [];
   private _shopsCachedAt = 0;  // epoch ms when shops were last fetched
   private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
+  private _addressesCachedAt = 0; // epoch ms when serverAddresses were last fetched
   private _listenersRole: string | null = null; // e.g. 'helper:uid123'
 
   constructor() {
@@ -692,6 +705,13 @@ class FallbackStore {
         });
       }
 
+      const parsedServerAddrs = this.safeParse<[string, ServerAddress][]>('jamanot_server_addresses');
+      if (parsedServerAddrs && Array.isArray(parsedServerAddrs)) {
+        parsedServerAddrs.forEach(([id, addr]) => {
+          if (id && addr) this.serverAddresses.set(id, addr);
+        });
+      }
+
       const savedPricing = this.safeParse<PricingSettings>('jamanot_pricing_store');
       if (savedPricing && typeof savedPricing === 'object') {
         this.pricingSettings = savedPricing;
@@ -721,6 +741,7 @@ class FallbackStore {
       localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
       localStorage.setItem('jamanot_reward_prizes_store', JSON.stringify(Array.from(this.rewardPrizes.entries())));
       localStorage.setItem('jamanot_reward_claims_store', JSON.stringify(Array.from(this.rewardClaims.entries())));
+      localStorage.setItem('jamanot_server_addresses', JSON.stringify(Array.from(this.serverAddresses.entries())));
       localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
       console.warn('Local storage persist error:', e);
@@ -865,6 +886,29 @@ class FallbackStore {
       .catch((err) => console.warn('[Firestore] CustomModals getDocs note:', err));
   }
 
+  // ─── Server Addresses: cached read with localStorage cache ─────────────────
+  private _loadServerAddressesCached() {
+    const CACHE_TTL = 15 * 60 * 1000;
+    if (Date.now() - this._addressesCachedAt < CACHE_TTL && this.serverAddresses.size > 0) return;
+    getDocs(collection(db, 'server_addresses'))
+      .then((snapshot) => {
+        snapshot.forEach((docSnap) => {
+          const addr = docSnap.data() as ServerAddress;
+          if (addr) {
+            const id = addr.id || docSnap.id;
+            this.serverAddresses.set(id, { ...addr, id });
+          }
+        });
+        this._addressesCachedAt = Date.now();
+        this.orders.forEach((ord, id) => {
+          this.orders.set(id, this.resolveOrderLocations(ord));
+        });
+        this.saveLocalStore();
+        this.notify();
+      })
+      .catch((err) => console.warn('[Firestore] ServerAddresses getDocs note:', err));
+  }
+
   // ─── Tear down all active Firestore listeners ──────────────────────────────
   // Called on logout and before switching to a different role/user.
   public teardownListeners() {
@@ -875,14 +919,6 @@ class FallbackStore {
 
   // ─── Role-scoped Firestore listener initialization ────────────────────────
   // Call this from AuthContext after login and whenever active mode changes.
-  //
-  // OPTIMIZATION SUMMARY vs old 12-listener approach:
-  //   Customer: own orders + own notifs + pricing + cached shops/modals
-  //   Helper:   active orders + own orders + own notifs + own wallet + pricing + cached shops/modals
-  //   Store:    incoming shopOrders + store orders + own customer orders + notifs + wallet + cached shops/modals
-  //   Admin:    full visibility with sensible limits (200 orders, 300 users, 500 txns)
-  //
-  // Estimated reads/day: ~1,400 (vs ~50,000 previously) for 500 orders/day
   public initListenersForRole(
     role: 'customer' | 'helper' | 'admin' | 'store',
     userId: string,
@@ -911,6 +947,30 @@ class FallbackStore {
           }
         },
         (err) => console.warn('[Firestore] PricingSettings sync note:', err)
+      )
+    );
+
+    // ── Server Addresses: realtime sync so address text updates reflect instantly across all clients ──
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'server_addresses'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') {
+              this.serverAddresses.delete(change.doc.id);
+            } else {
+              const addr = change.doc.data() as ServerAddress;
+              const id = addr.id || change.doc.id;
+              this.serverAddresses.set(id, { ...addr, id });
+            }
+          });
+          this.orders.forEach((ord, id) => {
+            this.orders.set(id, this.resolveOrderLocations(ord));
+          });
+          this.saveLocalStore();
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] ServerAddresses realtime sync note:', err)
       )
     );
 
@@ -953,7 +1013,7 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -976,7 +1036,7 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -1033,6 +1093,7 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
       this._loadModalsCached();
+      this._loadServerAddressesCached();
 
       // ── CUSTOMER role ─────────────────────────────────────────────────────────
     } else if (role === 'customer') {
@@ -1045,7 +1106,7 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -1144,6 +1205,7 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache (rarely change)
       this._loadShopsCached();
       this._loadModalsCached();
+      this._loadServerAddressesCached();
 
       // ── HELPER role ───────────────────────────────────────────────────────────
     } else if (role === 'helper') {
@@ -1166,7 +1228,7 @@ class FallbackStore {
                 // listener (helperId == userId, all statuses) will keep/re-add it.
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -1185,7 +1247,7 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -1259,6 +1321,7 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
       this._loadModalsCached();
+      this._loadServerAddressesCached();
 
       // Shop orders placed by this helper (realtime)
       unsubs.push(
@@ -1304,7 +1367,7 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, change.doc.data() as Order);
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
@@ -1328,6 +1391,24 @@ class FallbackStore {
             this.notify();
           },
           (err) => console.warn('[Firestore] Admin rewardClaims sync note:', err)
+        )
+      );
+
+      // ── REALTIME: order feedbacks (for Needs Attention bad feedback & feedback tab) ──
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orderFeedbacks'), orderBy('createdAt', 'desc'), limit(200)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orderFeedbacks.delete(change.doc.id);
+              } else {
+                this.orderFeedbacks.set(change.doc.id, change.doc.data() as OrderFeedback);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Admin orderFeedbacks sync note:', err)
         )
       );
 
@@ -1388,6 +1469,7 @@ class FallbackStore {
         this._fetchAdminWallets(),
         this._fetchAdminWalletTransactions(),
         this._fetchAdminScheduledNotifications(),
+        this._fetchServerAddresses(),
       ]);
       this.notify();
     } catch (err) {
@@ -1402,7 +1484,7 @@ class FallbackStore {
   public async refreshAdminData(
     subset?: 'users' | 'withdrawals' | 'helperApplications' | 'storeApplications' |
       'orderFeedbacks' | 'feeSuggestions' | 'customModals' | 'rewardPrizes' |
-      'shops' | 'shopOrders' | 'wallets' | 'walletTransactions' | 'scheduledNotifications' | 'all'
+      'shops' | 'shopOrders' | 'wallets' | 'walletTransactions' | 'scheduledNotifications' | 'serverAddresses' | 'all'
   ): Promise<void> {
     try {
       const target = subset ?? 'all';
@@ -1424,6 +1506,7 @@ class FallbackStore {
         case 'wallets': await this._fetchAdminWallets(); break;
         case 'walletTransactions': await this._fetchAdminWalletTransactions(); break;
         case 'scheduledNotifications': await this._fetchAdminScheduledNotifications(); break;
+        case 'serverAddresses': await this._fetchServerAddresses(); break;
       }
       this.notify();
     } catch (err) {
@@ -1514,6 +1597,23 @@ class FallbackStore {
     this.scheduledNotifications.clear();
     snap.docs.forEach((d) => { this.scheduledNotifications.set(d.id, d.data() as AppNotification); });
     this.saveLocalStore();
+  }
+
+  private async _fetchServerAddresses() {
+    try {
+      const snap = await getDocs(collection(db, 'server_addresses'));
+      this.serverAddresses.clear();
+      snap.docs.forEach((d) => {
+        const a = d.data() as ServerAddress;
+        if (a) {
+          const id = a.id || d.id;
+          this.serverAddresses.set(id, { ...a, id });
+        }
+      });
+      this.saveLocalStore();
+    } catch (e) {
+      console.warn('[Firestore] _fetchServerAddresses error:', e);
+    }
   }
 
   public subscribe(listener: Listener): () => void {
@@ -1704,6 +1804,7 @@ class FallbackStore {
     const updated: UserProfile = {
       ...existing,
       isAdmin,
+      isSuperAdmin: !isAdmin ? false : existing.isSuperAdmin,
       role: isAdmin ? 'admin' : (existing.isHelper ? 'helper' : 'customer'),
       lastActiveMode: isAdmin ? 'admin' : (existing.lastActiveMode === 'admin' ? 'customer' : existing.lastActiveMode),
     };
@@ -1715,6 +1816,26 @@ class FallbackStore {
       console.warn('[Firestore] setAdminRole note (stored locally):', e?.message || e);
     }
   }
+
+  public async setSuperAdminRole(uid: string, isSuperAdmin: boolean) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+    const updated: UserProfile = {
+      ...existing,
+      isAdmin: isSuperAdmin ? true : existing.isAdmin,
+      isSuperAdmin,
+      role: isSuperAdmin ? 'admin' : (existing.isAdmin ? 'admin' : (existing.isHelper ? 'helper' : 'customer')),
+      lastActiveMode: isSuperAdmin ? 'admin' : existing.lastActiveMode,
+    };
+    this.users.set(uid, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] setSuperAdminRole note (stored locally):', e?.message || e);
+    }
+  }
+
 
   public async addOrder(order: Order) {
     this.orders.set(order.id, order);
@@ -2512,6 +2633,76 @@ class FallbackStore {
       return this.getShopOrdersForOrder(parentOrderId);
     }
   }
+
+  public async getAllShopOrders(): Promise<ShopOrder[]> {
+    try {
+      const snap = await getDocs(query(collection(db, 'shopOrders'), orderBy('createdAt', 'desc'), limit(1000)));
+      snap.docs.forEach((d) => {
+        const so = d.data() as ShopOrder;
+        if (so && so.id) {
+          this.shopOrders.set(d.id, so);
+        }
+      });
+      this.notify();
+    } catch (e: any) {
+      try {
+        const snap2 = await getDocs(query(collection(db, 'shopOrders'), limit(1000)));
+        snap2.docs.forEach((d) => {
+          const so = d.data() as ShopOrder;
+          if (so && so.id) {
+            this.shopOrders.set(d.id, so);
+          }
+        });
+        this.notify();
+      } catch (err) {
+        console.warn('[Firestore] getAllShopOrders fallback note:', err);
+      }
+    }
+    return Array.from(this.shopOrders.values());
+  }
+
+  public async deleteShopOrdersBulk(shopOrderIds: string[]): Promise<void> {
+    for (const id of shopOrderIds) {
+      await this.deleteShopOrder(id);
+    }
+  }
+
+  public async updateShopOrderDetails(
+    shopOrderId: string,
+    updates: Partial<ShopOrder>,
+    adminName?: string
+  ): Promise<void> {
+    const existing = this.shopOrders.get(shopOrderId);
+    if (!existing) return;
+
+    const historyItem: import('@/types').ShopOrderStatusHistoryItem | undefined =
+      updates.status && updates.status !== existing.status
+        ? {
+            status: updates.status,
+            timestamp: new Date().toISOString(),
+            actor: adminName || 'Admin',
+            note: updates.note || `Status changed to ${updates.status} by Admin`,
+          }
+        : undefined;
+
+    const updated: ShopOrder = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+      statusHistory: historyItem
+        ? [...(existing.statusHistory || []), historyItem]
+        : existing.statusHistory || [],
+    };
+
+    this.shopOrders.set(shopOrderId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shopOrders', shopOrderId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateShopOrderDetails note:', e?.message || e);
+    }
+  }
+
 
   public async fetchCustomerOrders(userId: string): Promise<Order[]> {
     if (!userId || !db) return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
@@ -3639,12 +3830,16 @@ class FallbackStore {
     this.orderFeedbacks.delete(feedbackId);
     if (fb && fb.orderId) {
       const ord = this.orders.get(fb.orderId);
-      if (ord && ord.feedback?.id === feedbackId) {
+      if (ord) {
         delete ord.feedback;
         this.orders.set(ord.id, ord);
         try {
-          await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
-        } catch (_) { }
+          await updateDoc(doc(db, 'orders', ord.id), { feedback: deleteField() });
+        } catch (_) {
+          try {
+            await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord));
+          } catch (_) { }
+        }
       }
     }
     this.notify();
@@ -3693,6 +3888,43 @@ class FallbackStore {
       await setDoc(doc(db, 'orderFeedbacks', feedbackId), { adminReplyShownToCustomer: true }, { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] markFeedbackReplyShown error:', e?.message || e);
+    }
+  }
+
+  public async updateOrderFeedbackMutuallyDiscussed(feedbackId: string, mutuallyDiscussed: boolean = true) {
+    const fb = this.orderFeedbacks.get(feedbackId);
+    if (!fb) return;
+    const updated: OrderFeedback = {
+      ...fb,
+      mutuallyDiscussed,
+    };
+    this.orderFeedbacks.set(feedbackId, updated);
+
+    // Also update order mutuallyDiscussed flag and order.feedback if available
+    if (fb.orderId) {
+      const ord = this.orders.get(fb.orderId);
+      if (ord) {
+        ord.mutuallyDiscussed = mutuallyDiscussed;
+        if (ord.feedback) {
+          ord.feedback.mutuallyDiscussed = mutuallyDiscussed;
+        }
+        this.orders.set(ord.id, ord);
+        try {
+          await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+        } catch (e: any) {
+          console.warn('[Firestore] updateOrderFeedbackMutuallyDiscussed order update note:', e?.message || e);
+        }
+      }
+    }
+
+    this.notify();
+    try {
+      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
+    } catch (_) { }
+    try {
+      await setDoc(doc(db, 'orderFeedbacks', feedbackId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateOrderFeedbackMutuallyDiscussed error:', e?.message || e);
     }
   }
 
@@ -4384,6 +4616,344 @@ class FallbackStore {
       console.warn('[Firestore] getAllCustomModals error:', e);
       return Array.from(this.customModals.values());
     }
+  }
+
+  public async addServerAddress(addr: ServerAddress): Promise<void> {
+    this.serverAddresses.set(addr.id, addr);
+    this.saveLocalStore();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'server_addresses', addr.id), cleanForFirestore(addr), { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] addServerAddress error:', e);
+    }
+  }
+
+  public resolveLocation(loc?: LocationData): LocationData | undefined {
+    if (!loc) return loc;
+    if (loc.addressId && this.serverAddresses.has(loc.addressId)) {
+      const sa = this.serverAddresses.get(loc.addressId)!;
+      return {
+        ...loc,
+        address: sa.address,
+        name: sa.shortName || loc.name,
+        lat: typeof sa.lat === 'number' ? sa.lat : loc.lat,
+        lng: typeof sa.lng === 'number' ? sa.lng : loc.lng,
+        details: sa.details || loc.details,
+        addressId: sa.id,
+      };
+    }
+    if (loc.address) {
+      const norm = loc.address.trim().toLowerCase();
+      const matched = Array.from(this.serverAddresses.values()).find(
+        (s) => s.address && s.address.trim().toLowerCase() === norm
+      );
+      if (matched) {
+        return {
+          ...loc,
+          address: matched.address,
+          name: matched.shortName || loc.name,
+          lat: typeof matched.lat === 'number' ? matched.lat : loc.lat,
+          lng: typeof matched.lng === 'number' ? matched.lng : loc.lng,
+          details: matched.details || loc.details,
+          addressId: matched.id,
+        };
+      }
+    }
+    return loc;
+  }
+
+  public resolveOrderLocations(order: Order): Order {
+    if (!order) return order;
+    return {
+      ...order,
+      deliveryLocation: order.deliveryLocation ? this.resolveLocation(order.deliveryLocation)! : order.deliveryLocation,
+      pickupLocation: order.pickupLocation ? this.resolveLocation(order.pickupLocation) : order.pickupLocation,
+    };
+  }
+
+  public async updateServerAddress(id: string, updates: Partial<ServerAddress>): Promise<void> {
+    const existing = this.serverAddresses.get(id);
+    if (!existing) return;
+    const oldAddressText = existing.address.trim().toLowerCase();
+    const updated: ServerAddress = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.serverAddresses.set(id, updated);
+    const newAddressText = updated.address.trim();
+
+    // 1. Update all matching orders in store and sync to Firestore
+    const orderPromises: Promise<void>[] = [];
+    this.orders.forEach((ord, orderId) => {
+      let isChanged = false;
+      let newDeliv = ord.deliveryLocation;
+      let newPickup = ord.pickupLocation;
+
+      if (newDeliv) {
+        const isMatch = (newDeliv.addressId && newDeliv.addressId === id) ||
+          (newDeliv.address && newDeliv.address.trim().toLowerCase() === oldAddressText);
+        if (isMatch) {
+          newDeliv = {
+            ...newDeliv,
+            address: newAddressText,
+            name: updated.shortName || newDeliv.name,
+            lat: typeof updated.lat === 'number' ? updated.lat : newDeliv.lat,
+            lng: typeof updated.lng === 'number' ? updated.lng : newDeliv.lng,
+            addressId: id,
+          };
+          isChanged = true;
+        }
+      }
+
+      if (newPickup) {
+        const isMatch = (newPickup.addressId && newPickup.addressId === id) ||
+          (newPickup.address && newPickup.address.trim().toLowerCase() === oldAddressText);
+        if (isMatch) {
+          newPickup = {
+            ...newPickup,
+            address: newAddressText,
+            name: updated.shortName || newPickup.name,
+            lat: typeof updated.lat === 'number' ? updated.lat : newPickup.lat,
+            lng: typeof updated.lng === 'number' ? updated.lng : newPickup.lng,
+            addressId: id,
+          };
+          isChanged = true;
+        }
+      }
+
+      if (isChanged) {
+        const newOrd: Order = {
+          ...ord,
+          deliveryLocation: newDeliv,
+          pickupLocation: newPickup,
+          updatedAt: new Date().toISOString(),
+        };
+        this.orders.set(orderId, newOrd);
+        orderPromises.push(
+          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => {}).catch(() => {})
+        );
+      }
+    });
+
+    // 2. Update user default locations in users map & Firestore
+    this.users.forEach((user, uid) => {
+      if (user.defaultDeliveryLocation) {
+        const isMatch = (user.defaultDeliveryLocation.addressId && user.defaultDeliveryLocation.addressId === id) ||
+          (user.defaultDeliveryLocation.address && user.defaultDeliveryLocation.address.trim().toLowerCase() === oldAddressText);
+        if (isMatch) {
+          const updatedUser: UserProfile = {
+            ...user,
+            defaultDeliveryLocation: {
+              ...user.defaultDeliveryLocation,
+              address: newAddressText,
+              name: updated.shortName || user.defaultDeliveryLocation.name,
+              lat: typeof updated.lat === 'number' ? updated.lat : user.defaultDeliveryLocation.lat,
+              lng: typeof updated.lng === 'number' ? updated.lng : user.defaultDeliveryLocation.lng,
+              addressId: id,
+            },
+          };
+          this.users.set(uid, updatedUser);
+          orderPromises.push(
+            setDoc(doc(db, 'users', uid), cleanForFirestore(updatedUser), { merge: true }).then(() => {}).catch(() => {})
+          );
+        }
+      }
+    });
+
+    // 3. Update localStorage saved keys
+    if (typeof window !== 'undefined') {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('jamanot_')) {
+            const raw = localStorage.getItem(key);
+            if (raw && (raw.includes(id) || raw.toLowerCase().includes(oldAddressText))) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                  let arrChanged = false;
+                  const newArr = parsed.map((item) => {
+                    if (item && typeof item === 'object' && ('address' in item || 'addressId' in item)) {
+                      if (item.addressId === id || (item.address && item.address.trim().toLowerCase() === oldAddressText)) {
+                        arrChanged = true;
+                        return {
+                          ...item,
+                          address: newAddressText,
+                          name: updated.shortName || item.name,
+                          lat: typeof updated.lat === 'number' ? updated.lat : item.lat,
+                          lng: typeof updated.lng === 'number' ? updated.lng : item.lng,
+                          addressId: id,
+                        };
+                      }
+                    }
+                    return item;
+                  });
+                  if (arrChanged) {
+                    localStorage.setItem(key, JSON.stringify(newArr));
+                  }
+                } else if (parsed && typeof parsed === 'object' && ('address' in parsed || 'addressId' in parsed)) {
+                  if (parsed.addressId === id || (parsed.address && parsed.address.trim().toLowerCase() === oldAddressText)) {
+                    localStorage.setItem(key, JSON.stringify({
+                      ...parsed,
+                      address: newAddressText,
+                      name: updated.shortName || parsed.name,
+                      lat: typeof updated.lat === 'number' ? updated.lat : parsed.lat,
+                      lng: typeof updated.lng === 'number' ? updated.lng : parsed.lng,
+                      addressId: id,
+                    }));
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    this.saveLocalStore();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'server_addresses', id), cleanForFirestore(updated), { merge: true });
+      await Promise.all(orderPromises);
+    } catch (e) {
+      console.warn('[Firestore] updateServerAddress error:', e);
+    }
+  }
+
+  public async deleteServerAddress(id: string): Promise<void> {
+    this.serverAddresses.delete(id);
+    this.saveLocalStore();
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'server_addresses', id));
+    } catch (e) {
+      console.warn('[Firestore] deleteServerAddress error:', e);
+    }
+  }
+
+  public async getAllServerAddresses(): Promise<ServerAddress[]> {
+    try {
+      const snap = await getDocs(collection(db, 'server_addresses'));
+      snap.forEach((docSnap) => {
+        const addr = docSnap.data() as ServerAddress;
+        if (addr) {
+          const id = addr.id || docSnap.id;
+          this.serverAddresses.set(id, { ...addr, id });
+        }
+      });
+      this.orders.forEach((ord, id) => {
+        this.orders.set(id, this.resolveOrderLocations(ord));
+      });
+      this.saveLocalStore();
+      this.notify();
+    } catch (e) {
+      console.warn('[Firestore] getAllServerAddresses error:', e);
+    }
+    return Array.from(this.serverAddresses.values());
+  }
+
+  public async searchServerAddresses(query: string, maxResults = 4): Promise<ServerAddress[]> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    try {
+      await this._loadServerAddressesCached();
+    } catch (_) {}
+
+    const tokens = q.split(/[\s,]+/).filter(Boolean);
+    const results = Array.from(this.serverAddresses.values())
+      .map((item) => {
+        const itemText = (item.address || '').toLowerCase();
+        const itemShort = (item.shortName || '').toLowerCase();
+        const itemDetails = (item.details || '').toLowerCase();
+        const full = `${itemText} ${itemShort} ${itemDetails}`;
+
+        let score = 0;
+        if (itemText.startsWith(q)) score += 100;
+        else if (itemShort.startsWith(q)) score += 90;
+        else if (itemText.includes(q)) score += 60;
+        else if (full.includes(q)) score += 50;
+        else if (tokens.length > 0) {
+          let tokenMatches = 0;
+          for (const token of tokens) {
+            if (full.includes(token)) tokenMatches++;
+          }
+          if (tokenMatches > 0) {
+            score += (tokenMatches / tokens.length) * 40;
+            if (tokenMatches === tokens.length) score += 25;
+          }
+        }
+        if (score === 0) return { item, score: 0 };
+        if (item.lat && item.lng) score += 5;
+        score += Math.min(item.usageCount || 1, 10);
+        return { item, score };
+      })
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((r) => r.item)
+      .slice(0, maxResults);
+
+    return results;
+  }
+
+  public async recordOrUpsertServerAddress(
+    addressText: string,
+    coords?: { lat?: number; lng?: number; shortName?: string; details?: string }
+  ): Promise<ServerAddress> {
+    const cleanText = addressText.trim();
+    if (!cleanText) throw new Error('Address is empty');
+
+    // Check if an existing address matches cleanText
+    const matched = Array.from(this.serverAddresses.values()).find(
+      (a) => a.address.trim().toLowerCase() === cleanText.toLowerCase()
+    );
+
+    if (matched) {
+      const shouldUpdate =
+        (coords?.lat && coords?.lat !== matched.lat) ||
+        (coords?.lng && coords?.lng !== matched.lng) ||
+        (coords?.shortName && coords?.shortName !== matched.shortName) ||
+        (coords?.details && coords?.details !== matched.details);
+
+      if (shouldUpdate) {
+        const updated: ServerAddress = {
+          ...matched,
+          lat: coords?.lat ?? matched.lat,
+          lng: coords?.lng ?? matched.lng,
+          shortName: coords?.shortName ?? matched.shortName,
+          details: coords?.details ?? matched.details,
+          usageCount: (matched.usageCount || 1) + 1,
+          updatedAt: new Date().toISOString(),
+        };
+        this.serverAddresses.set(matched.id, updated);
+        this.saveLocalStore();
+        this.notify();
+        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => {});
+        return updated;
+      }
+      return matched;
+    }
+
+    // Create new ServerAddress
+    const id = `addr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newAddr: ServerAddress = {
+      id,
+      address: cleanText,
+      shortName: coords?.shortName || undefined,
+      lat: coords?.lat || undefined,
+      lng: coords?.lng || undefined,
+      details: coords?.details || undefined,
+      usageCount: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.serverAddresses.set(id, newAddr);
+    this.saveLocalStore();
+    this.notify();
+    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => {});
+    return newAddr;
   }
 }
 

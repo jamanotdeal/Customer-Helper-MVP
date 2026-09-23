@@ -41,6 +41,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
+import { AdminStoreOrderDetailsModal } from './AdminStoreOrderDetailsModal';
 
 interface AdminOrderDetailsModalProps {
   orderId: string;
@@ -55,6 +56,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const { user: currentUser } = useAuth();
   const isSuperAdmin = currentUser?.isSuperAdmin ?? false;
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedShopOrderId, setSelectedShopOrderId] = useState<string | null>(null);
 
   // Reactive live order state bound to fallbackStore updates
   const [order, setOrder] = useState<Order | undefined>(() => fallbackStore.orders.get(orderId));
@@ -608,20 +610,36 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     }
   };
 
-  const handleAdminSaveAddress = (type: 'pickup' | 'delivery', loc: LocationData) => {
+  const handleAdminSaveAddress = async (type: 'pickup' | 'delivery', loc: LocationData) => {
+    let effectiveAddressId = loc.addressId;
+    try {
+      const sa = await fallbackStore.recordOrUpsertServerAddress(loc.address, {
+        lat: loc.lat,
+        lng: loc.lng,
+        shortName: loc.name,
+        details: loc.details,
+      });
+      if (sa?.id) effectiveAddressId = sa.id;
+    } catch (_) {}
+
+    const locWithId: LocationData = {
+      ...loc,
+      addressId: effectiveAddressId,
+    };
+
     fallbackStore.updateOrder(orderId, (o) => {
       const changes = [];
       const oldVal = type === 'pickup' ? (o.pickupLocation?.address || 'N/A') : (o.deliveryLocation?.address || 'N/A');
       changes.push({
         field: type === 'pickup' ? 'Pickup Address' : 'Delivery Address',
         oldValue: oldVal,
-        newValue: loc.address,
+        newValue: locWithId.address,
       });
 
       const updatedOrder = {
         ...o,
-        pickupLocation: type === 'pickup' ? loc : o.pickupLocation,
-        deliveryLocation: type === 'delivery' ? loc : o.deliveryLocation,
+        pickupLocation: type === 'pickup' ? locWithId : o.pickupLocation,
+        deliveryLocation: type === 'delivery' ? locWithId : o.deliveryLocation,
         lastEditedBy: 'admin' as const,
         lastEditedAt: new Date().toISOString(),
         editHistory: [
@@ -641,7 +659,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             status: o.status,
             timestamp: new Date().toISOString(),
             actor: 'Admin',
-            note: `${type === 'pickup' ? 'Pickup' : 'Delivery'} address updated to: ${loc.address}`,
+            note: `${type === 'pickup' ? 'Pickup' : 'Delivery'} address updated to: ${locWithId.address}`,
           },
         ],
       };
@@ -1517,12 +1535,33 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                               {so.status}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-700 font-semibold bg-gray-50 p-2 rounded-lg border border-gray-100">
-                            {so.requestText}
-                          </p>
-                          <div className="flex items-center justify-between text-[11px] pt-0.5 text-gray-600">
-                            <span>Set Price: <strong className="text-purple-900">{so.price !== undefined ? `৳${so.price}` : 'Not set'}</strong></span>
-                            {shop?.whatsapp && <span>Shop Phone: <strong className="text-gray-900">{shop.whatsapp}</strong></span>}
+                          {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
+                            <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 text-xs space-y-1">
+                              {so.itemsWithPrice.map((it, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-gray-700">
+                                  <span>{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
+                                  <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-gray-700 font-semibold bg-gray-50 p-2 rounded-lg border border-gray-100">
+                              {so.requestText}
+                            </p>
+                          )}
+                          <div className="flex items-center justify-between text-[11px] pt-1 text-gray-600 flex-wrap gap-2 border-t border-purple-50">
+                            <div>
+                              <span>Total Price: <strong className="text-purple-900">{so.price !== undefined ? `৳${so.price}` : 'Not set'}</strong></span>
+                              {shop?.whatsapp && <span className="ml-3">Phone: <strong className="text-gray-900">{shop.whatsapp}</strong></span>}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedShopOrderId(so.id)}
+                              className="px-2.5 py-1 rounded-lg bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] transition-all flex items-center gap-1 shadow-xs"
+                            >
+                              <span>Manage Store Order</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </button>
                           </div>
                         </div>
                       );
@@ -2559,6 +2598,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           helperLocation={helperLocation}
           shops={Array.from(fallbackStore.shops.values())}
           shopOrders={fallbackStore.getShopOrdersForOrder(order.id)}
+        />
+      )}
+
+      {/* Admin Store Order Details Modal */}
+      {selectedShopOrderId && (
+        <AdminStoreOrderDetailsModal
+          shopOrderId={selectedShopOrderId}
+          onClose={() => setSelectedShopOrderId(null)}
         />
       )}
     </>

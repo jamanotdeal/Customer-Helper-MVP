@@ -176,6 +176,26 @@ export function getElapsedTime(createdAtStrOrOrder: string | OrderTimeInfo, endA
   return formatMinSecText(createdAtStrOrOrder, endAtStr);
 }
 
+export function getLiveElapsedTimeHMS(createdAtStrOrOrder: string | OrderTimeInfo, endAtStr?: string): string {
+  let diffMs = 0;
+  if (typeof createdAtStrOrOrder === 'object') {
+    diffMs = getOrderEffectiveElapsedMs(createdAtStrOrOrder);
+  } else if (createdAtStrOrOrder) {
+    const start = new Date(createdAtStrOrOrder).getTime();
+    if (!isNaN(start)) {
+      const end = endAtStr ? new Date(endAtStr).getTime() : Date.now();
+      diffMs = Math.max(0, (!isNaN(end) ? end : Date.now()) - start);
+    }
+  }
+
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+
+  return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+}
+
 export function getDeliveryDurationText(createdAtStrOrOrder: string | OrderTimeInfo, endedAtStr?: string): string {
   if (typeof createdAtStrOrOrder === 'object') {
     const diffMs = getOrderEffectiveElapsedMs(createdAtStrOrOrder);

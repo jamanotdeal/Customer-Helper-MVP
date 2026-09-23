@@ -11,6 +11,8 @@ interface PaginationControlProps {
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizeOptions?: number[];
+  colorScheme?: 'purple' | 'indigo' | 'emerald';
+  className?: string;
 }
 
 export const PaginationControl: React.FC<PaginationControlProps> = ({
@@ -21,6 +23,8 @@ export const PaginationControl: React.FC<PaginationControlProps> = ({
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = [10, 25, 30, 50, 100],
+  colorScheme = 'purple',
+  className = '',
 }) => {
   if (totalItems === 0) return null;
 
@@ -52,8 +56,22 @@ export const PaginationControl: React.FC<PaginationControlProps> = ({
     return pages;
   };
 
+  const activeBtnClass =
+    colorScheme === 'indigo'
+      ? 'bg-indigo-900 text-white shadow-md'
+      : colorScheme === 'emerald'
+      ? 'bg-emerald-700 text-white shadow-md'
+      : 'bg-purple-900 text-white shadow-md';
+
+  const focusRingClass =
+    colorScheme === 'indigo'
+      ? 'focus:ring-indigo-500/20'
+      : colorScheme === 'emerald'
+      ? 'focus:ring-emerald-500/20'
+      : 'focus:ring-purple-500/20';
+
   return (
-    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 py-3 px-5 bg-white border-t border-gray-100 rounded-b-3xl text-xs">
+    <div className={`flex flex-col sm:flex-row items-center justify-between gap-4 py-3 px-5 bg-white border-t border-gray-100 rounded-b-3xl text-xs ${className}`}>
       {/* Items Range & Page Size Picker */}
       <div className="flex items-center space-x-4 text-gray-500 font-medium">
         <span>
@@ -68,7 +86,7 @@ export const PaginationControl: React.FC<PaginationControlProps> = ({
             id="pageSizeSelect"
             value={pageSize}
             onChange={(e) => onPageSizeChange(Number(e.target.value))}
-            className="bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1 text-xs font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+            className={`bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1 text-xs font-bold text-gray-800 focus:outline-none focus:ring-2 ${focusRingClass}`}
           >
             {pageSizeOptions.map((opt) => (
               <option key={opt} value={opt}>
@@ -107,7 +125,7 @@ export const PaginationControl: React.FC<PaginationControlProps> = ({
                 onClick={() => onPageChange(pg)}
                 className={`w-8 h-8 rounded-xl text-xs font-extrabold transition-all ${
                   currentPage === pg
-                    ? 'bg-purple-900 text-white shadow-md'
+                    ? activeBtnClass
                     : 'text-gray-700 hover:bg-gray-100 border border-transparent'
                 }`}
               >

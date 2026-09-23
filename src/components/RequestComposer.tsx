@@ -4,15 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
-import { OrderItem, LocationData, Order } from '@/types';
+import { OrderItem, LocationData, Order, ServerAddress } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore, saveCustomerPickupAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
-import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress, getSavedPickupAddresses, addSavedPickupAddress } from '@/lib/storage';
+import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getServiceDeliveryLocation, saveServiceDeliveryLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress, getSavedPickupAddresses, addSavedPickupAddress } from '@/lib/storage';
 import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Check, Clock, AlertTriangle, AlertCircle, Coins, Sparkles, Gift, X } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
-import { MapPickerModal } from './MapPickerModal';
-import { SavedAddressPicker } from './SavedAddressPicker';
+import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
 
@@ -40,22 +39,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [deliveryLat, setDeliveryLat] = useState<number | undefined>(undefined);
   const [deliveryLng, setDeliveryLng] = useState<number | undefined>(undefined);
+  const [deliveryAddressId, setDeliveryAddressId] = useState<string | undefined>(undefined);
 
   // Pickup Location state
   const [pickupLat, setPickupLat] = useState<number | undefined>(undefined);
   const [pickupLng, setPickupLng] = useState<number | undefined>(undefined);
+  const [pickupAddressId, setPickupAddressId] = useState<string | undefined>(undefined);
 
-  // Map Picker Modal States
-  const [showPickupMapPicker, setShowPickupMapPicker] = useState(false);
-  const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
-  const [mapHasError, setMapHasError] = useState(false);
-
-  // Saved address picker state
-  const [showSavedAddressPicker, setShowSavedAddressPicker] = useState(false);
+  // Saved address states (from localStorage & Firestore)
   const [savedAddresses, setSavedAddresses] = useState<LocationData[]>([]);
-
-  // Pickup saved-address picker state (service-scoped)
-  const [showPickupAddressPicker, setShowPickupAddressPicker] = useState(false);
   const [savedPickupAddresses, setSavedPickupAddresses] = useState<LocationData[]>([]);
 
   // Previous unpaid due payment state
@@ -102,31 +94,59 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return noSaveList.some((n) => n.trim().toLowerCase() === lowerSvc);
   };
 
-  // When service changes, pre-fill pickup from saved location (if allowed)
+  const userInitRef = useRef<string | null>(null);
+
+  // When service changes, pre-fill pickup & delivery from previous used locations for this category
   const handleServiceChange = (newService: string) => {
     setService(newService);
     setErrors((prev) => ({ ...prev, service: undefined }));
+
+    // 1. Pre-fill Pickup Address for this service category
     if (!isNoSavePickupService(newService)) {
-      const saved = getServicePickupLocation(newService, user?.uid);
-      const userPickupList = user?.uid ? getSavedPickupAddresses(user.uid) : [];
-      if (saved?.address) {
-        setPickupNote(saved.address);
-        if (saved.lat) setPickupLat(saved.lat);
-        if (saved.lng) setPickupLng(saved.lng);
-        setSavedPickupAddresses(userPickupList.length > 0 ? userPickupList : [saved]);
+      const rawPickup = getServicePickupLocation(newService, user?.uid);
+      const savedPickup = fallbackStore.resolveLocation(rawPickup || undefined);
+      const userPickupList = (user?.uid ? getSavedPickupAddresses(user.uid) : [])
+        .map((p) => fallbackStore.resolveLocation(p) || p);
+      if (savedPickup?.address) {
+        setPickupNote(savedPickup.address.trim());
+        setPickupLat(savedPickup.lat);
+        setPickupLng(savedPickup.lng);
+        setPickupAddressId(savedPickup.addressId);
+        setSavedPickupAddresses(userPickupList.length > 0 ? userPickupList : [savedPickup]);
       } else if (userPickupList.length > 0) {
         setSavedPickupAddresses(userPickupList);
       } else {
         setPickupNote('');
         setPickupLat(undefined);
         setPickupLng(undefined);
+        setPickupAddressId(undefined);
         setSavedPickupAddresses([]);
       }
     } else {
       setPickupNote('');
       setPickupLat(undefined);
       setPickupLng(undefined);
+      setPickupAddressId(undefined);
       setSavedPickupAddresses([]);
+    }
+
+    // 2. Pre-fill Delivery Address for this service category (or fallback to default delivery address)
+    const rawDelivery = getServiceDeliveryLocation(newService, user?.uid);
+    const savedDelivery = fallbackStore.resolveLocation(rawDelivery || undefined);
+    if (savedDelivery?.address) {
+      setDeliveryAddress(savedDelivery.address.trim());
+      setDeliveryLat(savedDelivery.lat);
+      setDeliveryLng(savedDelivery.lng);
+      setDeliveryAddressId(savedDelivery.addressId);
+    } else {
+      const rawDefaultLoc = getSavedDefaultDeliveryLocation() || user?.defaultDeliveryLocation;
+      const defaultLoc = fallbackStore.resolveLocation(rawDefaultLoc);
+      if (defaultLoc?.address) {
+        setDeliveryAddress(defaultLoc.address.trim());
+        setDeliveryLat(defaultLoc.lat);
+        setDeliveryLng(defaultLoc.lng);
+        setDeliveryAddressId(defaultLoc.addressId);
+      }
     }
   };
 
@@ -142,11 +162,11 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       const params = new URLSearchParams(window.location.search);
       const serviceParam = params.get('service');
       if (serviceParam) {
-        setService(serviceParam);
+        handleServiceChange(serviceParam);
         setIsExpanded(true);
       }
     }
-  }, []);
+  }, [user?.uid]);
 
   // Update SEO metadata dynamically when selected service changes
   useEffect(() => {
@@ -170,30 +190,35 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return () => unsub();
   }, []);
 
-  // Pre-fill phone and delivery location if available
+  // Pre-fill phone and delivery location once on login / initial mount
   useEffect(() => {
-    if (user) {
+    if (user?.uid && userInitRef.current !== user.uid) {
+      userInitRef.current = user.uid;
       const savedPhone = getSavedAltPhone() || user.alternativePhone || '';
       if (savedPhone) setAltPhone(savedPhone);
 
-      const savedLoc = getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
+      const rawDefaultLoc = getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
+      const savedLoc = fallbackStore.resolveLocation(rawDefaultLoc);
       if (savedLoc?.address) {
-        setDeliveryAddress(formatShortAddress(savedLoc.address));
+        setDeliveryAddress(savedLoc.address.trim());
         if (savedLoc.lat) setDeliveryLat(savedLoc.lat);
         if (savedLoc.lng) setDeliveryLng(savedLoc.lng);
+        if (savedLoc.addressId) setDeliveryAddressId(savedLoc.addressId);
       }
 
       // Load saved delivery addresses from localStorage (populated from Firestore on login)
-      const addresses = getSavedDeliveryAddresses(user.uid);
+      const addresses = getSavedDeliveryAddresses(user.uid)
+        .map((a) => fallbackStore.resolveLocation(a) || a);
       setSavedAddresses(addresses);
 
       // Load saved pickup addresses from localStorage (populated from Firestore on login)
-      const pickupAddresses = getSavedPickupAddresses(user.uid);
+      const pickupAddresses = getSavedPickupAddresses(user.uid)
+        .map((p) => fallbackStore.resolveLocation(p) || p);
       if (pickupAddresses.length > 0) {
         setSavedPickupAddresses(pickupAddresses);
       }
     }
-  }, [user]);
+  }, [user?.uid]);
 
   // Sync customer's unpaid due payments from previous completed orders
   useEffect(() => {
@@ -209,6 +234,77 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     const unsub = fallbackStore.subscribe(syncDue);
     return () => unsub();
   }, [user?.uid]);
+
+  // Live auto-update pre-filled address and suggestions when server addresses change
+  useEffect(() => {
+    const syncServerAddresses = () => {
+      // 1. If delivery address was set from an address with ID or matches a server address
+      if (deliveryAddressId && fallbackStore.serverAddresses.has(deliveryAddressId)) {
+        const sa = fallbackStore.serverAddresses.get(deliveryAddressId)!;
+        if (sa.address && sa.address !== deliveryAddress) {
+          setDeliveryAddress(sa.address);
+        }
+        if (typeof sa.lat === 'number' && sa.lat !== deliveryLat) {
+          setDeliveryLat(sa.lat);
+        }
+        if (typeof sa.lng === 'number' && sa.lng !== deliveryLng) {
+          setDeliveryLng(sa.lng);
+        }
+      } else if (deliveryAddress) {
+        const norm = deliveryAddress.trim().toLowerCase();
+        const matched = Array.from(fallbackStore.serverAddresses.values()).find(
+          (s) => s.address && s.address.trim().toLowerCase() === norm
+        );
+        if (matched) {
+          if (matched.address !== deliveryAddress) setDeliveryAddress(matched.address);
+          if (matched.id !== deliveryAddressId) setDeliveryAddressId(matched.id);
+          if (typeof matched.lat === 'number' && matched.lat !== deliveryLat) setDeliveryLat(matched.lat);
+          if (typeof matched.lng === 'number' && matched.lng !== deliveryLng) setDeliveryLng(matched.lng);
+        }
+      }
+
+      // 2. If pickup address was set from an address with ID or matches a server address
+      if (pickupAddressId && fallbackStore.serverAddresses.has(pickupAddressId)) {
+        const sa = fallbackStore.serverAddresses.get(pickupAddressId)!;
+        if (sa.address && sa.address !== pickupNote) {
+          setPickupNote(sa.address);
+        }
+        if (typeof sa.lat === 'number' && sa.lat !== pickupLat) {
+          setPickupLat(sa.lat);
+        }
+        if (typeof sa.lng === 'number' && sa.lng !== pickupLng) {
+          setPickupLng(sa.lng);
+        }
+      } else if (pickupNote) {
+        const norm = pickupNote.trim().toLowerCase();
+        const matched = Array.from(fallbackStore.serverAddresses.values()).find(
+          (s) => s.address && s.address.trim().toLowerCase() === norm
+        );
+        if (matched) {
+          if (matched.address !== pickupNote) setPickupNote(matched.address);
+          if (matched.id !== pickupAddressId) setPickupAddressId(matched.id);
+          if (typeof matched.lat === 'number' && matched.lat !== pickupLat) setPickupLat(matched.lat);
+          if (typeof matched.lng === 'number' && matched.lng !== pickupLng) setPickupLng(matched.lng);
+        }
+      }
+
+      // 3. Update saved delivery / pickup address lists with resolved values
+      if (user?.uid) {
+        const updatedDelivery = getSavedDeliveryAddresses(user.uid)
+          .map((a) => fallbackStore.resolveLocation(a) || a);
+        setSavedAddresses(updatedDelivery);
+
+        const updatedPickup = getSavedPickupAddresses(user.uid)
+          .map((p) => fallbackStore.resolveLocation(p) || p);
+        if (updatedPickup.length > 0) {
+          setSavedPickupAddresses(updatedPickup);
+        }
+      }
+    };
+
+    const unsub = fallbackStore.subscribe(syncServerAddresses);
+    return () => unsub();
+  }, [deliveryAddressId, deliveryAddress, deliveryLat, deliveryLng, pickupAddressId, pickupNote, pickupLat, pickupLng, user?.uid]);
 
   // Rotate placeholder every 2.8 s
   useEffect(() => {
@@ -281,13 +377,75 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     // Save preferences
     saveAltPhone(altPhone);
+
+    // 1. Delivery address: record / upsert in server addresses and get id
+    let finalDeliveryAddressText = deliveryAddress.trim();
+    let effectiveDelivAddressId = deliveryAddressId;
+
+    if (finalDeliveryAddressText) {
+      try {
+        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
+          lat: deliveryLat,
+          lng: deliveryLng,
+        });
+        if (sa?.id) {
+          effectiveDelivAddressId = sa.id;
+          finalDeliveryAddressText = sa.address;
+        }
+      } catch (_) {}
+    }
+
     const finalDelivLoc: LocationData = {
-      address: deliveryAddress.trim(),
+      address: finalDeliveryAddressText,
       lat: deliveryLat,
       lng: deliveryLng,
+      addressId: effectiveDelivAddressId,
     };
     saveDefaultDeliveryLocation(finalDelivLoc);
+    if (service) {
+      saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
+    }
     updateCustomerPreferences(altPhone, finalDelivLoc, undefined);
+
+    if (user?.uid && finalDeliveryAddressText) {
+      const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
+      setSavedAddresses(updated);
+      saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
+    }
+
+    // 2. Pickup address: record / upsert in server addresses and get id
+    let finalPickupAddressText = pickupNote.trim();
+    let effectivePickupAddressId = pickupAddressId;
+    let pickupLoc: LocationData | undefined = undefined;
+
+    if (finalPickupAddressText) {
+      try {
+        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+          lat: pickupLat,
+          lng: pickupLng,
+        });
+        if (sa?.id) {
+          effectivePickupAddressId = sa.id;
+          finalPickupAddressText = sa.address;
+        }
+      } catch (_) {}
+
+      pickupLoc = {
+        address: finalPickupAddressText,
+        lat: pickupLat,
+        lng: pickupLng,
+        addressId: effectivePickupAddressId,
+      };
+
+      if (service && !isNoSavePickupService(service)) {
+        saveServicePickupLocation(service, pickupLoc, user?.uid);
+      }
+      if (user?.uid) {
+        const updated = addSavedPickupAddress(user.uid, pickupLoc);
+        setSavedPickupAddresses(updated);
+        saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
+      }
+    }
 
     // Build a single-item list from the description
     const singleItem: OrderItem = {
@@ -327,9 +485,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       service: service,
       items: [singleItem],
       missingItemPreference: undefined,
-      pickupLocation: pickupNote.trim()
-        ? { address: pickupNote.trim(), lat: pickupLat, lng: pickupLng }
-        : undefined,
+      pickupLocation: pickupLoc,
       deliveryLocation: finalDelivLoc,
       additionalNote: undefined,
       status: 'PENDING',
@@ -367,6 +523,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     setPickupNote('');
     setPickupLat(undefined);
     setPickupLng(undefined);
+    setPickupAddressId(undefined);
+    setDeliveryAddressId(undefined);
     setIsExpanded(false);
     // Prompt notification permission on order submit so customer receives live helper updates
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
@@ -388,24 +546,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   };
 
   const timingStatus = isOrderTimingOpen(fallbackStore.pricingSettings);
-
-  const handleDeliveryAddressClick = () => {
-    if (mapHasError) return;
-    if (savedAddresses.length > 0) {
-      setShowSavedAddressPicker(true);
-    } else {
-      setShowDeliveryMapPicker(true);
-    }
-  };
-
-  const handlePickupAddressClick = () => {
-    if (mapHasError) return;
-    if (savedPickupAddresses.length > 0) {
-      setShowPickupAddressPicker(true);
-    } else {
-      setShowPickupMapPicker(true);
-    }
-  };
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
@@ -511,43 +651,68 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
                 {/* Pickup / Source Location (optional) */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">কোথা থেকে আনতে হবে বা করতে হবে?</label>
-                  <div className="relative group">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={pickupNote}
-                      onChange={(e) => setPickupNote(e.target.value)}
-                      onClick={handlePickupAddressClick}
-                      placeholder="কোথা থেকে নিতে হবে? (ক্লিক করে সিলেক্ট করুন)"
-                      className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                      readOnly
-                    />
-                  </div>
+                  <AddressAutocompleteInput
+                    id="pickup-address-input"
+                    label="কোথা থেকে আনতে হবে বা করতে হবে? (ঐচ্ছিক)"
+                    value={pickupNote}
+                    onChange={(val, loc) => {
+                      setPickupNote(val);
+                      if (loc) {
+                        setPickupLat(loc.lat);
+                        setPickupLng(loc.lng);
+                        setPickupAddressId(loc.addressId);
+                      } else if (!val.trim()) {
+                        setPickupLat(undefined);
+                        setPickupLng(undefined);
+                        setPickupAddressId(undefined);
+                      }
+                    }}
+                    onSelectSuggestion={(loc) => {
+                      setPickupNote(loc.address);
+                      setPickupLat(loc.lat);
+                      setPickupLng(loc.lng);
+                      setPickupAddressId(loc.addressId);
+                    }}
+                    placeholder="কোথা থেকে নিতে হবে? (যেমন: আরিফ স্টোর, আশুলিয়া বাজার)"
+                    icon={<MapPin className="w-4 h-4" />}
+                    serviceCategory={service}
+                    savedLocalAddresses={savedPickupAddresses}
+                  />
                 </div>
 
-                {/* Delivery Address — clicks open saved address picker first, or map if none saved */}
+                {/* Delivery Address */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">ডেলিভারি ঠিকানা *</label>
-                  <div className="relative group">
-                    <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={deliveryAddress}
-                      onChange={(e) => {
-                        setDeliveryAddress(e.target.value);
-                        if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
-                      }}
-                      onClick={handleDeliveryAddressClick}
-                      placeholder="ডেলিভারি ঠিকানা (ক্লিক করে সিলেক্ট করুন) *"
-                      className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer ${
-                        errors.deliveryAddress
-                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
-                          : 'border-gray-200 bg-white focus:border-emerald-500'
-                      }`}
-                      readOnly
-                    />
-                  </div>
+                  <AddressAutocompleteInput
+                    id="delivery-address-input"
+                    label="ডেলিভারি ঠিকানা"
+                    required
+                    value={deliveryAddress}
+                    onChange={(val, loc) => {
+                      setDeliveryAddress(val);
+                      if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
+                      if (loc) {
+                        setDeliveryLat(loc.lat);
+                        setDeliveryLng(loc.lng);
+                        setDeliveryAddressId(loc.addressId);
+                      } else if (!val.trim()) {
+                        setDeliveryLat(undefined);
+                        setDeliveryLng(undefined);
+                        setDeliveryAddressId(undefined);
+                      }
+                    }}
+                    onSelectSuggestion={(loc) => {
+                      setDeliveryAddress(loc.address);
+                      if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
+                      setDeliveryLat(loc.lat);
+                      setDeliveryLng(loc.lng);
+                      setDeliveryAddressId(loc.addressId);
+                    }}
+                    placeholder="আপনার বাসার ঠিকানা (যেমন: ৪এ, রহমান ভিলা, মডেল টাউন) *"
+                    icon={<Navigation className="w-4 h-4" />}
+                    error={errors.deliveryAddress}
+                    serviceCategory={service}
+                    savedLocalAddresses={savedAddresses}
+                  />
                   {errors.deliveryAddress && (
                     <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -670,102 +835,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           </form>
         </>
       )}
-
-      {/* Pickup Saved Address Picker — shown first when pickup field clicked and a saved location exists */}
-      <SavedAddressPicker
-        isOpen={showPickupAddressPicker}
-        onClose={() => setShowPickupAddressPicker(false)}
-        savedAddresses={savedPickupAddresses}
-        selectedAddress={{ address: pickupNote, lat: pickupLat, lng: pickupLng }}
-        title="সেভ করা স্থান"
-        subtitle="লোকেশন  সিলেক্ট করুন, না হলে নিচের বাটনে ক্লিক করে নতুন Address সেট করুন।"
-        openMapLabel="No, অন্য ঠিকানা হবে!"
-        onSelectAddress={(loc) => {
-          const cleanAddr = formatShortAddress(loc.address);
-          setPickupNote(cleanAddr);
-          if (loc.lat) setPickupLat(loc.lat);
-          if (loc.lng) setPickupLng(loc.lng);
-        }}
-        onOpenMap={() => setShowPickupMapPicker(true)}
-      />
-
-      {/* Saved Address Picker — shown first when delivery address field is clicked */}
-      <SavedAddressPicker
-        isOpen={showSavedAddressPicker}
-        onClose={() => setShowSavedAddressPicker(false)}
-        savedAddresses={savedAddresses}
-        selectedAddress={{ address: deliveryAddress, lat: deliveryLat, lng: deliveryLng }}
-        onSelectAddress={(loc) => {
-          const cleanAddr = formatShortAddress(loc.address);
-          setDeliveryAddress(cleanAddr);
-          setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
-          if (loc.lat) setDeliveryLat(loc.lat);
-          if (loc.lng) setDeliveryLng(loc.lng);
-        }}
-        onOpenMap={() => setShowDeliveryMapPicker(true)}
-      />
-
-      {/* Map Picker Modals */}
-      <MapPickerModal
-        isOpen={showPickupMapPicker}
-        onClose={() => setShowPickupMapPicker(false)}
-        title="কোথা থেকে আনতে হবে বা করতে হবে?"
-        modalType="pickup"
-        initialLocation={{
-          address: pickupNote,
-          lat: pickupLat,
-          lng: pickupLng,
-        }}
-        addressLabel="এখানে দোকানের, মার্কেটের বা এলাকার নাম লিখুন।"
-        addressPlaceholder="Arif store, Ashulia bazar."
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          const cleanAddr = formatShortAddress(loc.address);
-          setPickupNote(cleanAddr);
-          if (loc.lat) setPickupLat(loc.lat);
-          if (loc.lng) setPickupLng(loc.lng);
-          const locToSave = { ...loc, address: cleanAddr };
-          // Save per-category if service is not in no-save list
-          if (service && !isNoSavePickupService(service)) {
-            saveServicePickupLocation(service, locToSave, user?.uid);
-          }
-          if (user?.uid) {
-            const updated = addSavedPickupAddress(user.uid, locToSave);
-            setSavedPickupAddresses(updated);
-            saveCustomerPickupAddressToFirestore(user.uid, locToSave, service).catch(() => {});
-          }
-        }}
-      />
-
-      <MapPickerModal
-        isOpen={showDeliveryMapPicker}
-        onClose={() => setShowDeliveryMapPicker(false)}
-        title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
-        modalType="delivery"
-        initialLocation={{
-          address: deliveryAddress,
-          lat: deliveryLat,
-          lng: deliveryLng,
-        }}
-        addressLabel="আপনার বাসার নাম বা ঠিকানা লিখুন"
-        addressPlaceholder="4A, Rahman vila, Model town."
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          const cleanAddr = formatShortAddress(loc.address);
-          setDeliveryAddress(cleanAddr);
-          setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
-          if (loc.lat) setDeliveryLat(loc.lat);
-          if (loc.lng) setDeliveryLng(loc.lng);
-          // Auto-save new delivery address to localStorage + Firestore
-          if (user && cleanAddr.trim()) {
-            const locToSave = { ...loc, address: cleanAddr };
-            const updated = addSavedDeliveryAddress(user.uid, locToSave);
-            setSavedAddresses(updated);
-            // Push to Firestore in background (non-blocking)
-            saveCustomerSavedAddressToFirestore(user.uid, locToSave).catch(() => {});
-          }
-        }}
-      />
 
       {/* Minimalist Insufficient Coins Custom Modal */}
       {showInsufficientCoinsModal && (

@@ -26,6 +26,19 @@ export interface LocationData {
   lng?: number;
   name?: string;
   details?: string;
+  addressId?: string;
+}
+
+export interface ServerAddress {
+  id: string;
+  address: string;
+  shortName?: string;
+  lat?: number;
+  lng?: number;
+  details?: string;
+  usageCount?: number;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface AllowedAreaPolygon {
@@ -271,6 +284,7 @@ export interface OrderFeedback {
   thumbsUp?: boolean;          // true = positive, false = negative (new thumbs system)
   improvementComment?: string;
   createdAt: string;
+  mutuallyDiscussed?: boolean;
   // Admin reply fields
   adminReply?: string;              // Admin's reply text
   adminReplyAt?: string;            // ISO timestamp when admin wrote the reply
@@ -426,6 +440,11 @@ export interface PricingSettings {
   pwaInstallPromptTitle?: string;    // Custom title e.g. "Install Jamanot App"
   pwaInstallPromptDescription?: string; // Custom description text
   pwaInstallButtonText?: string;     // Custom button text e.g. "Install Jamanot"
+  // In-App Browser (Facebook/Messenger) prompt settings
+  inAppBrowserPromptEnabled?: boolean; // Admin toggle to enable/disable in-app browser detection popup (default true)
+  inAppBrowserPromptTitle?: string;    // Custom title e.g. "ব্রাউজারে ওপেন করুন"
+  inAppBrowserPromptSubtitle?: string; // Custom subtitle e.g. "Open in Chrome or Safari for the Best Experience"
+  inAppBrowserPromptMessage?: string;  // Custom alert message / description text
   locationPermissionModalTitle?: string; // Admin editable title for location permission modal
   locationPermissionModalBody?: string;  // Admin editable body message for location permission modal
   notificationPermissionModalTitle?: string; // Admin editable title for notification permission modal
@@ -518,6 +537,12 @@ export interface ShopOrderStatusHistoryItem {
   note?: string;
 }
 
+export interface ShopOrderItemPrice {
+  name: string;
+  unit?: string;
+  price?: number;
+}
+
 export interface ShopOrder {
   id: string;
   parentOrderId: string;     // The main delivery order ID
@@ -526,6 +551,7 @@ export interface ShopOrder {
   helperId: string;
   helperName: string;        // Store sees this as "customer" name
   requestText: string;       // Helper's typed order/request
+  itemsWithPrice?: ShopOrderItemPrice[]; // Divided items with their individual prices set by store
   status: ShopOrderStatus;
   price?: number;            // Set by store
   sellerName?: string;       // Custom cost seller / vendor name
