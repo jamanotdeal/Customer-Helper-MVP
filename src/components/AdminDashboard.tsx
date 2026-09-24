@@ -19,6 +19,7 @@ import {
   X,
   Layers,
   ArrowUpRight,
+  ArrowRight,
   Sparkles,
   Bike,
   Clock,
@@ -57,6 +58,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   Send,
+  Compass,
+  ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -75,11 +78,13 @@ import { DraggableTabsContainer } from './admin/DraggableTabsContainer';
 import { AddShopModal } from './AddShopModal';
 import { UserActionDropdown } from './admin/UserActionDropdown';
 import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
+import { AdminStoreOrderDetailsModal } from './admin/AdminStoreOrderDetailsModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
 import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
+import { AdminAddressesManager } from './admin/AdminAddressesManager';
 import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AsyncButton } from './ui/AsyncButton';
 import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
@@ -88,9 +93,12 @@ import {
   exportUsersToPDF,
   exportOrdersToCSV,
   exportOrdersToPDF,
+  exportShopOrdersToCSV,
+  exportShopOrdersToPDF,
   exportFeedbackToCSV,
   exportFeedbackToPDF,
 } from '@/lib/exportUtils';
+import { ShopOrder } from '@/types';
 
 interface AdminDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -104,16 +112,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
-    'EXCEPTIONS' | 'ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS'
+    'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
   const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
 
-  // Realtime Data state
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
+  const [storeOrdersSearchQuery, setStoreOrdersSearchQuery] = useState<string>('');
+  const [storeOrdersAppliedSearchQuery, setStoreOrdersAppliedSearchQuery] = useState<string>('');
+  const [storeOrdersStatusFilter, setStoreOrdersStatusFilter] = useState<string>('ALL');
+  const [storeOrdersShopFilter, setStoreOrdersShopFilter] = useState<string>('ALL');
+  const [storeOrdersHelperFilter, setStoreOrdersHelperFilter] = useState<string>('ALL');
+  const [storeOrdersStartDate, setStoreOrdersStartDate] = useState<string>('');
+  const [storeOrdersEndDate, setStoreOrdersEndDate] = useState<string>('');
+  const [storeOrdersSortBy, setStoreOrdersSortBy] = useState<'NEWEST' | 'OLDEST' | 'PRICE_HIGH' | 'PRICE_LOW'>('NEWEST');
+  const [selectedStoreOrderIds, setSelectedStoreOrderIds] = useState<string[]>([]);
+  const [isDeletingStoreOrders, setIsDeletingStoreOrders] = useState<boolean>(false);
+  const [selectedShopOrderId, setSelectedShopOrderId] = useState<string | null>(null);
   const [showHighDurationModal, setShowHighDurationModal] = useState<boolean>(false);
   const [applications, setApplications] = useState<HelperApplication[]>([]);
   const [storeApplications, setStoreApplications] = useState<StoreApplication[]>([]);
@@ -194,6 +213,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [pwaInstallPromptTitle, setPwaInstallPromptTitle] = useState<string>('Install Jamanot App');
   const [pwaInstallPromptDescription, setPwaInstallPromptDescription] = useState<string>('আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!');
   const [pwaInstallButtonText, setPwaInstallButtonText] = useState<string>('Install Jamanot');
+
+  // In-App Browser (Facebook/Messenger) Prompt Admin Controls
+  const [inAppBrowserPromptEnabled, setInAppBrowserPromptEnabled] = useState<boolean>(true);
+  const [inAppBrowserPromptTitle, setInAppBrowserPromptTitle] = useState<string>('ব্রাউজারে ওপেন করুন');
+  const [inAppBrowserPromptSubtitle, setInAppBrowserPromptSubtitle] = useState<string>('Open in Chrome or Safari');
+  const [inAppBrowserPromptMessage, setInAppBrowserPromptMessage] = useState<string>(
+    'লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।'
+  );
 
   // Permission Alert Modal Content Controls
   const [locPermModalTitle, setLocPermModalTitle] = useState<string>('লোকেশন পারমিশন আবশ্যক (Location Required)');
@@ -318,6 +345,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleToggleSelectStoreOrder = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedStoreOrderIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleToggleSelectAllStoreOrders = (currentList: ShopOrder[]) => {
+    const currentIds = currentList.map((so) => so.id);
+    const allSelected = currentIds.every((id) => selectedStoreOrderIds.includes(id));
+    if (allSelected) {
+      setSelectedStoreOrderIds((prev) => prev.filter((id) => !currentIds.includes(id)));
+    } else {
+      setSelectedStoreOrderIds((prev) => Array.from(new Set([...prev, ...currentIds])));
+    }
+  };
+
+  const handleBulkDeleteStoreOrders = async () => {
+    if (selectedStoreOrderIds.length === 0) return;
+    const isConfirmed = await showConfirm(
+      'ডিলিট নিশ্চিতকরণ (Batch Delete Store Orders)',
+      `আপনি কি নিশ্চিত যে নির্বাচিত ${selectedStoreOrderIds.length}টি স্টোর অর্ডার স্থায়ীভাবে ডিলিট করতে চান?`,
+      'হ্যাঁ, ডিলিট করুন',
+      'বাতিল'
+    );
+    if (!isConfirmed) return;
+
+    setIsDeletingStoreOrders(true);
+    try {
+      await fallbackStore.deleteShopOrdersBulk(selectedStoreOrderIds);
+      setShopOrders((prev) => prev.filter((so) => !selectedStoreOrderIds.includes(so.id)));
+      setSelectedStoreOrderIds([]);
+      await showAlert('সফল', `${selectedStoreOrderIds.length}টি স্টোর অর্ডার সফলভাবে ডিলিট করা হয়েছে।`, 'success');
+    } catch (err: any) {
+      showAlert('ত্রুটি', `স্টোর অর্ডার ডিলিট করতে সমস্যা হয়েছে: ${err?.message || err}`, 'error');
+    } finally {
+      setIsDeletingStoreOrders(false);
+    }
+  };
+
   const handleBulkDeleteOrders = async () => {
     if (selectedOrderIds.length === 0) return;
     const isConfirmed = await showConfirm(
@@ -431,6 +498,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [excPendingWdPageSize, setExcPendingWdPageSize] = useState(10);
   const [excRewardClaimPage, setExcRewardClaimPage] = useState(1);
   const [excRewardClaimPageSize, setExcRewardClaimPageSize] = useState(10);
+  const [excBadFeedbackPage, setExcBadFeedbackPage] = useState(1);
+  const [excBadFeedbackPageSize, setExcBadFeedbackPageSize] = useState(10);
 
   // Tab-specific Date Filters
   const [ordersStartDate, setOrdersStartDate] = useState('');
@@ -560,6 +629,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return freshShops;
       });
 
+      const freshShopOrders = Array.from(fallbackStore.shopOrders.values());
+      setShopOrders(freshShopOrders);
+
       const freshFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
       setFeedbacks((prev) => {
         if (prev.length > 0 && freshFeedbacks.length > prev.length) {
@@ -593,6 +665,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!'
       );
       setPwaInstallButtonText(settings.pwaInstallButtonText || 'Install Jamanot');
+      setInAppBrowserPromptEnabled(settings.inAppBrowserPromptEnabled !== false);
+      setInAppBrowserPromptTitle(settings.inAppBrowserPromptTitle || 'ব্রাউজারে ওপেন করুন');
+      setInAppBrowserPromptSubtitle(settings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari');
+      setInAppBrowserPromptMessage(
+        settings.inAppBrowserPromptMessage ||
+        'লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।'
+      );
       setLocPermModalTitle(settings.locationPermissionModalTitle || 'লোকেশন পারমিশন আবশ্যক (Location Required)');
       setLocPermModalBody(
         settings.locationPermissionModalBody ||
@@ -730,6 +809,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (activeTab !== 'ORDERS') return;
     setServerOrders(null); // reset to trigger re-fetch
   }, [activeTab, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
+
+  useEffect(() => {
+    if (activeTab === 'STORE_ORDERS') {
+      fallbackStore.getAllShopOrders().then((fetched) => {
+        if (fetched && fetched.length > 0) {
+          setShopOrders(fetched);
+        }
+      }).catch((err) => console.warn('Error fetching shop orders:', err));
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -1066,6 +1155,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (c) => c.status === 'PENDING'
   );
 
+  const badFeedbacks = React.useMemo(() => {
+    return feedbacks
+      .filter((f) => {
+        if (!f || !f.id || f.mutuallyDiscussed) return false;
+        const linkedOrder = allOrders.find((o) => o.id === f.orderId);
+        if (linkedOrder?.mutuallyDiscussed) return false;
+
+        // ONLY strictly negative feedback:
+        if (f.thumbsUp === false) return true;
+        if (f.thumbsUp === true) return false; // Strictly exclude positive
+
+        // If thumbsUp is undefined (legacy feedback), only include if score is strictly <= 2
+        const ratings = [f.serviceRating, f.riderRating, f.shopRating].filter(
+          (r) => typeof r === 'number' && r > 0
+        );
+        if (ratings.length > 0) {
+          return ratings.some((r) => r <= 2);
+        }
+        return false;
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [feedbacks, allOrders]);
+
   const totalExceptionsCount =
     cancellingRequests.filter(o => o.cancellationRequest?.status === 'PENDING').length +
     notAcceptedRequests.length +
@@ -1074,7 +1186,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     pendingWds.length +
     pendingStoreApps.length +
     delayedOrders.length +
-    pendingRewardClaims.length;
+    pendingRewardClaims.length +
+    badFeedbacks.length;
 
   const avgDeliveryTimeMins = React.useMemo(() => {
     const delivered = allOrders.filter(o => o.status === 'DELIVERED');
@@ -1374,6 +1487,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       pwaInstallPromptTitle: pwaInstallPromptTitle.trim() || undefined,
       pwaInstallPromptDescription: pwaInstallPromptDescription.trim() || undefined,
       pwaInstallButtonText: pwaInstallButtonText.trim() || undefined,
+      inAppBrowserPromptEnabled: inAppBrowserPromptEnabled,
+      inAppBrowserPromptTitle: inAppBrowserPromptTitle.trim() || undefined,
+      inAppBrowserPromptSubtitle: inAppBrowserPromptSubtitle.trim() || undefined,
+      inAppBrowserPromptMessage: inAppBrowserPromptMessage.trim() || undefined,
       locationPermissionModalTitle: locPermModalTitle.trim() || undefined,
       locationPermissionModalBody: locPermModalBody.trim() || undefined,
       notificationPermissionModalTitle: notifPermModalTitle.trim() || undefined,
@@ -1480,6 +1597,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   };
 
+  const handleToggleSuperAdminRole = async (targetUser: UserProfile, makeSuperAdmin: boolean) => {
+    if (!currentUser?.isSuperAdmin) {
+      showAlert('অনুমতি নেই', 'শুধুমাত্র Super Admin অন্য কাউকে Super Admin বানাতে বা সরাতে পারবেন।', 'error');
+      return;
+    }
+    const isPrimarySuperAdmin = targetUser.email && ['ajnasim72@gmail.com'].includes(targetUser.email.trim().toLowerCase());
+    if (isPrimarySuperAdmin && targetUser.isSuperAdmin) {
+      showAlert('সুরক্ষিত অ্যাকাউন্ট', 'মূল Super Admin এর রোল পরিবর্তন করা যাবে না।', 'warning');
+      return;
+    }
+    const actionText = makeSuperAdmin ? 'Super Admin রোল প্রদান করতে' : 'Super Admin রোল অপসারণ করে সাধারণ Admin করতে';
+    const confirmed = await showConfirm(
+      'Super Admin রোল পরিবর্তন',
+      `আপনি কি ${targetUser.displayName}-কে ${actionText} চান?`,
+      makeSuperAdmin ? 'হ্যাঁ, Super Admin করুন' : 'হ্যাঁ, ডিমোট করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    await fallbackStore.setSuperAdminRole(targetUser.uid, makeSuperAdmin);
+    setUsers(Array.from(fallbackStore.users.values()));
+    showAlert(
+      'রোল আপডেট সম্পন্ন',
+      `${targetUser.displayName} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
+      'success'
+    );
+  };
+
   const handleDeleteFeedback = async (feedbackId: string) => {
     const confirmed = await showConfirm(
       'Delete Feedback',
@@ -1492,6 +1637,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       await fallbackStore.deleteOrderFeedback(feedbackId);
       setFeedbacks((prev) => prev.filter((f) => f.id !== feedbackId));
+      setAllOrders((prev) =>
+        prev.map((o) => (o.feedback?.id === feedbackId ? { ...o, feedback: undefined } : o))
+      );
       if (serverFeedbacks) {
         setServerFeedbacks((prev) => (prev ? prev.filter((f) => f.id !== feedbackId) : null));
       }
@@ -1602,6 +1750,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     return list;
   };
+
+  // 1b. Process Store Orders List (Search, Filter by Status, Filter by Shop, Filter by Helper, Sort)
+  const getProcessedStoreOrders = (rawShopOrders: ShopOrder[]) => {
+    let list = [...rawShopOrders];
+
+    // Date range filter
+    if (storeOrdersStartDate) {
+      const startMs = new Date(`${storeOrdersStartDate}T00:00:00`).getTime();
+      list = list.filter((so) => new Date(so.createdAt).getTime() >= startMs);
+    }
+    if (storeOrdersEndDate) {
+      const endMs = new Date(`${storeOrdersEndDate}T23:59:59.999`).getTime();
+      list = list.filter((so) => new Date(so.createdAt).getTime() <= endMs);
+    }
+
+    // Search query filter
+    if (storeOrdersAppliedSearchQuery.trim()) {
+      const q = storeOrdersAppliedSearchQuery.toLowerCase().trim();
+      list = list.filter(
+        (so) =>
+          so.id.toLowerCase().includes(q) ||
+          (so.parentOrderId || '').toLowerCase().includes(q) ||
+          (so.shopName || '').toLowerCase().includes(q) ||
+          (so.helperName || '').toLowerCase().includes(q) ||
+          (so.requestText || '').toLowerCase().includes(q) ||
+          (so.sellerName || '').toLowerCase().includes(q) ||
+          (so.sellerPhone && so.sellerPhone.includes(q)) ||
+          (so.note && so.note.toLowerCase().includes(q)) ||
+          (so.itemsWithPrice || []).some((it) => it.name && it.name.toLowerCase().includes(q))
+      );
+    }
+
+    // Status filter
+    if (storeOrdersStatusFilter !== 'ALL') {
+      list = list.filter((so) => so.status === storeOrdersStatusFilter);
+    }
+
+    // Shop filter
+    if (storeOrdersShopFilter !== 'ALL') {
+      list = list.filter((so) => so.shopId === storeOrdersShopFilter || so.shopName === storeOrdersShopFilter);
+    }
+
+    // Helper filter
+    if (storeOrdersHelperFilter !== 'ALL') {
+      list = list.filter((so) => so.helperId === storeOrdersHelperFilter || so.helperName === storeOrdersHelperFilter);
+    }
+
+    // Sorting
+    list.sort((a, b) => {
+      if (storeOrdersSortBy === 'OLDEST') {
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      }
+      if (storeOrdersSortBy === 'PRICE_HIGH') {
+        return (b.price || 0) - (a.price || 0);
+      }
+      if (storeOrdersSortBy === 'PRICE_LOW') {
+        return (a.price || 0) - (b.price || 0);
+      }
+      // NEWEST default
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return list;
+  };
+
 
   // 2. Customer Aggregated List
   const getProcessedCustomers = () => {
@@ -2037,14 +2250,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { totalPages, paginatedItems, totalItems: totalCount };
   }
 
+  // Filter out custom costs and only include requests sent to registered shops that can receive orders in app
+  const realStoreOrders = React.useMemo(() => {
+    return shopOrders.filter((so) => {
+      if (!so) return false;
+      // Exclude custom cost orders (MySelf / seller custom entries)
+      if (so.shopId === 'myself' || so.shopName === 'MySelf' || so.id?.startsWith('so-myself') || so.sellerName) {
+        return false;
+      }
+      // Only include orders sent to a registered store that can receive/accept orders directly in app
+      const targetShop = shops.find((s) => s.id === so.shopId) || fallbackStore.shops.get(so.shopId);
+      if (!targetShop) return false;
+      if (targetShop.canReceiveOrders === false) return false;
+      return true;
+    });
+  }, [shopOrders, shops]);
+
   const isSuperAdmin = currentUser?.isSuperAdmin;
   const isAdmin = currentUser?.isAdmin;
   const isNormalAdmin = isAdmin && !isSuperAdmin;
 
-  // GROWTH is intentionally excluded — it is Super Admin only and cannot be granted to normal admins
   const tabsList = [
     { key: 'EXCEPTIONS', label: 'Needs Attention', icon: AlertCircle, color: 'text-amber-500' },
+    { key: 'GROWTH', label: 'Growth & Everyday Rates', icon: BarChart2, color: 'text-indigo-600' },
     { key: 'ORDERS', label: 'All Orders', icon: ShoppingBag, color: 'text-emerald-600' },
+    { key: 'STORE_ORDERS', label: 'All Store Orders', icon: Store, color: 'text-purple-600' },
     { key: 'USERS_LIST', label: 'User Lists', icon: Users, color: 'text-purple-600' },
     { key: 'HELPERS', label: 'Helpers', icon: Bike, color: 'text-emerald-600' },
     { key: 'SHOPS', label: 'Shops', icon: Store, color: 'text-purple-600' },
@@ -2055,13 +2285,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { key: 'REVENUE', label: 'Revenue Analytics', icon: TrendingUp, color: 'text-emerald-600' },
     { key: 'WITHDRAWALS', label: 'Commissions Requests', icon: DollarSign, color: 'text-purple-600' },
     { key: 'PRICING', label: 'Pricing', icon: DollarSign, color: 'text-emerald-600' },
+    { key: 'ADDRESSES', label: 'Server Addresses', icon: MapPin, color: 'text-teal-600' },
     { key: 'REWARDS', label: 'Coins & Rewards', icon: Gift, color: 'text-amber-500' },
     { key: 'SETTINGS', label: 'Settings', icon: Settings, color: 'text-purple-600' },
   ];
 
   const isTabAllowed = (tabKey: string) => {
-    // GROWTH is Super Admin only — normal admins can never access it
-    if (tabKey === 'GROWTH') return Boolean(isSuperAdmin);
     if (isSuperAdmin) return true;
     return allowedAdminTabs.includes(tabKey);
   };
@@ -2389,6 +2618,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         )}
 
+        {isTabAllowed('STORE_ORDERS') && (
+          <button
+            onClick={() => setActiveTab('STORE_ORDERS')}
+            data-active={activeTab === 'STORE_ORDERS'}
+            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'STORE_ORDERS'
+                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+          >
+            <Store className="w-4 h-4 text-purple-600 shrink-0" />
+            <span>All Store Orders ({realStoreOrders.length})</span>
+          </button>
+        )}
+
         {isTabAllowed('USERS_LIST') && (
           <button
             onClick={() => setActiveTab('USERS_LIST')}
@@ -2539,6 +2782,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         )}
 
+        {isTabAllowed('ADDRESSES') && (
+          <button
+            onClick={() => setActiveTab('ADDRESSES')}
+            data-active={activeTab === 'ADDRESSES'}
+            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'ADDRESSES'
+                ? 'bg-white text-teal-950 shadow-md border border-gray-200/80 font-black'
+                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+          >
+            <MapPin className="w-4 h-4 text-teal-600 shrink-0" />
+            <span>Server Addresses</span>
+          </button>
+        )}
+
         {isTabAllowed('SETTINGS') && (
           <button
             onClick={() => setActiveTab('SETTINGS')}
@@ -2574,7 +2831,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </DraggableTabsContainer>
 
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
-      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && activeTab !== 'REWARDS' && (() => {
+      {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && activeTab !== 'REWARDS' && activeTab !== 'ADDRESSES' && (() => {
         const getTabSearchStates = () => {
           switch (activeTab) {
             case 'ORDERS':
@@ -2847,6 +3104,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const pfa = paginate(feeAdjustments, excFeeAdjPage, excFeeAdjPageSize);
         const pna = paginate(notAccepted, excNotAcceptedPage, excNotAcceptedPageSize);
         const pdl = paginate(delayedOrders, excDelayedPage, excDelayedPageSize);
+        const pbf = paginate(badFeedbacks, excBadFeedbackPage, excBadFeedbackPageSize);
         const pha = paginate(pendingApps, excHelperAppPage, excHelperAppPageSize);
         const psa = paginate(pendingStoreApps, excStoreAppPage, excStoreAppPageSize);
         const pwd = paginate(pendingWds, excPendingWdPage, excPendingWdPageSize);
@@ -2859,7 +3117,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           pendingWds.length > 0 ||
           pendingStoreApps.length > 0 ||
           delayedOrders.length > 0 ||
-          pendingRewardClaims.length > 0;
+          pendingRewardClaims.length > 0 ||
+          badFeedbacks.length > 0;
 
         return (
           <div className="space-y-6">
@@ -3210,6 +3469,140 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       pageSize={excDelayedPageSize}
                       onPageChange={(p) => setExcDelayedPage(p)}
                       onPageSizeChange={(s) => { setExcDelayedPageSize(s); setExcDelayedPage(1); }}
+                      pageSizeOptions={[5, 10, 25]}
+                    />
+                  </div>
+                )}
+
+                {/* 3.6 Bad / Negative Customer Feedback */}
+                {badFeedbacks.length > 0 && (
+                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden animate-in fade-in duration-200">
+                    <div className="p-5 border-b border-gray-100 bg-red-50/60 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-gray-900 flex items-center space-x-2">
+                        <ThumbsDown className="w-4 h-4 text-red-600 animate-bounce" />
+                        <span>Bad Feedback / Negative Reviews ({badFeedbacks.length})</span>
+                      </h3>
+                      <button
+                        onClick={() => setActiveTab('FEEDBACK')}
+                        className="text-xs font-extrabold text-red-700 hover:text-red-900 underline cursor-pointer"
+                      >
+                        Feedback Tab →
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-gray-600 min-w-[650px]">
+                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                          <tr>
+                            <th className="py-3 px-5">Order ID</th>
+                            <th className="py-3 px-5">Customer</th>
+                            <th className="py-3 px-5">Helper / Shop</th>
+                            <th className="py-3 px-5">Feedback</th>
+                            <th className="py-3 px-5">Reason / Comment</th>
+                            <th className="py-3 px-5">Date</th>
+                            <th className="py-3 px-5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-medium">
+                          {pbf.items.map((fb) => (
+                            <tr key={fb.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="py-3.5 px-5 font-bold text-gray-900">
+                                {fb.orderId ? (
+                                  <button
+                                    onClick={() => setSelectedOrderId(fb.orderId)}
+                                    className="text-purple-900 hover:text-purple-950 hover:underline font-extrabold cursor-pointer"
+                                  >
+                                    #{fb.orderId}
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400">N/A</span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-extrabold text-gray-900">{fb.customerName || 'Customer'}</div>
+                                <div className="text-[10px] text-gray-400 font-mono">{fb.customerId}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-bold text-gray-800">{fb.helperName || fb.shopName || 'Unassigned'}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                {fb.thumbsUp === false ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-extrabold text-[10px]">
+                                    <ThumbsDown className="w-3 h-3" /> খারাপ লেগেছে
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-red-600 font-extrabold text-xs">
+                                    <Star className="w-3.5 h-3.5 fill-red-400 text-red-400" />
+                                    {fb.serviceRating || fb.riderRating || 1}/5
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-5">
+                                {fb.improvementComment ? (
+                                  <div className="p-2 rounded-xl bg-red-50 border border-red-200 text-red-950 font-semibold max-w-xs text-[11px] leading-snug">
+                                    &ldquo;{fb.improvementComment}&rdquo;
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 italic">No comment specified</span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-5 text-gray-400 font-mono text-[10px]">
+                                {new Date(fb.createdAt).toLocaleDateString('bn-BD')}
+                              </td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="flex justify-end items-center space-x-1.5 flex-wrap gap-1">
+                                  {fb.orderId && (
+                                    <button
+                                      onClick={() => setSelectedOrderId(fb.orderId)}
+                                      className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all cursor-pointer"
+                                    >
+                                      Details
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={async () => {
+                                      const confirmed = await showConfirm(
+                                        'Mutually Discussed নিশ্চিতকরণ',
+                                        `আপনি কি "${fb.customerName || 'কাস্টমার'}" এর ব্যাড ফিডব্যাকটি আলোচনা সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি এই তালিকা থেকে সরিয়ে দেওয়া হবে।`,
+                                        'হ্যাঁ, আলোচনা হয়েছে',
+                                        'বাতিল'
+                                      );
+                                      if (confirmed) {
+                                        await fallbackStore.updateOrderFeedbackMutuallyDiscussed(fb.id, true);
+                                        setFeedbacks((prev) =>
+                                          prev.map((f) => (f.id === fb.id ? { ...f, mutuallyDiscussed: true } : f))
+                                        );
+                                        setAllOrders((prev) =>
+                                          prev.map((o) =>
+                                            o.id === fb.orderId
+                                              ? {
+                                                  ...o,
+                                                  mutuallyDiscussed: true,
+                                                  feedback: o.feedback ? { ...o.feedback, mutuallyDiscussed: true } : o.feedback,
+                                                }
+                                              : o
+                                          )
+                                        );
+                                        showAlert('সফল', 'ফিডব্যাকটি mutually discussed হিসেবে চিহ্নিত করা হয়েছে।', 'success');
+                                      }
+                                    }}
+                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all animate-pulse cursor-pointer"
+                                  >
+                                    Mutually Discussed
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <PaginationControl
+                      currentPage={Math.min(excBadFeedbackPage, pbf.totalPages)}
+                      totalPages={pbf.totalPages}
+                      totalItems={badFeedbacks.length}
+                      pageSize={excBadFeedbackPageSize}
+                      onPageChange={(p) => setExcBadFeedbackPage(p)}
+                      onPageSizeChange={(s) => { setExcBadFeedbackPageSize(s); setExcBadFeedbackPage(1); }}
                       pageSizeOptions={[5, 10, 25]}
                     />
                   </div>
@@ -3876,6 +4269,360 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
       })()}
 
+      {/* --- TAB 2b: ALL STORE ORDERS TAB --- */}
+      {activeTab === 'STORE_ORDERS' && isTabAllowed('STORE_ORDERS') && (() => {
+        const processed = getProcessedStoreOrders(realStoreOrders);
+        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
+        const totalStoreRevenue = processed
+          .filter((so) => so.status !== 'CANCELED')
+          .reduce((acc, so) => acc + (so.price || 0), 0);
+
+        return (
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden space-y-2">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h3 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
+                  <Store className="w-5 h-5 text-purple-600" />
+                  <span>All Store Orders Master List</span>
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Real-time list of store order requests sent to stores capable of receiving in-app orders
+                </p>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                {selectedStoreOrderIds.length > 0 && (
+                  <AsyncButton
+                    onClick={handleBulkDeleteStoreOrders}
+                    isLoading={isDeletingStoreOrders}
+                    icon={<Trash2 className="w-4 h-4" />}
+                    className="py-1.5 px-3.5 rounded-xl bg-red-600 hover:bg-red-700 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5 disabled:opacity-50"
+                  >
+                    <span>Delete Selected ({selectedStoreOrderIds.length})</span>
+                  </AsyncButton>
+                )}
+                {/* Export Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => exportShopOrdersToCSV(processed)}
+                    title="Export visible store orders to Excel (CSV)"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    onClick={() => exportShopOrdersToPDF(processed)}
+                    title="Export visible store orders to PDF"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                  </button>
+                </div>
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-900 flex items-center gap-2 flex-wrap border border-purple-100">
+                  <span>{totalItems} store orders</span>
+                  <span className="text-purple-300">•</span>
+                  <span>Total Value: ৳{totalStoreRevenue.toLocaleString()}</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Sub-Filters and Search Controls */}
+            <div className="p-4 bg-gray-50/50 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+              {/* Search Bar */}
+              <div className="md:col-span-2">
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Search Store Orders</label>
+                <div className="flex items-center gap-1.5">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={storeOrdersSearchQuery}
+                      onChange={(e) => setStoreOrdersSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setStoreOrdersAppliedSearchQuery(storeOrdersSearchQuery);
+                          setCurrentPage(1);
+                        }
+                      }}
+                      placeholder="Parent Order ID, Shop, Helper, Items..."
+                      className="w-full pl-8 pr-3 py-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      setStoreOrdersAppliedSearchQuery(storeOrdersSearchQuery);
+                      setCurrentPage(1);
+                    }}
+                    className="px-3 py-2 bg-purple-900 hover:bg-purple-950 text-white font-bold text-xs rounded-xl shadow-xs transition-all"
+                  >
+                    Search
+                  </button>
+                  {storeOrdersAppliedSearchQuery && (
+                    <button
+                      onClick={() => {
+                        setStoreOrdersSearchQuery('');
+                        setStoreOrdersAppliedSearchQuery('');
+                        setCurrentPage(1);
+                      }}
+                      className="px-2 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold text-xs rounded-xl transition-all"
+                      title="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Filter */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Status Filter</label>
+                <select
+                  value={storeOrdersStatusFilter}
+                  onChange={(e) => {
+                    setStoreOrdersStatusFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="PENDING">PENDING</option>
+                  <option value="ACCEPTED">ACCEPTED</option>
+                  <option value="PREPARING">PREPARING</option>
+                  <option value="READY">READY</option>
+                  <option value="HANDOVER">HANDOVER</option>
+                  <option value="DELIVERED">DELIVERED</option>
+                  <option value="CANCELED">CANCELED</option>
+                </select>
+              </div>
+
+              {/* Filter by Shop */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Filter by Shop</label>
+                <select
+                  value={storeOrdersShopFilter}
+                  onChange={(e) => {
+                    setStoreOrdersShopFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Shops</option>
+                  {shops
+                    .filter((s) => s.canReceiveOrders !== false)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} {s.type ? `(${s.type})` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Sort By */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Sort By</label>
+                <select
+                  value={storeOrdersSortBy}
+                  onChange={(e) => {
+                    setStoreOrdersSortBy(e.target.value as any);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="NEWEST">Newest First</option>
+                  <option value="OLDEST">Oldest First</option>
+                  <option value="PRICE_HIGH">Price (High to Low)</option>
+                  <option value="PRICE_LOW">Price (Low to High)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600 min-w-[850px]">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                  <tr>
+                    <th className="py-3 px-4 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={
+                          paginatedItems.length > 0 &&
+                          paginatedItems.every((so) => selectedStoreOrderIds.includes(so.id))
+                        }
+                        onChange={() => handleToggleSelectAllStoreOrders(paginatedItems)}
+                        className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                        title="Select All on page"
+                      />
+                    </th>
+                    <th className="py-3 px-5">Parent Delivery Order</th>
+                    <th className="py-3 px-5">Shop / Store</th>
+                    <th className="py-3 px-5">Helper</th>
+                    <th className="py-3 px-5">Request & Items</th>
+                    <th className="py-3 px-5">Cost / Price</th>
+                    <th className="py-3 px-5">Status</th>
+                    <th className="py-3 px-5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 font-medium">
+                  {paginatedItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
+                        No store orders match your criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedItems.map((so) => {
+                      const shop = shops.find((s) => s.id === so.shopId) || fallbackStore.shops.get(so.shopId);
+                      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
+                      const helper = fallbackStore.users.get(so.helperId);
+                      const helperPhone = parentOrder?.helperPhone || helper?.alternativePhone || helper?.phoneNumber || '';
+                      const isSelected = selectedStoreOrderIds.includes(so.id);
+
+                      return (
+                        <tr
+                          key={so.id}
+                          className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${
+                            isSelected ? 'bg-purple-50/70' : ''
+                          }`}
+                          onClick={() => setSelectedShopOrderId(so.id)}
+                        >
+                          <td className="py-4 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => handleToggleSelectStoreOrder(so.id, e as any)}
+                              className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                            />
+                          </td>
+                          <td className="py-4 px-5 font-mono" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                onClick={() => setSelectedOrderId(so.parentOrderId)}
+                                className="inline-flex items-center gap-1 text-purple-700 hover:text-purple-900 font-black text-xs hover:underline bg-purple-50 px-2 py-1 rounded-lg border border-purple-150 transition-colors"
+                                title="Open Customer Order Details"
+                              >
+                                <span>#{so.parentOrderId}</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </button>
+                              {so.viewedByStore && (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-bold border border-emerald-200">
+                                  👁️ Seen
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
+                              {new Date(so.createdAt).toLocaleDateString()} {new Date(so.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          </td>
+                          <td className="py-4 px-5">
+                            <div className="font-extrabold text-gray-900 text-xs flex items-center gap-1.5 flex-wrap">
+                              <Store className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                              <span>{so.shopName}</span>
+                              {shop?.type && (
+                                <span className="text-[9px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-bold">
+                                  {shop.type}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-gray-500 font-medium">
+                              {shop?.whatsapp || shop?.contactPerson || 'N/A'}
+                            </div>
+                          </td>
+                          <td className="py-4 px-5">
+                            <div className="font-extrabold text-purple-900 text-xs flex items-center gap-1.5 flex-wrap">
+                              <Bike className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              <span>{so.helperName}</span>
+                            </div>
+                            <div className="text-[11px] text-gray-500 font-mono">
+                              {helperPhone || 'N/A'}
+                            </div>
+                          </td>
+                          <td className="py-4 px-5 max-w-xs">
+                            {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
+                              <div className="space-y-0.5">
+                                <span className="inline-block px-1.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 rounded text-[9px] font-bold">
+                                  {so.itemsWithPrice.length} item{so.itemsWithPrice.length > 1 ? 's' : ''} divided
+                                </span>
+                                <div className="text-[11px] text-gray-700 truncate font-medium">
+                                  {so.itemsWithPrice.map((it) => `${it.name} (৳${it.price ?? 0})`).join(', ')}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-gray-700 line-clamp-2 font-medium">
+                                {so.requestText || 'No description'}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 font-black text-xs">
+                            {so.price !== undefined && so.price !== null ? (
+                              <span className="text-emerald-700 text-sm font-mono font-black">
+                                ৳{so.price}
+                              </span>
+                            ) : (
+                              <span className="text-amber-600 text-[10px] font-bold bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                Pending Price
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5">
+                            <div className="flex flex-col gap-0.5">
+                              <span
+                                className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] w-fit border ${
+                                  so.status === 'DELIVERED'
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                    : so.status === 'HANDOVER'
+                                    ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                                    : so.status === 'READY'
+                                    ? 'bg-teal-100 text-teal-800 border-teal-200'
+                                    : so.status === 'PREPARING'
+                                    ? 'bg-purple-100 text-purple-800 border-purple-200'
+                                    : so.status === 'ACCEPTED'
+                                    ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                    : so.status === 'CANCELED'
+                                    ? 'bg-red-100 text-red-800 border-red-200'
+                                    : 'bg-amber-100 text-amber-800 border-amber-200'
+                                }`}
+                              >
+                                {so.status}
+                              </span>
+                              <span className="text-[10px] text-gray-400 font-medium">
+                                {new Date(so.updatedAt || so.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => setSelectedShopOrderId(so.id)}
+                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all inline-flex items-center gap-1"
+                            >
+                              <span>Manage</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <PaginationControl
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={(p) => setCurrentPage(p)}
+              onPageSizeChange={(s) => {
+                setPageSize(s);
+                setCurrentPage(1);
+              }}
+            />
+          </div>
+        );
+      })()}
+
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
         const processed = getProcessedUsersList();
@@ -4263,6 +5010,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onViewProfile={(uid) => setSelectedUserId(uid)}
                             onEditCoins={(target) => handleOpenEditCoins(target)}
                             onToggleAdmin={(targetUser, makeAdmin) => handleToggleAdminRole(targetUser, makeAdmin)}
+                            onToggleSuperAdmin={(targetUser, makeSuperAdmin) => handleToggleSuperAdminRole(targetUser, makeSuperAdmin)}
                             onToggleBlock={async (targetUser) => {
                               if (targetUser.isBlocked) {
                                 const confirmed = await showConfirm(
@@ -6066,6 +6814,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* In-App Browser (Facebook/Messenger/Instagram) Popup & Alert Admin Controls */}
+          <div className="p-5 rounded-3xl bg-amber-50/70 border border-amber-200 space-y-4">
+            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
+              <Compass className="w-5 h-5 text-amber-600" />
+              <span>In-App Browser (Facebook / Messenger) Popup & Alert Settings (ইন-অ্যাপ ব্রাউজার পপআপ ও সতর্কতা বার্তা)</span>
+            </h4>
+            <p className="text-[11px] text-amber-900 font-medium">
+              ব্যবহারকারী যখন ফেসবুক বা মেসেঞ্জারের ভেতর থেকে ওয়েবসাইট ভিজিট করেন, তখন গুগল লগইন ব্লক হওয়া রোধ ও সেরা সুবিধার জন্য ব্রাউজারে খোলার পপআপ বার্তা নিয়ন্ত্রণ করুন।
+            </p>
+
+            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-amber-200">
+              <input
+                type="checkbox"
+                id="inAppBrowserPromptEnabled"
+                checked={inAppBrowserPromptEnabled}
+                onChange={(e) => setInAppBrowserPromptEnabled(e.target.checked)}
+                className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300 cursor-pointer"
+              />
+              <label htmlFor="inAppBrowserPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
+                ফেসবুক/মেসেঞ্জারে ওয়েবসাইট দেখলে পপআপ অ্যালার্ট দেখান (Enable In-App Browser Popup Alert)
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  পপআপ টাইটেল (Popup Title)
+                </label>
+                <input
+                  type="text"
+                  value={inAppBrowserPromptTitle}
+                  onChange={(e) => setInAppBrowserPromptTitle(e.target.value)}
+                  placeholder="ব্রাউজারে ওপেন করুন"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  সাব-টাইটেল (Subtitle / Sub-text)
+                </label>
+                <input
+                  type="text"
+                  value={inAppBrowserPromptSubtitle}
+                  onChange={(e) => setInAppBrowserPromptSubtitle(e.target.value)}
+                  placeholder="Open in Chrome or Safari"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                সতর্কবার্তা ও বিবরণ (Alert Message & Details)
+              </label>
+              <textarea
+                value={inAppBrowserPromptMessage}
+                onChange={(e) => setInAppBrowserPromptMessage(e.target.value)}
+                placeholder="লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।"
+                rows={3}
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+              />
+            </div>
+          </div>
+
           {/* Permission Asking Modal Content Admin Controls */}
           <div className="p-5 rounded-3xl bg-amber-50/80 border border-amber-200 space-y-4">
             <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
@@ -7657,14 +8470,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <ThumbsUp className="w-3.5 h-3.5" /> ভালো ছিল
                               </span>
                             ) : fb.thumbsUp === false ? (
-                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[11px]">
-                                <ThumbsDown className="w-3.5 h-3.5" /> ভালো না
-                              </span>
+                              <div className="space-y-1">
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[11px]">
+                                  <ThumbsDown className="w-3.5 h-3.5" /> ভালো না
+                                </span>
+                                {fb.mutuallyDiscussed && (
+                                  <span className="block text-[9px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                                    ✓ Discussed
+                                  </span>
+                                )}
+                              </div>
                             ) : (
-                              <span className="inline-flex items-center gap-1 text-amber-600 font-extrabold text-xs">
-                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                                {fb.riderRating}/5
-                              </span>
+                              <div className="space-y-1">
+                                <span className="inline-flex items-center gap-1 text-amber-600 font-extrabold text-xs">
+                                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                                  {fb.riderRating}/5
+                                </span>
+                                {fb.mutuallyDiscussed && (
+                                  <span className="block text-[9px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                                    ✓ Discussed
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="py-4 px-5">
@@ -7995,6 +8822,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <AdminRewardsManager />
       )}
 
+      {/* --- TAB 13: SERVER ADDRESSES TAB --- */}
+      {activeTab === 'ADDRESSES' && isTabAllowed('ADDRESSES') && (
+        <AdminAddressesManager />
+      )}
+
       {/* --- ALL MODALS OVERLAYS --- */}
 
       {/* 1. Admin Order Details Modal */}
@@ -8002,6 +8834,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <AdminOrderDetailsModal
           orderId={selectedOrderId}
           onClose={() => setSelectedOrderId(null)}
+        />
+      )}
+
+      {/* 1.5 Admin Store Order Details Modal */}
+      {selectedShopOrderId && (
+        <AdminStoreOrderDetailsModal
+          shopOrderId={selectedShopOrderId}
+          onClose={() => setSelectedShopOrderId(null)}
+          onViewParentOrder={(parentOrderId) => {
+            setSelectedShopOrderId(null);
+            setSelectedOrderId(parentOrderId);
+          }}
         />
       )}
 

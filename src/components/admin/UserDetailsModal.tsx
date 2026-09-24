@@ -12,6 +12,7 @@ import {
   Mail,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Ban,
   Trash2,
   Tag,
@@ -286,6 +287,35 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     showAlert(
       'রোল আপডেট সম্পন্ন',
       `${user.displayName} ${makeAdmin ? 'এখন একজন Admin।' : 'এর Admin রোল সরানো হয়েছে।'}`,
+      'success'
+    );
+    if (onUserUpdated) onUserUpdated();
+  };
+
+  const handleToggleSuperAdminRoleInModal = async () => {
+    if (!currentUser?.isSuperAdmin) {
+      showAlert('অনুমতি নেই', 'শুধুমাত্র Super Admin অন্য কাউকে Super Admin বানাতে বা সরাতে পারবেন।', 'error');
+      return;
+    }
+    const isPrimarySuperAdmin = user.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase());
+    if (isPrimarySuperAdmin && user.isSuperAdmin) {
+      showAlert('সুরক্ষিত অ্যাকাউন্ট', 'মূল Super Admin এর রোল পরিবর্তন করা যাবে না।', 'warning');
+      return;
+    }
+    const makeSuperAdmin = !user.isSuperAdmin;
+    const actionText = makeSuperAdmin ? 'Super Admin রোল প্রদান করতে' : 'Super Admin রোল অপসারণ করে সাধারণ Admin করতে';
+    const confirmed = await showConfirm(
+      'Super Admin রোল পরিবর্তন',
+      `আপনি কি ${user.displayName}-কে ${actionText} চান?`,
+      makeSuperAdmin ? 'হ্যাঁ, Super Admin করুন' : 'হ্যাঁ, ডিমোট করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    await fallbackStore.setSuperAdminRole(userId, makeSuperAdmin);
+    showAlert(
+      'রোল আপডেট সম্পন্ন',
+      `${user.displayName} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
       'success'
     );
     if (onUserUpdated) onUserUpdated();
@@ -1152,9 +1182,29 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
                   {currentUser?.isSuperAdmin ? (
                     user.isSuperAdmin ? (
-                      <p className="text-xs text-slate-300 font-semibold">
-                        এই ব্যবহারকারী একজন <strong className="text-amber-400 font-extrabold">Super Admin</strong>। Super Admin রোল সুরক্ষিত।
-                      </p>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
+                        <div>
+                          <p className="text-xs font-bold text-amber-300 flex items-center space-x-1.5">
+                            <ShieldCheck className="w-4 h-4 text-amber-400" />
+                            <span>রোল: <strong>SUPER ADMIN</strong></span>
+                          </p>
+                          <p className="text-[11px] text-slate-400">
+                            {user.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase())
+                              ? 'এই ব্যবহারকারী মূল Super Admin অ্যাকাউন্ট। এটি সুরক্ষিত।'
+                              : 'এই ব্যবহারকারী একজন অনুমোদিত Super Admin।'}
+                          </p>
+                        </div>
+                        {user.uid !== currentUser.uid && !(user.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase())) && (
+                          <button
+                            type="button"
+                            onClick={handleToggleSuperAdminRoleInModal}
+                            className="py-2 px-4 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 border border-amber-500/40 font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap cursor-pointer"
+                          >
+                            <ShieldAlert className="w-4 h-4" />
+                            <span>Demote to Normal Admin</span>
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
                         <div>
@@ -1163,22 +1213,34 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                           </p>
                           <p className="text-[11px] text-slate-400">
                             {user.isAdmin
-                              ? 'Admin সুবিধা তুলে নিলে ব্যবহারকারী সাধারণ Customer/Helper হিসেবে অ্যাকাউন্টটি ব্যবহার করবেন।'
+                              ? 'Admin সুবিধা তুলে নিলে ব্যবহারকারী সাধারণ Customer/Helper হবেন। অথবা Super Admin-এ উন্নীত করতে পারেন।'
                               : 'Admin রোল দিলে ব্যবহারকারী Super Admin ব্যতীত বাকি সকল অপারেশনাল এবং অ্যানালিটিক্স কাজ করতে পারবেন।'}
                           </p>
                         </div>
                         {user.isAdmin ? (
-                          <button
-                            onClick={handleToggleAdminRoleInModal}
-                            className="py-2 px-4 rounded-xl bg-red-500 hover:bg-red-600 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap"
-                          >
-                            <ShieldAlert className="w-4 h-4" />
-                            <span>Remove Admin Role</span>
-                          </button>
+                          <div className="flex items-center space-x-2 flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={handleToggleSuperAdminRoleInModal}
+                              className="py-2 px-3.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md cursor-pointer"
+                            >
+                              <ShieldCheck className="w-4 h-4 text-purple-200" />
+                              <span>Promote to Super Admin</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleToggleAdminRoleInModal}
+                              className="py-2 px-3.5 rounded-xl bg-red-500/80 hover:bg-red-600 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap cursor-pointer"
+                            >
+                              <ShieldAlert className="w-4 h-4" />
+                              <span>Remove Admin Role</span>
+                            </button>
+                          </div>
                         ) : (
                           <button
+                            type="button"
                             onClick={handleToggleAdminRoleInModal}
-                            className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md"
+                            className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md cursor-pointer"
                           >
                             <Shield className="w-4 h-4" />
                             <span>Make Admin</span>

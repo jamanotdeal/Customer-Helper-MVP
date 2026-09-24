@@ -42,9 +42,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const [editPickup, setEditPickup] = useState('');
   const [editPickupLat, setEditPickupLat] = useState<number | undefined>(undefined);
   const [editPickupLng, setEditPickupLng] = useState<number | undefined>(undefined);
+  const [editPickupAddressId, setEditPickupAddressId] = useState<string | undefined>(undefined);
   const [editAddress, setEditAddress] = useState('');
   const [editDeliveryLat, setEditDeliveryLat] = useState<number | undefined>(undefined);
   const [editDeliveryLng, setEditDeliveryLng] = useState<number | undefined>(undefined);
+  const [editDeliveryAddressId, setEditDeliveryAddressId] = useState<string | undefined>(undefined);
   const [editPhone, setEditPhone] = useState('');
   const [editError, setEditError] = useState('');
 
@@ -140,7 +142,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   useEffect(() => {
     const syncOrder = () => {
       const current = fallbackStore.orders.get(orderId);
-      if (current) setOrder({ ...current });
+      if (current) setOrder(fallbackStore.resolveOrderLocations({ ...current }));
     };
     syncOrder();
     const unsub = fallbackStore.subscribe(syncOrder);
@@ -155,8 +157,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             if (docSnap.exists()) {
               const updated = docSnap.data() as Order;
               if (updated && updated.id) {
-                fallbackStore.orders.set(orderId, updated);
-                setOrder({ ...updated });
+                const resolved = fallbackStore.resolveOrderLocations(updated);
+                fallbackStore.orders.set(orderId, resolved);
+                setOrder({ ...resolved });
               }
             }
           },
@@ -379,21 +382,24 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   // Open edit modal pre-filled with current order data
   const openEditModal = () => {
     if (order.status === 'ARRIVED' || order.status === 'DELIVERED' || order.status === 'CANCELED') return;
-    setEditService(order.service || order.title || '');
+    const resolvedOrder = fallbackStore.resolveOrderLocations(order);
+    setEditService(resolvedOrder.service || resolvedOrder.title || '');
     // The description is stored in items[0].name (single-item format used by the order form)
-    setEditDescription(order.items[0]?.name || '');
-    setEditPickup(order.pickupLocation?.address || '');
-    setEditPickupLat(order.pickupLocation?.lat);
-    setEditPickupLng(order.pickupLocation?.lng);
-    setEditAddress(order.deliveryLocation.address);
-    setEditDeliveryLat(order.deliveryLocation.lat);
-    setEditDeliveryLng(order.deliveryLocation.lng);
-    setEditPhone(order.alternativePhone || order.customerPhone || '');
+    setEditDescription(resolvedOrder.items[0]?.name || '');
+    setEditPickup(resolvedOrder.pickupLocation?.address || '');
+    setEditPickupLat(resolvedOrder.pickupLocation?.lat);
+    setEditPickupLng(resolvedOrder.pickupLocation?.lng);
+    setEditPickupAddressId(resolvedOrder.pickupLocation?.addressId);
+    setEditAddress(resolvedOrder.deliveryLocation.address);
+    setEditDeliveryLat(resolvedOrder.deliveryLocation.lat);
+    setEditDeliveryLng(resolvedOrder.deliveryLocation.lng);
+    setEditDeliveryAddressId(resolvedOrder.deliveryLocation.addressId);
+    setEditPhone(resolvedOrder.alternativePhone || resolvedOrder.customerPhone || '');
     setEditError('');
     setShowEditModal(true);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editService.trim()) { setEditError('অনুগ্রহ করে একটি সার্ভিস সিলেক্ট করুন।'); return; }
     if (!editDescription.trim()) { setEditError('অনুগ্রহ করে কী করতে হবে তা লিখুন।'); return; }
     if (!editAddress.trim()) { setEditError('ডেলিভারি ঠিকানা খালি রাখা যাবে না।'); return; }
@@ -401,6 +407,38 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     if (!/^01[3-9]\d{8}$/.test(editPhone.trim())) {
       setEditError('অনুগ্রহ করে ১১ ডিজিটের সঠিক মোবাইল নম্বর দিন (যেমন: 01712345678)।');
       return;
+    }
+
+    // Record / upsert delivery address in server addresses catalog
+    let effDelivId = editDeliveryAddressId || order.deliveryLocation?.addressId;
+    let finalDeliveryAddressText = editAddress.trim();
+    if (finalDeliveryAddressText) {
+      try {
+        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
+          lat: editDeliveryLat,
+          lng: editDeliveryLng,
+        });
+        if (sa?.id) {
+          effDelivId = sa.id;
+          finalDeliveryAddressText = sa.address;
+        }
+      } catch (_) {}
+    }
+
+    // Record / upsert pickup address in server addresses catalog
+    let effPickupId = editPickupAddressId || order.pickupLocation?.addressId;
+    let finalPickupAddressText = editPickup.trim();
+    if (finalPickupAddressText) {
+      try {
+        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+          lat: editPickupLat,
+          lng: editPickupLng,
+        });
+        if (sa?.id) {
+          effPickupId = sa.id;
+          finalPickupAddressText = sa.address;
+        }
+      } catch (_) {}
     }
 
     // Compute diffs
@@ -414,12 +452,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       diffs.push({ field: 'Details / Items', oldValue: oldDesc, newValue: editDescription.trim() });
     }
     const oldPickup = order.pickupLocation?.address || '';
-    if (oldPickup !== editPickup.trim()) {
-      diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: editPickup.trim() || 'None' });
+    if (oldPickup !== finalPickupAddressText) {
+      diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: finalPickupAddressText || 'None' });
     }
     const oldDelivery = order.deliveryLocation?.address || '';
-    if (oldDelivery !== editAddress.trim()) {
-      diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: editAddress.trim() });
+    if (oldDelivery !== finalDeliveryAddressText) {
+      diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: finalDeliveryAddressText });
     }
     const oldPhone = order.alternativePhone || order.customerPhone || '';
     if (oldPhone !== editPhone.trim()) {
@@ -440,14 +478,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       service: editService.trim(),
       title: editService.trim(),
       items: [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
-      pickupLocation: editPickup.trim()
-        ? { address: editPickup.trim(), lat: editPickupLat, lng: editPickupLng }
+      pickupLocation: finalPickupAddressText
+        ? { address: finalPickupAddressText, lat: editPickupLat, lng: editPickupLng, addressId: effPickupId }
         : undefined,
       deliveryLocation: {
         ...o.deliveryLocation,
-        address: editAddress.trim(),
+        address: finalDeliveryAddressText,
         lat: editDeliveryLat,
         lng: editDeliveryLng,
+        addressId: effDelivId,
       },
       alternativePhone: editPhone.trim(),
       customerPhone: editPhone.trim(),
@@ -739,11 +778,33 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             )}
           </div>
           <div className="space-y-2">
-            {(order.items || []).map((it) => (
-              <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
-                <span className="font-semibold text-gray-800">{it.name}</span>
-              </div>
-            ))}
+            {(order.items || []).map((it) => {
+              const itemPricing = (() => {
+                const cleanName = it.name.toLowerCase().trim();
+                for (const so of validShopOrders) {
+                  if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+                    const found = so.itemsWithPrice.find(
+                      (p) => p.name.toLowerCase().trim() === cleanName || cleanName.includes(p.name.toLowerCase().trim()) || p.name.toLowerCase().trim().includes(cleanName)
+                    );
+                    if (found && found.price !== undefined) return { price: found.price, unit: found.unit };
+                  }
+                }
+                return undefined;
+              })();
+
+              return (
+                <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
+                  <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
+                    {it.name}{itemPricing?.unit ? ` (${itemPricing.unit})` : ''}
+                  </span>
+                  {itemPricing?.price !== undefined && (
+                    <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
+                      ৳{itemPricing.price}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {order.additionalNote && (
             <div className="mt-3 p-3 rounded-2xl bg-amber-50/70 border border-amber-100 text-xs text-amber-900">
@@ -1012,13 +1073,26 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       )}
 
                       {/* Item Details */}
-                      {so.requestText && (
+                      {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
+                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs space-y-1.5">
+                          {so.itemsWithPrice.map((it, iIdx) => (
+                            <div key={iIdx} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-b-0">
+                              <span className="text-gray-800 font-semibold">{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
+                              <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
+                            </div>
+                          ))}
+                          <div className="flex items-center justify-between pt-1 font-black text-xs text-gray-900 border-t border-gray-200">
+                            <span>মোট পণ্যের দাম (Total):</span>
+                            <span className="font-mono text-emerald-800">৳{so.price ?? 0}</span>
+                          </div>
+                        </div>
+                      ) : so.requestText ? (
                         <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
                           <p className="text-gray-800 font-semibold leading-relaxed">
                             {so.requestText}
                           </p>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })
@@ -1131,18 +1205,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) ── */}
-        {isDelivered && (
+        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) OR DISPLAY (CUSTOMER) ── */}
+        {isDelivered && (order.duePayment || user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
           <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <DollarSign className="w-5 h-5 text-purple-600" />
-                <div>
-                  <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট (Due Payment)</h3>
-                  <p className="text-[11px] text-gray-500 font-medium">
-                    পরবর্তী অর্ডারে যুক্ত করার জন্য কাস্টমারের বাকি পেমেন্ট রেকর্ড
-                  </p>
-                </div>
+                <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
               </div>
               {(user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
                 <button
@@ -1150,7 +1219,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1"
                 >
                   <Edit2 className="w-3 h-3" />
-                  <span>{order.duePayment ? 'এডিট করুন' : '+ বাকি যোগ করুন'}</span>
+                  <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
                 </button>
               )}
             </div>
@@ -1159,22 +1228,16 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <div className="p-3.5 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between font-bold">
                   <span className="text-purple-900">বাকি পরিমাণ:</span>
-                  <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-600 font-semibold">স্ট্যাটাস:</span>
-                  <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
-                    {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত (PAID)' : '⚠️ বকেয়া (UNPAID)'}
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
+                    <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                      {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
+                    </span>
+                  </div>
                 </div>
                 {order.duePayment.note && (
                   <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
-                    <strong>কারণ/নোট:</strong> {order.duePayment.note}
-                  </div>
-                )}
-                {order.duePayment.addedByName && (
-                  <div className="text-[10px] text-gray-500 italic">
-                    যোগ করেছেন: {order.duePayment.addedByName} ({order.duePayment.addedBy})
+                    <strong>নোট:</strong> {order.duePayment.note}
                   </div>
                 )}
               </div>
@@ -1578,19 +1641,19 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
               <div>
                 <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  কারণ / নোট (Note for Customer) *
+                  নোট / কারণ *
                 </label>
                 <textarea
                   value={dueNoteInput}
                   onChange={(e) => setDueNoteInput(e.target.value)}
-                  placeholder="যেমন: পণ্য ক্রয়ে দোকানে ৫০ টাকা বাকি ছিলো..."
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-24"
+                  placeholder="যেমন: ৫০ টাকা বাকি ছিলো..."
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-20"
                   required
                 />
               </div>
 
-              <p className="text-[11px] text-gray-500 leading-relaxed">
-                * এই বাকি পেমেন্টটি কাস্টমারের পরবর্তী যেকোনো নতুন অর্ডারের সাথে স্বয়ংক্রিয়ভাবে যোগ হবে এবং কাস্টমার বিলের সামারিতে এর বিস্তারিত নোট দেখতে পারবেন।
+              <p className="text-[11px] text-gray-400">
+                * পরবর্তী অর্ডারে স্বয়ংক্রিয়ভাবে যোগ হবে।
               </p>
 
               <div className="flex items-center space-x-3 pt-2">

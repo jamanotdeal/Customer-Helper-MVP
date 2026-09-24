@@ -10,6 +10,7 @@ interface UserActionDropdownProps {
   onViewProfile: (userId: string) => void;
   onEditCoins?: (user: UserProfile) => void;
   onToggleAdmin: (user: UserProfile, makeAdmin: boolean) => void;
+  onToggleSuperAdmin?: (user: UserProfile, makeSuperAdmin: boolean) => void;
   onToggleBlock: (user: UserProfile) => void;
   onDeleteUser: (user: UserProfile) => void;
 }
@@ -20,11 +21,14 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
   onViewProfile,
   onEditCoins,
   onToggleAdmin,
+  onToggleSuperAdmin,
   onToggleBlock,
   onDeleteUser,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const isPrimarySuperAdmin = user.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase());
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -53,7 +57,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
       {isOpen && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="origin-top-right absolute right-0 mt-2 w-52 rounded-2xl shadow-xl bg-white ring-1 ring-black/5 divide-y divide-gray-100 z-30 animate-in fade-in duration-150"
+          className="origin-top-right absolute right-0 mt-2 w-56 rounded-2xl shadow-xl bg-white ring-1 ring-black/5 divide-y divide-gray-100 z-30 animate-in fade-in duration-150"
         >
           <div className="py-1">
             <button
@@ -89,19 +93,48 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
               </span>
             </button>
 
-            {currentUser?.isSuperAdmin && user.uid !== currentUser.uid && !user.isSuperAdmin && (
-              user.isAdmin ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsOpen(false);
-                    onToggleAdmin(user, false);
-                  }}
-                  className="w-full text-left px-4 py-2.5 text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center space-x-2"
-                >
-                  <ShieldAlert className="w-4 h-4 text-amber-600" />
-                  <span>Remove Admin Role</span>
-                </button>
+            {currentUser?.isSuperAdmin && user.uid !== currentUser.uid && (
+              user.isSuperAdmin ? (
+                !isPrimarySuperAdmin && onToggleSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onToggleSuperAdmin(user, false);
+                    }}
+                    className="w-full text-left px-4 py-2.5 text-xs font-bold text-amber-800 hover:bg-amber-50 flex items-center space-x-2"
+                  >
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    <span>Demote to Normal Admin</span>
+                  </button>
+                )
+              ) : user.isAdmin ? (
+                <>
+                  {onToggleSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsOpen(false);
+                        onToggleSuperAdmin(user, true);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-xs font-bold text-purple-700 hover:bg-purple-50 flex items-center space-x-2"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-purple-600" />
+                      <span>Promote to Super Admin</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onToggleAdmin(user, false);
+                    }}
+                    className="w-full text-left px-4 py-2.5 text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center space-x-2"
+                  >
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    <span>Remove Admin Role</span>
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"

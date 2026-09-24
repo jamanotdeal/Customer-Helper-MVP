@@ -3,7 +3,7 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, Wallet } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
@@ -25,13 +25,30 @@ interface HelperActiveOrderViewProps {
 }
 
 export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
-  order,
+  order: rawOrder,
   helperLocation,
   onBack,
   onAccept,
   activeOrdersCount,
   activeOrderLimit,
 }) => {
+  const [liveOrder, setLiveOrder] = useState<Order>(() => fallbackStore.resolveOrderLocations(rawOrder));
+
+  useEffect(() => {
+    const sync = () => {
+      const current = fallbackStore.orders.get(rawOrder.id);
+      if (current) {
+        setLiveOrder(fallbackStore.resolveOrderLocations(current));
+      } else {
+        setLiveOrder(fallbackStore.resolveOrderLocations(rawOrder));
+      }
+    };
+    sync();
+    const unsub = fallbackStore.subscribe(sync);
+    return () => unsub();
+  }, [rawOrder.id, rawOrder]);
+
+  const order = liveOrder;
   const { user, openAuthModal } = useAuth();
   const isAcceptedByThisHelper = order.status !== 'PENDING' && !!order.helperId && user?.uid === order.helperId;
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
@@ -461,20 +478,37 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }));
   };
 
-  const handleSaveEditedAddress = (type: 'pickup' | 'delivery', loc: LocationData) => {
+  const handleSaveEditedAddress = async (type: 'pickup' | 'delivery', loc: LocationData) => {
+    // Connect and save to server addresses catalog
+    let effectiveAddressId = loc.addressId;
+    try {
+      const sa = await fallbackStore.recordOrUpsertServerAddress(loc.address, {
+        lat: loc.lat,
+        lng: loc.lng,
+        shortName: loc.name,
+        details: loc.details,
+      });
+      if (sa?.id) effectiveAddressId = sa.id;
+    } catch (_) {}
+
+    const locWithId: LocationData = {
+      ...loc,
+      addressId: effectiveAddressId,
+    };
+
     fallbackStore.updateOrder(order.id, (o) => {
       const changes = [];
       const oldVal = type === 'pickup' ? (o.pickupLocation?.address || 'N/A') : (o.deliveryLocation?.address || 'N/A');
       changes.push({
         field: type === 'pickup' ? 'Pickup Address' : 'Delivery Address',
         oldValue: oldVal,
-        newValue: loc.address,
+        newValue: locWithId.address,
       });
 
       const updatedOrder = {
         ...o,
-        pickupLocation: type === 'pickup' ? loc : o.pickupLocation,
-        deliveryLocation: type === 'delivery' ? loc : o.deliveryLocation,
+        pickupLocation: type === 'pickup' ? locWithId : o.pickupLocation,
+        deliveryLocation: type === 'delivery' ? locWithId : o.deliveryLocation,
         lastEditedBy: 'helper' as const,
         lastEditedAt: new Date().toISOString(),
         updatedByCustomer: false,
@@ -495,7 +529,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             status: o.status,
             timestamp: new Date().toISOString(),
             actor: `Helper (${o.helperName || 'Helper'})`,
-            note: `${type === 'pickup' ? 'Pickup' : 'Delivery'} address updated to: ${loc.address}`,
+            note: `${type === 'pickup' ? 'Pickup' : 'Delivery'} address updated to: ${locWithId.address}`,
           },
         ],
       };
@@ -935,15 +969,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-inner">
             <X className="w-10 h-10" />
           </div>
-          <h3 className="font-extrabold text-gray-900 text-lg">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h3>
+          <h3 className="font-extrabold text-gray-900 text-lg">Order Cancelled</h3>
           <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
-            এই অর্ডারটি কাস্টমার অথবা অ্যাডমিন দ্বারা বাতিল করা হয়েছে। আপনি এই অর্ডারের বিবরণ দেখতে পারবেন না।
+            This order has been cancelled by customer or admin.
           </p>
           <button
             onClick={onBack}
             className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
           >
-            ফিরে যান
+            Go Back
           </button>
         </div>
       </div>
@@ -1025,13 +1059,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
           {!isDone && !isPaused && urgency.urgencyLevel === 'red' && (
             <p className="mt-1.5 text-[11px] font-black text-red-700 bg-red-200/80 px-3 py-1 rounded-full border border-red-300 text-center animate-pulse">
-              🚨 55+ মিনিট অতিক্রান্ত! দ্রুত ডেলিভারি সম্পন্ন করুন!
+              🚨 55+ min elapsed! Please deliver urgently!
             </p>
           )}
 
           {!isDone && !isPaused && urgency.urgencyLevel === 'yellow' && (
             <p className="mt-1.5 text-[11px] font-black text-amber-900 bg-amber-200/80 px-3 py-1 rounded-full border border-amber-300 text-center">
-              ⚠️ 40+ মিনিট অতিক্রান্ত! দ্রুত পৌঁছানোর চেষ্টা করুন।
+              ⚠️ 40+ min elapsed! Please expedite delivery.
             </p>
           )}
 
@@ -1044,8 +1078,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <CalendarClock className={`w-3.5 h-3.5 shrink-0 ${isPaused ? 'text-indigo-700' : 'text-emerald-600'}`} />
               <span className="text-[10px] font-extrabold text-center">
                 {isPaused
-                  ? `⏸️ সময় স্থগিত (টাইমার পজ করা আছে) • ফিরবেন: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`
-                  : `▶️ ২য় ধাপ রানিং • শিডিউল ছিল: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`}
+                  ? `⏸️ Timer Paused • Return at: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`
+                  : `▶️ Step 2 Running • Scheduled: ${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'short', timeStyle: 'short' })}`}
               </span>
             </div>
           )}
@@ -1122,9 +1156,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <AlertOctagon className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="font-extrabold text-xs text-red-900">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h4>
+                <h4 className="font-extrabold text-xs text-red-900">Order Cancelled</h4>
                 <p className="text-[11px] text-red-700 font-medium">
-                  এই অর্ডারটি কাস্টমার বা এডমিন কর্তৃক বাতিল করা হয়েছে। এটি আর রানিং অর্ডারে গণনীয় নয়।
+                  This order was cancelled by customer or admin.
                 </p>
               </div>
             </div>
@@ -1137,7 +1171,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1.5">
                 <FileEdit className="w-4 h-4 text-amber-600 shrink-0" />
-                <span className="font-extrabold text-xs text-amber-950">গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
+                <span className="font-extrabold text-xs text-amber-950">Customer updated order info</span>
               </div>
               <button
                 onClick={() => {
@@ -1145,7 +1179,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 }}
                 className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/80 transition-all active:scale-95 shrink-0"
               >
-                ঠিক আছে (Dismiss)
+                Dismiss
               </button>
             </div>
 
@@ -1265,9 +1299,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <p className="font-extrabold text-amber-900 text-xs">কাস্টমার পিকআপ ঠিকানা দেননি (Pickup Not Set)</p>
+                          <p className="font-extrabold text-amber-900 text-xs">Pickup Not Set</p>
                           <p className="text-[11px] text-amber-700 font-medium leading-relaxed mt-0.5">
-                            সঠিক দূরত্ব ও ডেলিভারি হিসাবের জন্য পিকআপ লোকেশন নির্ধারণ করুন। এটি কাস্টমারের প্রোফাইলে সংরক্ষিত থাকবে।
+                            Set pickup location for accurate distance calculation. Saved to customer profile.
                           </p>
                         </div>
                       </div>
@@ -1277,7 +1311,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-98 cursor-pointer"
                       >
                         <MapPin className="w-3.5 h-3.5" />
-                        <span>📍 পিকআপ ঠিকানা নির্ধারণ করুন (Set Pickup)</span>
+                        <span>📍 Set Pickup Location</span>
                       </button>
                     </div>
                   ) : (
@@ -1290,7 +1324,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         type="button"
                         onClick={() => setActiveMapPicker('pickup')}
                         className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                        title="পিকআপ ঠিকানা পরিবর্তন"
+                        title="Edit pickup address"
                       >
                         <FileEdit className="w-3 h-3 text-gray-700" />
                         <span>Edit</span>
@@ -1313,7 +1347,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     className="absolute top-2.5 right-2.5 z-20 flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900/90 hover:bg-slate-950 text-white rounded-xl text-xs font-extrabold backdrop-blur-md shadow-md transition-all active:scale-95 cursor-pointer border border-slate-700"
                   >
                     <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>ম্যাপ বড় করে দেখুন (Full Map)</span>
+                    <span>Full Map</span>
                   </button>
                 </div>
               </div>
@@ -1376,32 +1410,34 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </span>
             </div>
             <div className="space-y-2">
-              {parsedItems.map((i) => (
-                <div
-                  key={i.id}
-                  onClick={() => !isDone && toggleParsedItemPurchased(i.id, i.originalId)}
-                  className={`flex items-center justify-between text-sm p-3 rounded-2xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${
-                    isDone
-                      ? 'cursor-default opacity-65'
-                      : 'cursor-pointer hover:brightness-105 active:scale-[0.99]'
-                  } ${
-                    i.purchased ? 'opacity-85 font-medium' : 'font-extrabold'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2.5">
-                    <input
-                      type="checkbox"
-                      checked={!!i.purchased}
-                      disabled={isDone}
-                      onChange={() => {}} // Handled by parent container onClick
-                      className="w-4 h-4 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-50"
-                    />
-                    <span className={`text-sm ${i.purchased ? 'line-through text-white/80' : ''}`}>
-                      {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
-                    </span>
+              {parsedItems.map((i) => {
+                return (
+                  <div
+                    key={i.id}
+                    onClick={() => !isDone && toggleParsedItemPurchased(i.id, i.originalId)}
+                    className={`flex items-center justify-between text-sm p-3 rounded-2xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${
+                      isDone
+                        ? 'cursor-default opacity-65'
+                        : 'cursor-pointer hover:brightness-105 active:scale-[0.99]'
+                    } ${
+                      i.purchased ? 'opacity-85 font-medium' : 'font-extrabold'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={!!i.purchased}
+                        disabled={isDone}
+                        onChange={() => {}} // Handled by parent container onClick
+                        className="w-4 h-4 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-50 shrink-0"
+                      />
+                      <span className={`text-sm break-words ${i.purchased ? 'line-through text-white/80' : ''}`}>
+                        {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Customer Description Comma-Separated Checklist */}
@@ -1567,12 +1603,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
           {/* Requests to Shops */}
           <div className="pt-2 border-t border-gray-100">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
-                <Store className="w-3.5 h-3.5 text-purple-600" />
-                <span>Requests to Shops</span>
-              </h4>
-            </div>
+            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1">
+              <Store className="w-3.5 h-3.5 text-purple-600" />
+              <span>Requests to Shops</span>
+            </h4>
             {!isDone && (
               <div className="grid grid-cols-2 gap-2 mb-2.5">
                 <button
@@ -1625,16 +1659,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             </span>
                           ) : null}
                         </div>
-                        <p className="text-[11px] text-gray-500 truncate mt-0.5" title={so.requestText}>
-                          {so.requestText}
+                        <p className="text-[11px] text-gray-500 truncate mt-0.5 font-medium" title={so.requestText}>
+                          {so.itemsWithPrice && so.itemsWithPrice.length > 0
+                            ? so.itemsWithPrice.map((i) => `${i.name}${i.unit ? ` (${i.unit})` : ''}`).join(', ')
+                            : so.requestText}
                         </p>
                       </div>
                       {isMyself ? (
-                        <span className="text-xs font-black text-amber-950 bg-amber-100 px-2.5 py-1 rounded-xl border border-amber-250 shrink-0">
+                        <span className="text-lg sm:text-xl font-black text-amber-950 bg-amber-100 px-3.5 py-1.5 rounded-xl border border-amber-250 shrink-0 font-mono">
                           ৳{so.price || 0}
                         </span>
                       ) : (
-                        <div className="flex flex-col items-end gap-1 shrink-0">
+                        <div className="flex flex-col items-end gap-0.5 shrink-0">
                           <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
                             so.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
                             so.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
@@ -1648,8 +1684,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             {so.status === 'PREPARING' ? 'Processing' : so.status}
                           </span>
                           {so.price !== undefined && (
-                            <span className="text-[10px] font-extrabold text-gray-650">
-                              Cost: ৳{so.price}
+                            <span className="text-lg sm:text-xl font-black text-emerald-950 font-mono">
+                              ৳{so.price}
                             </span>
                           )}
                         </div>
@@ -1732,13 +1768,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
                   <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="truncate">পিকআপ লোকেশন নির্ধারণ করা হয়নি</span>
+                    <span className="truncate">Pickup Location Not Set</span>
                   </div>
                   {!isDone && (
                     <button
                       onClick={() => setActiveMapPicker('pickup')}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
-                      title="পিকআপ ঠিকানা যোগ করুন"
+                      title="Set pickup address"
                     >
                       <MapPin className="w-3 h-3 text-white" />
                       <span>+ Set Pickup</span>
@@ -1755,7 +1791,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <button
                       onClick={() => setActiveMapPicker('pickup')}
                       className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                      title="পিকআপ ঠিকানা পরিবর্তন"
+                      title="Edit pickup address"
                     >
                       <FileEdit className="w-3 h-3 text-gray-700" />
                       <span>Edit</span>
@@ -1772,7 +1808,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <button
                     onClick={() => setActiveMapPicker('delivery')}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
-                    title="ডেলিভারি ঠিকানা পরিবর্তন"
+                    title="Edit delivery address"
                   >
                     <FileEdit className="w-3 h-3 text-emerald-700" />
                     <span>Edit</span>
@@ -1810,8 +1846,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </h4>
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700 animate-in fade-in">
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Product cost</span>
-                <span className="text-sm font-black text-gray-900">
+                <span className="text-gray-500 font-bold">Product Cost</span>
+                <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">
                   ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)}
                 </span>
               </div>
@@ -1820,12 +1856,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {distanceKm > 0 ? (
                   <>
                     <span className="text-gray-500 font-bold">Distance ({distanceKm.toFixed(1)} km)</span>
-                    <span className="font-bold text-gray-900">৳{estdPricing.distanceFee}</span>
+                    <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.distanceFee}</span>
                   </>
                 ) : (
                   <>
                     <span className="text-amber-700 font-bold flex items-center gap-1">
-                      <span>Distance (পিকআপ সেট নেই)</span>
+                      <span>Distance (Pickup not set)</span>
                     </span>
                     {!isDone ? (
                       <button
@@ -1833,10 +1869,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         onClick={() => setActiveMapPicker('pickup')}
                         className="text-[11px] text-amber-700 underline font-extrabold hover:text-amber-800 cursor-pointer"
                       >
-                        + সেট করুন
+                        + Set Location
                       </button>
                     ) : (
-                      <span className="font-bold text-gray-400">৳0</span>
+                      <span className="text-xs sm:text-sm font-bold text-gray-400 font-mono">৳0</span>
                     )}
                   </>
                 )}
@@ -1859,7 +1895,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-xs outline-none focus:border-emerald-500 bg-white"
                     />
                   ) : (
-                    <span className="font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
+                    <span className="text-xs sm:text-sm font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
                   )}
                   {estdPricing.weightFee > 0 && (
                     <span className="text-[10px] text-gray-500">(+৳{estdPricing.weightFee})</span>
@@ -1870,7 +1906,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-gray-500 font-bold">Processing Fee</span>
-                  <span className="font-bold text-gray-900">৳{estdPricing.processingFee}</span>
+                  <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.processingFee}</span>
                 </div>
               )}
 
@@ -1879,7 +1915,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span className="text-gray-500 font-bold">
                     {order.needDeliveryBack ? 'Two-Way Fee' : 'Return Fee'} ({estdPricing.returnPercent}%)
                   </span>
-                  <span className="font-bold text-gray-900">৳{estdPricing.returnFee}</span>
+                  <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.returnFee}</span>
                 </div>
               )}
 
@@ -1889,13 +1925,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <div className="flex items-center justify-between text-amber-950 font-bold">
                     <span className="flex items-center space-x-1 text-amber-900">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span>Previous Order Due (পূর্বের বাকি)</span>
+                      <span>Previous Order Due</span>
                     </span>
-                    <span className="font-extrabold text-sm text-red-600">+৳{order.appliedDuePayment.amount}</span>
+                    <span className="font-extrabold text-sm text-red-600 font-mono">+৳{order.appliedDuePayment.amount}</span>
                   </div>
                   {order.appliedDuePayment.note && (
                     <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200/70 text-[11px] text-amber-950 font-medium leading-relaxed">
-                      <strong>বাকি নোট:</strong> {order.appliedDuePayment.note}
+                      <strong>Due Note:</strong> {order.appliedDuePayment.note}
                     </div>
                   )}
                 </div>
@@ -1906,12 +1942,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
                   {order.isFreeDelivery && (
                     <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                      🎁 ফ্রি ডেলিভারি (Reward Claimed)
+                      🎁 Free Delivery (Reward Claimed)
                     </span>
                   )}
                 </div>
                 <div className="flex items-center space-x-1.5">
-                  <span className="text-base font-black text-emerald-850">
+                  <span className="text-xs sm:text-sm font-bold text-emerald-850 font-mono">
                     ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
                   </span>
                   {!isDone && !order.isFreeDelivery && (
@@ -1930,42 +1966,89 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
 
-              <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
-                <span className="font-bold text-gray-900 text-sm">Total to Collect (মোট বিল)</span>
-                <span className="text-base font-black text-emerald-800">
+              <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
+                <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
+                <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
                   ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                 </span>
               </div>
 
-              {/* Helper Earnings after Platfrom Commission Deduction */}
+              {/* Helper Earnings after Platform Commission Deduction */}
               {(() => {
                 const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
                 const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
                 return (
                   <div className="flex items-center justify-between bg-purple-50/60 p-2.5 rounded-xl border border-purple-100 -mx-0.5">
                     <div>
-                      <span className="font-bold text-purple-950 text-xs block">আপনার আয় (Net Earnings)</span>
+                      <span className="font-bold text-purple-950 text-xs block">Net Earnings</span>
                       <span className="text-[9px] text-purple-700">
-                        {order.isFreeDelivery ? 'ফ্রি ডেলিভারি প্ল্যাটফর্ম সাবসিডি আয়' : 'প্ল্যাটফর্ম কমিশন বাদে নিট আয়'}
+                        {order.isFreeDelivery ? 'Free delivery platform subsidy earnings' : 'Net earnings after platform commission'}
                       </span>
                     </div>
-                    <span className="text-base font-black text-purple-900">৳{netEarned}</span>
+                    <span className="text-xs sm:text-sm font-bold text-purple-900 font-mono">৳{netEarned}</span>
                   </div>
                 );
               })()}
 
               {order.deliveryFee > (fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70) && (
                 <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-850 font-bold leading-relaxed animate-in fade-in duration-200">
-                  ⚠️ {fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || `মোট ডেলিভারি ফি ৳${fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70}-এর বেশি।`}
+                  ⚠️ {fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || `Delivery fee exceeds ৳${fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70}.`}
                   <div className="mt-1 text-[11px] font-black text-amber-900">
-                    👉 কাস্টমারকে কল করে আলোচনার মাধ্যমে ফেয়ার ডেলিভারি ফি সেট করুন।
+                    👉 Call customer to agree on a fair delivery fee.
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* 7. PRIVATE NOTE SECTION (Customer cannot see this) */}
+          {/* 7. DUE PAYMENT MANAGEMENT (Helper) */}
+          {(isAcceptedByThisHelper || isDone) && (
+            <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={openHelperDueModal}
+                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1 cursor-pointer"
+                >
+                  <FileEdit className="w-3.5 h-3.5" />
+                  <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
+                </button>
+              </div>
+
+              {order.duePayment ? (
+                <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between font-bold">
+                    <span className="text-purple-900">বাকি পরিমাণ:</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
+                      <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                        {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
+                      </span>
+                    </div>
+                  </div>
+                  {order.duePayment.note && (
+                    <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
+                      <strong>নোট:</strong> {order.duePayment.note}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 rounded-2xl bg-gray-50 border border-dashed border-gray-200 text-center">
+                  <p className="text-xs text-gray-500 font-semibold">
+                    কোনো বাকি পেমেন্ট যোগ করা নেই
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}
           <div className="pt-2 border-t border-gray-100 space-y-1.5 animate-in fade-in">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1 text-purple-950 font-extrabold text-[10px]">
@@ -2550,44 +2633,40 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
       {showCompletionModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-5 border border-emerald-100 text-center animate-in zoom-in-95 duration-200 relative overflow-hidden">
+          <div className="w-full max-w-xs bg-white rounded-3xl p-6 shadow-2xl space-y-4 border border-emerald-100 text-center animate-in zoom-in-95 duration-200 relative overflow-hidden">
             {/* Decorative glows */}
-            <div className="absolute -top-12 -left-12 w-32 h-32 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none" />
-            <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-amber-400/20 rounded-full blur-2xl pointer-events-none" />
+            <div className="absolute -top-12 -left-12 w-28 h-28 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none" />
+            <div className="absolute -bottom-12 -right-12 w-28 h-28 bg-teal-400/20 rounded-full blur-2xl pointer-events-none" />
 
             {/* Celebratory Icon */}
-            <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 animate-bounce">
-              <Sparkles className="w-10 h-10" />
+            <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30">
+              <Sparkles className="w-8 h-8" />
             </div>
 
             {(() => {
-              const commissionPercent = fallbackStore.pricingSettings?.helperCommissionPercent || 80;
-              const platformPercent = 100 - commissionPercent;
               const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
               const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
-              const platformCommissionFee = Math.max(0, baseFeeForHelper - netEarned);
 
               return (
                 <div className="space-y-3">
-                  <span className="inline-flex items-center space-x-1 text-xs font-black uppercase tracking-widest text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                    🎉 Order Completed!
-                  </span>
-                  <h3 className="text-2xl font-black text-gray-900 leading-tight">
-                    Congratulations!
-                  </h3>
-                  <div className="bg-emerald-50/90 py-3.5 px-4 rounded-2xl border border-emerald-200 shadow-xs space-y-1.5">
-                    <p className="text-sm font-extrabold text-emerald-950">
-                      You earned <span className="text-emerald-700 text-2xl font-black">{netEarned} BDT</span>
-                    </p>
-                    <p className="text-[11px] text-emerald-800 font-bold bg-emerald-100/70 py-1 px-2.5 rounded-xl border border-emerald-200/80 inline-block">
-                      {order.isFreeDelivery
-                        ? `(ফ্রি ডেলিভারি অর্ডার - প্ল্যাটফর্ম সাবসিডি হতে নিট আয় ৳${netEarned})`
-                        : `(ডেলিভারি ফি ৳${order.deliveryFee} হতে ${platformPercent}% প্ল্যাটফর্ম কমিশন ৳${platformCommissionFee} বাদে নিট আয়)`}
-                    </p>
+                  <div>
+                    <h3 className="text-xl font-black text-gray-900">
+                      Congratulations! 🎉
+                    </h3>
+                    <p className="text-xs text-gray-500 font-bold mt-0.5">Order Completed</p>
                   </div>
-                  <p className="text-xs text-gray-500 font-semibold pt-1">
-                    অর্ডার #{order.id} সফলভাবে সম্পন্ন করার জন্য আপনাকে ধন্যবাদ! এই অর্থ আপনার ওয়ালেটে জমা হয়েছে।
-                  </p>
+
+                  <div className="bg-emerald-50 py-3.5 px-4 rounded-2xl border border-emerald-200/80">
+                    <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
+                      You Earned
+                    </span>
+                    <span className="text-3xl font-black text-emerald-600 tracking-tight block my-0.5">
+                      ৳{netEarned}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100/70 px-2.5 py-0.5 rounded-full mt-1">
+                      <Wallet className="w-3.5 h-3.5" /> Added to Wallet
+                    </span>
+                  </div>
                 </div>
               );
             })()}
@@ -2599,7 +2678,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               }}
               className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 active:scale-95 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 transition-all"
             >
-              Great! Back to Orders
+              Back to Orders
             </button>
           </div>
         </div>
@@ -2868,10 +2947,29 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </p>
               )}
 
+              {/* Itemized pricing breakdown if provided by store */}
+              {viewRequestDetails.itemsWithPrice && viewRequestDetails.itemsWithPrice.length > 0 && (
+                <div className="bg-emerald-50/60 p-3 rounded-2xl border border-emerald-150 space-y-1.5">
+                  <span className="text-[10px] font-black uppercase text-emerald-900 tracking-wider block mb-1">
+                    Itemized Prices
+                  </span>
+                  {viewRequestDetails.itemsWithPrice.map((it, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-emerald-100/60 last:border-b-0">
+                      <span className="font-semibold text-gray-800">{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
+                      <span className="font-bold text-emerald-950 font-mono">৳{it.price ?? 0}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-1 border-t border-emerald-200 font-black text-xs text-emerald-950">
+                    <span>Total Product Cost:</span>
+                    <span className="font-mono">৳{viewRequestDetails.price ?? 0}</span>
+                  </div>
+                </div>
+              )}
+
               {/* Edit inputs */}
               <div className="space-y-3 pt-1">
                 <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details (পণ্যের বিবরণ)</label>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details</label>
                   <textarea
                     value={viewRequestDetails.requestText}
                     disabled={isDone}
@@ -2881,13 +2979,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">প্রোডাক্ট কস্ট (Cost - ৳)</label>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Product Cost (৳)</label>
                   <input
                     type="number"
                     value={viewRequestDetails.price !== undefined ? String(viewRequestDetails.price) : ''}
                     disabled={isDone}
                     onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, price: parseFloat(e.target.value) || 0 })}
-                    placeholder="যেমন: ২৫০"
+                    placeholder="e.g. 250"
                     className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
                   />
                 </div>
@@ -2895,18 +2993,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {isMyself && (
                   <>
                     <div>
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতা / দোকানের নাম (Seller Name)</label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller / Shop Name</label>
                       <input
                         type="text"
                         value={viewRequestDetails.sellerName || ''}
                         disabled={isDone}
                         onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
-                        placeholder="যেমন: ভাই ভাই স্টোর"
+                        placeholder="e.g. Bhai Bhai Store"
                         className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number)</label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller Phone Number</label>
                       <input
                         type="tel"
                         value={viewRequestDetails.sellerPhone || ''}
@@ -2997,7 +3095,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
               <div>
                 <h3 className="font-bold text-base text-gray-900">Add Custom Cost</h3>
-                <p className="text-[11px] text-gray-500 font-medium">হেলপারের নিজস্ব কেনা পণ্যের কস্ট ও বিক্রেতার তথ্য</p>
+                <p className="text-[11px] text-gray-500 font-medium">Helper purchased item cost and seller details</p>
               </div>
             </div>
             <form
@@ -3006,11 +3104,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 if (isSubmittingCustomCost) return;
                 if (!customProductName.trim() || !customProductCost.trim()) return;
                 if (!customSellerName.trim()) {
-                  showAlert('বিক্রেতার নাম আবশ্যক', 'অনুগ্রহ করে যেখান থেকে কিনেছেন সেই দোকান বা বিক্রেতার নাম লিখুন।', 'warning');
+                  showAlert('Seller Name Required', 'Please enter the seller or store name.', 'warning');
                   return;
                 }
                 if (!customSellerPhone.trim()) {
-                  showAlert('বিক্রেতার মোবাইল নম্বর আবশ্যক', 'অনুগ্রহ করে বিক্রেতার মোবাইল নম্বর লিখুন যাতে কাস্টমার যাচাই করতে পারেন।', 'warning');
+                  showAlert('Seller Phone Required', 'Please enter seller mobile phone number for customer verification.', 'warning');
                   return;
                 }
                 setIsSubmittingCustomCost(true);
@@ -3045,41 +3143,41 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               className="space-y-3"
             >
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name (পণ্যের নাম) *</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name *</label>
                 <input
                   type="text"
                   value={customProductName}
                   onChange={(e) => setCustomProductName(e.target.value)}
-                  placeholder="যেমন: ১ কেজি পেঁয়াজ"
+                  placeholder="e.g. 1 kg Onion"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
                   required
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (দাম - ৳) *</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (৳) *</label>
                 <input
                   type="number"
                   step="0.01"
                   value={customProductCost}
                   onChange={(e) => setCustomProductCost(e.target.value)}
-                  placeholder="যেমন: ১২০"
+                  placeholder="e.g. 120"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
                   required
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতা / দোকানের নাম (Seller Name) *</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Seller / Shop Name *</label>
                 <input
                   type="text"
                   value={customSellerName}
                   onChange={(e) => setCustomSellerName(e.target.value)}
-                  placeholder="যেমন: আল-মদিনা স্টোর বা করিম ভাই"
+                  placeholder="e.g. Bhai Bhai Store or Karim"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
                   required
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">বিক্রেতার ফোন নম্বর (Seller Phone Number) *</label>
+                <label className="text-xs font-bold text-gray-755 block mb-1">Seller Phone Number *</label>
                 <input
                   type="tel"
                   value={customSellerPhone}
@@ -3184,19 +3282,19 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
               <div>
                 <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  কারণ / নোট (Note for Customer) *
+                  নোট / কারণ *
                 </label>
                 <textarea
                   value={helperDueNoteInput}
                   onChange={(e) => setHelperDueNoteInput(e.target.value)}
-                  placeholder="যেমন: পণ্য ক্রয়ে দোকানে ৫০ টাকা বাকি ছিলো..."
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-24"
+                  placeholder="যেমন: দোকানে ৫০ টাকা বাকি ছিলো..."
+                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-20"
                   required
                 />
               </div>
 
-              <p className="text-[11px] text-gray-500 leading-relaxed">
-                * এই বাকি পেমেন্টটি কাস্টমারের পরবর্তী যেকোনো নতুন অর্ডারের সাথে স্বয়ংক্রিয়ভাবে যোগ হবে এবং কাস্টমার বিলের সামারিতে এর নোট দেখতে পারবেন।
+              <p className="text-[11px] text-gray-400">
+                * পরবর্তী অর্ডারে স্বয়ংক্রিয়ভাবে যোগ হবে।
               </p>
 
               <div className="flex items-center space-x-3 pt-2">

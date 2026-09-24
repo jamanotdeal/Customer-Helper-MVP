@@ -18,7 +18,7 @@ interface HelperRequestCardProps {
 }
 
 export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
-  order,
+  order: rawOrder,
   onAccept,
   onViewDetails,
   activeOrdersCount,
@@ -27,6 +27,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   isFirstOrder = false,
   helperLocation,
 }) => {
+  const order = fallbackStore.resolveOrderLocations(rawOrder);
   const isCapReached = (activeOrdersCount || 0) >= (activeOrderLimit || 5);
   const isDone =
     order.status === 'DELIVERED' ||

@@ -26,6 +26,7 @@ import {
   getNativeFcmToken,
 } from '@/lib/native';
 import { calculateDistanceKm } from '@/lib/pricing';
+import { detectInAppBrowser } from '@/lib/inAppBrowser';
 
 
 export const isUserAuthenticated = (user: UserProfile | null): boolean => {
@@ -194,8 +195,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastLocationWriteRef = useRef<{ lat: number; lng: number; at: number } | null>(null);
 
   const buildProfile = (fbUser: import('firebase/auth').User, savedMode: ActiveMode): UserProfile => {
-    const isAdmin = isUserAdminEmail(fbUser.email);
-    const isSuperAdmin = isUserSuperAdminEmail(fbUser.email);
+    const isHardcodedAdmin = isUserAdminEmail(fbUser.email);
+    const isHardcodedSuperAdmin = isUserSuperAdminEmail(fbUser.email);
     const isEduVerified = checkEduVerified(fbUser.email);
     let profile = fallbackStore.users.get(fbUser.uid);
 
@@ -224,19 +225,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? fbUser.displayName 
       : (fbUser.email ? fbUser.email.split('@')[0] : 'Customer User');
 
+    const effectiveIsSuperAdmin = isHardcodedSuperAdmin || Boolean(profile?.isSuperAdmin);
+    const effectiveIsAdmin = isHardcodedAdmin || Boolean(profile?.isAdmin) || effectiveIsSuperAdmin;
+
     if (!profile) {
       profile = {
         uid: fbUser.uid,
         email: fbUser.email || '',
         displayName: fallbackDisplayName,
         photoURL: fbUser.photoURL || undefined,
-        role: isAdmin ? 'admin' : 'customer',
+        role: effectiveIsAdmin ? 'admin' : 'customer',
         isHelper: false,
         helperType: 'commuter',
         isEduVerified: isEduVerified,
-        isAdmin: isAdmin,
-        isSuperAdmin: isSuperAdmin,
-        lastActiveMode: isAdmin ? 'admin' : (savedMode || 'customer'),
+        isAdmin: effectiveIsAdmin,
+        isSuperAdmin: effectiveIsSuperAdmin,
+        lastActiveMode: effectiveIsAdmin ? 'admin' : (savedMode || 'customer'),
         createdAt: new Date().toISOString(),
       };
       fallbackStore.saveUser(profile);
@@ -246,13 +250,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile = { ...profile, displayName: fallbackDisplayName };
         needsSave = true;
       }
-      if (isAdmin && (!profile.isAdmin || profile.role !== 'admin' || (isSuperAdmin && !profile.isSuperAdmin))) {
+      if (isHardcodedSuperAdmin && (!profile.isSuperAdmin || !profile.isAdmin || profile.role !== 'admin')) {
         profile = {
           ...profile,
           isAdmin: true,
-          isSuperAdmin: isSuperAdmin,
+          isSuperAdmin: true,
           role: 'admin',
           lastActiveMode: 'admin',
+        };
+        needsSave = true;
+      } else if (isHardcodedAdmin && (!profile.isAdmin || profile.role !== 'admin')) {
+        profile = {
+          ...profile,
+          isAdmin: true,
+          role: 'admin',
+          lastActiveMode: 'admin',
+        };
+        needsSave = true;
+      } else if (effectiveIsSuperAdmin && !profile.isSuperAdmin) {
+        profile = {
+          ...profile,
+          isSuperAdmin: true,
+          isAdmin: true,
+          role: 'admin',
         };
         needsSave = true;
       }
@@ -646,6 +666,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // ─── Web (unchanged) ──────────────────────────────────────────────────
+      // If user is inside an in-app browser (Facebook, Messenger, Instagram, TikTok, etc.),
+      // Google explicitly blocks OAuth with "disallowed_useragent" and WebViews lose sessions.
+      // Show the dedicated in-app browser guidance modal with 1-click Chrome/Safari open.
+      const inAppInfo = detectInAppBrowser();
+      if (inAppInfo.isInApp) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('show-inapp-browser-prompt', {
+              detail: { showIosGuide: inAppInfo.isIos },
+            })
+          );
+        }
+        setLoading(false);
+        return;
+      }
+
       // Use popup on all devices (desktop & mobile). Mobile browsers support popups
       // triggered by a direct user gesture. The redirect flow was unreliable on mobile
       // (getRedirectResult failing silently due to cookie/storage restrictions).
@@ -685,6 +721,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setLoading(false);
         return;
       }
+      const isWebViewOrInApp =
+        err?.code === 'auth/disallowed-useragent' ||
+        err?.message?.includes('disallowed_useragent') ||
+        detectInAppBrowser().isInApp;
+
+      if (isWebViewOrInApp) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('show-inapp-browser-prompt', {
+              detail: { showIosGuide: detectInAppBrowser().isIos },
+            })
+          );
+        }
+        setLoading(false);
+        return;
+      }
+
       if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/popup-closed-by-user') {
         // Popup was blocked even on desktop — fall back silently to redirect.
         console.info('[Auth] Popup blocked, falling back to redirect.');

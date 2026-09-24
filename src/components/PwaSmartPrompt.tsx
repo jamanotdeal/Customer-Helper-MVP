@@ -49,12 +49,9 @@ export const isPwaInstalled = (): boolean => {
   const isTwaOrAndroidApp = document.referrer.startsWith('android-app://');
   const isCapacitorOrCordova =
     !!(window as any).Capacitor || !!(window as any).Cordova || !!(window as any).AndroidInterface;
-  const isWebView =
-    /wv|Android.*Version\/[0-9]\.[0-9]/i.test(window.navigator.userAgent) &&
-    !/Safari/i.test(window.navigator.userAgent);
 
   return Boolean(
-    isStandaloneMatch || isNavigatorStandalone || isTwaOrAndroidApp || isCapacitorOrCordova || isWebView
+    isStandaloneMatch || isNavigatorStandalone || isTwaOrAndroidApp || isCapacitorOrCordova
   );
 };
 
