@@ -67,9 +67,13 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/brand_primary" />
+        <!-- Must match NotificationHelper.CH_GENERAL. It pointed at the retired
+             "jamanot_general" id, a channel createChannels() deletes: FCM falls
+             back to its own low-importance "Miscellaneous" channel when the id
+             does not exist, which is neither heads-up nor reliably audible. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="jamanot_general" />
+            android:value="jamanot_general_v4" />
 
         <!-- MY_PACKAGE_REPLACED matters: an app update silently stops the service. -->
         <receiver

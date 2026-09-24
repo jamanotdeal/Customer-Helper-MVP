@@ -30,21 +30,23 @@ public final class NotificationHelper {
     public static final String CH_DUTY = "jamanot_duty";
 
     /**
-     * v2 because channels are immutable: the original {@code jamanot_order_alert}
-     * had vibration enabled with a long pattern, which users complained was too
-     * intense. Turning it off in place would do nothing on existing installs, so
-     * this is a new id and the old one is deleted in {@link #createChannels}.
+     * v3 because channels are immutable: v1 had an over-intense vibration
+     * pattern, and v2 was created before res/raw/new_order existed, so it is
+     * pinned to whatever the device default notification sound was — including
+     * "None" on a phone where the user has silenced that default. Setting the
+     * sound on the existing channel does nothing, so the id is bumped and the
+     * old ones are deleted in {@link #createChannels}.
      */
-    public static final String CH_ORDER = "jamanot_order_alert_v2";
-    private static final String CH_ORDER_LEGACY = "jamanot_order_alert";
+    public static final String CH_ORDER = "jamanot_order_alert_v3";
+    private static final String CH_ORDER_LEGACY_V1 = "jamanot_order_alert";
+    private static final String CH_ORDER_LEGACY_V2 = "jamanot_order_alert_v2";
 
-    /**
-     * v3 because channels are immutable: v2 had vibration on. Same reasoning as
-     * CH_ORDER above — bumped id + delete of the old one to force new settings.
-     */
-    public static final String CH_GENERAL = "jamanot_general_v3";
+    /** v4 for the same reason as CH_ORDER v3: the channel has to be re-created
+     * to pick up the bundled tone. */
+    public static final String CH_GENERAL = "jamanot_general_v4";
     private static final String CH_GENERAL_LEGACY_V1 = "jamanot_general";
     private static final String CH_GENERAL_LEGACY_V2 = "jamanot_general_v2";
+    private static final String CH_GENERAL_LEGACY_V3 = "jamanot_general_v3";
 
     public static final int ID_DUTY = 1001;
     public static final int ID_RESUME = 1002;
@@ -85,7 +87,7 @@ public final class NotificationHelper {
         order.setLightColor(BRAND);
         order.setShowBadge(true);
         order.setBypassDnd(false);
-        Uri sound = soundUri(c);
+        Uri sound = orderSoundUri(c);
         if (sound != null) {
             order.setSound(sound, new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
@@ -105,7 +107,7 @@ public final class NotificationHelper {
         general.setVibrationPattern(null);
         general.enableLights(true);
         general.setLightColor(BRAND);
-        Uri generalSound = soundUri(c);
+        Uri generalSound = orderSoundUri(c);
         if (generalSound != null) {
             general.setSound(generalSound, new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
@@ -116,16 +118,22 @@ public final class NotificationHelper {
 
         // Retire prior channel ids so users aren't left with stale duplicates
         // (with vibration enabled) in the app's notification settings.
-        try { nm.deleteNotificationChannel(CH_ORDER_LEGACY); } catch (Exception ignored) {}
+        try { nm.deleteNotificationChannel(CH_ORDER_LEGACY_V1); } catch (Exception ignored) {}
+        try { nm.deleteNotificationChannel(CH_ORDER_LEGACY_V2); } catch (Exception ignored) {}
         try { nm.deleteNotificationChannel(CH_GENERAL_LEGACY_V1); } catch (Exception ignored) {}
         try { nm.deleteNotificationChannel(CH_GENERAL_LEGACY_V2); } catch (Exception ignored) {}
+        try { nm.deleteNotificationChannel(CH_GENERAL_LEGACY_V3); } catch (Exception ignored) {}
     }
 
     /**
-     * res/raw/new_order.* if present, otherwise the system default. Ships without
-     * a bundled sound so the build never depends on a binary asset being added.
+     * The alert tone: res/raw/new_order.* — bundled, so the alert never depends
+     * on the device's default notification sound, which the user may have set
+     * to "None". Falls back to the system default if the asset is ever dropped.
+     *
+     * <p>Public because {@link AlertSound} plays the same tone directly for the
+     * foreground case, where no notification is posted.
      */
-    private static Uri soundUri(Context c) {
+    public static Uri orderSoundUri(Context c) {
         int id = c.getResources().getIdentifier("new_order", "raw", c.getPackageName());
         if (id != 0) {
             return Uri.parse("android.resource://" + c.getPackageName() + "/" + id);

@@ -9,6 +9,7 @@ import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 import com.jamanot.app.MainActivity;
+import com.jamanot.app.core.AlertSound;
 import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderMatcher;
@@ -83,6 +84,10 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         if (notifId != null && !Prefs.markSeen(this, notifId)) return;
 
         if (MainActivity.isAppInForeground()) {
+            // Sound comes from here, not from the WebView: its AudioContext is
+            // blocked until the user has touched the app, so an auto-opened
+            // alert had no way to make a noise. See AlertSound.
+            if ("new_order".equals(type)) AlertSound.playOrderTone(this);
             com.jamanot.app.plugin.JamanotNativePlugin.emitOrderAlert(orderId);
             return;
         }

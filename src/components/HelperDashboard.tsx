@@ -246,6 +246,13 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       window.removeEventListener('click', warm);
       window.removeEventListener('keydown', warm);
     };
+    // In the native app the WebView is started with
+    // setMediaPlaybackRequiresUserGesture(false), so the context can be built
+    // right away — which matters because an auto-opened alert reaches this
+    // screen with nobody having touched the phone yet, and waiting for a
+    // gesture meant the alarm stayed silent exactly when it was needed.
+    if (isNativeApp()) warm();
+
     window.addEventListener('touchstart', warm, { once: true, passive: true });
     window.addEventListener('touchend', warm, { once: true, passive: true });
     window.addEventListener('click', warm, { once: true });
@@ -258,12 +265,22 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     };
   }, []);
 
+  // Bumped whenever the pending set *grows*. The alarm effect keys off it so a
+  // second order arriving while the first is still alarming re-fires the tone
+  // instead of being absorbed into the run already in progress.
+  const [alarmEpoch, setAlarmEpoch] = useState(0);
+  const prevNewOrderCount = useRef(0);
+
   useEffect(() => {
     if (newOrderIds.size > 0) {
+      if (newOrderIds.size > prevNewOrderCount.current) {
+        setAlarmEpoch((n) => n + 1);
+      }
       setIsAlarmPlaying(true);
     } else {
       setIsAlarmPlaying(false);
     }
+    prevNewOrderCount.current = newOrderIds.size;
   }, [newOrderIds]);
 
   // ── Helper: fire one beep via the pre-warmed AudioContext ──────────────────
@@ -379,7 +396,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       if (timeoutId) clearTimeout(timeoutId);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [isAlarmPlaying]);
+  }, [isAlarmPlaying, alarmEpoch]);
 
   // Track which ACTIVE orders the helper has viewed (clicked on the card)
   const [viewedActiveOrderIds, setViewedActiveOrderIds] = useState<Set<string>>(new Set());

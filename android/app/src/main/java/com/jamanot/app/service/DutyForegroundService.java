@@ -25,6 +25,7 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.MetadataChanges;
 import com.google.firebase.firestore.Query;
 import com.jamanot.app.MainActivity;
+import com.jamanot.app.core.AlertSound;
 import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderMatcher;
@@ -238,9 +239,15 @@ public class DutyForegroundService extends Service {
     }
 
     private void onNotifications(List<DocumentChange> changes, boolean fromCache) {
-        // The first delivery is the existing window, not news. Without this the
-        // service would fire an alert storm every time it starts.
-        boolean suppress = !firstSnapshotHandled;
+        // The first delivery is mostly the existing window, not news — without a
+        // guard the service would fire an alert storm every time it starts. But
+        // a blanket skip also swallowed real orders: the listener attaches a
+        // moment after the service starts, and anything created inside that
+        // window arrives in this very first snapshot. Those were marked seen and
+        // never alerted, on a restart the user never saw (watchdog, Android 15
+        // FGS timeout, boot, app update). So the blanket skip now applies only
+        // where the per-document createdAt check below cannot judge for itself.
+        boolean firstSnapshot = !firstSnapshotHandled;
         firstSnapshotHandled = true;
 
         for (DocumentChange change : changes) {
@@ -261,10 +268,13 @@ public class DutyForegroundService extends Service {
                 continue;
             }
 
-            // Second guard: anything created before this service started is
-            // backlog even if the de-dup set was cleared.
-            if (suppress || olderThanStart(doc.getString("createdAt"))) {
-                Log.d(TAG, "skip " + id + ": backlog (suppress=" + suppress + ")");
+            // Anything created before this service started is backlog even if
+            // the de-dup set was cleared. On the first snapshot a document with
+            // no usable createdAt is treated as backlog too, since there is
+            // nothing else to distinguish it from the window being replayed.
+            String createdAt = doc.getString("createdAt");
+            if (olderThanStart(createdAt) || (firstSnapshot && !hasTimestamp(createdAt))) {
+                Log.d(TAG, "skip " + id + ": backlog (firstSnapshot=" + firstSnapshot + ")");
                 Prefs.markSeen(this, id);
                 continue;
             }
@@ -294,18 +304,27 @@ public class DutyForegroundService extends Service {
      * than java.time because minSdk is 24 and this avoids needing core library
      * desugaring for one timestamp.
      */
+    /** True when createdAt is present and in the format olderThanStart() can read. */
+    private boolean hasTimestamp(String createdAtIso) {
+        return createdAtIso != null && parseCreatedAt(createdAtIso) != null;
+    }
+
     private boolean olderThanStart(String createdAtIso) {
-        if (createdAtIso == null) return false;
+        Date d = parseCreatedAt(createdAtIso);
+        // Unparseable timestamp — treat as current rather than silently
+        // dropping a real order.
+        return d != null && d.getTime() < startedAt;
+    }
+
+    private Date parseCreatedAt(String createdAtIso) {
+        if (createdAtIso == null) return null;
         try {
             java.text.SimpleDateFormat fmt =
                     new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US);
             fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
-            Date d = fmt.parse(createdAtIso);
-            return d != null && d.getTime() < startedAt;
+            return fmt.parse(createdAtIso);
         } catch (Exception e) {
-            // Unparseable timestamp — treat as current rather than silently
-            // dropping a real order.
-            return false;
+            return null;
         }
     }
 
@@ -360,9 +379,19 @@ public class DutyForegroundService extends Service {
      * which is both the reliability story and the Play-review story.
      */
     private void dispatchAlert(String notifId, String title, String body, String orderId, Double distanceKm) {
-        // 1. App already open and visible — don't double-alert. The existing
-        //    in-app Firestore listener and UI handle it.
+        // 1. App already open and visible — let the in-app UI own the alert
+        //    rather than posting a tray notification on top of it, but play the
+        //    tone from here regardless.
+        //
+        //    The tone must not be left to the WebView: its AudioContext is gated
+        //    by the autoplay policy until the user has touched the app, and the
+        //    commonest way to be in the foreground at all is that AutoOpen just
+        //    raised the activity without anyone touching anything. That is how
+        //    alerts went silent after the first one or two — the first arrived
+        //    while backgrounded (notification, audible), it auto-opened the app,
+        //    and every alert after it took this branch and made no sound at all.
         if (MainActivity.isAppInForeground()) {
+            AlertSound.playOrderTone(this);
             com.jamanot.app.plugin.JamanotNativePlugin.emitOrderAlert(orderId);
             return;
         }

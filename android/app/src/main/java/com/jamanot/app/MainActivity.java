@@ -65,6 +65,13 @@ public class MainActivity extends BridgeActivity {
         WebView webView = getBridge().getWebView();
         if (webView != null) {
             webView.setBackgroundColor(Color.WHITE);
+            // The in-app alarm loop is Web Audio, and the WebView's autoplay gate
+            // blocks it until the user has touched the app. An auto-opened alert
+            // is exactly the case where nobody has, so without this the repeating
+            // tone that tells a helper an order is still unanswered never starts.
+            // AlertSound covers the single alert tone regardless; this is what
+            // makes the repeat work.
+            webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
         }
         ViewGroup root = findViewById(android.R.id.content);
         if (root != null) root.setBackgroundColor(Color.WHITE);
