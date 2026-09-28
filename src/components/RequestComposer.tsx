@@ -655,6 +655,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     id="pickup-address-input"
                     label="কোথা থেকে আনতে হবে বা করতে হবে? (ঐচ্ছিক)"
                     value={pickupNote}
+                    userLocation={
+                      pickupLat && pickupLng
+                        ? { lat: pickupLat, lng: pickupLng }
+                        : deliveryLat && deliveryLng
+                        ? { lat: deliveryLat, lng: deliveryLng }
+                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                        : undefined
+                    }
                     onChange={(val, loc) => {
                       setPickupNote(val);
                       if (loc) {
@@ -687,6 +696,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     label="ডেলিভারি ঠিকানা"
                     required
                     value={deliveryAddress}
+                    userLocation={
+                      deliveryLat && deliveryLng
+                        ? { lat: deliveryLat, lng: deliveryLng }
+                        : pickupLat && pickupLng
+                        ? { lat: pickupLat, lng: pickupLng }
+                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                        : undefined
+                    }
                     onChange={(val, loc) => {
                       setDeliveryAddress(val);
                       if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));

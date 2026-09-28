@@ -212,18 +212,8 @@ export default function PageClient() {
     return cleanup;
   }, [showNotifications]);
 
-  // Auto-register service worker & request push notification permission (only for Helper or Store on load)
+  // Request push notification permission (only for Helper or Store on load)
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker
-        .register('/sw.js', { updateViaCache: 'none' })
-        .then((reg) => {
-          console.log('ServiceWorker registered:', reg.scope);
-          reg.update().catch(() => { });
-        })
-        .catch((err) => console.warn('ServiceWorker registration note:', err));
-    }
-
     if (user && (user.isHelper || user.isStoreApproved || user.role === 'store' || user.role === 'helper' || Boolean(user.storeId))) {
       const alreadyGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
       const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';

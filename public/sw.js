@@ -1,7 +1,7 @@
 // ─── Jamanot PWA Service Worker ───────────────────────────────────────────────
 // Handles: caching, FCM background push messages, notification clicks.
 // Cache version — bump this string to force update on all clients.
-const CACHE_NAME = 'jamanot-pwa-v5';
+const CACHE_NAME = 'jamanot-pwa-v6';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
@@ -31,15 +31,58 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// ─── Fetch (Offline Cache) ────────────────────────────────────────────────────
+// ─── Fetch (Smart Cache-First / Stale-While-Revalidate) ────────────────────────
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+
+  // 1. Never intercept cross-origin requests (Firebase, OpenStreetMap, Google Fonts, etc.)
+  if (url.origin !== self.location.origin) return;
+
+  // 2. Never cache service worker itself or API endpoints
+  if (url.pathname === '/sw.js' || url.pathname.startsWith('/api/')) return;
+
+  // 3. Stale-While-Revalidate for static assets, chunks, icons, and manifest
+  const isStaticAsset =
+    url.pathname.startsWith('/_next/static/') ||
+    url.pathname.endsWith('.png') ||
+    url.pathname.endsWith('.jpg') ||
+    url.pathname.endsWith('.jpeg') ||
+    url.pathname.endsWith('.svg') ||
+    url.pathname.endsWith('.webp') ||
+    url.pathname.endsWith('.ico') ||
+    url.pathname.endsWith('.woff2') ||
+    url.pathname.endsWith('.woff') ||
+    url.pathname === '/manifest.json';
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cachedResponse = await cache.match(event.request);
+        const fetchPromise = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              cache.put(event.request, networkResponse.clone());
+            }
+            return networkResponse;
+          })
+          .catch(() => cachedResponse);
+
+        return cachedResponse || fetchPromise;
+      })
+    );
+    return;
+  }
+
+  // 4. Network-first with offline fallback for HTML pages
   event.respondWith(
     fetch(event.request).catch(() =>
       caches.match(event.request).then((res) => res || caches.match('/'))
     )
   );
 });
+
 
 // ─── Firebase Cloud Messaging (Background Push) ───────────────────────────────
 // Import Firebase compat scripts so FCM push events are received even when
