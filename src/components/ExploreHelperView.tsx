@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { Order, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { getOrderMinDistanceKm, calculateDistanceKm } from '@/lib/pricing';
@@ -14,7 +14,7 @@ import { Compass, Map as MapIcon, Layers, Clock, MapPin, Bike, Navigation, Refre
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 export const ExploreHelperView: React.FC = () => {
-  const { user } = useAuth();
+  const { user, openAuthModal } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [viewMode, setViewMode] = useState<'LIST' | 'MAP'>('LIST');
   const [unacceptedOrders, setUnacceptedOrders] = useState<Order[]>([]);
@@ -209,10 +209,8 @@ export const ExploreHelperView: React.FC = () => {
     return () => unsub();
   }, [user]);
 
-  const { openAuthModal } = useAuth();
-
   const handleAcceptOrder = async (orderId: string) => {
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
       openAuthModal();
       return;
     }
@@ -269,7 +267,7 @@ export const ExploreHelperView: React.FC = () => {
       return;
     }
 
-    fallbackStore.updateOrder(orderId, (o) => ({
+    await fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
       status: 'ACCEPTED',
       helperId: user.uid,

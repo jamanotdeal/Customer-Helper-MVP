@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
@@ -84,6 +84,12 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       }
     }
   }, [initialSelectedOrderId, onClearInitialOrder, user]);
+
+  useEffect(() => {
+    if (!user) {
+      setSelectedOrderId(null);
+    }
+  }, [user]);
   const [firstOrderIds, setFirstOrderIds] = useState<Set<string>>(new Set());
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
@@ -489,7 +495,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   }, [user]);
 
   const handleAcceptOrder = async (orderId: string) => {
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
       openAuthModal();
       return;
     }
@@ -559,7 +565,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       return;
     }
 
-    fallbackStore.updateOrder(orderId, (o) => ({
+    await fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
       status: 'ACCEPTED',
       helperId: user.uid,
@@ -1172,6 +1178,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
               activeOrders={filteredActiveOrders}
               helperLocation={user?.helperLocation}
               onSelectOrder={(ord) => handleActiveOrderClick(ord.id)}
+              onAcceptOrder={(ord) => handleAcceptOrder(ord.id)}
               onToggleViewMode={() => setViewMode('LIST')}
             />
           ) : (

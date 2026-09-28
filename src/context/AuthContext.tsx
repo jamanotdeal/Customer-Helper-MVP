@@ -17,8 +17,8 @@ import { getNativePosition } from '@/lib/native';
 import { detectInAppBrowser } from '@/lib/inAppBrowser';
 
 
-export const isUserAuthenticated = (user: UserProfile | null): boolean => {
-  if (!user || !user.uid) return false;
+export const isUserAuthenticated = (user: UserProfile | null | undefined): user is UserProfile => {
+  if (!user || !user.uid || typeof user.uid !== 'string' || user.uid.trim() === '') return false;
   return Boolean(user.email || (user.displayName && user.displayName !== '?'));
 };
 
@@ -147,7 +147,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (profile.displayName === '?' || !profile.displayName) {
         profile = { ...profile, displayName: fallbackDisplayName };
         needsSave = true;
+      } else if (fbUser.displayName && fbUser.displayName !== '?' && fbUser.displayName !== profile.displayName) {
+        // Sync updated name from Google account if user changes their Google name
+        profile = { ...profile, displayName: fbUser.displayName };
+        needsSave = true;
       }
+
+      // Sync updated Google profile photo if user updates photo in Google account
+      if (fbUser.photoURL && fbUser.photoURL !== profile.photoURL) {
+        profile = { ...profile, photoURL: fbUser.photoURL };
+        needsSave = true;
+      }
+
       if (isHardcodedSuperAdmin && (!profile.isSuperAdmin || !profile.isAdmin || profile.role !== 'admin')) {
         profile = {
           ...profile,
@@ -250,71 +261,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       maybeFinishLoading();
     }, 10000);
 
-    // Firebase Auth state listener
-    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('jamanot_active_user_uid', fbUser.uid);
-        }
-        // Try fetching user from Firestore first to avoid overwriting or losing the helper/store status
-        try {
-          await fallbackStore.fetchUserFromFirestore(fbUser.uid);
-        } catch (e) {
-          console.warn('[AuthContext] Error fetching user profile on login:', e);
-        }
-        let profile = buildProfile(fbUser, savedMode);
-        // Reconcile approved store/helper state — an approved store owner or helper
-        // whose profile never received the flags would otherwise land on the customer UI.
+    // Synchronously process and apply authenticated user, then sync Firestore data in background
+    const handleAuthenticatedUser = async (fbUser: import('firebase/auth').User, currentSavedMode: ActiveMode) => {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('jamanot_active_user_uid', fbUser.uid);
+      }
+      fallbackStore.currentUserId = fbUser.uid;
+
+      // 1. Immediately build and apply profile so React state has user instantly
+      let profile = buildProfile(fbUser, currentSavedMode);
+      applyProfile(profile, currentSavedMode);
+      setLoading(false);
+
+      // 2. Fetch and synchronize roles/store data in background
+      try {
+        await fallbackStore.fetchUserFromFirestore(fbUser.uid);
+        profile = buildProfile(fbUser, currentSavedMode);
         const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
         if (syncedProfile) profile = syncedProfile;
-        applyProfile(profile, savedMode);
-        // Tell the Firestore notification listener which user is on this device
-        fallbackStore.currentUserId = fbUser.uid;
-        // Initialize role-scoped Firestore listeners (replaces the old 12-blanket-listeners approach)
-        const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
-          ? 'admin'
-          : (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId))
-          ? 'store'
-          : (profile.isHelper || profile.role === 'helper')
-          ? 'helper'
-          : 'customer';
-        fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
-        // On customer login: load saved delivery and pickup addresses from Firestore if not already in localStorage
-        if (listenerRole === 'customer') {
-          const localAddresses = getSavedDeliveryAddresses(fbUser.uid);
-          if (localAddresses.length === 0) {
-            // No local cache — fetch from Firestore once and store
-            loadCustomerSavedAddresses(fbUser.uid).then((firestoreAddresses) => {
-              if (firestoreAddresses.length > 0) {
-                saveSavedDeliveryAddresses(fbUser.uid, firestoreAddresses);
-              }
-            }).catch(() => {});
-          }
+        applyProfile(profile, currentSavedMode);
+      } catch (e) {
+        console.warn('[AuthContext] Background user profile sync note:', e);
+      }
 
-          // Fetch saved pickup addresses and per-service pickup mappings
-          loadCustomerSavedPickupData(fbUser.uid).then(({ addresses, serviceLocations }) => {
-            if (addresses.length > 0) {
-              saveSavedPickupAddresses(fbUser.uid, addresses);
-            }
-            if (serviceLocations && Object.keys(serviceLocations).length > 0) {
-              Object.entries(serviceLocations).forEach(([svc, loc]) => {
-                if (svc && loc) {
-                  saveServicePickupLocation(svc, loc, fbUser.uid);
-                }
-              });
+      // 3. Initialize role-scoped Firestore listeners
+      const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
+        ? 'admin'
+        : (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId))
+        ? 'store'
+        : (profile.isHelper || profile.role === 'helper')
+        ? 'helper'
+        : 'customer';
+      fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
+
+      // 4. On customer login: load saved delivery and pickup addresses
+      if (listenerRole === 'customer') {
+        const localAddresses = getSavedDeliveryAddresses(fbUser.uid);
+        if (localAddresses.length === 0) {
+          loadCustomerSavedAddresses(fbUser.uid).then((firestoreAddresses) => {
+            if (firestoreAddresses.length > 0) {
+              saveSavedDeliveryAddresses(fbUser.uid, firestoreAddresses);
             }
           }).catch(() => {});
         }
-        // Initialize FCM push token: only prompt on load if helper or store; for customer, only init if already granted
-        if (listenerRole === 'helper' || listenerRole === 'store') {
-          requestBrowserNotificationPermission().then((granted) => {
-            if (granted) {
-              initFcmMessaging(fbUser.uid).catch(() => {});
-            }
-          });
-        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          initFcmMessaging(fbUser.uid).catch(() => {});
-        }
+
+        loadCustomerSavedPickupData(fbUser.uid).then(({ addresses, serviceLocations }) => {
+          if (addresses.length > 0) {
+            saveSavedPickupAddresses(fbUser.uid, addresses);
+          }
+          if (serviceLocations && Object.keys(serviceLocations).length > 0) {
+            Object.entries(serviceLocations).forEach(([svc, loc]) => {
+              if (svc && loc) {
+                saveServicePickupLocation(svc, loc, fbUser.uid);
+              }
+            });
+          }
+        }).catch(() => {});
+      }
+
+      // 5. Initialize FCM push token
+      if (listenerRole === 'helper' || listenerRole === 'store') {
+        requestBrowserNotificationPermission().then((granted) => {
+          if (granted) {
+            initFcmMessaging(fbUser.uid).catch(() => {});
+          }
+        });
+      } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        initFcmMessaging(fbUser.uid).catch(() => {});
+      }
+    };
+
+    // Firebase Auth state listener
+    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        await handleAuthenticatedUser(fbUser, savedMode);
       } else {
         if (typeof localStorage !== 'undefined') {
           localStorage.removeItem('jamanot_active_user_uid');
@@ -419,167 +439,187 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithGoogle = async (roleOverride?: 'customer' | 'helper' | 'admin') => {
-    try {
-      setLoading(true);
+  const activeLoginPromiseRef = React.useRef<Promise<void> | null>(null);
 
-      // Demo / test login shortcuts (no real Firebase call)
-      if (roleOverride) {
-        let demoProfile: UserProfile;
-        if (roleOverride === 'helper') {
-          demoProfile = {
-            uid: 'demo-helper-uid',
-            email: 'helper@jamanot.com',
-            displayName: 'Kamrul Rider (Helper)',
-            photoURL: undefined,
-            role: 'helper',
-            isHelper: true,
-            isAdmin: false,
-            isSuperAdmin: false,
-            lastActiveMode: 'helper',
-            createdAt: new Date().toISOString(),
-          };
-        } else if (roleOverride === 'admin') {
-          demoProfile = {
-            uid: 'demo-admin-uid',
-            email: 'ajnasim72@gmail.com',
-            displayName: 'Super Admin (ajnasim72@gmail.com)',
-            photoURL: undefined,
-            role: 'admin',
-            isHelper: false,
-            isAdmin: true,
-            isSuperAdmin: true,
-            lastActiveMode: 'admin',
-            createdAt: new Date().toISOString(),
-          };
-        } else {
-          demoProfile = {
-            uid: 'demo-customer-uid',
-            email: 'customer@jamanot.com',
-            displayName: 'Anisur Rahman (Customer)',
-            photoURL: undefined,
-            role: 'customer',
-            isHelper: false,
-            isAdmin: false,
-            isSuperAdmin: false,
-            lastActiveMode: 'customer',
-            createdAt: new Date().toISOString(),
-          };
-        }
-        fallbackStore.saveUser(demoProfile);
-        setUser(demoProfile);
-        // Tell the Firestore notification listener which user is on this device
-        fallbackStore.currentUserId = demoProfile.uid;
-        // Initialize role-scoped listeners for demo user
-        const demoRole: 'customer' | 'helper' | 'admin' = demoProfile.isAdmin
-          ? 'admin'
-          : demoProfile.isHelper
-          ? 'helper'
-          : 'customer';
-        fallbackStore.initListenersForRole(demoRole, demoProfile.uid, demoProfile.helperType);
-        // Initialize FCM push token for this device & ask permission only if helper
-        if (demoProfile.isHelper) {
-          requestBrowserNotificationPermission().then((granted) => {
-            if (granted) {
-              initFcmMessaging(demoProfile.uid).catch(() => {});
-            }
-          });
-        }
-        setActiveMode(demoProfile.lastActiveMode);
-        setLoading(false);
-        return;
-      }
-
-      // If user is inside an in-app browser (Facebook, Messenger, Instagram, TikTok, etc.),
-      // Google explicitly blocks OAuth with "disallowed_useragent" and WebViews lose sessions.
-      // Show the dedicated in-app browser guidance modal with 1-click Chrome/Safari open.
-      const inAppInfo = detectInAppBrowser();
-      if (inAppInfo.isInApp) {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('show-inapp-browser-prompt', {
-              detail: { showIosGuide: inAppInfo.isIos },
-            })
-          );
-        }
-        setLoading(false);
-        return;
-      }
-
-      // Use popup on all devices (desktop & mobile). Mobile browsers support popups
-      // triggered by a direct user gesture. The redirect flow was unreliable on mobile
-      // (getRedirectResult failing silently due to cookie/storage restrictions).
-      const res = await signInWithPopup(auth, googleProvider);
-      if (res.user) {
-        const savedMode = getSavedActiveMode();
-        let profile = buildProfile(res.user, savedMode);
-        const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
-        if (syncedProfile) profile = syncedProfile;
-        applyProfile(profile, savedMode);
-
-        // Only ask browser notification permission immediately after login if helper or store
-        if (profile.isHelper || profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId)) {
-          requestBrowserNotificationPermission().then((granted) => {
-            if (granted) {
-              initFcmMessaging(res.user.uid).catch(() => {});
-            }
-          });
-        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          initFcmMessaging(res.user.uid).catch(() => {});
-        }
-      }
-      setLoading(false);
-    } catch (err: any) {
-      console.warn('[Auth] Google login error:', err?.code, err?.message);
-      const isWebViewOrInApp =
-        err?.code === 'auth/disallowed-useragent' ||
-        err?.message?.includes('disallowed_useragent') ||
-        detectInAppBrowser().isInApp;
-
-      if (isWebViewOrInApp) {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('show-inapp-browser-prompt', {
-              detail: { showIosGuide: detectInAppBrowser().isIos },
-            })
-          );
-        }
-        setLoading(false);
-        return;
-      }
-
-      if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/popup-closed-by-user') {
-        // Popup was blocked even on desktop — fall back silently to redirect.
-        console.info('[Auth] Popup blocked, falling back to redirect.');
-        await signInWithRedirect(auth, googleProvider);
-        // Browser navigates away, no further code runs.
-      } else if (err?.code === 'auth/unauthorized-domain') {
-        if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
-          (window as any).showCustomAlert(
-            'Domain Not Authorized!',
-            `Your domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`,
-            'error'
-          );
-        } else {
-          alert(
-            `Domain Not Authorized!\n\nYour domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`
-          );
-        }
-        setLoading(false);
-      } else if (err?.code && err.code !== 'auth/cancelled-popup-request') {
-        if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
-          (window as any).showCustomAlert('Login failed', err.message || err.code, 'error');
-        } else {
-          alert(`Login failed: ${err.message || err.code}`);
-        }
-        setLoading(false);
-      } else {
-        setLoading(false);
-      }
+  const loginWithGoogle = async (roleOverride?: 'customer' | 'helper' | 'admin'): Promise<void> => {
+    if (activeLoginPromiseRef.current) {
+      return activeLoginPromiseRef.current;
     }
+
+    const doLogin = async () => {
+      try {
+        setLoading(true);
+
+        // Demo / test login shortcuts (no real Firebase call)
+        if (roleOverride) {
+          let demoProfile: UserProfile;
+          if (roleOverride === 'helper') {
+            demoProfile = {
+              uid: 'demo-helper-uid',
+              email: 'helper@jamanot.com',
+              displayName: 'Kamrul Rider (Helper)',
+              photoURL: undefined,
+              role: 'helper',
+              isHelper: true,
+              isAdmin: false,
+              isSuperAdmin: false,
+              lastActiveMode: 'helper',
+              createdAt: new Date().toISOString(),
+            };
+          } else if (roleOverride === 'admin') {
+            demoProfile = {
+              uid: 'demo-admin-uid',
+              email: 'ajnasim72@gmail.com',
+              displayName: 'Super Admin (ajnasim72@gmail.com)',
+              photoURL: undefined,
+              role: 'admin',
+              isHelper: false,
+              isAdmin: true,
+              isSuperAdmin: true,
+              lastActiveMode: 'admin',
+              createdAt: new Date().toISOString(),
+            };
+          } else {
+            demoProfile = {
+              uid: 'demo-customer-uid',
+              email: 'customer@jamanot.com',
+              displayName: 'Anisur Rahman (Customer)',
+              photoURL: undefined,
+              role: 'customer',
+              isHelper: false,
+              isAdmin: false,
+              isSuperAdmin: false,
+              lastActiveMode: 'customer',
+              createdAt: new Date().toISOString(),
+            };
+          }
+          fallbackStore.saveUser(demoProfile);
+          setUser(demoProfile);
+          fallbackStore.currentUserId = demoProfile.uid;
+          const demoRole: 'customer' | 'helper' | 'admin' = demoProfile.isAdmin
+            ? 'admin'
+            : demoProfile.isHelper
+            ? 'helper'
+            : 'customer';
+          fallbackStore.initListenersForRole(demoRole, demoProfile.uid, demoProfile.helperType);
+          if (demoProfile.isHelper) {
+            requestBrowserNotificationPermission().then((granted) => {
+              if (granted) {
+                initFcmMessaging(demoProfile.uid).catch(() => {});
+              }
+            });
+          }
+          setActiveMode(demoProfile.lastActiveMode);
+          setLoading(false);
+          return;
+        }
+
+        // If user is inside an in-app browser (Facebook, Messenger, Instagram, TikTok, etc.),
+        // Google explicitly blocks OAuth with "disallowed_useragent" and WebViews lose sessions.
+        // Show the dedicated in-app browser guidance modal with 1-click Chrome/Safari open.
+        const inAppInfo = detectInAppBrowser();
+        if (inAppInfo.isInApp) {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('show-inapp-browser-prompt', {
+                detail: { showIosGuide: inAppInfo.isIos },
+              })
+            );
+          }
+          setLoading(false);
+          return;
+        }
+
+        // Use popup on all devices (desktop & mobile)
+        const res = await signInWithPopup(auth, googleProvider);
+        if (res.user) {
+          const savedMode = getSavedActiveMode();
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('jamanot_active_user_uid', res.user.uid);
+          }
+          fallbackStore.currentUserId = res.user.uid;
+
+          // Build and apply immediately
+          let profile = buildProfile(res.user, savedMode);
+          applyProfile(profile, savedMode);
+          setLoading(false);
+
+          // Background sync
+          (async () => {
+            try {
+              await fallbackStore.fetchUserFromFirestore(res.user.uid);
+              let updated = buildProfile(res.user, savedMode);
+              const synced = await fallbackStore.syncApprovedRolesForUser(updated);
+              if (synced) updated = synced;
+              applyProfile(updated, savedMode);
+
+              if (updated.isHelper || updated.isStoreApproved || updated.role === 'store' || Boolean(updated.storeId)) {
+                requestBrowserNotificationPermission().then((granted) => {
+                  if (granted) {
+                    initFcmMessaging(res.user.uid).catch(() => {});
+                  }
+                });
+              } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+                initFcmMessaging(res.user.uid).catch(() => {});
+              }
+            } catch (e) {
+              console.warn('[Auth] Background sync note:', e);
+            }
+          })();
+        }
+      } catch (err: any) {
+        console.warn('[Auth] Google login error:', err?.code, err?.message);
+        const isWebViewOrInApp =
+          err?.code === 'auth/disallowed-useragent' ||
+          err?.message?.includes('disallowed_useragent') ||
+          detectInAppBrowser().isInApp;
+
+        if (isWebViewOrInApp) {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('show-inapp-browser-prompt', {
+                detail: { showIosGuide: detectInAppBrowser().isIos },
+              })
+            );
+          }
+          setLoading(false);
+          return;
+        }
+
+        if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/popup-closed-by-user') {
+          console.info('[Auth] Popup blocked, falling back to redirect.');
+          await signInWithRedirect(auth, googleProvider);
+        } else if (err?.code === 'auth/unauthorized-domain') {
+          if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+            (window as any).showCustomAlert(
+              'Domain Not Authorized!',
+              `Your domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`,
+              'error'
+            );
+          } else {
+            alert(
+              `Domain Not Authorized!\n\nYour domain is not in Firebase Authorized Domains.\n\nAdd it in Firebase Console → Authentication → Settings → Authorized domains.`
+            );
+          }
+        } else if (err?.code && err.code !== 'auth/cancelled-popup-request') {
+          if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+            (window as any).showCustomAlert('Login failed', err.message || err.code, 'error');
+          } else {
+            alert(`Login failed: ${err.message || err.code}`);
+          }
+        }
+      } finally {
+        setLoading(false);
+        activeLoginPromiseRef.current = null;
+      }
+    };
+
+    activeLoginPromiseRef.current = doLogin();
+    return activeLoginPromiseRef.current;
   };
 
   const openAuthModal = () => {
+    if (isUserAuthenticated(user)) return;
     const manualAuthEnabled = fallbackStore.pricingSettings?.manualAuthEnabled === true;
     if (!manualAuthEnabled) {
       loginWithGoogle();
@@ -594,11 +634,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await signInWithEmailAndPassword(auth, email.trim(), pass);
       if (res.user) {
         const savedMode = getSavedActiveMode();
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('jamanot_active_user_uid', res.user.uid);
+        }
+        fallbackStore.currentUserId = res.user.uid;
         let profile = buildProfile(res.user, savedMode);
-        const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
-        if (syncedProfile) profile = syncedProfile;
         applyProfile(profile, savedMode);
         setIsAuthModalOpen(false);
+        setLoading(false);
+
+        // Background sync
+        (async () => {
+          try {
+            await fallbackStore.fetchUserFromFirestore(res.user.uid);
+            let updated = buildProfile(res.user, savedMode);
+            const synced = await fallbackStore.syncApprovedRolesForUser(updated);
+            if (synced) updated = synced;
+            applyProfile(updated, savedMode);
+          } catch (e) {
+            console.warn('[Auth] Background sync error:', e);
+          }
+        })();
       }
     } catch (err: any) {
       console.warn('[Auth] Email login error:', err?.code, err?.message);
@@ -625,9 +681,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.user) {
         await updateProfile(res.user, { displayName: name.trim() });
         const savedMode = getSavedActiveMode();
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('jamanot_active_user_uid', res.user.uid);
+        }
+        fallbackStore.currentUserId = res.user.uid;
         let profile = buildProfile({ ...res.user, displayName: name.trim() } as any, savedMode);
         applyProfile(profile, savedMode);
         setIsAuthModalOpen(false);
+        setLoading(false);
       }
     } catch (err: any) {
       console.warn('[Auth] Email register error:', err?.code, err?.message);

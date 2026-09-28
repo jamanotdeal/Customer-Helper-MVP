@@ -146,7 +146,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
 
   // Brief items summary (truncated via CSS)
   const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
+    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
     : 'No items listed';
 
   // Dynamic card container classes for helper views

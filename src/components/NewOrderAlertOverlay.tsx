@@ -89,7 +89,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   if (!order) return null;
 
   const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
+    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
     : null;
 
   const progressPercent = Math.max(0, Math.min(100, (countdown / autoDismissSeconds) * 100));

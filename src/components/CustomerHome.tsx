@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
@@ -50,13 +50,21 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
+    if (!user) {
+      setSelectedOrderId(null);
+    }
+  }, [user]);
+
+  useEffect(() => {
     if (initialSelectedOrderId) {
-      setSelectedOrderId(initialSelectedOrderId);
+      if (user) {
+        setSelectedOrderId(initialSelectedOrderId);
+      }
       if (onClearInitialOrder) {
         onClearInitialOrder();
       }
     }
-  }, [initialSelectedOrderId, onClearInitialOrder]);
+  }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loaderRef = useRef<HTMLDivElement | null>(null);
@@ -161,7 +169,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       {/* Primary Request Composer */}
       <RequestComposer
         onOrderCreated={(newOrder) => {
-          if (!user) {
+          if (!isUserAuthenticated(user)) {
             openAuthModal();
           } else {
             setSelectedOrderId(newOrder.id);

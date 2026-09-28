@@ -305,6 +305,7 @@ export default function PageClient() {
   // Sync activeTab when user or activeMode changes
   useEffect(() => {
     if (!user) {
+      setInitialSelectedOrderId(null);
       if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
         setActiveTab('request');
       }

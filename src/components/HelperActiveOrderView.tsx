@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Order, OrderStatus, LocationData, Shop, ShopOrder } from '@/types';
+import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, Wallet } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, Wallet, ChevronDown } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -49,7 +49,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const order = liveOrder;
   const { user, openAuthModal } = useAuth();
-  const isAcceptedByThisHelper = order.status !== 'PENDING' && !!order.helperId && user?.uid === order.helperId;
+  const isAcceptedByThisHelper = !!order.helperId && user?.uid === order.helperId;
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
@@ -142,10 +142,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     order.deliveryBackTime
       ? order.deliveryBackTime.substring(0, 16)
       : (() => {
-          const d = new Date();
-          d.setDate(d.getDate() + 1);
-          return d.toISOString().substring(0, 16);
-        })()
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        return d.toISOString().substring(0, 16);
+      })()
   );
 
   const [weightInput, setWeightInput] = useState(order.weightKg !== undefined ? String(order.weightKg) : '0');
@@ -323,7 +323,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       if (pendingMapInstanceRef.current) {
         try {
           pendingMapInstanceRef.current.remove();
-        } catch (e) {}
+        } catch (e) { }
         pendingMapInstanceRef.current = null;
       }
     };
@@ -345,23 +345,115 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   );
 
   const [showCustomCostModal, setShowCustomCostModal] = useState(false);
-  const [customProductName, setCustomProductName] = useState('');
-  const [customProductCost, setCustomProductCost] = useState('');
   const [customSellerName, setCustomSellerName] = useState('');
   const [customSellerPhone, setCustomSellerPhone] = useState('');
   const [isSubmittingCustomCost, setIsSubmittingCustomCost] = useState(false);
   const [checkedNoteItems, setCheckedNoteItems] = useState<Record<number, boolean>>({});
   const [checkedSubItems, setCheckedSubItems] = useState<Record<string, boolean>>({});
 
+  interface SelectedItemEntry {
+    id: string;
+    originalId: string;
+    name: string;
+    qty?: string | number;
+    price?: string;
+    isChecked: boolean;
+    isNote: boolean;
+    noteIdx?: number;
+  }
+
+  const [customCostItems, setCustomCostItems] = useState<SelectedItemEntry[]>([]);
+  const [shopOrderItems, setShopOrderItems] = useState<SelectedItemEntry[]>([]);
+  const [viewRequestItems, setViewRequestItems] = useState<SelectedItemEntry[]>([]);
+  const [storeInstructionNote, setStoreInstructionNote] = useState('');
+
+  // Helper Edit Order Items Modal State
+  const [showHelperEditModal, setShowHelperEditModal] = useState(false);
+  const [editDescription, setEditDescription] = useState('');
+  const [editError, setEditError] = useState('');
+  const [isSavingHelperEdit, setIsSavingHelperEdit] = useState(false);
+  const [editMapPickerType, setEditMapPickerType] = useState<'pickup' | 'delivery' | null>(null);
+  const [editPickup, setEditPickup] = useState('');
+  const [editPickupLat, setEditPickupLat] = useState<number | undefined>(undefined);
+  const [editPickupLng, setEditPickupLng] = useState<number | undefined>(undefined);
+  const [editPickupAddressId, setEditPickupAddressId] = useState<string | undefined>(undefined);
+  const [editAddress, setEditAddress] = useState('');
+  const [editDeliveryLat, setEditDeliveryLat] = useState<number | undefined>(undefined);
+  const [editDeliveryLng, setEditDeliveryLng] = useState<number | undefined>(undefined);
+  const [editDeliveryAddressId, setEditDeliveryAddressId] = useState<string | undefined>(undefined);
+
+  const normalizeItemName = (name: string): string => {
+    return name
+      .toLowerCase()
+      .replace(/\s*[×x]\s*\d+/g, '') // remove "x2", "×2"
+      .replace(/\s*\(\s*[×x]?\s*\d+\s*\)/g, '') // remove "(x2)", "(2)"
+      .trim();
+  };
+
+  const getItemConnectedOrder = (itemName: string, itemId?: string): ShopOrder | null => {
+    const targetNorm = normalizeItemName(itemName);
+    if (!targetNorm) return null;
+    for (const so of shopOrders) {
+      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') continue;
+
+      // 1. Exact match in itemsWithPrice
+      if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        if (so.itemsWithPrice.some((ip) => normalizeItemName(ip.name) === targetNorm)) {
+          return so;
+        }
+      }
+
+      // 2. Exact match in separated requestText parts
+      const rawLines = so.requestText.split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+      const parts: string[] = [];
+      rawLines.forEach((line) => {
+        line.split(/,/).forEach((p) => {
+          const trimmed = normalizeItemName(p);
+          if (trimmed) parts.push(trimmed);
+        });
+      });
+
+      if (parts.some((p) => p === targetNorm)) {
+        return so;
+      }
+    }
+    return null;
+  };
+
+  const getItemIndividualPrice = (itemName: string, connectedOrder?: ShopOrder | null): number | undefined => {
+    if (!connectedOrder) return undefined;
+    const targetNorm = normalizeItemName(itemName);
+    if (connectedOrder.itemsWithPrice && connectedOrder.itemsWithPrice.length > 0) {
+      const match = connectedOrder.itemsWithPrice.find((ip) => normalizeItemName(ip.name) === targetNorm);
+      if (match && match.price !== undefined) {
+        return match.price;
+      }
+    }
+    // If request has only 1 item and overall price is defined
+    const rawLines = (connectedOrder.requestText || '').split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+    const parts: string[] = [];
+    rawLines.forEach((line) => {
+      line.split(/,/).forEach((p) => {
+        const trimmed = normalizeItemName(p);
+        if (trimmed) parts.push(trimmed);
+      });
+    });
+    if (parts.length === 1 && connectedOrder.price !== undefined) {
+      return connectedOrder.price;
+    }
+    return undefined;
+  };
+
   const parsedItems = useMemo(() => {
     if (!order.items || order.items.length === 0) return [];
     const result: Array<{ id: string; originalId: string; name: string; qty?: string | number; purchased: boolean }> = [];
     order.items.forEach((item) => {
-      const parts = item.name.split(',').map((p) => p.trim()).filter(Boolean);
+      const parts = item.name.split(/,|\r?\n/).map((p) => p.trim()).filter(Boolean);
       if (parts.length > 1) {
         parts.forEach((part, index) => {
           const subId = `${item.id}-${index}`;
-          const isSubChecked = checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : !!item.purchased;
+          const isConnected = getItemConnectedOrder(part, item.id) !== null;
+          const isSubChecked = isConnected ? true : (checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : !!item.purchased);
           result.push({
             id: subId,
             originalId: item.id,
@@ -371,7 +463,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           });
         });
       } else {
-        const isSubChecked = checkedSubItems[item.id] !== undefined ? checkedSubItems[item.id] : !!item.purchased;
+        const isConnected = getItemConnectedOrder(item.name, item.id) !== null;
+        const isSubChecked = isConnected ? true : (checkedSubItems[item.id] !== undefined ? checkedSubItems[item.id] : !!item.purchased);
         result.push({
           id: item.id,
           originalId: item.id,
@@ -382,15 +475,227 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       }
     });
     return result;
-  }, [order.items, checkedSubItems]);
+  }, [order.items, checkedSubItems, shopOrders]);
 
   const parsedNoteItems = useMemo(() => {
     if (!order.additionalNote) return [];
     return order.additionalNote
-      .split(',')
+      .split(/,|\r?\n/)
       .map((item) => item.trim())
       .filter(Boolean);
   }, [order.additionalNote]);
+
+  const selectedParsedItems = useMemo(() => {
+    return parsedItems.filter((i) => i.purchased);
+  }, [parsedItems]);
+
+  const pendingSelectedParsedItems = useMemo(() => {
+    return parsedItems.filter((i) => i.purchased && !getItemConnectedOrder(i.name, i.id));
+  }, [parsedItems, shopOrders]);
+
+  const selectedNoteItems = useMemo(() => {
+    return parsedNoteItems.filter((_, idx) => checkedNoteItems[idx]);
+  }, [parsedNoteItems, checkedNoteItems]);
+
+  const selectedItemsCount = pendingSelectedParsedItems.length + selectedNoteItems.length;
+
+  const getInitialSelectedItemList = (): SelectedItemEntry[] => {
+    let items = [
+      ...pendingSelectedParsedItems.map((i) => ({
+        id: i.id,
+        originalId: i.originalId,
+        name: i.name,
+        qty: i.qty,
+        price: '',
+        isChecked: true,
+        isNote: false,
+      })),
+      ...parsedNoteItems
+        .map((note, idx) => ({
+          id: `note-${idx}`,
+          originalId: `note-${idx}`,
+          name: note,
+          qty: undefined,
+          price: '',
+          isChecked: !!checkedNoteItems[idx],
+          isNote: true,
+          noteIdx: idx,
+        }))
+        .filter((n) => n.isChecked),
+    ];
+
+    if (items.length === 0) {
+      items = parsedItems
+        .filter((i) => !getItemConnectedOrder(i.name, i.id))
+        .map((i) => ({
+          id: i.id,
+          originalId: i.originalId,
+          name: i.name,
+          qty: i.qty,
+          price: '',
+          isChecked: true,
+          isNote: false,
+        }));
+    }
+    return items;
+  };
+
+  const openCustomCostModal = () => {
+    setCustomCostItems(getInitialSelectedItemList());
+    setCustomSellerName('');
+    setCustomSellerPhone('');
+    setShowCustomCostModal(true);
+  };
+
+  const openPlaceShopOrder = (shop: Shop) => {
+    setShopOrderItems(getInitialSelectedItemList());
+    setStoreInstructionNote('');
+    setOrderTextError('');
+    setPlaceOrderShop(shop);
+  };
+
+  const handleToggleCustomCostItem = (id: string) => {
+    setCustomCostItems((prev) =>
+      prev.map((item) => {
+        if (item.id === id) {
+          const nextChecked = !item.isChecked;
+          if (!nextChecked) {
+            if (item.isNote && item.noteIdx !== undefined) {
+              setCheckedNoteItems((nPrev) => ({ ...nPrev, [item.noteIdx!]: false }));
+            } else {
+              setCheckedSubItems((sPrev) => ({ ...sPrev, [item.id]: false }));
+              fallbackStore.updateOrder(order.id, (o) => ({
+                ...o,
+                items: (o.items || []).map((it) => (it.id === item.originalId ? { ...it, purchased: false } : it)),
+              }));
+            }
+          } else {
+            if (item.isNote && item.noteIdx !== undefined) {
+              setCheckedNoteItems((nPrev) => ({ ...nPrev, [item.noteIdx!]: true }));
+            } else {
+              setCheckedSubItems((sPrev) => ({ ...sPrev, [item.id]: true }));
+            }
+          }
+          return { ...item, isChecked: nextChecked };
+        }
+        return item;
+      })
+    );
+  };
+
+  const handleToggleShopOrderItem = (id: string) => {
+    setShopOrderItems((prev) =>
+      prev.map((item) => {
+        if (item.id === id) {
+          const nextChecked = !item.isChecked;
+          if (!nextChecked) {
+            if (item.isNote && item.noteIdx !== undefined) {
+              setCheckedNoteItems((nPrev) => ({ ...nPrev, [item.noteIdx!]: false }));
+            } else {
+              setCheckedSubItems((sPrev) => ({ ...sPrev, [item.id]: false }));
+              fallbackStore.updateOrder(order.id, (o) => ({
+                ...o,
+                items: (o.items || []).map((it) => (it.id === item.originalId ? { ...it, purchased: false } : it)),
+              }));
+            }
+          } else {
+            if (item.isNote && item.noteIdx !== undefined) {
+              setCheckedNoteItems((nPrev) => ({ ...nPrev, [item.noteIdx!]: true }));
+            } else {
+              setCheckedSubItems((sPrev) => ({ ...sPrev, [item.id]: true }));
+            }
+          }
+          return { ...item, isChecked: nextChecked };
+        }
+        return item;
+      })
+    );
+  };
+
+  const handleCustomItemPriceChange = (id: string, priceStr: string) => {
+    setCustomCostItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, price: priceStr } : item))
+    );
+  };
+
+  const totalCustomCost = useMemo(() => {
+    return customCostItems
+      .filter((i) => i.isChecked)
+      .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+  }, [customCostItems]);
+
+  const openViewRequestDetails = (so: ShopOrder) => {
+    let items: SelectedItemEntry[] = [];
+    if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+      items = so.itemsWithPrice.map((it, idx) => ({
+        id: `vri-${idx}`,
+        originalId: `vri-${idx}`,
+        name: it.name,
+        qty: it.unit,
+        price: it.price !== undefined ? String(it.price) : '',
+        isChecked: true,
+        isNote: false,
+      }));
+    } else {
+      const rawLines = (so.requestText || '').split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+      const allParts: string[] = [];
+      rawLines.forEach((line) => {
+        line.split(/,/).forEach((p) => {
+          const trimmed = p.trim();
+          if (trimmed) allParts.push(trimmed);
+        });
+      });
+      const perItemPrice = allParts.length === 1 && so.price !== undefined ? String(so.price) : '';
+      items = allParts.map((part, idx) => ({
+        id: `vri-${idx}`,
+        originalId: `vri-${idx}`,
+        name: part,
+        qty: undefined,
+        price: perItemPrice,
+        isChecked: true,
+        isNote: false,
+      }));
+    }
+    setViewRequestItems(items);
+    setViewRequestDetails(so);
+  };
+
+  const handleToggleViewRequestItem = (id: string) => {
+    setViewRequestItems((prev) => {
+      const next = prev.map((item) =>
+        item.id === id ? { ...item, isChecked: !item.isChecked } : item
+      );
+      if (viewRequestDetails?.shopId === 'myself') {
+        const total = next
+          .filter((i) => i.isChecked)
+          .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+        setViewRequestDetails((so) => (so ? { ...so, price: total } : null));
+      }
+      return next;
+    });
+  };
+
+  const handleViewRequestItemPriceChange = (id: string, priceStr: string) => {
+    if (viewRequestDetails?.shopId !== 'myself') return;
+    setViewRequestItems((prev) => {
+      const next = prev.map((item) =>
+        item.id === id ? { ...item, price: priceStr } : item
+      );
+      const total = next
+        .filter((i) => i.isChecked)
+        .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+      setViewRequestDetails((so) => (so ? { ...so, price: total } : null));
+      return next;
+    });
+  };
+
+  const getSelectedItemsText = () => {
+    const names = [
+      ...pendingSelectedParsedItems.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`),
+      ...selectedNoteItems,
+    ];
+    return names.join(', ');
+  };
 
   useEffect(() => {
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(order.id));
@@ -488,7 +793,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         details: loc.details,
       });
       if (sa?.id) effectiveAddressId = sa.id;
-    } catch (_) {}
+    } catch (_) { }
 
     const locWithId: LocationData = {
       ...loc,
@@ -546,13 +851,105 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }
   };
 
-  const handlePlaceShopOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isSubmittingOrder) return;
-    if (!placeOrderShop || !orderText.trim()) {
-      setOrderTextError('অর্ডার বিস্তারিত লিখুন।');
+  const openHelperEditModal = () => {
+    if (isDone) return;
+    const resolvedOrder = fallbackStore.resolveOrderLocations(order);
+    const itemsText = (resolvedOrder.items && resolvedOrder.items.length > 0)
+      ? resolvedOrder.items.map(it => `${it.name}${it.qty && Number(it.qty) > 1 ? ` (x${it.qty})` : ''}`).join('\n')
+      : (resolvedOrder.title || '');
+    setEditDescription(itemsText);
+    setEditError('');
+    setShowHelperEditModal(true);
+  };
+
+  const handleSaveHelperEdit = async () => {
+    if (!editDescription.trim()) {
+      setEditError('অনুগ্রহ করে আইটেম বা বিবরণ লিখুন।');
       return;
     }
+
+    setIsSavingHelperEdit(true);
+    try {
+      // Parse items
+      const lines = editDescription
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      const newItems: OrderItem[] = lines.flatMap((line, lineIdx) => {
+        const subParts = line.split(',').map(p => p.trim()).filter(Boolean);
+        return subParts.map((part, partIdx) => {
+          const match = part.match(/\(x(\d+)\)$/i) || part.match(/x(\d+)$/i) || part.match(/×(\d+)$/i);
+          let qty = '1';
+          let name = part;
+          if (match) {
+            qty = match[1];
+            name = part.replace(/\(x\d+\)$/i, '').replace(/x\d+$/i, '').replace(/×\d+$/i, '').trim();
+          }
+          const existingItem = order.items?.find(it => it.name.toLowerCase() === name.toLowerCase());
+          return {
+            id: existingItem?.id || `item-${Date.now()}-${lineIdx}-${partIdx}`,
+            name: name || part,
+            qty,
+            purchased: existingItem?.purchased ?? false,
+          };
+        });
+      });
+
+      // Diffs
+      const diffs: OrderEditChange[] = [];
+      const oldItemsText = (order.items || []).map(it => `${it.name}${it.qty && Number(it.qty) > 1 ? ` (x${it.qty})` : ''}`).join(', ') || order.title || '';
+      const newItemsText = newItems.map(it => `${it.name}${it.qty && Number(it.qty) > 1 ? ` (x${it.qty})` : ''}`).join(', ');
+      if (oldItemsText !== newItemsText) {
+        diffs.push({ field: 'Items / Details', oldValue: oldItemsText || 'None', newValue: newItemsText });
+      }
+
+      const nowIso = new Date().toISOString();
+      const editItem: OrderEditHistoryItem = {
+        id: `eh-${Date.now()}`,
+        timestamp: nowIso,
+        editedBy: 'helper',
+        editedByName: order.helperName || 'Helper',
+        changes: diffs.length > 0 ? diffs : [{ field: 'Items', oldValue: oldItemsText, newValue: newItemsText }],
+      };
+
+      fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        title: newItems[0]?.name || o.title,
+        items: newItems.length > 0 ? newItems : [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
+        lastEditedAt: nowIso,
+        lastEditedBy: 'helper',
+        editHistory: [...(o.editHistory || []), editItem],
+        updatedAt: nowIso,
+        statusHistory: [
+          ...(o.statusHistory || []),
+          {
+            id: `sh-${Date.now()}`,
+            status: o.status,
+            timestamp: nowIso,
+            actor: `Helper (${o.helperName || 'Helper'})`,
+            note: `Order items updated by helper (${diffs.map((d) => d.field).join(', ') || 'Items Updated'})`,
+          },
+        ],
+      }));
+
+      setShowHelperEditModal(false);
+      showAlert('আইটেম আপডেট হয়েছে', 'আইটেমের বিবরণ সফলভাবে পরিবর্তন ও সংরক্ষণ করা হয়েছে।', 'success');
+    } finally {
+      setIsSavingHelperEdit(false);
+    }
+  };
+
+  const handlePlaceShopOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingOrder || !placeOrderShop) return;
+
+    const checkedItems = shopOrderItems.filter((i) => i.isChecked);
+    if (checkedItems.length === 0) {
+      setOrderTextError('অনুগ্রহ করে অন্তত একটি আইটেম চেক করুন।');
+      return;
+    }
+
     const isManualStore = placeOrderShop.canReceiveOrders === false;
     const initialPrice = isManualStore ? (placeOrderShop as any)._tempPrice : undefined;
 
@@ -563,6 +960,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
     setIsSubmittingOrder(true);
     try {
+      const itemsListText = checkedItems
+        .map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`)
+        .join(', ');
+
+      const helperNote = storeInstructionNote.trim() || undefined;
+
       const initialStatus = isManualStore
         ? ((placeOrderShop as any)._tempStatus || 'ACCEPTED')
         : 'PENDING';
@@ -574,7 +977,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         shopName: placeOrderShop.name,
         helperId: order.helperId || '',
         helperName: order.helperName || 'Helper',
-        requestText: orderText.trim(),
+        requestText: itemsListText,
+        helperNote: helperNote,
         status: initialStatus as any,
         price: initialPrice,
         createdAt: new Date().toISOString(),
@@ -582,8 +986,19 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         statusHistory: [{ status: initialStatus as any, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
       };
       await fallbackStore.addShopOrder(newShopOrder);
+
+      // Ensure all selected items remain permanently checked/purchased in order
+      const relatedItemIds = checkedItems.filter(i => !i.isNote).map(i => i.originalId);
+      if (relatedItemIds.length > 0) {
+        fallbackStore.updateOrder(order.id, (o) => ({
+          ...o,
+          items: (o.items || []).map(it => relatedItemIds.includes(it.id) ? { ...it, purchased: true } : it),
+        }));
+      }
+
       setPlaceOrderShop(null);
-      setOrderText('');
+      setShopOrderItems([]);
+      setStoreInstructionNote('');
       setOrderTextError('');
     } finally {
       setIsSubmittingOrder(false);
@@ -604,7 +1019,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }
 
     const destStr = destLat && destLng ? `${destLat},${destLng}` : encodeURIComponent(order.deliveryLocation?.address || '');
-    
+
     const url = `https://www.google.com/maps/dir/?api=1${originStr}&destination=${destStr}&travelmode=driving`;
     window.open(url, '_blank');
   };
@@ -679,22 +1094,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     });
   };
 
-  const toggleParsedItemPurchased = (subId: string, originalId: string) => {
+  const toggleParsedItemPurchased = (subId: string, originalId: string, itemName?: string) => {
     if (isDone) return;
+    const nameToCheck = itemName || parsedItems.find((i) => i.id === subId)?.name || '';
+    if (nameToCheck && getItemConnectedOrder(nameToCheck, originalId)) {
+      // Locked: cost or shop order is already placed for this item
+      return;
+    }
     setCheckedSubItems((prev) => {
-      const currentVal = prev[subId] !== undefined ? prev[subId] : !!(order.items || []).find((i) => i.id === originalId)?.purchased;
-      const nextMap = { ...prev, [subId]: !currentVal };
-
-      // Sync overall order.items purchased status if all sub-items of an item are checked
-      const relatedSubItems = parsedItems.filter((i) => i.originalId === originalId);
-      const allSubChecked = relatedSubItems.every((si) => (nextMap[si.id] !== undefined ? nextMap[si.id] : si.purchased));
-
-      fallbackStore.updateOrder(order.id, (o) => ({
-        ...o,
-        items: o.items.map((i) => (i.id === originalId ? { ...i, purchased: allSubChecked } : i)),
-      }));
-
-      return nextMap;
+      const currentVal = !!prev[subId];
+      return { ...prev, [subId]: !currentVal };
     });
   };
 
@@ -704,18 +1113,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [uncheckedError, setUncheckedError] = useState('');
 
   const handleUpdateStatusWithCheck = (newStatus: OrderStatus, note?: string) => {
-    const totalCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
+    const activeShopOrders = shopOrders.filter(
+      (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    );
+    const totalCost = activeShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
     if (totalCost <= 0) {
       showAlert(
         'Product Cost Required',
-        'অর্ডারের মোট বিল/প্রোডাক্ট কস্ট যোগ করতে হবে। অনুগ্রহ করে Requests to Shops বা Custom Cost ব্যবহার করে খরচটি যুক্ত করুন।',
+        'অর্ডারের মোট বিল/প্রোডাক্ট কস্ট যোগ করতে হবে। অনুগ্রহ করে "Request to store" বা "+ Custom Cost" ব্যবহার করে প্রতিটি পণ্যের খরচ যুক্ত করুন। শুধুমাত্র আইটেম সিলেক্ট করা যথেষ্ট নয়।',
         'warning'
       );
       return;
     }
 
-    const allChecked = parsedItems.length > 0 ? parsedItems.every((i) => i.purchased) : (order.items || []).every((i) => i.purchased);
-    if (!allChecked && !note) {
+    // Check if any items are unconfirmed (do not have a connected store order or custom cost)
+    const unconfirmedItems = parsedItems.filter((i) => !getItemConnectedOrder(i.name, i.id));
+    if (unconfirmedItems.length > 0 && !note) {
       setPendingNextStatus(newStatus);
       setUncheckedNote('');
       setUncheckedError('');
@@ -732,7 +1145,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const handleConfirmUncheckedSubmission = (e: React.FormEvent) => {
     e.preventDefault();
-    const totalCost = shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0);
+    const activeShopOrders = shopOrders.filter(
+      (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    );
+    const totalCost = activeShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
     if (totalCost <= 0) {
       showAlert(
         'Product Cost Required',
@@ -773,11 +1189,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return;
     }
 
-    if (targetStatus === 'PURCHASED_EXECUTED') {
-      handleUpdateStatus('PURCHASED_EXECUTED');
-    } else {
-      handleUpdateStatusWithCheck(targetStatus);
-    }
+    handleUpdateStatusWithCheck(targetStatus);
   };
 
   const handleSaveProductCost = (e: React.FormEvent) => {
@@ -787,7 +1199,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
     const currentWeight = parseFloat(weightInput) || 0;
     const settings = fallbackStore.pricingSettings;
-    
+
     const estdBase = calculateEstimatedFee({
       distanceKm: Math.ceil(distanceKm),
       weightKg: 0,
@@ -817,7 +1229,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const updateEstdPricing = (newCost: number, newWeight: number) => {
     const settings = fallbackStore.pricingSettings;
-    
+
     const estdBase = calculateEstimatedFee({
       distanceKm: Math.ceil(distanceKm),
       weightKg: 0,
@@ -886,11 +1298,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         deliveryFee: val,
         feeAdjustment: feeReason.trim()
           ? {
-               amount: val,
-              reason: feeReason.trim(),
-              status: 'APPROVED',
-              requestedAt: new Date().toISOString(),
-            }
+            amount: val,
+            reason: feeReason.trim(),
+            status: 'APPROVED',
+            requestedAt: new Date().toISOString(),
+          }
           : o.feeAdjustment,
         statusHistory: updatedHistory,
       };
@@ -1008,13 +1420,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
       <div className="max-w-md mx-auto p-4 space-y-5">
         {/* DYNAMIC URGENCIES TIMER BLOCK */}
-        <div className={`relative w-full rounded-2xl py-3 px-4 flex flex-col items-center justify-center transition-all ${
-          urgency.urgencyLevel === 'red'
+        <div className={`relative w-full rounded-2xl py-3 px-4 flex flex-col items-center justify-center transition-all ${urgency.urgencyLevel === 'red'
             ? 'bg-gradient-to-br from-red-100 via-rose-50 to-red-100 border-2 border-red-400 shadow-md shadow-red-100'
             : urgency.urgencyLevel === 'yellow'
-            ? 'bg-gradient-to-br from-amber-100 via-yellow-50 to-amber-100 border-2 border-amber-400 shadow-sm shadow-amber-100'
-            : 'bg-red-50/10 border border-red-500'
-        }`}>
+              ? 'bg-gradient-to-br from-amber-100 via-yellow-50 to-amber-100 border-2 border-amber-400 shadow-sm shadow-amber-100'
+              : 'bg-red-50/10 border border-red-500'
+          }`}>
           {customerLabels.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-2 justify-center w-full">
               {customerLabels.map((lbl, idx) => (
@@ -1028,35 +1439,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </div>
           )}
           <div className="flex items-center space-x-2.5">
-            <Clock className={`w-5 h-5 ${
-              isPaused
+            <Clock className={`w-5 h-5 ${isPaused
                 ? 'text-indigo-600'
                 : urgency.urgencyLevel === 'red'
-                ? 'text-red-700 animate-spin'
-                : urgency.urgencyLevel === 'yellow'
-                ? 'text-amber-700 animate-spin-slow'
-                : 'text-red-600 animate-pulse'
-            }`} />
-            <span className={`text-xs font-black uppercase tracking-wider ${
-              isPaused
+                  ? 'text-red-700 animate-spin'
+                  : urgency.urgencyLevel === 'yellow'
+                    ? 'text-amber-700 animate-spin-slow'
+                    : 'text-red-600 animate-pulse'
+              }`} />
+            <span className={`text-xs font-black uppercase tracking-wider ${isPaused
                 ? 'text-indigo-900'
                 : urgency.urgencyLevel === 'red'
-                ? 'text-red-950'
-                : urgency.urgencyLevel === 'yellow'
-                ? 'text-amber-950'
-                : 'text-red-600'
-            }`}>
+                  ? 'text-red-950'
+                  : urgency.urgencyLevel === 'yellow'
+                    ? 'text-amber-950'
+                    : 'text-red-600'
+              }`}>
               {isDone ? 'Duration:' : isPaused ? '⏸️ Paused (Stuck):' : 'Live:'}
             </span>
-            <span className={`text-xl font-black font-mono ${
-              isPaused
+            <span className={`text-xl font-black font-mono ${isPaused
                 ? 'text-indigo-950 font-bold'
                 : urgency.urgencyLevel === 'red'
-                ? 'text-red-950'
-                : urgency.urgencyLevel === 'yellow'
-                ? 'text-amber-950'
-                : 'text-red-600'
-            }`}>
+                  ? 'text-red-950'
+                  : urgency.urgencyLevel === 'yellow'
+                    ? 'text-amber-950'
+                    : 'text-red-600'
+              }`}>
               {elapsed}
             </span>
           </div>
@@ -1074,11 +1482,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           )}
 
           {order.needDeliveryBack && order.deliveryBackTime && (
-            <div className={`mt-2 flex items-center space-x-1.5 px-3 py-1.5 rounded-full border w-full justify-center ${
-              isPaused
+            <div className={`mt-2 flex items-center space-x-1.5 px-3 py-1.5 rounded-full border w-full justify-center ${isPaused
                 ? 'bg-indigo-100/90 border-indigo-300 text-indigo-900 shadow-xs'
                 : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-            }`}>
+              }`}>
               <CalendarClock className={`w-3.5 h-3.5 shrink-0 ${isPaused ? 'text-indigo-700' : 'text-emerald-600'}`} />
               <span className="text-[10px] font-extrabold text-center">
                 {isPaused
@@ -1120,13 +1527,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       onClick={() => statusKey !== 'SCHEDULED' && handleStatusClick(statusKey as OrderStatus)}
                       className="flex flex-col items-center gap-1 flex-1 cursor-pointer disabled:cursor-default disabled:pointer-events-none hover:scale-105 active:scale-95 transition-all outline-none"
                     >
-                      <div className={`w-5 h-5 rounded-full flex-shrink-0 border-2 flex items-center justify-center transition-all ${
-                        isCompleted
+                      <div className={`w-5 h-5 rounded-full flex-shrink-0 border-2 flex items-center justify-center transition-all ${isCompleted
                           ? 'bg-emerald-500 border-emerald-500 shadow-sm shadow-emerald-200'
                           : isCurrent
-                          ? 'bg-amber-400 border-amber-400 animate-pulse shadow-sm shadow-amber-200'
-                          : 'bg-white border-gray-300'
-                      }`}>
+                            ? 'bg-amber-400 border-amber-400 animate-pulse shadow-sm shadow-amber-200'
+                            : 'bg-white border-gray-300'
+                        }`}>
                         {isCompleted && (
                           <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none">
                             <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -1136,14 +1542,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           <span className="w-1.5 h-1.5 rounded-full bg-white" />
                         )}
                       </div>
-                      <span className={`text-[9px] font-black text-center leading-tight whitespace-nowrap ${
-                        isCompleted ? 'text-emerald-700' : isCurrent ? 'text-amber-700' : 'text-gray-400'
-                      }`}>{labels[statusKey]}</span>
+                      <span className={`text-[9px] font-black text-center leading-tight whitespace-nowrap ${isCompleted ? 'text-emerald-700' : isCurrent ? 'text-amber-700' : 'text-gray-400'
+                        }`}>{labels[statusKey]}</span>
                     </button>
                     {!isLast && (
-                      <div className={`flex-1 h-0.5 mt-2.5 mx-0.5 rounded-full transition-all ${
-                        isCompleted ? 'bg-emerald-400' : 'bg-gray-200'
-                      }`} />
+                      <div className={`flex-1 h-0.5 mt-2.5 mx-0.5 rounded-full transition-all ${isCompleted ? 'bg-emerald-400' : 'bg-gray-200'
+                        }`} />
                     )}
                   </React.Fragment>
                 );
@@ -1190,10 +1594,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             {order.editHistory && order.editHistory.length > 0 && (
               <div className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
                 {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
-                  <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                    <span className="font-bold text-amber-900">{c.field}:</span>
-                    <div className="font-medium text-right">
-                      <span className="line-through text-amber-700/60 mr-1.5 text-[10px]">{c.oldValue || 'None'}</span>
+                  <div key={idx} className="text-left space-y-1 text-[11px]">
+                    {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                      <span className="font-bold text-amber-900 block">{c.field}:</span>
+                    )}
+                    <div className="text-left flex flex-wrap items-center gap-2">
+                      {c.oldValue && c.oldValue !== 'None' && c.oldValue !== 'Empty' && (
+                        <span className="line-through text-amber-700/60 text-[10px]">{c.oldValue}</span>
+                      )}
                       <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
                         {c.newValue}
                       </span>
@@ -1246,33 +1654,55 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {order.editHistory && order.editHistory.length > 0 && (() => {
                 const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
                 if (!latestHistoryItem) return null;
+
+                const getEditorLabel = () => {
+                  const by = (latestHistoryItem.editedBy || '').toLowerCase();
+                  const name = (latestHistoryItem.editedByName || '').toLowerCase();
+                  if (by === order.helperId?.toLowerCase() || by === user?.uid?.toLowerCase() || by === 'helper' || name.includes('helper') || name === 'you') {
+                    return 'Me';
+                  }
+                  if (by === order.customerId?.toLowerCase() || by === 'customer' || name.includes('customer')) {
+                    return 'Customer';
+                  }
+                  if (by === 'admin' || name.includes('admin')) {
+                    return 'Admin';
+                  }
+                  return 'Customer';
+                };
+
+                const editorLabel = getEditorLabel();
+
                 return (
                   <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                       <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
                         <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Latest Update {order.editHistory.length > 1 ? `(Change ${order.editHistory.length})` : ''}</span>
+                        <span>Order Update History</span>
                       </span>
                       <span className="text-[9px] font-bold text-amber-800">
-                        {formatPlacedDateTime(latestHistoryItem.timestamp || order.lastEditedAt || new Date().toISOString())}
+                        Edited by {editorLabel}
                       </span>
                     </div>
                     <div className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1.5 shadow-2xs">
                       <div className="border-b border-amber-100 pb-1 flex items-center justify-between">
                         <div className="text-[10px] font-bold text-amber-900">
-                          Edited by: {latestHistoryItem.editedByName || latestHistoryItem.editedBy}
+                          Edited by: {editorLabel}
                         </div>
                         <div className="text-[9px] font-medium text-amber-700/80">
                           {formatPlacedDateTime(latestHistoryItem.timestamp)}
                         </div>
                       </div>
-                      <div className="space-y-1 pt-0.5">
+                      <div className="space-y-1.5 pt-0.5">
                         {latestHistoryItem.changes.map((c, idx) => (
-                          <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                            <span className="font-extrabold text-amber-950">{c.field}:</span>
-                            <div className="font-semibold text-right">
-                              <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
-                              <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
+                          <div key={idx} className="text-left space-y-1">
+                            {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                              <span className="font-extrabold text-amber-950 block text-[11px]">{c.field}:</span>
+                            )}
+                            <div className="text-left flex flex-wrap items-center gap-2">
+                              {c.oldValue && c.oldValue !== 'None' && c.oldValue !== 'Empty' && (
+                                <span className="line-through text-gray-400 text-xs">{c.oldValue}</span>
+                              )}
+                              <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2.5 py-1 rounded-xl inline-block text-xs">
                                 {c.newValue}
                               </span>
                             </div>
@@ -1402,692 +1832,787 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           {/* ACCEPTED+ ORDER: Show full details */}
           {order.status !== 'PENDING' && (
             <>
-          {/* 1. ITEMS (Interactive Checklist) */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
-                <ShoppingBag className="w-4 h-4 text-emerald-600" />
-                <span>Items Checklist</span>
-              </h4>
-              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100">
-                {parsedItems.filter((i) => i.purchased).length}/{parsedItems.length} Checked
-              </span>
-            </div>
-            <div className="space-y-2">
-              {parsedItems.map((i) => {
-                return (
-                  <div
-                    key={i.id}
-                    onClick={() => !isDone && toggleParsedItemPurchased(i.id, i.originalId)}
-                    className={`flex items-center justify-between text-sm p-3 rounded-2xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${
-                      isDone
-                        ? 'cursor-default opacity-65'
-                        : 'cursor-pointer hover:brightness-105 active:scale-[0.99]'
-                    } ${
-                      i.purchased ? 'opacity-85 font-medium' : 'font-extrabold'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                      <input
-                        type="checkbox"
-                        checked={!!i.purchased}
-                        disabled={isDone}
-                        onChange={() => {}} // Handled by parent container onClick
-                        className="w-4 h-4 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-50 shrink-0"
-                      />
-                      <span className={`text-sm break-words ${i.purchased ? 'line-through text-white/80' : ''}`}>
-                        {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
-                      </span>
-                    </div>
+              {/* 1. ITEMS (Interactive Checklist) */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
+                    <ShoppingBag className="w-4 h-4 text-emerald-600" />
+                    <span>Items</span>
+                  </h4>
+                  <div className="flex items-center gap-2">
+                    {!isDone && (
+                      <button
+                        type="button"
+                        onClick={openHelperEditModal}
+                        className="p-1 px-2.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 text-[11px] font-extrabold flex items-center gap-1.5 transition-all shadow-2xs active:scale-95"
+                      >
+                        <FileEdit className="w-3.5 h-3.5" />
+                        <span>Edit</span>
+                      </button>
+                    )}
+                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100">
+                      {parsedItems.filter((i) => getItemConnectedOrder(i.name, i.id)).length}/{parsedItems.length} Cost Confirmed
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-
-            {/* Customer Description Comma-Separated Checklist */}
-            {parsedNoteItems.length > 0 && (
-              <div className="mt-3 p-3 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1">
-                    📝 Description Checklist ({parsedNoteItems.filter((_, idx) => checkedNoteItems[idx]).length}/{parsedNoteItems.length})
-                  </span>
                 </div>
-                <div className="space-y-1.5">
-                  {parsedNoteItems.map((itemStr, idx) => {
-                    const isChecked = !!checkedNoteItems[idx];
+                <div className="space-y-2">
+                  {parsedItems.map((i) => {
+                    const connectedShopOrder = getItemConnectedOrder(i.name, i.id);
+                    const isLocked = !isDone && !!connectedShopOrder;
                     return (
                       <div
-                        key={idx}
-                        onClick={() => setCheckedNoteItems((prev) => ({ ...prev, [idx]: !prev[idx] }))}
-                        className={`flex items-center space-x-2 text-xs p-2.5 rounded-xl border transition-all cursor-pointer select-none ${
-                          isChecked
-                            ? 'bg-amber-200/90 border-amber-300 text-amber-950 line-through opacity-80'
-                            : 'bg-white border-amber-200 text-amber-950 font-bold hover:bg-amber-100/60'
-                        }`}
+                        key={i.id}
+                        onClick={() => {
+                          if (isDone) return;
+                          if (connectedShopOrder) {
+                            openViewRequestDetails(connectedShopOrder);
+                          } else {
+                            toggleParsedItemPurchased(i.id, i.originalId, i.name);
+                          }
+                        }}
+                        className={`flex flex-col text-sm p-3 rounded-2xl border transition-all select-none bg-[#19a24c] border-[#19a24c] text-white ${isDone
+                            ? 'cursor-default opacity-90'
+                            : 'cursor-pointer hover:brightness-105 active:scale-[0.99]'
+                          } ${i.purchased ? 'opacity-90 font-medium' : 'font-extrabold'
+                          }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {}}
-                          className="w-3.5 h-3.5 accent-amber-700 rounded cursor-pointer"
-                        />
-                        <span className={isChecked ? 'line-through text-amber-900' : ''}>{itemStr}</span>
+                        <div className="flex items-center justify-between min-w-0 flex-1">
+                          <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                            <input
+                              type="checkbox"
+                              checked={!!i.purchased}
+                              disabled={isDone || isLocked}
+                              onChange={() => { }} // Handled by parent container onClick
+                              className="w-4 h-4 accent-white rounded cursor-pointer disabled:cursor-default disabled:opacity-75 shrink-0"
+                            />
+                            <span className={`text-sm break-words ${i.purchased ? 'line-through text-white/90 font-semibold' : ''}`}>
+                              {i.name}{i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Connected Shop / Custom Cost Tag */}
+                        {connectedShopOrder && (() => {
+                          const itemPrice = getItemIndividualPrice(i.name, connectedShopOrder);
+                          return (
+                            <div className="mt-2 pt-2 border-t border-white/20 flex items-center justify-between text-[10px] flex-wrap gap-1 font-bold">
+                              <span className="bg-white/20 text-white px-2 py-0.5 rounded-md flex items-center gap-1">
+                                {connectedShopOrder.shopId === 'myself' ? (
+                                  <>
+                                    <Plus className="w-3 h-3 text-amber-200" />
+                                    <span>Custom Cost: {connectedShopOrder.sellerName || 'Direct'}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Store className="w-3 h-3 text-purple-200" />
+                                    <span>Ordered via {connectedShopOrder.shopName}</span>
+                                  </>
+                                )}
+                              </span>
+                              <div className="flex items-center gap-1.5 font-mono">
+                                <span className="bg-white/30 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider">
+                                  {connectedShopOrder.status === 'PREPARING' ? 'Processing' : connectedShopOrder.status}
+                                </span>
+                                {itemPrice !== undefined && (
+                                  <span className="font-extrabold bg-white/20 px-2 py-0.5 rounded">৳{itemPrice}</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            )}
 
-            {/* Customer Edit History: Show Latest Updated Change for Active Order */}
-            {order.editHistory && order.editHistory.length > 0 && (() => {
-              const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
-              if (!latestHistoryItem) return null;
-              return (
-                <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                    <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
-                      <FileEdit className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Latest Update {order.editHistory.length > 1 ? `(Change ${order.editHistory.length})` : ''}</span>
-                    </span>
-                    <span className="text-[9px] font-bold text-amber-800">
-                      {formatPlacedDateTime(latestHistoryItem.timestamp || order.lastEditedAt || new Date().toISOString())}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1.5 shadow-2xs">
-                    <div className="border-b border-amber-100 pb-1 flex items-center justify-between">
-                      <div className="text-[10px] font-bold text-amber-900">
-                        Edited by: {latestHistoryItem.editedByName || latestHistoryItem.editedBy}
-                      </div>
-                      <div className="text-[9px] font-medium text-amber-700/80">
-                        {formatPlacedDateTime(latestHistoryItem.timestamp)}
-                      </div>
+                {/* Customer Description Comma-Separated Checklist */}
+                {parsedNoteItems.length > 0 && (
+                  <div className="mt-3 p-3 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1">
+                        📝 Description Checklist ({parsedNoteItems.filter((_, idx) => checkedNoteItems[idx]).length}/{parsedNoteItems.length})
+                      </span>
                     </div>
-                    <div className="space-y-1 pt-0.5">
-                      {latestHistoryItem.changes.map((c, idx) => (
-                        <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                          <span className="font-extrabold text-amber-950">{c.field}:</span>
-                          <div className="font-semibold text-right">
-                            <span className="line-through text-gray-400 mr-1.5">{c.oldValue || 'Empty'}</span>
-                            <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2 py-0.5 rounded-md inline-block">
-                              {c.newValue}
-                            </span>
+                    <div className="space-y-1.5">
+                      {parsedNoteItems.map((itemStr, idx) => {
+                        const connectedShopOrder = getItemConnectedOrder(itemStr);
+                        const isChecked = !!checkedNoteItems[idx] || !!connectedShopOrder;
+                        const itemPrice = getItemIndividualPrice(itemStr, connectedShopOrder);
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => {
+                              if (isDone) return;
+                              if (connectedShopOrder) {
+                                openViewRequestDetails(connectedShopOrder);
+                              } else {
+                                setCheckedNoteItems((prev) => ({ ...prev, [idx]: !prev[idx] }));
+                              }
+                            }}
+                            className={`flex flex-col text-xs p-2.5 rounded-xl border transition-all cursor-pointer select-none ${isChecked
+                                ? 'bg-amber-200/90 border-amber-300 text-amber-950 font-bold'
+                                : 'bg-white border-amber-200 text-amber-950 font-bold hover:bg-amber-100/60'
+                              }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => { }}
+                                className="w-3.5 h-3.5 accent-amber-700 rounded cursor-pointer"
+                              />
+                              <span className={`flex-1 ${isChecked ? 'line-through text-amber-900' : ''}`}>{itemStr}</span>
+                            </div>
+                            {connectedShopOrder && (
+                              <div className="mt-1.5 pt-1.5 border-t border-amber-300/60 flex items-center justify-between text-[10px] font-bold">
+                                <span className="bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                  {connectedShopOrder.shopId === 'myself' ? 'Custom Cost' : connectedShopOrder.shopName}
+                                </span>
+                                {itemPrice !== undefined && (
+                                  <span className="font-extrabold text-amber-950 font-mono bg-amber-100 px-1.5 py-0.5 rounded">৳{itemPrice}</span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
-                </div>
-              );
-            })()}
-          </div>
+                )}
 
-          {/* Two-Way Delivery Toggle */}
-          {!isDone && (
-            <div className="bg-indigo-50/30 py-2 px-3 rounded-2xl space-y-1.5 animate-in fade-in duration-200">
-              <div className="flex items-center gap-2">
-                {/* Toggle Switch on Left */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!!order.needDeliveryBack}
-                  onClick={() => {
-                    if (!order.needDeliveryBack) {
-                      setReturnWhen('schedule');
-                      setDeliveryBackTimeInput(
-                        order.deliveryBackTime
-                          ? order.deliveryBackTime.substring(0, 16)
-                          : (() => {
-                              const d = new Date();
-                              d.setDate(d.getDate() + 1);
-                              return d.toISOString().substring(0, 16);
-                            })()
-                      );
-                      setShowDeliveryBackModal(true);
-                    } else {
-                      const baseFee = calculateEstimatedFee({
-                        distanceKm: Math.ceil(distanceKm),
-                        weightKg: Math.ceil(order.weightKg || 0),
-                        isReturnRequested: false,
-                        productPrice: 0,
-                      }, fallbackStore.pricingSettings).totalFee;
-                      fallbackStore.updateOrder(order.id, (o) => ({
-                        ...o,
-                        needDeliveryBack: false,
-                        needReturnItems: false,
-                        deliveryBackTime: undefined,
-                        deliveryBackSetAt: undefined,
-                        deliveryFee: o.isFreeDelivery ? 0 : baseFee,
-                        originalDeliveryFee: o.isFreeDelivery ? 0 : baseFee,
-                      }));
-                    }
-                  }}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${
-                    order.needDeliveryBack ? 'bg-indigo-600' : 'bg-gray-300'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200 ${
-                      order.needDeliveryBack ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-                <div className="flex-1 min-w-0">
-                  <span className="text-xs font-bold text-indigo-800 uppercase tracking-wider block">Two-Way Delivery</span>
-                  {order.needDeliveryBack && (
-                    <span className="text-[11px] text-gray-700 font-semibold block mt-0.5">
-                      Return mode: {order.deliveryBackTime
-                        ? `Scheduled (${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' })})`
-                        : 'Return Now'}
+                {/* Action buttons shown directly under items list when items are selected */}
+                {!isDone && selectedItemsCount > 0 && (
+                  <div className="mt-3 p-3 rounded-2xl bg-purple-50/80 border border-purple-200/90 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase text-purple-900 tracking-wider flex items-center gap-1.5">
+                        <Store className="w-3.5 h-3.5 text-purple-700" />
+                        <span>Selected ({selectedItemsCount} {selectedItemsCount === 1 ? 'item' : 'items'})</span>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setReturnWhen(order.deliveryBackTime ? 'schedule' : 'now');
+                        onClick={() => setShowMapModal(true)}
+                        className="w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white border border-purple-700 rounded-xl text-xs font-extrabold transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                      >
+                        <Store className="w-3.5 h-3.5 text-white shrink-0" />
+                        <span>Request to store</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openCustomCostModal}
+                        className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white border border-amber-700 rounded-xl text-xs font-extrabold transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-white shrink-0" />
+                        <span>+ Custom Cost</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Customer Edit History: Show Latest Updated Change for Active Order */}
+                {order.editHistory && order.editHistory.length > 0 && (() => {
+                  const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
+                  if (!latestHistoryItem) return null;
+
+                  const getEditorLabel = () => {
+                    const by = (latestHistoryItem.editedBy || '').toLowerCase();
+                    const name = (latestHistoryItem.editedByName || '').toLowerCase();
+                    if (by === order.helperId?.toLowerCase() || by === user?.uid?.toLowerCase() || by === 'helper' || name.includes('helper') || name === 'you') {
+                      return 'Me';
+                    }
+                    if (by === order.customerId?.toLowerCase() || by === 'customer' || name.includes('customer')) {
+                      return 'Customer';
+                    }
+                    if (by === 'admin' || name.includes('admin')) {
+                      return 'Admin';
+                    }
+                    return 'Customer';
+                  };
+
+                  const editorLabel = getEditorLabel();
+
+                  return (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200/80 space-y-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5">
+                          <FileEdit className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Order Update History</span>
+                        </span>
+                        <span className="text-[9px] font-bold text-amber-800">
+                          Edited by {editorLabel}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs space-y-1.5 shadow-2xs">
+                        <div className="border-b border-amber-100 pb-1 flex items-center justify-between">
+                          <div className="text-[10px] font-bold text-amber-900">
+                            Edited by: {editorLabel}
+                          </div>
+                          <div className="text-[9px] font-medium text-amber-700/80">
+                            {formatPlacedDateTime(latestHistoryItem.timestamp)}
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 pt-0.5">
+                          {latestHistoryItem.changes.map((c, idx) => (
+                            <div key={idx} className="text-left space-y-1">
+                              {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                                <span className="font-extrabold text-amber-950 block text-[11px]">{c.field}:</span>
+                              )}
+                              <div className="text-left flex flex-wrap items-center gap-2">
+                                {c.oldValue && c.oldValue !== 'None' && c.oldValue !== 'Empty' && (
+                                  <span className="line-through text-gray-400 text-xs">{c.oldValue}</span>
+                                )}
+                                <span className="text-emerald-950 font-bold bg-emerald-100/90 border border-emerald-200 px-2.5 py-1 rounded-xl inline-block text-xs">
+                                  {c.newValue}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Two-Way Delivery Toggle */}
+              {!isDone && (
+                <div className="bg-indigo-50/30 py-2 px-3 rounded-2xl space-y-1.5 animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2">
+                    {/* Toggle Switch on Left */}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!order.needDeliveryBack}
+                      onClick={() => {
+                        if (!order.needDeliveryBack) {
+                          setReturnWhen('schedule');
                           setDeliveryBackTimeInput(
                             order.deliveryBackTime
                               ? order.deliveryBackTime.substring(0, 16)
                               : (() => {
-                                  const d = new Date();
-                                  d.setDate(d.getDate() + 1);
-                                  return d.toISOString().substring(0, 16);
-                                })()
+                                const d = new Date();
+                                d.setDate(d.getDate() + 1);
+                                return d.toISOString().substring(0, 16);
+                              })()
                           );
                           setShowDeliveryBackModal(true);
-                        }}
-                        className="ml-2 text-indigo-600 hover:text-indigo-800 font-bold underline text-[10px]"
+                        } else {
+                          const baseFee = calculateEstimatedFee({
+                            distanceKm: Math.ceil(distanceKm),
+                            weightKg: Math.ceil(order.weightKg || 0),
+                            isReturnRequested: false,
+                            productPrice: 0,
+                          }, fallbackStore.pricingSettings).totalFee;
+                          fallbackStore.updateOrder(order.id, (o) => ({
+                            ...o,
+                            needDeliveryBack: false,
+                            needReturnItems: false,
+                            deliveryBackTime: undefined,
+                            deliveryBackSetAt: undefined,
+                            deliveryFee: o.isFreeDelivery ? 0 : baseFee,
+                            originalDeliveryFee: o.isFreeDelivery ? 0 : baseFee,
+                          }));
+                        }
+                      }}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${order.needDeliveryBack ? 'bg-indigo-600' : 'bg-gray-300'
+                        }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200 ${order.needDeliveryBack ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                      />
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-bold text-indigo-800 uppercase tracking-wider block">Two-Way Delivery</span>
+                      {order.needDeliveryBack && (
+                        <span className="text-[11px] text-gray-700 font-semibold block mt-0.5">
+                          Return mode: {order.deliveryBackTime
+                            ? `Scheduled (${new Date(order.deliveryBackTime).toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' })})`
+                            : 'Return Now'}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReturnWhen(order.deliveryBackTime ? 'schedule' : 'now');
+                              setDeliveryBackTimeInput(
+                                order.deliveryBackTime
+                                  ? order.deliveryBackTime.substring(0, 16)
+                                  : (() => {
+                                    const d = new Date();
+                                    d.setDate(d.getDate() + 1);
+                                    return d.toISOString().substring(0, 16);
+                                  })()
+                              );
+                              setShowDeliveryBackModal(true);
+                            }}
+                            className="ml-2 text-indigo-600 hover:text-indigo-800 font-bold underline text-[10px]"
+                          >
+                            (Edit)
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Requests to Shops */}
+              {shopOrders.length > 0 && (
+                <div className="pt-2 border-t border-gray-100">
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1">
+                    <Store className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Requests to Shops & Custom Costs ({shopOrders.length})</span>
+                  </h4>
+                  <div className="space-y-2">
+                    {shopOrders.map((so) => {
+                      const isMyself = so.shopId === 'myself';
+                      const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+                      return (
+                        <div
+                          key={so.id}
+                          onClick={() => openViewRequestDetails(so)}
+                          className={`${isMyself
+                              ? 'bg-amber-50/35 hover:bg-amber-50/70 border-amber-200/80'
+                              : 'bg-purple-50/30 hover:bg-purple-50/70 border-purple-200/80'
+                            } border p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`font-extrabold text-xs ${isMyself ? 'text-amber-950' : 'text-purple-950'}`}>
+                                {so.shopName}
+                              </span>
+                              {isMyself ? (
+                                <span className="text-[8px] font-black bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-amber-250 flex items-center gap-0.5">
+                                  <Plus className="w-2.5 h-2.5 text-amber-700" />
+                                  Custom Cost
+                                </span>
+                              ) : shop ? (
+                                <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200 flex items-center gap-0.5">
+                                  <Store className="w-2.5 h-2.5 text-purple-600" />
+                                  {shop.type}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-[11px] text-gray-500 truncate mt-0.5 font-medium" title={so.requestText}>
+                              {so.itemsWithPrice && so.itemsWithPrice.length > 0
+                                ? so.itemsWithPrice.map((i) => i.name).join(', ')
+                                : so.requestText}
+                            </p>
+                          </div>
+                          {isMyself ? (
+                            <span className="text-lg sm:text-xl font-black text-amber-950 bg-amber-100 px-3.5 py-1.5 rounded-xl border border-amber-250 shrink-0 font-mono">
+                              ৳{so.price || 0}
+                            </span>
+                          ) : (
+                            <div className="flex flex-col items-end gap-0.5 shrink-0">
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${so.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
+                                  so.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
+                                    so.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
+                                      so.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
+                                        so.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                                          so.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                                            so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                                              'bg-gray-100 text-gray-700 border-gray-250'
+                                }`}>
+                                {so.status === 'PREPARING' ? 'Processing' : so.status}
+                              </span>
+                              {so.price !== undefined && (
+                                <span className="text-lg sm:text-xl font-black text-emerald-950 font-mono">
+                                  ৳{so.price}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 5. CUSTOMER CONTACT NUMBER */}
+              <div className="pt-2 border-t border-gray-100">
+                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
+                  <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Customer Contact</span>
+                </h4>
+                <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100 flex items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    {/* Line 1: Phone number + label badges */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-black text-gray-900 text-xs font-mono tracking-wide">
+                        {order.alternativePhone || order.customerPhone || 'Not provided'}
+                      </span>
+                      {customerLabels.length > 0 && customerLabels.map((lbl, idx) => (
+                        <span
+                          key={idx}
+                          className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow-sm border border-amber-300/30 uppercase tracking-wider shrink-0"
+                        >
+                          ⭐ {lbl}
+                        </span>
+                      ))}
+                    </div>
+                    {/* Line 2: Customer name */}
+                    <p className="text-[11px] text-gray-650 font-bold mt-0.5">{order.customerName}</p>
+                  </div>
+                  {/* Call / WhatsApp buttons */}
+                  {(order.alternativePhone || order.customerPhone) && (
+                    <div className="flex items-center space-x-1.5 shrink-0">
+                      <a
+                        href={`tel:${order.alternativePhone || order.customerPhone}`}
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
                       >
-                        (Edit)
-                      </button>
-                    </span>
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>Call</span>
+                      </a>
+                      <a
+                        href={`https://wa.me/880${(order.alternativePhone || order.customerPhone || '').replace(/^0/, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                      >
+                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                        <span>WhatsApp</span>
+                      </a>
+                    </div>
                   )}
                 </div>
               </div>
-            </div>
-          )}
 
-          {/* Requests to Shops */}
-          <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1">
-              <Store className="w-3.5 h-3.5 text-purple-600" />
-              <span>Requests to Shops</span>
-            </h4>
-            {!isDone && (
-              <div className="grid grid-cols-2 gap-2 mb-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowMapModal(true)}
-                  className="w-full py-2 px-3 bg-purple-50 hover:bg-purple-100/80 active:bg-purple-200 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                >
-                  <Store className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                  <span>Request to store</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCustomCostModal(true)}
-                  className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100/80 active:bg-amber-200 text-amber-900 border border-amber-250 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                >
-                  <Plus className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                  <span>+ Custom Cost</span>
-                </button>
-              </div>
-            )}
-            {shopOrders.length > 0 ? (
-              <div className="space-y-2">
-                {shopOrders.map((so) => {
-                  const isMyself = so.shopId === 'myself';
-                  const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
-                  return (
-                    <div
-                      key={so.id}
-                      onClick={() => setViewRequestDetails(so)}
-                      className={`${
-                        isMyself
-                          ? 'bg-amber-50/35 hover:bg-amber-50/70 border-amber-200/80'
-                          : 'bg-purple-50/30 hover:bg-purple-50/70 border-purple-200/80'
-                      } border p-3 rounded-2xl flex items-center justify-between gap-3 shadow-xs cursor-pointer active:scale-[0.99] transition-all`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`font-extrabold text-xs ${isMyself ? 'text-amber-950' : 'text-purple-950'}`}>
-                            {so.shopName}
-                          </span>
-                          {isMyself ? (
-                            <span className="text-[8px] font-black bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-amber-250 flex items-center gap-0.5">
-                              <Plus className="w-2.5 h-2.5 text-amber-700" />
-                              Custom Cost
-                            </span>
-                          ) : shop ? (
-                            <span className="text-[8px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full uppercase tracking-wider border border-purple-200 flex items-center gap-0.5">
-                              <Store className="w-2.5 h-2.5 text-purple-600" />
-                              {shop.type}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="text-[11px] text-gray-500 truncate mt-0.5 font-medium" title={so.requestText}>
-                          {so.itemsWithPrice && so.itemsWithPrice.length > 0
-                            ? so.itemsWithPrice.map((i) => `${i.name}${i.unit ? ` (${i.unit})` : ''}`).join(', ')
-                            : so.requestText}
-                        </p>
+              {/* 6. COMBINED ADDRESSES BLOCK — inline Pickup/Delivery format */}
+              <div className="pt-2 border-t border-gray-100">
+                <div className="flex items-center justify-between mb-1.5">
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Addresses & Distance</span>
+                  </h4>
+                  {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                    <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
+                      📍 {distanceKm.toFixed(2)} km
+                    </span>
+                  )}
+                </div>
+                <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
+                  {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
+                    <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
+                      <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">Pickup Location Not Set</span>
                       </div>
-                      {isMyself ? (
-                        <span className="text-lg sm:text-xl font-black text-amber-950 bg-amber-100 px-3.5 py-1.5 rounded-xl border border-amber-250 shrink-0 font-mono">
-                          ৳{so.price || 0}
+                      {!isDone && (
+                        <button
+                          onClick={() => setActiveMapPicker('pickup')}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
+                          title="Set pickup address"
+                        >
+                          <MapPin className="w-3 h-3 text-white" />
+                          <span>+ Set Pickup</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area'}>
+                        <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                        <span>{order.pickupLocation.address}</span>
+                      </p>
+                      {!isDone && (
+                        <button
+                          onClick={() => setActiveMapPicker('pickup')}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                          title="Edit pickup address"
+                        >
+                          <FileEdit className="w-3 h-3 text-gray-700" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
+                      <strong className="font-extrabold text-emerald-800">Delivery: </strong>
+                      <span>{order.deliveryLocation?.address || 'N/A'}</span>
+                    </p>
+                    {!isDone && (
+                      <button
+                        onClick={() => setActiveMapPicker('delivery')}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
+                        title="Edit delivery address"
+                      >
+                        <FileEdit className="w-3 h-3 text-emerald-700" />
+                        <span>Edit</span>
+                      </button>
+                    )}
+                  </div>
+                  <div className="pt-1 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowMapModal(true)}
+                      className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Map className="w-3.5 h-3.5" />
+                      <span>Road and Shops</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenGoogleMapsDirection}
+                      className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 shrink-0 cursor-pointer"
+                      title="Google Map Direction"
+                    >
+                      <Navigation className="w-3.5 h-3.5" />
+                      <span>Direction</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+
+              {/* Product Cost & Pricing Calculation Summary */}
+              <div className="pt-2 border-t border-gray-100">
+                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Calculation Summary</span>
+                </h4>
+                <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-bold">Product Cost</span>
+                    <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">
+                      ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    {distanceKm > 0 ? (
+                      <>
+                        <span className="text-gray-500 font-bold">Distance ({distanceKm.toFixed(1)} km)</span>
+                        <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.distanceFee}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-amber-700 font-bold flex items-center gap-1">
+                          <span>Distance (Pickup not set)</span>
                         </span>
+                        {!isDone ? (
+                          <button
+                            type="button"
+                            onClick={() => setActiveMapPicker('pickup')}
+                            className="text-[11px] text-amber-700 underline font-extrabold hover:text-amber-800 cursor-pointer"
+                          >
+                            + Set Location
+                          </button>
+                        ) : (
+                          <span className="text-xs sm:text-sm font-bold text-gray-400 font-mono">৳0</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-bold">Approximate Weight (kg)</span>
+                    <div className="flex items-center space-x-1.5">
+                      {!isDone ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          value={weightInput}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setWeightInput(e.target.value);
+                            updateEstdPricing(activeProductCost, val);
+                          }}
+                          className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-xs outline-none focus:border-emerald-500 bg-white"
+                        />
                       ) : (
-                        <div className="flex flex-col items-end gap-0.5 shrink-0">
-                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
-                            so.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
-                            so.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
-                            so.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
-                            so.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
-                            so.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                            so.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                            so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
-                            'bg-gray-100 text-gray-700 border-gray-250'
-                          }`}>
-                            {so.status === 'PREPARING' ? 'Processing' : so.status}
-                          </span>
-                          {so.price !== undefined && (
-                            <span className="text-lg sm:text-xl font-black text-emerald-950 font-mono">
-                              ৳{so.price}
-                            </span>
-                          )}
+                        <span className="text-xs sm:text-sm font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
+                      )}
+                      {estdPricing.weightFee > 0 && (
+                        <span className="text-[10px] text-gray-500">(+৳{estdPricing.weightFee})</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500 font-bold">Processing Fee</span>
+                      <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.processingFee}</span>
+                    </div>
+                  )}
+
+                  {estdPricing.returnFee > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500 font-bold">
+                        {order.needDeliveryBack ? 'Two-Way Fee' : 'Return Fee'} ({estdPricing.returnPercent}%)
+                      </span>
+                      <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.returnFee}</span>
+                    </div>
+                  )}
+
+                  {/* Previous Order Due Payment Line Item */}
+                  {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
+                    <div className="border-t border-amber-200 pt-2 space-y-1">
+                      <div className="flex items-center justify-between text-amber-950 font-bold">
+                        <span className="flex items-center space-x-1 text-amber-900">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Previous Order Due</span>
+                        </span>
+                        <span className="font-extrabold text-sm text-red-600 font-mono">+৳{order.appliedDuePayment.amount}</span>
+                      </div>
+                      {order.appliedDuePayment.note && (
+                        <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200/70 text-[11px] text-amber-950 font-medium leading-relaxed">
+                          <strong>Due Note:</strong> {order.appliedDuePayment.note}
                         </div>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-[10px] text-gray-400 italic text-center py-2 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                No shop requests yet. Add custom cost or select shops from map.
-              </p>
-            )}
-          </div>
+                  )}
 
-          {/* 5. CUSTOMER CONTACT NUMBER */}
-          <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
-              <Phone className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Customer Contact</span>
-            </h4>
-            <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100 flex items-center justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                {/* Line 1: Phone number + label badges */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-black text-gray-900 text-xs font-mono tracking-wide">
-                    {order.alternativePhone || order.customerPhone || 'Not provided'}
-                  </span>
-                  {customerLabels.length > 0 && customerLabels.map((lbl, idx) => (
-                    <span
-                      key={idx}
-                      className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow-sm border border-amber-300/30 uppercase tracking-wider shrink-0"
-                    >
-                      ⭐ {lbl}
-                    </span>
-                  ))}
-                </div>
-                {/* Line 2: Customer name */}
-                <p className="text-[11px] text-gray-650 font-bold mt-0.5">{order.customerName}</p>
-              </div>
-              {/* Call / WhatsApp buttons */}
-              {(order.alternativePhone || order.customerPhone) && (
-                <div className="flex items-center space-x-1.5 shrink-0">
-                  <a
-                    href={`tel:${order.alternativePhone || order.customerPhone}`}
-                    className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                    <span>Call</span>
-                  </a>
-                  <a
-                    href={`https://wa.me/880${(order.alternativePhone || order.customerPhone || '').replace(/^0/, '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                  >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                    <span>WhatsApp</span>
-                  </a>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 6. COMBINED ADDRESSES BLOCK — inline Pickup/Delivery format */}
-          <div className="pt-2 border-t border-gray-100">
-            <div className="flex items-center justify-between mb-1.5">
-              <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
-                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Addresses & Distance</span>
-              </h4>
-              {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
-                <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
-                  📍 {distanceKm.toFixed(2)} km
-                </span>
-              )}
-            </div>
-            <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
-              {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
-                <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
-                  <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="truncate">Pickup Location Not Set</span>
+                  <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
+                      {order.isFreeDelivery && (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                          🎁 Free Delivery (Reward Claimed)
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-xs sm:text-sm font-bold text-emerald-850 font-mono">
+                        ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
+                      </span>
+                      {!isDone && !order.isFreeDelivery && (
+                        <button
+                          onClick={() => {
+                            setFeeInput(String(order.deliveryFee));
+                            setCustomerAgreed(false);
+                            setShowFeeModal(true);
+                          }}
+                          className="p-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
+                          title="Override Fee"
+                        >
+                          <FileEdit className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {!isDone && (
-                    <button
-                      onClick={() => setActiveMapPicker('pickup')}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
-                      title="Set pickup address"
-                    >
-                      <MapPin className="w-3 h-3 text-white" />
-                      <span>+ Set Pickup</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-start justify-between gap-2 min-w-0">
-                  <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area'}>
-                    <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                    <span>{order.pickupLocation.address}</span>
-                  </p>
-                  {!isDone && (
-                    <button
-                      onClick={() => setActiveMapPicker('pickup')}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                      title="Edit pickup address"
-                    >
-                      <FileEdit className="w-3 h-3 text-gray-700" />
-                      <span>Edit</span>
-                    </button>
-                  )}
-                </div>
-              )}
-              <div className="flex items-start justify-between gap-2 min-w-0">
-                <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
-                  <strong className="font-extrabold text-emerald-800">Delivery: </strong>
-                  <span>{order.deliveryLocation?.address || 'N/A'}</span>
-                </p>
-                {!isDone && (
-                  <button
-                    onClick={() => setActiveMapPicker('delivery')}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
-                    title="Edit delivery address"
-                  >
-                    <FileEdit className="w-3 h-3 text-emerald-700" />
-                    <span>Edit</span>
-                  </button>
-                )}
-              </div>
-              <div className="pt-1 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowMapModal(true)}
-                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
-                >
-                  <Map className="w-3.5 h-3.5" />
-                  <span>Road and Shops</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenGoogleMapsDirection}
-                  className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 shrink-0 cursor-pointer"
-                  title="Google Map Direction"
-                >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Direction</span>
-                </button>
-              </div>
-            </div>
-          </div>
 
-
-          {/* Product Cost & Pricing Calculation Summary */}
-          <div className="pt-2 border-t border-gray-100">
-            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
-              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Calculation Summary</span>
-            </h4>
-            <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Product Cost</span>
-                <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                {distanceKm > 0 ? (
-                  <>
-                    <span className="text-gray-500 font-bold">Distance ({distanceKm.toFixed(1)} km)</span>
-                    <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.distanceFee}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-amber-700 font-bold flex items-center gap-1">
-                      <span>Distance (Pickup not set)</span>
+                  <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
+                    <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
+                    <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
+                      ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
                     </span>
-                    {!isDone ? (
-                      <button
-                        type="button"
-                        onClick={() => setActiveMapPicker('pickup')}
-                        className="text-[11px] text-amber-700 underline font-extrabold hover:text-amber-800 cursor-pointer"
-                      >
-                        + Set Location
-                      </button>
-                    ) : (
-                      <span className="text-xs sm:text-sm font-bold text-gray-400 font-mono">৳0</span>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Approximate Weight (kg)</span>
-                <div className="flex items-center space-x-1.5">
-                  {!isDone ? (
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={weightInput}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value) || 0;
-                        setWeightInput(e.target.value);
-                        updateEstdPricing(activeProductCost, val);
-                      }}
-                      className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-xs outline-none focus:border-emerald-500 bg-white"
-                    />
-                  ) : (
-                    <span className="text-xs sm:text-sm font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
-                  )}
-                  {estdPricing.weightFee > 0 && (
-                    <span className="text-[10px] text-gray-500">(+৳{estdPricing.weightFee})</span>
-                  )}
-                </div>
-              </div>
-
-              {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-bold">Processing Fee</span>
-                  <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.processingFee}</span>
-                </div>
-              )}
-
-              {estdPricing.returnFee > 0 && (
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 font-bold">
-                    {order.needDeliveryBack ? 'Two-Way Fee' : 'Return Fee'} ({estdPricing.returnPercent}%)
-                  </span>
-                  <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.returnFee}</span>
-                </div>
-              )}
-
-              {/* Previous Order Due Payment Line Item */}
-              {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
-                <div className="border-t border-amber-200 pt-2 space-y-1">
-                  <div className="flex items-center justify-between text-amber-950 font-bold">
-                    <span className="flex items-center space-x-1 text-amber-900">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span>Previous Order Due</span>
-                    </span>
-                    <span className="font-extrabold text-sm text-red-600 font-mono">+৳{order.appliedDuePayment.amount}</span>
                   </div>
-                  {order.appliedDuePayment.note && (
-                    <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200/70 text-[11px] text-amber-950 font-medium leading-relaxed">
-                      <strong>Due Note:</strong> {order.appliedDuePayment.note}
+
+                  {/* Helper Earnings after Platform Commission Deduction */}
+                  {(() => {
+                    const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                    const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
+                    return (
+                      <div className="flex items-center justify-between bg-purple-50/60 p-2.5 rounded-xl border border-purple-100 -mx-0.5">
+                        <div>
+                          <span className="font-bold text-purple-950 text-xs block">Net Earnings</span>
+                          <span className="text-[9px] text-purple-700">
+                            {order.isFreeDelivery ? 'Free delivery platform subsidy earnings' : 'Net earnings after platform commission'}
+                          </span>
+                        </div>
+                        <span className="text-xs sm:text-sm font-bold text-purple-900 font-mono">৳{netEarned}</span>
+                      </div>
+                    );
+                  })()}
+
+                  {order.deliveryFee > (fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70) && (
+                    <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-850 font-bold leading-relaxed animate-in fade-in duration-200">
+                      ⚠️ {fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || `Delivery fee exceeds ৳${fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70}.`}
+                      <div className="mt-1 text-[11px] font-black text-amber-900">
+                        👉 Call customer to agree on a fair delivery fee.
+                      </div>
                     </div>
                   )}
                 </div>
-              )}
+              </div>
 
-              <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
-                <div className="flex items-center space-x-1.5">
-                  <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
-                  {order.isFreeDelivery && (
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                      🎁 Free Delivery (Reward Claimed)
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-xs sm:text-sm font-bold text-emerald-850 font-mono">
-                    ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
-                  </span>
-                  {!isDone && !order.isFreeDelivery && (
+              {/* 7. DUE PAYMENT MANAGEMENT (Helper) */}
+              {(isAcceptedByThisHelper || isDone) && (
+                <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                        <DollarSign className="w-4 h-4" />
+                      </div>
+                      <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
+                    </div>
                     <button
-                      onClick={() => {
-                        setFeeInput(String(order.deliveryFee));
-                        setCustomerAgreed(false);
-                        setShowFeeModal(true);
-                      }}
-                      className="p-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
-                      title="Override Fee"
+                      type="button"
+                      onClick={openHelperDueModal}
+                      className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1 cursor-pointer"
                     >
                       <FileEdit className="w-3.5 h-3.5" />
+                      <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
                     </button>
-                  )}
-                </div>
-              </div>
+                  </div>
 
-              <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
-                <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
-                <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
-                  ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
-                </span>
-              </div>
-
-              {/* Helper Earnings after Platform Commission Deduction */}
-              {(() => {
-                const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
-                const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
-                return (
-                  <div className="flex items-center justify-between bg-purple-50/60 p-2.5 rounded-xl border border-purple-100 -mx-0.5">
-                    <div>
-                      <span className="font-bold text-purple-950 text-xs block">Net Earnings</span>
-                      <span className="text-[9px] text-purple-700">
-                        {order.isFreeDelivery ? 'Free delivery platform subsidy earnings' : 'Net earnings after platform commission'}
-                      </span>
+                  {order.duePayment ? (
+                    <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="text-purple-900">বাকি পরিমাণ:</span>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
+                          <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                            {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
+                          </span>
+                        </div>
+                      </div>
+                      {order.duePayment.note && (
+                        <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
+                          <strong>নোট:</strong> {order.duePayment.note}
+                        </div>
+                      )}
                     </div>
-                    <span className="text-xs sm:text-sm font-bold text-purple-900 font-mono">৳{netEarned}</span>
-                  </div>
-                );
-              })()}
-
-              {order.deliveryFee > (fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70) && (
-                <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-850 font-bold leading-relaxed animate-in fade-in duration-200">
-                  ⚠️ {fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || `Delivery fee exceeds ৳${fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70}.`}
-                  <div className="mt-1 text-[11px] font-black text-amber-900">
-                    👉 Call customer to agree on a fair delivery fee.
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 7. DUE PAYMENT MANAGEMENT (Helper) */}
-          {(isAcceptedByThisHelper || isDone) && (
-            <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
-                    <DollarSign className="w-4 h-4" />
-                  </div>
-                  <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={openHelperDueModal}
-                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1 cursor-pointer"
-                >
-                  <FileEdit className="w-3.5 h-3.5" />
-                  <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
-                </button>
-              </div>
-
-              {order.duePayment ? (
-                <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between font-bold">
-                    <span className="text-purple-900">বাকি পরিমাণ:</span>
-                    <div className="flex items-center space-x-2">
-                      <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
-                      <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
-                        {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
-                      </span>
-                    </div>
-                  </div>
-                  {order.duePayment.note && (
-                    <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
-                      <strong>নোট:</strong> {order.duePayment.note}
+                  ) : (
+                    <div className="p-3 rounded-2xl bg-gray-50 border border-dashed border-gray-200 text-center">
+                      <p className="text-xs text-gray-500 font-semibold">
+                        কোনো বাকি পেমেন্ট যোগ করা নেই
+                      </p>
                     </div>
                   )}
                 </div>
-              ) : (
-                <div className="p-3 rounded-2xl bg-gray-50 border border-dashed border-gray-200 text-center">
-                  <p className="text-xs text-gray-500 font-semibold">
-                    কোনো বাকি পেমেন্ট যোগ করা নেই
-                  </p>
-                </div>
               )}
-            </div>
-          )}
 
-          {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}
-          <div className="pt-2 border-t border-gray-100 space-y-1.5 animate-in fade-in">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-1 text-purple-950 font-extrabold text-[10px]">
-                <FileText className="w-3.5 h-3.5 text-purple-700" />
-                <span>Private Note</span>
-              </div>
-              <span className="text-[9px] font-black bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
-                🔒 কাস্টমার দেখবে না
-              </span>
-            </div>
-            <form onSubmit={handleSaveHelperNote} className="space-y-1.5">
-              <textarea
-                value={helperNoteInput}
-                onChange={(e) => setHelperNoteInput(e.target.value)}
-                placeholder="গোপন নোট লিখুন..."
-                className="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50/50 text-xs font-semibold text-gray-900 outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 h-16 resize-none"
-              />
-              <div className="flex items-center justify-between pt-0.5">
-                {noteSavedAlert ? (
-                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-200 animate-in fade-in">
-                    ✓ নোট সংরক্ষিত হয়েছে!
+              {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}
+              <div className="pt-2 border-t border-gray-100 space-y-1.5 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1 text-purple-950 font-extrabold text-[10px]">
+                    <FileText className="w-3.5 h-3.5 text-purple-700" />
+                    <span>Private Note</span>
+                  </div>
+                  <span className="text-[9px] font-black bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                    🔒 কাস্টমার দেখবে না
                   </span>
-                ) : (
-                  <span className="text-[9px] text-purple-700 font-medium"> </span>
-                )}
-                <button
-                  type="submit"
-                  className="px-2.5 py-1.5 bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] rounded-lg shadow-sm transition-all active:scale-95 flex items-center space-x-1"
-                >
-                  <FileText className="w-3 h-3" />
-                  <span>সেভ করুন</span>
-                </button>
+                </div>
+                <form onSubmit={handleSaveHelperNote} className="space-y-1.5">
+                  <textarea
+                    value={helperNoteInput}
+                    onChange={(e) => setHelperNoteInput(e.target.value)}
+                    placeholder="গোপন নোট লিখুন..."
+                    className="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50/50 text-xs font-semibold text-gray-900 outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 h-16 resize-none"
+                  />
+                  <div className="flex items-center justify-between pt-0.5">
+                    {noteSavedAlert ? (
+                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-200 animate-in fade-in">
+                        ✓ নোট সংরক্ষিত হয়েছে!
+                      </span>
+                    ) : (
+                      <span className="text-[9px] text-purple-700 font-medium"> </span>
+                    )}
+                    <button
+                      type="submit"
+                      className="px-2.5 py-1.5 bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] rounded-lg shadow-sm transition-all active:scale-95 flex items-center space-x-1"
+                    >
+                      <FileText className="w-3 h-3" />
+                      <span>সেভ করুন</span>
+                    </button>
+                  </div>
+                </form>
               </div>
-            </form>
-          </div>
             </>
           )}
         </div>
@@ -2120,11 +2645,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setReturnWhen('now')}
-                  className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                    returnWhen === 'now'
+                  className={`p-3 rounded-2xl border-2 text-left transition-all ${returnWhen === 'now'
                       ? 'border-indigo-600 bg-indigo-50'
                       : 'border-gray-200 bg-gray-50 hover:border-indigo-200'
-                  }`}
+                    }`}
                 >
                   <span className="text-sm">⚡</span>
                   <span className="text-xs font-extrabold text-gray-900 block mt-0.5">এখনই ফিরব</span>
@@ -2133,11 +2657,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setReturnWhen('schedule')}
-                  className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                    returnWhen === 'schedule'
+                  className={`p-3 rounded-2xl border-2 text-left transition-all ${returnWhen === 'schedule'
                       ? 'border-indigo-600 bg-indigo-50'
                       : 'border-gray-200 bg-gray-50 hover:border-indigo-200'
-                  }`}
+                    }`}
                 >
                   <span className="text-sm">📅</span>
                   <span className="text-xs font-extrabold text-gray-900 block mt-0.5">সময় নির্ধারণ</span>
@@ -2205,7 +2728,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <div className="p-4 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 space-y-3 shadow-sm animate-in fade-in duration-200">
                 <button
                   onClick={() => {
-                    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+                    if (!isUserAuthenticated(user)) {
                       openAuthModal();
                       return;
                     }
@@ -2230,12 +2753,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             )}
 
             {/* ACTIVE ACTIONS SECTION WITH BIDIRECTIONAL NAVIGATION */}
-            {['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status) && (
+            {(['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status) || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
               <div className="space-y-3">
                 {/* Main Action (Forward) */}
-                {order.status === 'ACCEPTED' && (
+                {(order.status === 'ACCEPTED' || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
                   <button
-                    onClick={() => handleUpdateStatus('PURCHASED_EXECUTED')}
+                    onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
                     className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
                   >
                     <PackageCheck className="w-5 h-5" />
@@ -2255,7 +2778,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                 {order.status === 'ON_THE_WAY' && (
                   <button
-                    onClick={() => handleUpdateStatus('ARRIVED')}
+                    onClick={() => handleUpdateStatusWithCheck('ARRIVED')}
                     className="w-full py-3.5 rounded-2xl bg-teal-600 hover:bg-teal-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-teal-600/25 transition-all flex items-center justify-center space-x-2"
                   >
                     <MapPin className="w-5 h-5" />
@@ -2356,6 +2879,72 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── HELPER EDIT ORDER ITEMS MODAL ── */}
+      {showHelperEditModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-emerald-100 animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
+                  <ShoppingBag className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-gray-900">Edit Items</h3>
+                  <p className="text-[11px] text-gray-500 font-medium">Update items or product list for this order</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowHelperEditModal(false)}
+                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-3">
+              {/* Items / Description */}
+              <div>
+                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-1.5">Items / Order Details *</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => { setEditDescription(e.target.value); setEditError(''); }}
+                  placeholder="প্রতি লাইনে বা কমা দিয়ে পণ্য লিখুন (যেমন: ১ কেজি আলু, ২ লিটার তেল)..."
+                  className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-36 placeholder-gray-400 font-medium leading-relaxed"
+                  autoFocus
+                />
+              </div>
+
+              {editError && (
+                <p className="text-[11px] text-red-600 font-bold bg-red-50 px-3 py-2 rounded-xl border border-red-100">
+                  {editError}
+                </p>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowHelperEditModal(false)}
+                className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                disabled={isSavingHelperEdit}
+                onClick={handleSaveHelperEdit}
+                className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white font-extrabold text-xs shadow-md shadow-emerald-600/25 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{isSavingHelperEdit ? 'Saving...' : 'Save Changes'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2518,7 +3107,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
-            
+
             <div className="flex items-center space-x-3 text-red-800">
               <div className="p-2.5 rounded-2xl bg-red-100 text-red-650 flex items-center justify-center">
                 <AlertOctagon className="w-6 h-6" />
@@ -2688,14 +3277,42 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         </div>
       )}
       {/* Address Edit Map Picker Modal */}
-      {activeMapPicker && (
+      {(activeMapPicker || editMapPickerType) && (
         <MapPickerModal
-          isOpen={activeMapPicker !== null}
-          onClose={() => setActiveMapPicker(null)}
-          title={activeMapPicker === 'pickup' ? 'পিকআপ ঠিকানা পরিবর্তন' : 'ডেলিভারি ঠিকানা পরিবর্তন'}
-          initialLocation={activeMapPicker === 'pickup' ? order.pickupLocation : order.deliveryLocation}
-          modalType={activeMapPicker}
-          onSelectLocation={(loc) => handleSaveEditedAddress(activeMapPicker, loc)}
+          isOpen={activeMapPicker !== null || editMapPickerType !== null}
+          onClose={() => {
+            setActiveMapPicker(null);
+            setEditMapPickerType(null);
+          }}
+          title={
+            (activeMapPicker || editMapPickerType) === 'pickup'
+              ? 'পিকআপ ঠিকানা পরিবর্তন'
+              : 'ডেলিভারি ঠিকানা পরিবর্তন'
+          }
+          initialLocation={
+            (activeMapPicker || editMapPickerType) === 'pickup'
+              ? (editMapPickerType ? (editPickupLat && editPickupLng ? { address: editPickup, lat: editPickupLat, lng: editPickupLng, addressId: editPickupAddressId } : order.pickupLocation) : order.pickupLocation)
+              : (editMapPickerType ? (editDeliveryLat && editDeliveryLng ? { address: editAddress, lat: editDeliveryLat, lng: editDeliveryLng, addressId: editDeliveryAddressId } : order.deliveryLocation) : order.deliveryLocation)
+          }
+          modalType={(activeMapPicker || editMapPickerType)!}
+          onSelectLocation={(loc) => {
+            if (editMapPickerType === 'pickup') {
+              setEditPickup(loc.address);
+              setEditPickupLat(loc.lat);
+              setEditPickupLng(loc.lng);
+              setEditPickupAddressId(loc.addressId);
+              setEditMapPickerType(null);
+            } else if (editMapPickerType === 'delivery') {
+              setEditAddress(loc.address);
+              setEditDeliveryLat(loc.lat);
+              setEditDeliveryLng(loc.lng);
+              setEditDeliveryAddressId(loc.addressId);
+              setEditMapPickerType(null);
+            } else if (activeMapPicker) {
+              handleSaveEditedAddress(activeMapPicker, loc);
+              setActiveMapPicker(null);
+            }
+          }}
         />
       )}
       {showMapModal && (
@@ -2713,9 +3330,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               return;
             }
             setShowMapModal(false);
-            setPlaceOrderShop(shop);
-            setOrderText('');
-            setOrderTextError('');
+            openPlaceShopOrder(shop);
           }}
         />
       )}
@@ -2723,7 +3338,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       {/* 1. Shop Order Request Modal */}
       {placeOrderShop && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
             <button
               type="button"
               onClick={() => setPlaceOrderShop(null)}
@@ -2772,7 +3387,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     rel="noopener noreferrer"
                     className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
                   >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
                     <span>WhatsApp</span>
                   </a>
                 </div>
@@ -2800,11 +3415,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       rel="noopener noreferrer"
                       className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
                     >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                    <span>WhatsApp</span>
-                  </a>
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                      <span>WhatsApp</span>
+                    </a>
+                  </div>
                 </div>
-              </div>
               )}
             </div>
 
@@ -2820,17 +3435,53 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               ) : null}
 
+              {/* Items List (Non-editable, tap/uncheck to exclude) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-gray-700 block">
+                    Items to Request ({shopOrderItems.filter((i) => i.isChecked).length}/{shopOrderItems.length}) *
+                  </label>
+                  <span className="text-[10px] text-gray-400 font-medium">Tap to exclude</span>
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                  {shopOrderItems.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => handleToggleShopOrderItem(item.id)}
+                      className={`flex items-center space-x-2.5 p-2.5 rounded-xl border text-xs cursor-pointer select-none transition-all ${
+                        item.isChecked
+                          ? 'bg-purple-50/80 border-purple-200 text-purple-950 font-bold'
+                          : 'bg-gray-50 border-gray-200 text-gray-400 line-through opacity-60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.isChecked}
+                        onChange={() => {}} // handled by parent onClick
+                        className="w-4 h-4 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                      <span className="flex-1 break-words">
+                        {item.name}
+                        {item.qty && Number(item.qty) > 1 ? ` ×${item.qty}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                  {shopOrderItems.length === 0 && (
+                    <p className="text-xs text-gray-400 italic p-2 bg-gray-50 rounded-xl text-center">
+                      কোনো আইটেম পাওয়া যায়নি।
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Optional instruction note */}
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Request Details / Note *</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Additional Instruction / Note (Optional)</label>
                 <textarea
-                  value={orderText}
-                  onChange={(e) => {
-                    setOrderText(e.target.value);
-                    if (e.target.value.trim()) setOrderTextError('');
-                  }}
-                  placeholder="যেমন: ১ কেজি আলু, ২ লিটার তেল ইত্যাদি..."
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs h-24 outline-none focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 text-gray-950 font-bold"
-                  required
+                  value={storeInstructionNote}
+                  onChange={(e) => setStoreInstructionNote(e.target.value)}
+                  placeholder="যেমন: দ্রুত রেডি রাখবেন, প্যাকেট আলাদা করবেন ইত্যাদি..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-purple-500 text-gray-900 font-medium resize-none"
                 />
               </div>
 
@@ -2887,10 +3538,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingOrder}
-                  className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:bg-gray-200"
+                  disabled={isSubmittingOrder || shopOrderItems.filter((i) => i.isChecked).length === 0}
+                  className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:bg-gray-200 disabled:opacity-50"
                 >
-                  {isSubmittingOrder ? 'সংরক্ষণ করা হচ্ছে...' : (placeOrderShop.canReceiveOrders === false ? 'Save Request' : 'send request')}
+                  {isSubmittingOrder ? 'সংরক্ষণ করা হচ্ছে...' : (placeOrderShop.canReceiveOrders === false ? 'Save Request' : 'Send Request')}
                 </button>
               </div>
             </form>
@@ -2905,12 +3556,20 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         const contactNum = isMyself
           ? (viewRequestDetails.sellerPhone || '')
           : (shop?.whatsapp || shop?.managerWhatsapp || '');
+        const totalItemsPrice = viewRequestItems
+          .filter((i) => i.isChecked)
+          .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+        const displayTotal = totalItemsPrice > 0 ? totalItemsPrice : (viewRequestDetails.price || 0);
+
         return (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
               <button
                 type="button"
-                onClick={() => setViewRequestDetails(null)}
+                onClick={() => {
+                  setViewRequestDetails(null);
+                  setViewRequestItems([]);
+                }}
                 className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -2928,16 +3587,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       {isMyself ? 'Direct Purchase' : (shop?.type || 'Store')}
                     </span>
                     {!isMyself && viewRequestDetails.status && (
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
-                        viewRequestDetails.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
-                        viewRequestDetails.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
-                        viewRequestDetails.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
-                        viewRequestDetails.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
-                        viewRequestDetails.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                        viewRequestDetails.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
-                        viewRequestDetails.status === 'CANCELED' || (viewRequestDetails.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
-                        'bg-gray-100 text-gray-700 border-gray-250'
-                      }`}>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${viewRequestDetails.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
+                          viewRequestDetails.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
+                            viewRequestDetails.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
+                              viewRequestDetails.status === 'READY' ? 'bg-teal-100 text-teal-800 border-teal-250' :
+                                viewRequestDetails.status === 'HANDOVER' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                                  viewRequestDetails.status === 'DELIVERED' ? 'bg-emerald-100 text-emerald-800 border-emerald-250' :
+                                    viewRequestDetails.status === 'CANCELED' || (viewRequestDetails.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
+                                      'bg-gray-100 text-gray-700 border-gray-250'
+                        }`}>
                         {viewRequestDetails.status === 'PREPARING' ? 'Processing' : viewRequestDetails.status}
                       </span>
                     )}
@@ -2951,76 +3609,149 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </p>
               )}
 
-              {/* Itemized pricing breakdown if provided by store */}
-              {viewRequestDetails.itemsWithPrice && viewRequestDetails.itemsWithPrice.length > 0 && (
-                <div className="bg-emerald-50/60 p-3 rounded-2xl border border-emerald-150 space-y-1.5">
-                  <span className="text-[10px] font-black uppercase text-emerald-900 tracking-wider block mb-1">
-                    Itemized Prices
+              {/* Separated Items List (Non-editable item names, check/uncheck + per-item price) */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider block">
+                    Items ({viewRequestItems.filter((i) => i.isChecked).length}/{viewRequestItems.length})
                   </span>
-                  {viewRequestDetails.itemsWithPrice.map((it, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-emerald-100/60 last:border-b-0">
-                      <span className="font-semibold text-gray-800">{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
-                      <span className="font-bold text-emerald-950 font-mono">৳{it.price ?? 0}</span>
+                  {!isDone && (
+                    <span className="text-[10px] text-gray-400 font-medium">Uncheck to remove</span>
+                  )}
+                </div>
+
+                <div className="space-y-2 max-h-52 overflow-y-auto pr-0.5">
+                  {viewRequestItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-2.5 rounded-xl border text-xs transition-all ${
+                        item.isChecked
+                          ? (isMyself ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold' : 'bg-purple-50/70 border-purple-200 text-purple-950 font-bold')
+                          : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          onClick={() => !isDone && handleToggleViewRequestItem(item.id)}
+                          className={`flex items-center space-x-2 flex-1 min-w-0 ${!isDone ? 'cursor-pointer select-none' : 'cursor-default'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.isChecked}
+                            disabled={isDone}
+                            onChange={() => {}} // handled by parent div onClick
+                            className={`w-4 h-4 rounded shrink-0 ${isMyself ? 'accent-amber-600' : 'accent-purple-600'} ${!isDone ? 'cursor-pointer' : 'cursor-default'}`}
+                          />
+                          <span className={`break-words ${item.isChecked ? '' : 'line-through'}`}>
+                            {item.name}
+                            {item.qty && Number(item.qty) > 1 ? ` ×${item.qty}` : (item.qty && isNaN(Number(item.qty)) ? ` (${item.qty})` : '')}
+                          </span>
+                        </div>
+                        {item.isChecked && (
+                          isMyself ? (
+                            <div className="flex items-center space-x-1 shrink-0">
+                              <span className="text-gray-500 font-bold">৳</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                disabled={isDone}
+                                value={item.price !== undefined ? String(item.price) : ''}
+                                onChange={(e) => handleViewRequestItemPriceChange(item.id, e.target.value)}
+                                placeholder="মূল্য"
+                                className="w-20 p-1.5 rounded-lg border bg-white text-xs font-bold text-gray-900 outline-none border-amber-300 focus:border-amber-500 disabled:bg-gray-100"
+                              />
+                            </div>
+                          ) : (
+                            <div className="flex items-center shrink-0">
+                              {item.price !== undefined && item.price !== null && Number(item.price) > 0 ? (
+                                <span className="font-extrabold text-purple-950 font-mono bg-purple-100/90 border border-purple-200/80 px-2 py-1 rounded-lg text-xs">
+                                  ৳{Number(item.price).toFixed(2).replace(/\.00$/, '')}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 border border-amber-200/80 px-2 py-0.5 rounded-md">
+                                  স্টোর মূল্য দেবে
+                                </span>
+                              )}
+                            </div>
+                          )
+                        )}
+                      </div>
                     </div>
                   ))}
-                  <div className="flex items-center justify-between pt-1 border-t border-emerald-200 font-black text-xs text-emerald-950">
-                    <span>Total Product Cost:</span>
-                    <span className="font-mono">৳{viewRequestDetails.price ?? 0}</span>
+                  {viewRequestItems.length === 0 && (
+                    <p className="text-xs text-gray-400 italic p-2 bg-gray-50 rounded-xl text-center">
+                      কোনো আইটেম পাওয়া যায়নি।
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Helper instruction note if present */}
+              {(() => {
+                const helperNoteText = viewRequestDetails.helperNote || (() => {
+                  const m = (viewRequestDetails.requestText || '').match(/(?:^|\n|,)\s*(?:নোট|Note|নোটঃ|Note:)\s*[:：]?\s*([\s\S]+)$/i);
+                  return m ? m[1].trim() : '';
+                })();
+                if (!helperNoteText) return null;
+                return (
+                  <div className="bg-amber-50 rounded-2xl border border-amber-200/80 p-3 space-y-1">
+                    <span className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">Instruction Note (নোট):</span>
+                    <p className="text-xs text-amber-950 font-medium whitespace-pre-wrap">{helperNoteText}</p>
+                  </div>
+                );
+              })()}
+
+              {/* Total Product Cost Summary Banner */}
+              {isMyself ? (
+                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200/80 flex items-center justify-between">
+                  <span className="text-xs font-black text-amber-900 uppercase tracking-wider">Total Product Cost:</span>
+                  <span className="font-mono font-black text-sm text-amber-950">৳{Number(displayTotal).toFixed(2).replace(/\.00$/, '')}</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
+                    <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
+                    <span className="font-mono font-black text-sm text-purple-950">
+                      {viewRequestDetails.price !== undefined && viewRequestDetails.price !== null && Number(viewRequestDetails.price) > 0
+                        ? `৳${Number(viewRequestDetails.price).toFixed(2).replace(/\.00$/, '')}`
+                        : '৳0 (স্টোর নির্ধারণ করবে)'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-purple-50/80 border border-purple-100 text-[11px] text-purple-900 font-medium flex items-start gap-1.5">
+                    <span className="text-purple-600 font-bold shrink-0">ℹ️</span>
+                    <span>স্টোর রিকোয়েস্টের পণ্যের মূল্য শুধুমাত্র স্টোর অথবা এডমিন নির্ধারণ করতে পারবেন (হেলপার প্রাইস পরিবর্তন করতে পারবে না)।</span>
                   </div>
                 </div>
               )}
 
-              {/* Edit inputs */}
-              <div className="space-y-3 pt-1">
-                <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Request Details</label>
-                  <textarea
-                    value={viewRequestDetails.requestText}
-                    disabled={isDone}
-                    onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, requestText: e.target.value })}
-                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50 font-bold"
-                    rows={2}
-                  />
+              {/* Seller details for Myself */}
+              {isMyself && (
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller / Shop Name</label>
+                    <input
+                      type="text"
+                      value={viewRequestDetails.sellerName || ''}
+                      disabled={isDone}
+                      onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
+                      placeholder="e.g. Bhai Bhai Store"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller Phone Number</label>
+                    <input
+                      type="tel"
+                      value={viewRequestDetails.sellerPhone || ''}
+                      disabled={isDone}
+                      onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerPhone: e.target.value })}
+                      placeholder="01XXXXXXXXX"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Product Cost (৳)</label>
-                  <input
-                    type="number"
-                    value={viewRequestDetails.price !== undefined ? String(viewRequestDetails.price) : ''}
-                    disabled={isDone}
-                    onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, price: parseFloat(e.target.value) || 0 })}
-                    placeholder="e.g. 250"
-                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
-                  />
-                </div>
-
-                {isMyself && (
-                  <>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller / Shop Name</label>
-                      <input
-                        type="text"
-                        value={viewRequestDetails.sellerName || ''}
-                        disabled={isDone}
-                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
-                        placeholder="e.g. Bhai Bhai Store"
-                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller Phone Number</label>
-                      <input
-                        type="tel"
-                        value={viewRequestDetails.sellerPhone || ''}
-                        disabled={isDone}
-                        onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerPhone: e.target.value })}
-                        placeholder="01XXXXXXXXX"
-                        className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
+              )}
 
               {contactNum && (
                 <div className="flex items-center space-x-2 pt-1">
@@ -3037,7 +3768,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     rel="noopener noreferrer"
                     className="flex-1 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
                   >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
                     <span>WhatsApp</span>
                   </a>
                 </div>
@@ -3050,8 +3781,51 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     onClick={async () => {
                       const confirmDel = await showConfirm("Confirm removal", "Are you sure you want to remove this request?");
                       if (confirmDel) {
+                        const itemNames = (viewRequestItems.length > 0 ? viewRequestItems : (viewRequestDetails.itemsWithPrice || []))
+                          .map((i) => i.name.toLowerCase().trim())
+                          .concat(
+                            viewRequestDetails.requestText
+                              .split(/,|\r?\n/)
+                              .map((p) => p.trim().toLowerCase())
+                              .filter((p) => p && !p.startsWith('নোট:'))
+                          );
+
+                        // Uncheck in order items
+                        fallbackStore.updateOrder(order.id, (o) => ({
+                          ...o,
+                          items: (o.items || []).map((it) => {
+                            const itName = it.name.toLowerCase().trim();
+                            const isMatched = itemNames.some((rn) => itName.includes(rn) || rn.includes(itName));
+                            return isMatched ? { ...it, purchased: false } : it;
+                          }),
+                        }));
+
+                        // Reset local sub-item and note states
+                        setCheckedSubItems((prev) => {
+                          const updated = { ...prev };
+                          parsedItems.forEach((pi) => {
+                            const piName = pi.name.toLowerCase().trim();
+                            if (itemNames.some((rn) => piName.includes(rn) || rn.includes(piName))) {
+                              delete updated[pi.id];
+                            }
+                          });
+                          return updated;
+                        });
+
+                        setCheckedNoteItems((prev) => {
+                          const updated = { ...prev };
+                          parsedNoteItems.forEach((note, idx) => {
+                            const nName = note.toLowerCase().trim();
+                            if (itemNames.some((rn) => nName.includes(rn) || rn.includes(nName))) {
+                              updated[idx] = false;
+                            }
+                          });
+                          return updated;
+                        });
+
                         await fallbackStore.deleteShopOrder(viewRequestDetails.id);
                         setViewRequestDetails(null);
+                        setViewRequestItems([]);
                       }
                     }}
                     className="flex-1 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-705 font-extrabold text-xs transition-colors"
@@ -3061,15 +3835,111 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      if (!viewRequestDetails.requestText.trim()) return;
-                      await fallbackStore.updateShopOrder(viewRequestDetails.id, (so) => ({
-                        ...so,
-                        requestText: viewRequestDetails.requestText.trim(),
-                        price: viewRequestDetails.price,
-                        sellerName: viewRequestDetails.sellerName?.trim() || undefined,
-                        sellerPhone: viewRequestDetails.sellerPhone?.trim() || undefined,
-                      }), 'helper');
+                      const checkedItems = viewRequestItems.filter((i) => i.isChecked);
+                      if (checkedItems.length === 0) {
+                        showAlert('পণ্য নির্বাচন করুন', 'অনুগ্রহ করে অন্তত একটি আইটেম চেক রাখুন অথবা অর্ডারটি রিমুভ করুন।', 'warning');
+                        return;
+                      }
+
+                      const itemsListText = checkedItems
+                        .map((i) => i.name)
+                        .join(', ');
+
+                      if (isMyself) {
+                        const calculatedTotal = checkedItems.reduce(
+                          (sum, i) => sum + (parseFloat(i.price || '0') || 0),
+                          0
+                        );
+
+                        const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => ({
+                          name: i.name,
+                          price: parseFloat(i.price || '0') || 0,
+                        }));
+
+                        await fallbackStore.updateShopOrder(
+                          viewRequestDetails.id,
+                          (so) => ({
+                            ...so,
+                            requestText: itemsListText,
+                            price: calculatedTotal > 0 ? calculatedTotal : viewRequestDetails.price,
+                            itemsWithPrice: updatedItemsWithPrice,
+                            sellerName: viewRequestDetails.sellerName?.trim() || undefined,
+                            sellerPhone: viewRequestDetails.sellerPhone?.trim() || undefined,
+                          }),
+                          'helper'
+                        );
+                      } else {
+                        // Store Request: Helper cannot edit price. Preserve store/admin set prices.
+                        const existingPricesMap: Record<string, number | undefined> = {};
+                        (viewRequestDetails.itemsWithPrice || []).forEach((ip) => {
+                          existingPricesMap[ip.name.toLowerCase().trim()] = ip.price;
+                        });
+
+                        const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => {
+                          const existingPrice = existingPricesMap[i.name.toLowerCase().trim()];
+                          return {
+                            name: i.name,
+                            ...(existingPrice !== undefined ? { price: existingPrice } : {}),
+                          };
+                        });
+
+                        let newTotal = viewRequestDetails.price;
+                        const hasSomePrices = updatedItemsWithPrice.some((it) => it.price !== undefined && it.price > 0);
+                        if (hasSomePrices) {
+                          newTotal = updatedItemsWithPrice.reduce((sum, it) => sum + (it.price || 0), 0);
+                        }
+
+                        await fallbackStore.updateShopOrder(
+                          viewRequestDetails.id,
+                          (so) => ({
+                            ...so,
+                            requestText: itemsListText,
+                            price: newTotal,
+                            itemsWithPrice: updatedItemsWithPrice.length > 0 ? updatedItemsWithPrice : so.itemsWithPrice,
+                          }),
+                          'helper'
+                        );
+                      }
+
+                      // If some items were unchecked in this modal, uncheck them in parent order
+                      const uncheckedItemNames = viewRequestItems
+                        .filter((i) => !i.isChecked)
+                        .map((i) => i.name.toLowerCase().trim());
+                      if (uncheckedItemNames.length > 0) {
+                        fallbackStore.updateOrder(order.id, (o) => ({
+                          ...o,
+                          items: (o.items || []).map((it) => {
+                            const itName = it.name.toLowerCase().trim();
+                            const isUnchecked = uncheckedItemNames.some((rn) => itName.includes(rn) || rn.includes(itName));
+                            return isUnchecked ? { ...it, purchased: false } : it;
+                          }),
+                        }));
+
+                        setCheckedSubItems((prev) => {
+                          const updated = { ...prev };
+                          parsedItems.forEach((pi) => {
+                            const piName = pi.name.toLowerCase().trim();
+                            if (uncheckedItemNames.some((rn) => piName.includes(rn) || rn.includes(piName))) {
+                              delete updated[pi.id];
+                            }
+                          });
+                          return updated;
+                        });
+
+                        setCheckedNoteItems((prev) => {
+                          const updated = { ...prev };
+                          parsedNoteItems.forEach((note, idx) => {
+                            const nName = note.toLowerCase().trim();
+                            if (uncheckedItemNames.some((rn) => nName.includes(rn) || rn.includes(nName))) {
+                              updated[idx] = false;
+                            }
+                          });
+                          return updated;
+                        });
+                      }
+
                       setViewRequestDetails(null);
+                      setViewRequestItems([]);
                     }}
                     className="flex-1 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs shadow-sm transition-all"
                   >
@@ -3106,7 +3976,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               onSubmit={async (e) => {
                 e.preventDefault();
                 if (isSubmittingCustomCost) return;
-                if (!customProductName.trim() || !customProductCost.trim()) return;
+
+                const checkedItems = customCostItems.filter((i) => i.isChecked);
+                if (checkedItems.length === 0) {
+                  showAlert('পণ্য নির্বাচন করুন', 'অনুগ্রহ করে অন্তত একটি আইটেম চেক করুন।', 'warning');
+                  return;
+                }
+
+                const hasInvalidPrice = checkedItems.some(
+                  (i) => !i.price || isNaN(parseFloat(i.price)) || parseFloat(i.price) <= 0
+                );
+                if (hasInvalidPrice) {
+                  showAlert('মূল্য আবশ্যক', 'নির্বাচিত প্রতিটি পণ্যের জন্য সঠিক মূল্য (৳) লিখুন।', 'warning');
+                  return;
+                }
+
                 if (!customSellerName.trim()) {
                   showAlert('Seller Name Required', 'Please enter the seller or store name.', 'warning');
                   return;
@@ -3117,7 +4001,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 }
                 setIsSubmittingCustomCost(true);
                 try {
-                  const cost = parseFloat(customProductCost) || 0;
+                  const itemsListText = checkedItems
+                    .map((i) => i.name)
+                    .join(', ');
+
                   const newShopOrder: ShopOrder = {
                     id: `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
                     parentOrderId: order.id,
@@ -3125,19 +4012,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     shopName: 'MySelf',
                     helperId: order.helperId || '',
                     helperName: order.helperName || 'Helper',
-                    requestText: customProductName.trim(),
+                    requestText: itemsListText,
                     sellerName: customSellerName.trim(),
                     sellerPhone: customSellerPhone.trim(),
                     status: 'ACCEPTED',
-                    price: cost,
+                    price: totalCustomCost,
+                    itemsWithPrice: checkedItems.map((i) => ({
+                      name: i.name,
+                      price: parseFloat(i.price || '0') || 0,
+                    })),
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
                     statusHistory: [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
                   };
                   await fallbackStore.addShopOrder(newShopOrder);
+
+                  // Ensure all checked items remain permanently checked/purchased in order
+                  const relatedItemIds = checkedItems.filter((i) => !i.isNote).map((i) => i.originalId);
+                  if (relatedItemIds.length > 0) {
+                    fallbackStore.updateOrder(order.id, (o) => ({
+                      ...o,
+                      items: (o.items || []).map((it) => (relatedItemIds.includes(it.id) ? { ...it, purchased: true } : it)),
+                    }));
+                  }
+
                   setShowCustomCostModal(false);
-                  setCustomProductName('');
-                  setCustomProductCost('');
+                  setCustomCostItems([]);
                   setCustomSellerName('');
                   setCustomSellerPhone('');
                 } finally {
@@ -3146,31 +4046,74 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               }}
               className="space-y-3"
             >
-              <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Name *</label>
-                <input
-                  type="text"
-                  value={customProductName}
-                  onChange={(e) => setCustomProductName(e.target.value)}
-                  placeholder="e.g. 1 kg Onion"
-                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
-                  required
-                />
+              {/* Items with Per-Item Price Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-gray-700 block">
+                    Selected Items ({customCostItems.filter((i) => i.isChecked).length}/{customCostItems.length}) *
+                  </label>
+                  <span className="text-[10px] text-gray-400 font-medium">Uncheck to remove</span>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+                  {customCostItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-2.5 rounded-xl border text-xs transition-all ${
+                        item.isChecked
+                          ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold'
+                          : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          onClick={() => handleToggleCustomCostItem(item.id)}
+                          className="flex items-center space-x-2 cursor-pointer select-none flex-1 min-w-0"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.isChecked}
+                            onChange={() => {}} // Handled by parent div onClick
+                            className="w-4 h-4 accent-amber-600 rounded cursor-pointer shrink-0"
+                          />
+                          <span className={`break-words ${item.isChecked ? '' : 'line-through'}`}>
+                            {item.name}
+                            {item.qty && Number(item.qty) > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                        </div>
+                        {item.isChecked && (
+                          <div className="flex items-center space-x-1 shrink-0">
+                            <span className="text-gray-500 font-bold">৳</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.price || ''}
+                              onChange={(e) => handleCustomItemPriceChange(item.id, e.target.value)}
+                              placeholder="মূল্য"
+                              required
+                              className="w-20 p-1.5 rounded-lg border border-amber-300 bg-white text-xs font-bold text-gray-900 outline-none focus:border-amber-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {customCostItems.length === 0 && (
+                    <p className="text-xs text-gray-400 italic p-2 bg-gray-50 rounded-xl text-center">
+                      কোনো আইটেম পাওয়া যায়নি।
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost (৳) *</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={customProductCost}
-                  onChange={(e) => setCustomProductCost(e.target.value)}
-                  placeholder="e.g. 120"
-                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
-                  required
-                />
+
+              {/* Total Cost Display */}
+              <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
+                <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
+                <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
               </div>
+
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Seller / Shop Name *</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Seller / Shop Name *</label>
                 <input
                   type="text"
                   value={customSellerName}
@@ -3181,7 +4124,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-755 block mb-1">Seller Phone Number *</label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Seller Phone Number *</label>
                 <input
                   type="tel"
                   value={customSellerPhone}
@@ -3202,8 +4145,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingCustomCost}
-                  className="flex-1 py-3 rounded-2xl bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center justify-center space-x-1"
+                  disabled={isSubmittingCustomCost || customCostItems.filter((i) => i.isChecked).length === 0}
+                  className="flex-1 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center justify-center space-x-1"
                 >
                   {isSubmittingCustomCost ? <span>Saving...</span> : <span>Save Cost</span>}
                 </button>

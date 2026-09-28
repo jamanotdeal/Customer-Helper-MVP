@@ -1172,18 +1172,16 @@ class FallbackStore {
         onSnapshot(
           collection(db, 'rewardPrizes'),
           (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(change.doc.id)) {
-                deleteDoc(doc(db, 'rewardPrizes', change.doc.id)).catch(() => { });
-                this.rewardPrizes.delete(change.doc.id);
+            const prizeMap = new Map<string, RewardPrize>();
+            snapshot.docs.forEach((docSnap) => {
+              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(docSnap.id)) {
+                deleteDoc(doc(db, 'rewardPrizes', docSnap.id)).catch(() => { });
                 return;
               }
-              if (change.type === 'removed') {
-                this.rewardPrizes.delete(change.doc.id);
-              } else {
-                this.rewardPrizes.set(change.doc.id, change.doc.data() as RewardPrize);
-              }
+              prizeMap.set(docSnap.id, docSnap.data() as RewardPrize);
             });
+            this.rewardPrizes = prizeMap;
+            this.saveLocalStore();
             this.notify();
           },
           (err) => console.warn('[Firestore] Customer rewardPrizes sync note:', err)
@@ -1570,16 +1568,29 @@ class FallbackStore {
     snap.docs.forEach((d) => { const c = d.data() as AdminCustomModalConfig; this.customModals.set(c.id, c); });
   }
 
+  public async fetchRewardPrizes(): Promise<RewardPrize[]> {
+    try {
+      const snap = await getDocs(collection(db, 'rewardPrizes'));
+      const prizeMap = new Map<string, RewardPrize>();
+      snap.docs.forEach((d) => {
+        if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
+          deleteDoc(doc(db, 'rewardPrizes', d.id)).catch(() => { });
+          return;
+        }
+        prizeMap.set(d.id, d.data() as RewardPrize);
+      });
+      this.rewardPrizes = prizeMap;
+      this.saveLocalStore();
+      this.notify();
+      return Array.from(prizeMap.values());
+    } catch (e: any) {
+      console.warn('[Firestore] fetchRewardPrizes note:', e?.message || e);
+      return Array.from(this.rewardPrizes.values());
+    }
+  }
+
   private async _fetchAdminRewardPrizes() {
-    const snap = await getDocs(collection(db, 'rewardPrizes'));
-    snap.docs.forEach((d) => {
-      if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
-        deleteDoc(doc(db, 'rewardPrizes', d.id)).catch(() => { });
-        this.rewardPrizes.delete(d.id);
-        return;
-      }
-      this.rewardPrizes.set(d.id, d.data() as RewardPrize);
-    });
+    await this.fetchRewardPrizes();
   }
 
   private async _fetchAdminShops() {
@@ -1767,12 +1778,87 @@ class FallbackStore {
   }
 
   public async saveUser(user: UserProfile) {
-    this.users.set(user.uid, user);
+    const existing = this.users.get(user.uid);
+    const mergedUser: UserProfile = {
+      ...(existing || {}),
+      ...user,
+      coins: user.coins !== undefined ? user.coins : existing?.coins,
+      totalEarnedCoins: user.totalEarnedCoins !== undefined ? user.totalEarnedCoins : existing?.totalEarnedCoins,
+    };
+    this.users.set(user.uid, mergedUser);
+    this.saveLocalStore();
     this.notify();
     try {
       await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] saveUser note (stored locally):', e?.message || e);
+    }
+
+    // If user is a helper or has an application, sync application legalName & whatsapp and orders
+    const helperApp = Array.from(this.helperApplications.values()).find((a) => a.userId === user.uid);
+    if (helperApp) {
+      let appChanged = false;
+      const updatedApp = { ...helperApp };
+      if (mergedUser.displayName && mergedUser.displayName !== '?' && helperApp.legalName !== mergedUser.displayName) {
+        updatedApp.legalName = mergedUser.displayName;
+        appChanged = true;
+      }
+      const newPhone = mergedUser.alternativePhone || mergedUser.phoneNumber;
+      if (newPhone && helperApp.whatsapp !== newPhone) {
+        updatedApp.whatsapp = newPhone;
+        appChanged = true;
+      }
+      if (appChanged) {
+        this.helperApplications.set(helperApp.id, updatedApp);
+        try {
+          await setDoc(doc(db, 'helperApplications', helperApp.id), cleanForFirestore(updatedApp), { merge: true });
+        } catch (_) {}
+      }
+    }
+
+    if (mergedUser.isHelper || helperApp) {
+      const helperName = mergedUser.displayName;
+      const helperPhone = mergedUser.alternativePhone || mergedUser.phoneNumber;
+      if (helperName || helperPhone) {
+        this.syncHelperDataAcrossOrders(mergedUser.uid, helperName, helperPhone);
+      }
+    }
+  }
+
+  public async syncHelperDataAcrossOrders(helperId: string, newName?: string, newPhone?: string) {
+    if (!helperId) return;
+    const ordersToUpdate: Order[] = [];
+    this.orders.forEach((o) => {
+      if (o.helperId === helperId) {
+        let changed = false;
+        const updated = { ...o };
+        if (newName && updated.helperName !== newName) {
+          updated.helperName = newName;
+          changed = true;
+        }
+        if (newPhone && updated.helperPhone !== newPhone) {
+          updated.helperPhone = newPhone;
+          changed = true;
+        }
+        if (changed) {
+          this.orders.set(o.id, updated);
+          ordersToUpdate.push(updated);
+        }
+      }
+    });
+
+    if (ordersToUpdate.length > 0) {
+      this.saveLocalStore();
+      this.notify();
+      try {
+        await Promise.all(
+          ordersToUpdate.slice(0, 50).map((ord) =>
+            setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true })
+          )
+        );
+      } catch (err) {
+        console.warn('[Firestore] syncHelperDataAcrossOrders note:', err);
+      }
     }
   }
 
@@ -1933,7 +2019,18 @@ class FallbackStore {
   }
 
   public async updateOrder(orderId: string, updater: (order: Order) => Order) {
-    const existing = this.orders.get(orderId);
+    let existing = this.orders.get(orderId);
+    if (!existing) {
+      try {
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (snap.exists()) {
+          existing = this.resolveOrderLocations(snap.data() as Order);
+          this.orders.set(orderId, existing);
+        }
+      } catch (e: any) {
+        console.warn('[Firestore] updateOrder fetch fallback error:', e?.message || e);
+      }
+    }
     if (!existing) return;
 
     const previousStatus = existing.status;
@@ -3708,25 +3805,39 @@ class FallbackStore {
     const updated = { ...existing, ...updatedFields };
     this.helperApplications.set(appId, updated);
 
+    const user = this.users.get(updated.userId);
     if (updated.status === 'APPROVED' && existing.status !== 'APPROVED') {
-      const user = this.users.get(updated.userId);
       if (user) {
         const isDedicated = updated.applicationType === 'dedicated' || !updated.applicationType;
         const updatedUser: UserProfile = {
           ...user,
+          displayName: updated.legalName ? updated.legalName.trim() : user.displayName,
           isHelper: true,
           helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
-          alternativePhone: updated.whatsapp || user.alternativePhone,
+          alternativePhone: updated.whatsapp ? updated.whatsapp.trim() : user.alternativePhone,
         };
         this.users.set(updated.userId, updatedUser);
         await this.saveUser(updatedUser);
       }
     } else if (updated.status !== 'APPROVED' && existing.status === 'APPROVED') {
-      const user = this.users.get(updated.userId);
       if (user) {
         const updatedUser = {
           ...user,
+          displayName: updated.legalName ? updated.legalName.trim() : user.displayName,
           isHelper: false,
+          alternativePhone: updated.whatsapp ? updated.whatsapp.trim() : user.alternativePhone,
+        };
+        this.users.set(updated.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    } else if (user) {
+      const needsNameUpdate = updatedFields.legalName && updatedFields.legalName.trim() !== user.displayName;
+      const needsPhoneUpdate = updatedFields.whatsapp && updatedFields.whatsapp.trim() !== user.alternativePhone;
+      if (needsNameUpdate || needsPhoneUpdate) {
+        const updatedUser: UserProfile = {
+          ...user,
+          displayName: updatedFields.legalName ? updatedFields.legalName.trim() : user.displayName,
+          alternativePhone: updatedFields.whatsapp ? updatedFields.whatsapp.trim() : user.alternativePhone,
         };
         this.users.set(updated.userId, updatedUser);
         await this.saveUser(updatedUser);
@@ -4136,6 +4247,7 @@ class FallbackStore {
 
   public async saveRewardPrize(prize: RewardPrize): Promise<void> {
     this.rewardPrizes.set(prize.id, prize);
+    this.saveLocalStore();
     this.notify();
     try {
       await setDoc(doc(db, 'rewardPrizes', prize.id), cleanForFirestore(prize), { merge: true });
@@ -4146,6 +4258,7 @@ class FallbackStore {
 
   public async deleteRewardPrize(prizeId: string): Promise<void> {
     this.rewardPrizes.delete(prizeId);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'rewardPrizes', prizeId));
@@ -4249,10 +4362,11 @@ class FallbackStore {
   public async reconcileCustomerCoins(userId: string) {
     if (!userId) return;
     let user = this.users.get(userId);
-    if (!user) {
-      user = (await this.fetchUserFromFirestore(userId)) || undefined;
-      if (!user) return;
+    if (!user || typeof user.coins !== 'number') {
+      const fetched = await this.fetchUserFromFirestore(userId);
+      if (fetched) user = fetched;
     }
+    if (!user) return;
 
     const customerOrders = Array.from(this.orders.values()).filter(
       (o) => o.customerId === userId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
@@ -4280,45 +4394,15 @@ class FallbackStore {
       }
     });
 
-    const needsCoinsInit = typeof user.coins !== 'number';
-    const needsLifetimeInit = typeof user.totalEarnedCoins !== 'number';
-
-    if (newlyCreditedCoins === 0 && !needsCoinsInit && !needsLifetimeInit) {
+    if (newlyCreditedCoins === 0) {
       return;
     }
 
-    let updatedCoins = typeof user.coins === 'number' ? user.coins + newlyCreditedCoins : 0;
-    let updatedLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins + newlyCreditedCoins : updatedCoins;
+    const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+    const currentLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins : currentCoins;
 
-    if (needsCoinsInit || needsLifetimeInit) {
-      let deliveredEarnedCoins = 0;
-      customerOrders.forEach((o) => {
-        const c = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
-        deliveredEarnedCoins += c;
-      });
-
-      const userClaims = Array.from(this.rewardClaims.values()).filter(
-        (c) => c.userId === userId && c.status !== 'REJECTED'
-      );
-      let spentOnClaims = 0;
-      userClaims.forEach((c) => {
-        spentOnClaims += c.requiredCoins || 0;
-      });
-
-      const ordersWithRedeemedCoins = Array.from(this.orders.values()).filter(
-        (o) => o.customerId === userId && (o.coinsRedeemedForDelivery || 0) > 0 && (o.status === 'DELIVERED' || o.coinsDeductedForDelivery)
-      );
-      let spentOnFreeDelivery = 0;
-      ordersWithRedeemedCoins.forEach((o) => {
-        spentOnFreeDelivery += o.coinsRedeemedForDelivery || 0;
-      });
-
-      const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
-      const expectedLifetime = Math.max(0, deliveredEarnedCoins);
-
-      if (needsCoinsInit) updatedCoins = expectedMinCoins;
-      if (needsLifetimeInit) updatedLifetime = Math.max(updatedCoins, expectedLifetime);
-    }
+    const updatedCoins = currentCoins + newlyCreditedCoins;
+    const updatedLifetime = currentLifetime + newlyCreditedCoins;
 
     const updatedUser: UserProfile = {
       ...user,
@@ -4332,8 +4416,8 @@ class FallbackStore {
 
     try {
       const updatePayload: any = {
-        coins: updatedCoins,
-        totalEarnedCoins: updatedLifetime,
+        coins: increment(newlyCreditedCoins),
+        totalEarnedCoins: increment(newlyCreditedCoins),
       };
       if (newlyCreditedOrderIds.length > 0) {
         updatePayload.creditedOrderIds = arrayUnion(...newlyCreditedOrderIds);
@@ -4806,8 +4890,11 @@ class FallbackStore {
 
   public resolveOrderLocations(order: Order): Order {
     if (!order) return order;
+    // Self-healing: If an order has a helper assigned (helperId) but status is still PENDING, ensure it reflects ACCEPTED
+    const effectiveStatus = (order.helperId && order.status === 'PENDING') ? 'ACCEPTED' : order.status;
     return {
       ...order,
+      status: effectiveStatus,
       deliveryLocation: order.deliveryLocation ? this.resolveLocation(order.deliveryLocation)! : order.deliveryLocation,
       pickupLocation: order.pickupLocation ? this.resolveLocation(order.pickupLocation) : order.pickupLocation,
     };

@@ -1539,7 +1539,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                             <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 text-xs space-y-1">
                               {so.itemsWithPrice.map((it, idx) => (
                                 <div key={idx} className="flex items-center justify-between text-gray-700">
-                                  <span>{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
+                                  <span>{it.name}</span>
                                   <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
                                 </div>
                               ))}

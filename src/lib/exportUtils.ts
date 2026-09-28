@@ -412,7 +412,7 @@ function shopOrdersToRows(shopOrders: ShopOrder[]): (string | number)[][] {
     so.shopName || '',
     so.helperName || '',
     so.itemsWithPrice && so.itemsWithPrice.length > 0
-      ? so.itemsWithPrice.map((it) => `${it.name}${it.unit ? ` (${it.unit})` : ''}: ৳${it.price ?? 0}`).join('; ')
+      ? so.itemsWithPrice.map((it) => `${it.name}: ৳${it.price ?? 0}`).join('; ')
       : (so.requestText || ''),
     so.price !== undefined && so.price !== null ? so.price : 0,
     so.sellerName || '',

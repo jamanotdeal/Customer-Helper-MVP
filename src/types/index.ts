@@ -571,6 +571,7 @@ export interface ShopOrder {
   helperId: string;
   helperName: string;        // Store sees this as "customer" name
   requestText: string;       // Helper's typed order/request
+  helperNote?: string;       // Special instruction/note sent by helper
   itemsWithPrice?: ShopOrderItemPrice[]; // Divided items with their individual prices set by store
   status: ShopOrderStatus;
   price?: number;            // Set by store

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order, ServerAddress } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore, saveCustomerPickupAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
@@ -308,6 +308,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return () => unsub();
   }, [deliveryAddressId, deliveryAddress, deliveryLat, deliveryLng, pickupAddressId, pickupNote, pickupLat, pickupLng, user?.uid]);
 
+  const pendingExpandAfterLogin = useRef(false);
+
+  useEffect(() => {
+    if (isUserAuthenticated(user) && pendingExpandAfterLogin.current) {
+      pendingExpandAfterLogin.current = false;
+      setIsExpanded(true);
+    }
+  }, [user]);
+
   // Rotate placeholder every 2.8 s
   useEffect(() => {
     if (placeholders.length <= 1) return;
@@ -322,7 +331,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   // Handle focus / click on main input (Guard unauthenticated users & blocked users)
   const handleInputInteract = () => {
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
+      pendingExpandAfterLogin.current = true;
       openAuthModal();
       return;
     }
@@ -336,7 +346,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
       openAuthModal();
       return;
     }
@@ -810,7 +820,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                   return (
                     <div
                       onClick={() => {
-                        if (!user) {
+                        if (!isUserAuthenticated(user)) {
                           openAuthModal();
                           return;
                         }

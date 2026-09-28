@@ -38,6 +38,7 @@ import {
   Timer,
   AlertCircle,
   Award,
+  Store,
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
@@ -228,6 +229,15 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     return false;
   };
 
+  // Check if an order was placed to a partner store / shop
+  const isOrderPlacedToStore = (ord: Order): boolean => {
+    const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id);
+    if (shopOrders && shopOrders.length > 0) return true;
+    if (ord.selectedShopIds && ord.selectedShopIds.length > 0) return true;
+    if (ord.isStoreOrder) return true;
+    return false;
+  };
+
   // Helper order duration calculators
   const getOrderAcceptanceSecs = (ord: Order): number | null => {
     const createdMs = new Date(ord.createdAt).getTime();
@@ -384,6 +394,29 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       ? Math.round((positiveCount / totalReviews) * 100)
       : 100;
 
+    // 5. Store Orders Placed to Partner Stores
+    let storeOrdersCount = 0;
+    let storeOrdersGMV = 0;
+    dateFilteredOrders.forEach((o) => {
+      if (isOrderPlacedToStore(o)) {
+        storeOrdersCount++;
+        const shopOrders = fallbackStore.getShopOrdersForOrder(o.id);
+        const storeSpent = shopOrders && shopOrders.length > 0
+          ? shopOrders.filter((so) => so.status !== 'CANCELED').reduce((s, so) => s + (so.price || 0), 0)
+          : (o.productCost || 0);
+        storeOrdersGMV += storeSpent;
+      }
+    });
+
+    const storeOrdersPercentage = totalAssignedInPeriod > 0
+      ? Math.round((storeOrdersCount / totalAssignedInPeriod) * 100)
+      : 0;
+
+    const deliveredStoreOrdersCount = filteredDeliveredOrders.filter(isOrderPlacedToStore).length;
+    const deliveredStoreOrdersPercentage = filteredDeliveredOrders.length > 0
+      ? Math.round((deliveredStoreOrdersCount / filteredDeliveredOrders.length) * 100)
+      : 0;
+
     return {
       avgAcceptingSecs,
       avgAcceptingMinsFraction,
@@ -399,6 +432,11 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       positiveCount,
       totalReviews,
       positiveRate,
+      storeOrdersCount,
+      storeOrdersPercentage,
+      storeOrdersGMV,
+      deliveredStoreOrdersCount,
+      deliveredStoreOrdersPercentage,
     };
   }, [dateFilteredOrders, filteredDeliveredOrders, dateFilteredFeedbacks]);
 
@@ -646,10 +684,13 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   // Tab: All Jobs Filtered (with status + text search) - Delayed featured at TOP
   const tabJobsFiltered = useMemo(() => {
     const filtered = dateFilteredOrders.filter((ord) => {
-      if (orderStatusFilter === 'DELAYED') {
+      if (orderStatusFilter === 'STORE_ORDERS') {
+        if (!isOrderPlacedToStore(ord)) return false;
+      } else if (orderStatusFilter === 'NON_STORE') {
+        if (isOrderPlacedToStore(ord)) return false;
+      } else if (orderStatusFilter === 'DELAYED') {
         return getOrderDelayInfo(ord).isDelayed;
-      }
-      if (orderStatusFilter !== 'ALL' && ord.status !== orderStatusFilter) {
+      } else if (orderStatusFilter !== 'ALL' && ord.status !== orderStatusFilter) {
         return false;
       }
       if (orderSearchQuery.trim()) {
@@ -824,16 +865,28 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
           {/* Header */}
           <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-950 via-purple-900 to-indigo-900 text-white flex items-center justify-between shrink-0 shadow-sm">
             <div className="flex items-center space-x-3">
-              <div className="p-2.5 rounded-2xl bg-white/10 border border-white/20 shadow-inner">
-                <Bike className="w-6 h-6 text-indigo-200" />
-              </div>
+              {userProfile?.photoURL ? (
+                <img
+                  src={userProfile.photoURL}
+                  alt={userProfile?.displayName || application?.legalName || helperName}
+                  className="w-12 h-12 rounded-2xl object-cover ring-2 ring-indigo-400/40 shadow-md shrink-0"
+                />
+              ) : (
+                <div className="p-2.5 rounded-2xl bg-white/10 border border-white/20 shadow-inner shrink-0">
+                  <Bike className="w-6 h-6 text-indigo-200" />
+                </div>
+              )}
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-extrabold text-base sm:text-lg tracking-tight">
-                    {application?.legalName || helperName}
+                    {userProfile?.displayName || application?.legalName || helperName}
                   </h3>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-500/40 text-indigo-100 border border-indigo-300/30">
                     {userProfile?.helperType === 'dedicated' ? '⚡ Dedicated Rider' : '🚲 Commuter Helper'}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/40 text-amber-100 border border-amber-300/30 flex items-center gap-1">
+                    <Store className="w-3 h-3 text-amber-300" />
+                    <span>Store Orders: {performanceKPIs.storeOrdersCount} ({performanceKPIs.storeOrdersPercentage}%)</span>
                   </span>
                   {userProfile?.isEduVerified && (
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-500/40 text-blue-100 border border-blue-300/30 flex items-center gap-0.5">
@@ -843,7 +896,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-indigo-200 mt-0.5 font-medium">
-                  NID: {application?.nid || 'N/A'} • Phone: {userProfile?.alternativePhone || 'N/A'} • UID: {helperId}
+                  NID: {application?.nid || 'N/A'} • Phone: {userProfile?.alternativePhone || userProfile?.phoneNumber || application?.whatsapp || 'N/A'} • UID: {helperId}
                 </p>
               </div>
             </div>
@@ -973,8 +1026,8 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
             {activeTab === 'PERFORMANCE' && (
               <div className="space-y-4">
                 
-                {/* 4 PRIMARY KPI HERO CARDS */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* 5 PRIMARY KPI HERO CARDS */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                   
                   {/* KPI 1: Avg Order Accepting Time */}
                   <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-white border border-indigo-100 shadow-sm flex flex-col justify-between transition-all hover:shadow-md">
@@ -1062,7 +1115,32 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     </div>
                   </div>
 
-                  {/* KPI 4: Negative Reviews */}
+                  {/* KPI 4: Store Orders Placed */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-white border border-amber-200 shadow-sm flex flex-col justify-between transition-all hover:shadow-md">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-black uppercase text-amber-800 tracking-wide flex items-center gap-1">
+                        <Store className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Store Orders</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                        {performanceKPIs.storeOrdersPercentage}% Placed
+                      </span>
+                    </div>
+                    <div className="my-2">
+                      <span className="text-2xl font-black text-amber-950">
+                        {performanceKPIs.storeOrdersCount} <span className="text-sm font-bold text-gray-500">orders</span>
+                      </span>
+                      <span className="text-[10px] text-gray-500 block font-medium mt-0.5">
+                        Placed to partner stores
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-amber-900/80 font-bold bg-amber-100/60 px-2 py-1 rounded-lg flex items-center justify-between">
+                      <span>{performanceKPIs.deliveredStoreOrdersCount} delivered</span>
+                      <span className="text-[9px] text-amber-800 bg-amber-200/70 px-1 py-0.5 rounded font-black">Commissionable</span>
+                    </div>
+                  </div>
+
+                  {/* KPI 5: Negative Reviews */}
                   <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-50 to-white border border-rose-100 shadow-sm flex flex-col justify-between transition-all hover:shadow-md">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-black uppercase text-rose-700 tracking-wide flex items-center gap-1">
@@ -1521,7 +1599,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
             {activeTab === 'EARNINGS' && (
               <div className="space-y-3">
                 {/* Stats Summary Bar */}
-                <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5 p-3.5 bg-indigo-50/50 border border-gray-200 rounded-3xl text-center text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-7 gap-2.5 p-3.5 bg-indigo-50/50 border border-gray-200 rounded-3xl text-center text-xs">
                   <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
                     <span className="text-[10px] font-bold text-gray-400 uppercase block">Total Collected</span>
                     <span className="text-lg font-black text-indigo-950">৳{earningsMetrics.totalCollected}</span>
@@ -1536,6 +1614,11 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     <span className="text-[10px] font-bold text-gray-400 uppercase block">Platform Comm.</span>
                     <span className="text-lg font-black text-purple-900">৳{earningsMetrics.totalPlatformShare}</span>
                     <span className="text-[9px] text-gray-400 block">Platform Share</span>
+                  </div>
+                  <div className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs">
+                    <span className="text-[10px] font-bold text-amber-800 uppercase block">Store Orders</span>
+                    <span className="text-lg font-black text-amber-900">{performanceKPIs.deliveredStoreOrdersCount} <span className="text-xs font-bold text-amber-600">({performanceKPIs.deliveredStoreOrdersPercentage}%)</span></span>
+                    <span className="text-[9px] text-amber-700 block">৳{performanceKPIs.storeOrdersGMV} GMV</span>
                   </div>
                   <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
                     <span className="text-[10px] font-bold text-gray-400 uppercase block">Paid Comm.</span>
@@ -1589,6 +1672,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     {paginatedDeliveredOrders.map((ord) => {
                       const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(ord);
                       const delayInfo = getOrderDelayInfo(ord);
+                      const hasStore = isOrderPlacedToStore(ord);
                       const itemsSummary = ord.items && ord.items.length > 0
                         ? ord.items.map((i) => `${i.name}${i.qty ? ` (${i.qty})` : ''}`).join(', ')
                         : ord.title || 'Delivery Request';
@@ -1608,6 +1692,12 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                               <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800">
                                 DELIVERED
                               </span>
+                              {hasStore && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-0.5">
+                                  <Store className="w-2.5 h-2.5 text-amber-700" />
+                                  <span>Store Order</span>
+                                </span>
+                              )}
                               {delayInfo.isDelayed && (
                                 <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
                                   <AlertTriangle className="w-2.5 h-2.5 text-rose-600" />
@@ -1714,6 +1804,8 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     className="px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold text-gray-800 outline-none"
                   >
                     <option value="ALL">All Statuses</option>
+                    <option value="STORE_ORDERS">🏪 Store Orders ({performanceKPIs.storeOrdersCount})</option>
+                    <option value="NON_STORE">Direct / Non-Store Orders</option>
                     <option value="DELAYED">🚨 Delayed Orders Only</option>
                     <option value="ACCEPTED">Accepted</option>
                     <option value="PURCHASED_EXECUTED">Processing</option>
@@ -1733,6 +1825,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                   <div className="space-y-2">
                     {paginatedJobs.map((ord) => {
                       const delayInfo = getOrderDelayInfo(ord);
+                      const hasStore = isOrderPlacedToStore(ord);
                       return (
                         <div
                           key={ord.id}
@@ -1757,6 +1850,12 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                               >
                                 {ord.status}
                               </span>
+                              {hasStore && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-0.5">
+                                  <Store className="w-2.5 h-2.5 text-amber-700" />
+                                  <span>Store Order</span>
+                                </span>
+                              )}
                               {delayInfo.isDelayed && (
                                 <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
                                   <AlertTriangle className="w-2.5 h-2.5 text-rose-600" />

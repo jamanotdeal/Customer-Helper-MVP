@@ -1958,6 +1958,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         status: string;
         completedJobs: number;
         activeOrders: number;
+        storeOrdersCount: number;
+        storeOrdersPercentage: number;
         totalEarned: number;
         balance: number;
         totalWithdrawn: number;
@@ -1977,6 +1979,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         status: app.status,
         completedJobs: 0,
         activeOrders: 0,
+        storeOrdersCount: 0,
+        storeOrdersPercentage: 0,
         totalEarned: w.totalEarned,
         balance: w.balance,
         totalWithdrawn: w.totalWithdrawn,
@@ -1997,11 +2001,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         status: 'APPROVED',
         completedJobs: 0,
         activeOrders: 0,
+        storeOrdersCount: 0,
+        storeOrdersPercentage: 0,
         totalEarned: w.totalEarned,
         balance: w.balance,
         totalWithdrawn: w.totalWithdrawn,
         createdAt: o.createdAt,
       };
+
+      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id);
+      if ((shopOrders && shopOrders.length > 0) || (o.selectedShopIds && o.selectedShopIds.length > 0) || o.isStoreOrder) {
+        existing.storeOrdersCount += 1;
+      }
 
       if (o.status === 'DELIVERED') {
         existing.completedJobs += 1;
@@ -2021,12 +2032,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       helperMap.set(o.helperId, existing);
     });
 
-    // Calculate average delivery time for each helper
+    // Calculate average delivery time & store orders percentage for each helper
     helperMap.forEach((helper, helperId) => {
       const stats = helperDurations.get(helperId);
       if (stats && stats.count > 0) {
         helper.avgDeliveryTimeMins = Math.round(stats.totalMs / (1000 * 60 * stats.count));
       }
+      const totalJobs = helper.completedJobs + helper.activeOrders;
+      helper.storeOrdersPercentage = totalJobs > 0 ? Math.round((helper.storeOrdersCount / totalJobs) * 100) : 0;
     });
 
     let list = Array.from(helperMap.values());
@@ -5837,6 +5850,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </th>
                           <th
                             className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
+                            onClick={() => handleSortClick('storeOrders' as any)}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <span>Store Orders</span>
+                              {renderSortIcon('storeOrders' as any)}
+                            </div>
+                          </th>
+                          <th
+                            className="py-3.5 px-5 cursor-pointer hover:bg-gray-100 select-none"
                             onClick={() => handleSortClick('avgDeliveryTimeMins')}
                           >
                             <div className="flex items-center space-x-1">
@@ -5925,6 +5947,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <td className="py-4 px-5 font-bold text-gray-700">{h.nid || 'N/A'}</td>
                               <td className="py-4 px-5 font-black text-emerald-600">{h.completedJobs} jobs</td>
                               <td className="py-4 px-5 font-bold text-amber-600">{h.activeOrders} active</td>
+                              <td className="py-4 px-5">
+                                <span className="font-extrabold text-amber-900 bg-amber-50 border border-amber-200/80 px-2 py-0.5 rounded-lg text-xs flex items-center gap-1 w-fit">
+                                  <Store className="w-3 h-3 text-amber-600" />
+                                  <span>{h.storeOrdersCount} ({h.storeOrdersPercentage}%)</span>
+                                </span>
+                              </td>
                               <td className="py-4 px-5 font-black text-blue-700">
                                 {h.avgDeliveryTimeMins != null
                                   ? formatDurationMinutes(h.avgDeliveryTimeMins)

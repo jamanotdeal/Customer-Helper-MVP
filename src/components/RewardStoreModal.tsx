@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { fallbackStore } from '@/lib/firebase';
 import { RewardPrize, RewardClaim, PricingSettings } from '@/types';
 import { useModal } from './CustomModal';
@@ -64,6 +64,13 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
   const [myClaims, setMyClaims] = useState<RewardClaim[]>([]);
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>(fallbackStore.pricingSettings);
 
+  // Auto fetch latest active prizes from server whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      fallbackStore.fetchRewardPrizes().catch(() => {});
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     const syncData = () => {
       setPricingSettings({ ...fallbackStore.pricingSettings });
@@ -117,8 +124,8 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
     );
     if (isAlreadyPending) {
       showAlert(
-        'দাবি অপেক্ষমাণ',
-        'এই পুরস্কারের একটি দাবি ইতোমধ্যে পর্যালোচনার জন্য জমা রয়েছে। এডমিনের অনুমোদনের পর আপনি আবার দাবি করতে পারবেন।',
+        'Claim Pending',
+        'A claim for this prize is already submitted and waiting for review. You can claim again after admin approval.',
         'warning'
       );
       setClaimingPrize(null);
@@ -127,8 +134,8 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
     if (currentCoins < claimingPrize.requiredCoins) {
       showAlert(
-        'পর্যাপ্ত কয়েন নেই',
-        `এই পুরস্কার দাবি করতে আপনার ${claimingPrize.requiredCoins} কয়েন প্রয়োজন। আপনার বর্তমান ব্যালেন্স: ${currentCoins} কয়েন।`,
+        'Not Enough Coins',
+        `You need ${claimingPrize.requiredCoins} coins to claim this prize. Your current balance: ${currentCoins} coins.`,
         'warning'
       );
       return;
@@ -149,8 +156,8 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
       });
 
       showAlert(
-        'দাবি জমা হয়েছে!',
-        `আপনার "${claimingPrize.title}" দাবির আবেদন পাঠানো হয়েছে। এডমিন অনুমোদনের পর কয়েন কাটা হবে।`,
+        'Claim Submitted!',
+        `Your request for "${claimingPrize.title}" has been submitted. Coins will be deducted after admin approval.`,
         'success'
       );
 
@@ -159,7 +166,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
       setActiveTab('my_claims');
     } catch (err: any) {
       console.error('Error submitting claim:', err);
-      showAlert('ত্রুটি', err?.message || 'দাবি জমা দিতে সমস্যা হয়েছে। আবার চেষ্টা করুন।', 'error');
+      showAlert('Error', err?.message || 'Failed to submit claim. Please try again.', 'error');
     } finally {
       setSubmittingClaim(false);
     }
@@ -195,10 +202,10 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               </div>
               <div>
                 <h2 className="text-base font-extrabold text-white tracking-tight leading-tight">
-                  জামানত কয়েন ও রিওয়ার্ড
+                  Jamanot Coins & Rewards
                 </h2>
                 <p className="text-[11px] text-emerald-100 font-medium">
-                  মোট অর্জিত: {lifetimeCoins} Coins
+                  Total Earned: {lifetimeCoins} Coins
                 </p>
               </div>
             </div>
@@ -219,10 +226,10 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             <div className="flex items-center justify-between text-xs mb-1.5 font-bold">
               <div className="flex items-center space-x-1.5 text-yellow-300">
                 <Truck className="w-3.5 h-3.5 shrink-0" />
-                <span>ফ্রি ডেলিভারি ({freeDeliveryTarget} Coins)</span>
+                <span>Free Delivery ({freeDeliveryTarget} Coins)</span>
               </div>
               <span className={`text-[11px] font-black ${isFreeDeliveryEligible ? 'text-emerald-300' : 'text-emerald-200'}`}>
-                {isFreeDeliveryEligible ? 'আনলকড ✓' : `${currentCoins}/${freeDeliveryTarget}`}
+                {isFreeDeliveryEligible ? 'Unlocked ✓' : `${currentCoins}/${freeDeliveryTarget}`}
               </span>
             </div>
 
@@ -241,11 +248,11 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             <p className="text-[11px] text-emerald-100 mt-1.5 font-medium leading-tight">
               {isFreeDeliveryEligible ? (
                 <span className="text-emerald-200">
-                  🎉 আপনি ফ্রি ডেলিভারির জন্য যোগ্য! রিকোয়েস্টের সময় অপশনটি সিলেক্ট করুন।
+                  🎉 You are eligible for free delivery! Select the option when creating your request.
                 </span>
               ) : (
                 <span>
-                  ফ্রি ডেলিভারি পেতে আর <strong className="text-yellow-300 font-bold">{Math.max(0, freeDeliveryTarget - currentCoins)} কয়েন</strong> প্রয়োজন।
+                  Need <strong className="text-yellow-300 font-bold">{Math.max(0, freeDeliveryTarget - currentCoins)} more coins</strong> for free delivery.
                 </span>
               )}
             </p>
@@ -257,7 +264,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
           <div className="p-2.5 px-4 bg-amber-50 border-b border-amber-200 flex items-center space-x-2 shrink-0">
             <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
             <p className="text-xs text-amber-900 font-medium leading-tight truncate">
-              {insufficientMessage || `প্রয়োজন ${requiredCoinsForAction ?? freeDeliveryTarget} কয়েন (আপনার আছে ${currentCoins} কয়েন)`}
+              {insufficientMessage || `Need ${requiredCoinsForAction ?? freeDeliveryTarget} coins (You have ${currentCoins} coins)`}
             </p>
           </div>
         )}
@@ -273,7 +280,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             }`}
           >
             <Gift className="w-3.5 h-3.5" />
-            <span>প্রাইজ পুল ({prizes.length})</span>
+            <span>Prize Pool ({prizes.length})</span>
           </button>
 
           <button
@@ -285,7 +292,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             }`}
           >
             <Award className="w-3.5 h-3.5" />
-            <span>আমার দাবি ({myClaims.length})</span>
+            <span>My Claims ({myClaims.length})</span>
           </button>
 
           <button
@@ -297,7 +304,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             }`}
           >
             <Zap className="w-3.5 h-3.5" />
-            <span>কয়েন রেট</span>
+            <span>Coin Rates</span>
           </button>
         </div>
 
@@ -309,9 +316,9 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               {prizes.length === 0 ? (
                 <div className="text-center py-10 px-4 bg-emerald-50/30 rounded-2xl border border-dashed border-emerald-200">
                   <Gift className="w-8 h-8 text-emerald-400 mx-auto mb-1.5" />
-                  <p className="text-xs font-bold text-gray-800">বর্তমানে কোনো পুরস্কার সক্রিয় নেই</p>
+                  <p className="text-xs font-bold text-gray-800">No prizes available right now</p>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    কয়েন জমিয়ে রাখুন, নতুন প্রাইজ শীঘ্রই আসছে!
+                    Keep saving coins, exciting new prizes are coming soon!
                   </p>
                 </div>
               ) : (
@@ -355,7 +362,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                               </h3>
                               {isPendingForThisPrize && (
                                 <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
-                                  অপেক্ষমাণ
+                                  Pending
                                 </span>
                               )}
                             </div>
@@ -378,28 +385,28 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                         {isPendingForThisPrize ? (
                           <span className="font-semibold text-amber-700 flex items-center space-x-1">
                             <Clock className="w-3 h-3 text-amber-600" />
-                            <span>অনুমোদনের অপেক্ষায়</span>
+                            <span>Pending approval</span>
                           </span>
                         ) : canClaim ? (
                           <span className="font-bold text-emerald-700 flex items-center space-x-1">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>ক্লেইম করতে পারবেন</span>
+                            <span>Ready to claim</span>
                           </span>
                         ) : (
                           <span className="font-medium text-gray-500">
-                            আর <strong className="text-emerald-800 font-bold">{needed} কয়েন</strong> দরকার
+                            Need <strong className="text-emerald-800 font-bold">{needed} more coins</strong>
                           </span>
                         )}
 
                         <button
                           type="button"
                           onClick={() => {
-                            if (!user) {
+                            if (!isUserAuthenticated(user)) {
                               openAuthModal();
                               return;
                             }
                             if (isPendingForThisPrize) {
-                              showAlert('দাবি অপেক্ষমাণ', 'এই পুরস্কারের একটি দাবি পর্যালোচনার জন্য জমা রয়েছে।', 'warning');
+                              showAlert('Claim Pending', 'A claim for this prize is already pending review.', 'warning');
                               return;
                             }
                             setClaimingPrize(prize);
@@ -413,7 +420,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                           }`}
                         >
-                          {isPendingForThisPrize ? 'অপেক্ষমাণ' : canClaim ? 'ক্লেইম করুন' : 'লকড'}
+                          {isPendingForThisPrize ? 'Pending' : canClaim ? 'Claim' : 'Get'}
                         </button>
                       </div>
                     </div>
@@ -429,17 +436,17 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               {myClaims.length === 0 ? (
                 <div className="text-center py-8 px-4 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
                   <Award className="w-8 h-8 text-gray-300 mx-auto mb-1.5" />
-                  <p className="text-xs font-bold text-gray-700">কোনো দাবি পাওয়া যায়নি</p>
+                  <p className="text-xs font-bold text-gray-700">No claims found</p>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    প্রাইজ পুল থেকে পুরস্কার দাবি করতে পারেন।
+                    You can claim rewards from the Prize Pool using your coins.
                   </p>
                 </div>
               ) : (
                 myClaims.map((claim) => {
                   const statusConfig = {
-                    PENDING: { label: 'অপেক্ষমাণ', class: 'bg-amber-100 text-amber-800 border-amber-200', icon: Clock },
-                    APPROVED: { label: 'অনুমোদিত', class: 'bg-emerald-100 text-emerald-800 border-emerald-200', icon: CheckCircle2 },
-                    REJECTED: { label: 'বাতিল', class: 'bg-red-100 text-red-800 border-red-200', icon: XCircle },
+                    PENDING: { label: 'Pending', class: 'bg-amber-100 text-amber-800 border-amber-200', icon: Clock },
+                    APPROVED: { label: 'Approved', class: 'bg-emerald-100 text-emerald-800 border-emerald-200', icon: CheckCircle2 },
+                    REJECTED: { label: 'Rejected', class: 'bg-red-100 text-red-800 border-red-200', icon: XCircle },
                   }[claim.status] || { label: claim.status, class: 'bg-gray-100 text-gray-800 border-gray-200', icon: Clock };
 
                   const StatusIcon = statusConfig.icon;
@@ -461,17 +468,17 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
                       <div className="flex items-center justify-between text-[11px] font-medium text-gray-600">
                         <span className="flex items-center space-x-1">
-                          <span>খরচ:</span>
+                          <span>Cost:</span>
                           <SingleCoinIcon className="w-3 h-3 text-emerald-700" />
                           <strong className="text-emerald-800 font-bold">{claim.requiredCoins} Coins</strong>
                         </span>
                         <span className="text-gray-400 text-[10px]">
-                          {new Date(claim.createdAt).toLocaleDateString('bn-BD', { month: 'short', day: 'numeric' })}
+                          {new Date(claim.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                         </span>
                       </div>
                       {claim.reviewNote && (
                         <p className="text-[11px] text-gray-600 italic bg-gray-50 p-1.5 rounded-lg border border-gray-100">
-                          নোট: {claim.reviewNote}
+                          Note: {claim.reviewNote}
                         </p>
                       )}
                     </div>
@@ -495,7 +502,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                   </div>
                 ))}
                 <div className="px-3 py-2 flex items-center justify-between bg-gray-50/60 text-xs">
-                  <span className="text-gray-700 font-medium">সাধারণ সার্ভিস (ডিফল্ট)</span>
+                  <span className="text-gray-700 font-medium">Standard Service (Default)</span>
                   <span className="font-extrabold text-emerald-700 flex items-center space-x-1 shrink-0">
                     <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-600" />
                     <span>+{pricingSettings.defaultOrderCoins ?? 10}</span>
@@ -507,7 +514,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               <div className="p-2.5 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 text-[11px] text-emerald-950 flex items-center space-x-2">
                 <Truck className="w-4 h-4 text-emerald-700 shrink-0" />
                 <p className="leading-snug">
-                  অর্ডারে ফ্রি ডেলিভারি পেতে ন্যূনতম <strong>{freeDeliveryTarget} কয়েন</strong> প্রয়োজন।
+                  You need at least <strong>{freeDeliveryTarget} coins</strong> for free delivery on your orders.
                 </p>
               </div>
 
@@ -530,7 +537,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             <div className="w-full max-w-sm bg-white rounded-3xl p-4 sm:p-5 shadow-2xl border border-emerald-200 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-extrabold text-gray-900">
-                  পুরস্কার দাবি নিশ্চিতকরণ
+                  Confirm Reward Claim
                 </h3>
                 <button
                   type="button"
@@ -544,7 +551,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               <div className="p-2.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 space-y-1">
                 <p className="font-bold text-gray-900">{claimingPrize.title}</p>
                 <div className="flex items-center space-x-1">
-                  <span>খরচ হবে:</span>
+                  <span>Cost:</span>
                   <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-700" />
                   <strong className="text-emerald-900 font-extrabold">{claimingPrize.requiredCoins} Coins</strong>
                 </div>
@@ -552,12 +559,12 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  নোট / ডেলিভারি ঠিকানা (ঐচ্ছিক):
+                  Note / Delivery Address (Optional):
                 </label>
                 <textarea
                   value={claimNote}
                   onChange={(e) => setClaimNote(e.target.value)}
-                  placeholder="যেমন: ঠিকানা বা বিশেষ অনুরোধ..."
+                  placeholder="e.g. Delivery address or special instructions..."
                   rows={2}
                   className="w-full p-2 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-emerald-500"
                 />
@@ -569,7 +576,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                   onClick={() => setClaimingPrize(null)}
                   className="flex-1 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer"
                 >
-                  বাতিল
+                  Cancel
                 </button>
 
                 <AsyncButton
@@ -579,7 +586,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                   className="flex-1 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 text-white text-xs font-extrabold shadow-xs active:scale-95 cursor-pointer"
                 >
                   <Send className="w-3 h-3 mr-1" />
-                  <span>দাবি পাঠান</span>
+                  <span>Submit Claim</span>
                 </AsyncButton>
               </div>
             </div>
