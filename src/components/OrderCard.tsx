@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw } from 'lucide-react';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { calculateDistanceKm } from '@/lib/pricing';
 import { AsyncButton } from './ui/AsyncButton';
 import { fallbackStore } from '@/lib/firebase';
+import { isOrderFromStore } from '@/utils/orderUtils';
 
 interface OrderCardProps {
   order: Order;
@@ -129,6 +130,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
       ? getDeliveryDurationText(order)
       : getElapsedTime(order)
   );
+  const fromStore = isOrderFromStore(order);
 
   useEffect(() => {
     if (isDone) {
@@ -182,10 +184,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         <div className="p-4 space-y-3">
           {/* Top metadata row: Order ID badge (top-left) & Timer/Status (top-right) */}
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
                 #{order.id}
               </span>
+              {fromStore && (
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
+                  <Store className="w-2.5 h-2.5 text-purple-600" />
+                  <span>Store</span>
+                </span>
+              )}
               {order.needDeliveryBack && (
                 <span className="flex items-center justify-center bg-indigo-600 text-white p-1 rounded-md shadow-sm" title="Two-Way Delivery">
                   <RotateCcw className="w-3.5 h-3.5 font-black" strokeWidth={3} />
@@ -231,8 +239,13 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           {/* Customer Name & Short Delivery Address */}
           <div className="flex flex-col gap-1 py-1.5 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-bold text-gray-900 truncate">
-                👤 {order.customerName || 'Customer'}
+              <span className="font-bold text-gray-900 truncate flex items-center gap-1.5">
+                <span>👤 {order.customerName || 'Customer'}</span>
+                {fromStore && (
+                  <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
+                    STORE
+                  </span>
+                )}
               </span>
             </div>
             {order.deliveryLocation?.address && (
@@ -335,9 +348,17 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         {/* Header row: customer name + new badge (right) */}
         <div className="flex items-start justify-between mb-3">
           <div className="min-w-0 flex-1 pr-3">
-            <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
-              {order.customerName || 'Customer'}
-            </h3>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
+                {order.customerName || 'Customer'}
+              </h3>
+              {fromStore && (
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
+                  <Store className="w-2.5 h-2.5 text-purple-600" />
+                  <span>Store</span>
+                </span>
+              )}
+            </div>
             <span className="inline-block mt-1 bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shadow-xs">
               #{order.id}
             </span>

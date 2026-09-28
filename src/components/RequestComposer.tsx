@@ -14,17 +14,19 @@ import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
+import { BlockedUserModal } from './BlockedUserModal';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
 }
 
 export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
-  const { user, openAuthModal, updateCustomerPreferences } = useAuth();
+  const { user, openAuthModal, updateCustomerPreferences, activeMode } = useAuth();
   const { showAlert, showConfirm } = useModal();
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
 
   // Main description ("Ki korte hobe?")
   const [description, setDescription] = useState('');
@@ -318,10 +320,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const rawPlaceholder = placeholders[placeholderIndex] || 'আপনাকে কীভাবে Help করতে পারি? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে';
   const currentPlaceholder = rawPlaceholder.replace(/(\.{2,}|…)$/, '').trim();
 
-  // Handle focus / click on main input (Guard unauthenticated users)
+  // Handle focus / click on main input (Guard unauthenticated users & blocked users)
   const handleInputInteract = () => {
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
       openAuthModal();
+      return;
+    }
+    if (user.isBlocked) {
+      setShowBlockedModal(true);
       return;
     }
     setIsExpanded(true);
@@ -332,6 +338,11 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
       openAuthModal();
+      return;
+    }
+
+    if (user.isBlocked) {
+      setShowBlockedModal(true);
       return;
     }
 
@@ -473,6 +484,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
       : initialFee;
 
+    const isStoreUser = Boolean(
+      user.isStoreApproved ||
+      user.role === 'store' ||
+      Boolean(user.storeId) ||
+      (activeMode as string) === 'store'
+    );
+
     // Generate zero-padded 5-digit order ID
     const orderNum = Math.floor(Math.random() * 90000) + 10000;
     const newOrder: Order = {
@@ -494,6 +512,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       isFreeDelivery: isFree,
       deliveryDiscountPercent: isFree ? discountPct : undefined,
       coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
+      isStoreOrder: isStoreUser,
+      creatorRole: isStoreUser ? 'store' : (user.isHelper ? 'helper' : 'customer'),
       appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
         ? {
             amount: unpaidDue.totalAmount,
@@ -508,7 +528,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           id: `sh-${Date.now()}`,
           status: 'PENDING',
           timestamp: new Date().toISOString(),
-          actor: 'Customer',
+          actor: isStoreUser ? 'Store' : 'Customer',
           note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
         },
       ],
@@ -549,6 +569,21 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
+      {user?.isBlocked && (
+        <div
+          onClick={() => setShowBlockedModal(true)}
+          className="mb-4 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start space-x-3 cursor-pointer hover:bg-red-100/70 transition-colors shadow-xs"
+        >
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <h4 className="font-extrabold text-xs sm:text-sm text-red-950">আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে</h4>
+            <p className="text-[11px] text-red-800 font-medium">
+              নিরাপত্তা বা নীতিমালার কারণে নতুন রিকোয়েস্ট তৈরি করা সাময়িকভাবে বন্ধ আছে। বিস্তারিত জানতে ক্লিক করুন।
+            </p>
+          </div>
+        </div>
+      )}
+
       {user && !timingStatus.isOpen ? (
         <div className="text-center py-6 px-4 space-y-4 animate-in fade-in duration-300">
           <div className="inline-flex p-4 rounded-3xl bg-amber-50 border border-amber-200 text-amber-800 shadow-xs">
@@ -799,7 +834,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                           className="w-4 h-4 accent-amber-600 rounded cursor-pointer shrink-0 pointer-events-none"
                         />
                         <span className="text-xs sm:text-sm font-bold text-gray-900">
-                          Get Free Delivery
+                          Get Free Delivery!
                         </span>
                       </div>
                     </div>
@@ -861,7 +896,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           onClick={() => setShowInsufficientCoinsModal(false)}
         >
           <div
-            className="w-full max-w-[340px] bg-white rounded-3xl p-6 shadow-2xl border border-gray-100 relative animate-in zoom-in-95 duration-150 text-center"
+            className="w-full max-w-[340px] bg-white rounded-3xl p-5 shadow-2xl border border-gray-100 relative animate-in zoom-in-95 duration-150 text-center"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close Button */}
@@ -875,18 +910,25 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             </button>
 
             <div className="pt-2 px-1">
+              <div className="w-11 h-11 mx-auto mb-2.5 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shadow-2xs">
+                <Sparkles className="w-5 h-5" />
+              </div>
               <h3 className="font-extrabold text-base text-gray-900 tracking-tight leading-snug">
-                {fallbackStore.pricingSettings.insufficientCoinsTitle || 'Get Free Delivery'}
+                {fallbackStore.pricingSettings.insufficientCoinsTitle || 'ফ্রি ডেলিভারি'}
               </h3>
-              <p className="mt-2.5 text-xs sm:text-[13px] text-gray-600 font-medium leading-relaxed whitespace-pre-line">
-                {fallbackStore.pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই! ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
+              <p className="mt-2 text-xs sm:text-[13px] text-gray-600 font-medium leading-relaxed">
+                {fallbackStore.pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই। ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
               </p>
+              <div className="mt-3 py-2 px-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs font-semibold text-amber-900 flex items-center justify-between">
+                <span>প্রয়োজন: <strong>{fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50} Coins</strong></span>
+                <span>আপনার আছে: <strong className="text-emerald-700">{user?.coins || 0} Coins</strong></span>
+              </div>
             </div>
 
             <button
               type="button"
               onClick={() => setShowInsufficientCoinsModal(false)}
-              className="mt-5 w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs shadow-sm shadow-emerald-600/20 transition-all cursor-pointer"
+              className="mt-4 w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer"
             >
               ঠিক আছে
             </button>
@@ -962,6 +1004,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           </div>
         </div>,
         document.body
+      )}
+
+      {/* Blocked User Custom Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole="customer"
+        />
       )}
     </div>
   );

@@ -106,14 +106,38 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    // Reset or initialize values when modal opens
-    const initialLat = initialLocation?.lat || 23.9013;
-    const initialLng = initialLocation?.lng || 90.2699;
-    const hasInitCoords = typeof initialLocation?.lat === 'number' && typeof initialLocation?.lng === 'number';
+    // 1. Resolve initial coordinates if available
+    let targetLat = initialLocation?.lat;
+    let targetLng = initialLocation?.lng;
 
-    setLat(initialLocation?.lat);
-    setLng(initialLocation?.lng);
-    setHasSelected(false);
+    // If coordinates missing, check by addressId in server addresses
+    if ((!targetLat || !targetLng) && initialLocation?.addressId) {
+      const sa = fallbackStore.serverAddresses.get(initialLocation.addressId);
+      if (sa?.lat && sa?.lng) {
+        targetLat = sa.lat;
+        targetLng = sa.lng;
+      }
+    }
+
+    // If coordinates missing, check if address matches any known server address
+    if ((!targetLat || !targetLng) && initialLocation?.address) {
+      const normInit = initialLocation.address.toLowerCase().trim();
+      const saMatch = Array.from(fallbackStore.serverAddresses.values()).find(
+        (s) => s.address?.toLowerCase().trim() === normInit || (s.shortName && s.shortName.toLowerCase().trim() === normInit)
+      );
+      if (saMatch?.lat && saMatch?.lng) {
+        targetLat = saMatch.lat;
+        targetLng = saMatch.lng;
+      }
+    }
+
+    const hasInitCoords = typeof targetLat === 'number' && typeof targetLng === 'number' && !isNaN(targetLat) && !isNaN(targetLng);
+    const initialLat = hasInitCoords ? targetLat! : 23.9013;
+    const initialLng = hasInitCoords ? targetLng! : 90.2699;
+
+    setLat(targetLat);
+    setLng(targetLng);
+    setHasSelected(hasInitCoords);
     setDetailAddress(formatShortAddress(initialLocation?.address || ''));
     setMapAddress('');
     setSearchQuery('');
@@ -161,7 +185,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           doubleClickZoom: true,
           scrollWheelZoom: true,
           zoomControl: false,
-        }).setView([initialLat, initialLng], 15);
+        }).setView([initialLat, initialLng], hasInitCoords ? 17 : 15);
         mapInstanceRef.current = map;
 
         // Earth / Satellite Hybrid Tile Layer (Google Maps style)
@@ -170,15 +194,59 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
           maxZoom: 20,
         }).addTo(map);
 
+        // Invalidate map size to make sure all tiles load smoothly without layout shift
+        setTimeout(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
+          }
+        }, 150);
+        setTimeout(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
+          }
+        }, 400);
+
+        // Place pin marker immediately if valid coords exist
+        if (hasInitCoords && targetLat && targetLng) {
+          setLocationAndPin(targetLat, targetLng, 17);
+        } else if (initialLocation?.address && initialLocation.address.trim()) {
+          // Address exists but no coordinates: geocode it automatically so it appears on the map!
+          const addrQuery = initialLocation.address.trim();
+          setIsGeocoding(true);
+          const mapPref = fallbackStore.pricingSettings.mapLocationPreference || 'BD';
+          const customCode = fallbackStore.pricingSettings.customCountryCode || 'bd';
+          let countryQueryParam = '';
+          if (mapPref === 'BD') {
+            countryQueryParam = '&countrycodes=bd';
+          } else if (mapPref === 'CUSTOM' && customCode) {
+            countryQueryParam = `&countrycodes=${encodeURIComponent(customCode.toLowerCase().trim())}`;
+          }
+
+          fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addrQuery)}&limit=1&accept-language=bn,en${countryQueryParam}`
+          )
+            .then((res) => res.json())
+            .then((data) => {
+              if (data && data.length > 0) {
+                const foundLat = parseFloat(data[0].lat);
+                const foundLng = parseFloat(data[0].lon);
+                if (!isNaN(foundLat) && !isNaN(foundLng)) {
+                  setLocationAndPin(foundLat, foundLng, 17);
+                }
+              }
+            })
+            .catch((e) => console.warn('[MapPicker] Initial geocoding note:', e))
+            .finally(() => setIsGeocoding(false));
+        }
+
         // Handle map click: place pin, set selected location, and zoom in
         map.on('click', (e: any) => {
           const { lat: clickLat, lng: clickLng } = e.latlng;
           setLocationAndPin(clickLat, clickLng, 18);
         });
 
-        // Auto-locate to user's GPS position whenever the map opens
-        // Centers map at user location initially (without auto-zooming or selecting unless clicked)
-        if (navigator.geolocation && !hasInitCoords) {
+        // Auto-locate to user's GPS position whenever map opens with NO initial coords & NO initial address
+        if (navigator.geolocation && !hasInitCoords && !initialLocation?.address) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const userLat = pos.coords.latitude;

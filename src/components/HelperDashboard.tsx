@@ -14,7 +14,8 @@ import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
 import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
-import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, XCircle, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter, AlertTriangle } from 'lucide-react';
+import { BlockedUserModal } from './BlockedUserModal';
+import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, XCircle, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter, AlertTriangle, AlertCircle, Ban, ShieldAlert } from 'lucide-react';
 
 interface HelperDashboardProps {
   initialSelectedOrderId?: string | null;
@@ -38,6 +39,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
 
   useEffect(() => {
     if (initialSelectedOrderId) {
@@ -57,6 +59,19 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
         if (order.status === 'PENDING') {
           setActiveTab('NEW');
+          // When a new request arrives / auto opens app, show the custom new order modal alert
+          if (!user?.isBlocked) {
+            setNewOrderIds((prev) => {
+              const updated = new Set(prev);
+              updated.add(order.id);
+              return updated;
+            });
+            setIsAlarmPlaying(true);
+          }
+          if (onClearInitialOrder) {
+            onClearInitialOrder();
+          }
+          return;
         } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
           setActiveTab('ACTIVE');
         } else if (order.status === 'DELIVERED') {
@@ -478,6 +493,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       openAuthModal();
       return;
     }
+    if (user.isBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
     if (activeOrders.length >= activeOrderLimit) {
       await showAlert(
         'অর্ডার সীমা পূর্ণ',
@@ -843,6 +862,32 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   return (
     <div className="space-y-5 pb-24">
+      {/* Blocked Helper Top Banner */}
+      {user?.isBlocked && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-300">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-2xl bg-red-100 text-red-600 shrink-0">
+              <ShieldAlert className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h4 className="font-extrabold text-xs text-red-900">
+                অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)
+              </h4>
+              <p className="text-[11px] text-red-700 font-medium leading-relaxed">
+                আপনার হেলপার অ্যাকাউন্টটি স্থগিত করা হয়েছে। নতুন অর্ডার গ্রহণ বা সেবা দেওয়া সাময়িকভাবে বন্ধ আছে।
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowBlockedModal(true)}
+            className="px-3.5 py-2 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-extrabold shadow-sm transition-all shrink-0"
+          >
+            বিস্তারিত
+          </button>
+        </div>
+      )}
+
       {/* Mandatory Location Permission Warning Banner if missing/denied */}
       {locationPermissionDenied && (
         <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-md flex items-center justify-between gap-3 animate-in fade-in duration-300">
@@ -1400,6 +1445,13 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             });
             setNewOrderIds(new Set());
           }}
+        />
+      )}
+      {/* Blocked User Custom Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole="helper"
         />
       )}
     </div>

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
-import { Clock, Sparkles, MapPin, Edit2 } from 'lucide-react';
+import { Clock, Sparkles, MapPin, Edit2, Store } from 'lucide-react';
 import { getDeliveryDurationText, getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { getOrderMinDistanceKm } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
+import { isOrderFromStore } from '@/utils/orderUtils';
 
 interface HelperRequestCardProps {
   order: Order;
@@ -36,6 +37,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     order.cancellationRequest?.status === 'APPROVED';
   const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   const urgency = getHelperUrgencyBgClass(order, isDone);
+  const fromStore = isOrderFromStore(order);
 
   useEffect(() => {
     if (isDone) {
@@ -75,9 +77,17 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     <div className={`rounded-3xl border p-4 space-y-3 transition-all duration-300 ${getContainerBg()}`}>
       {/* Top metadata row: Order ID badge (top-left) & Badges/Timer (top-right) */}
       <div className="flex items-center justify-between gap-2">
-        <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
-          #{order.id}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shadow-xs">
+            #{order.id}
+          </span>
+          {fromStore && (
+            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
+              <Store className="w-2.5 h-2.5 text-purple-600" />
+              <span>Store</span>
+            </span>
+          )}
+        </div>
         <div className="flex items-center space-x-1.5 shrink-0 flex-wrap gap-y-1 justify-end">
           {distanceKm !== null && (
             <span className="text-[10px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0">
@@ -119,8 +129,13 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
       {/* Customer Name & Short Delivery Address */}
       <div className="flex flex-col gap-1 py-1 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-bold text-gray-900 truncate">
-            👤 {order.customerName || 'Customer'}
+          <span className="font-bold text-gray-900 truncate flex items-center gap-1.5">
+            <span>👤 {order.customerName || 'Customer'}</span>
+            {fromStore && (
+              <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
+                STORE
+              </span>
+            )}
           </span>
         </div>
         {order.deliveryLocation?.address && (

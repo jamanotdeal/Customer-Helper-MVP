@@ -16,6 +16,7 @@ import { ShopOrder, ShopOrderStatus, ShopOrderItemPrice } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
+import { BlockedUserModal } from './BlockedUserModal';
 
 
 // Helper to suppress "বাজার-সদাই করে দিন" service label in Store Mode
@@ -95,11 +96,15 @@ const formatOrderDateTime = (isoString?: string) => {
 interface StoreDashboardProps {
   activeTab?: string;
   setActiveTab?: (tab: string) => void;
+  initialSelectedOrderId?: string | null;
+  onClearInitialOrder?: () => void;
 }
 
 export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   activeTab: parentActiveTab,
   setActiveTab: parentSetActiveTab,
+  initialSelectedOrderId,
+  onClearInitialOrder,
 }) => {
   const { user } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
@@ -220,18 +225,70 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
   }, [user]);
 
+  const isStoreBlocked = Boolean(
+    user?.isBlocked ||
+    (storeId ? fallbackStore.shops.get(storeId)?.isBlocked : false)
+  );
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+
   // Track viewed shop order IDs in local state and sync with fallbackStore
   const [unviewedShopOrderIds, setUnviewedShopOrderIds] = useState<Set<string>>(new Set());
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
 
   // Audio Context & Sound/Vibration alarm loop for Store
   useEffect(() => {
-    if (unviewedShopOrderIds.size > 0) {
+    if (unviewedShopOrderIds.size > 0 && !isStoreBlocked) {
       setIsAlarmPlaying(true);
     } else {
       setIsAlarmPlaying(false);
     }
-  }, [unviewedShopOrderIds]);
+  }, [unviewedShopOrderIds, isStoreBlocked]);
+
+  // Handle incoming order query param / notification deep-link
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      // 1. Check direct shopOrder match or parentOrderId match
+      let targetShopOrder = fallbackStore.shopOrders.get(initialSelectedOrderId);
+      if (!targetShopOrder) {
+        targetShopOrder = Array.from(fallbackStore.shopOrders.values()).find(
+          (so) => so.parentOrderId === initialSelectedOrderId || so.id === initialSelectedOrderId
+        );
+      }
+
+      if (targetShopOrder) {
+        if (targetShopOrder.status === 'PENDING') {
+          // New request for store: show custom new order modal alert!
+          setLocalActiveTab('ORDERS');
+          setOrdersSubTab('NEW');
+          setUnviewedShopOrderIds((prev) => {
+            const updated = new Set(prev);
+            updated.add(targetShopOrder!.id);
+            return updated;
+          });
+          setIsAlarmPlaying(true);
+        } else {
+          // Already accepted / running / completed: open details
+          setLocalActiveTab('ORDERS');
+          if (targetShopOrder.status === 'ACCEPTED') {
+            setOrdersSubTab('RUNNING');
+          } else {
+            setOrdersSubTab('COMPLETED');
+          }
+          setSelectedShopOrderId(targetShopOrder.id);
+        }
+      } else {
+        const ord = fallbackStore.orders.get(initialSelectedOrderId);
+        if (ord && ord.customerId === user?.uid) {
+          setLocalActiveTab('MY_REQUESTS');
+          setSelectedOrderId(ord.id);
+        }
+      }
+
+      if (onClearInitialOrder) {
+        onClearInitialOrder();
+      }
+    }
+  }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
   useEffect(() => {
     if (!isAlarmPlaying) return;
@@ -851,6 +908,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
     }
 
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+
     setUpdatingCost(true);
     try {
       await persistItemPrices(soId, itemPrices);
@@ -884,6 +946,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // Handle operations
   const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+
     if (newStatus === 'DELIVERED') {
       showAlert('সতর্কতা', 'দোকানদার সরাসরি ডেলিভার্ড স্ট্যাটাস সেট করতে পারবেন না। মূল অর্ডারটি সম্পন্ন হলে এটি স্বয়ংক্রিয়ভাবে Delivered হবে।', 'warning');
       return;
@@ -1547,7 +1614,31 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
     return (
       <div className="space-y-5 pb-24 animate-in fade-in duration-200">
-
+        {/* ── Blocked Store Alert Banner ── */}
+        {isStoreBlocked && (
+          <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-300">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 rounded-2xl bg-red-100 text-red-600 shrink-0">
+                <ShieldAlert className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-xs text-red-900">
+                  দোকান সাময়িকভাবে স্থগিত (Store Blocked)
+                </h4>
+                <p className="text-[11px] text-red-700 font-medium leading-relaxed">
+                  আপনার স্টোর অ্যাকাউন্টটি অ্যাডমিন কর্তৃক স্থগিত করা হয়েছে। নতুন অর্ডার গ্রহণ বা রিকোয়েস্ট তৈরি সাময়িকভাবে বন্ধ আছে।
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowBlockedModal(true)}
+              className="px-3.5 py-2 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-extrabold shadow-sm transition-all shrink-0"
+            >
+              বিস্তারিত
+            </button>
+          </div>
+        )}
 
         {/* ─── Tab Bar in Emerald Green ──────────────────────────────────────────────────────── */}
         <div className="flex space-x-1.5 bg-gray-100 p-1.5 rounded-2xl">
@@ -2088,6 +2179,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           onDismissAll={() => {
             setIsAlarmPlaying(false);
           }}
+        />
+      )}
+
+      {/* Blocked User / Store Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole="store"
         />
       )}
     </>

@@ -161,6 +161,10 @@ export interface Order {
   coinsDeductedAt?: string;
   coinsAwarded?: number;
   coinsAwardedAt?: string;
+
+  // Store request tagging
+  isStoreOrder?: boolean;
+  creatorRole?: string;
 }
 
 export interface OrderDuePayment {
@@ -197,6 +201,9 @@ export interface UserProfile {
   createdAt: string;
   isBlocked?: boolean;
   blockedReason?: string;
+  adminBlockNote?: string;
+  blockedAt?: string;
+  blockedBy?: string;
   labels?: string[];
   fcmToken?: string; // FCM push subscription token for this device
   isStore?: boolean;         // True if user has an approved store application
@@ -204,6 +211,7 @@ export interface UserProfile {
   storeId?: string;          // The shop document ID linked to this user's store
   coins?: number;            // Current coin balance
   totalEarnedCoins?: number; // Lifetime earned coins
+  creditedOrderIds?: string[]; // Order IDs for which completion coins have been credited
   assignedAreaIds?: string[]; // Specific sub-area IDs assigned to this helper
   serveAllAreas?: boolean;   // If true, helper receives orders from all service areas
 }
@@ -267,6 +275,11 @@ export interface Shop {
   commissionNote?: string;    // Optional description of commission deal
   status?: 'Approved' | 'Pending' | 'Rejected' | 'APPROVED' | 'PENDING' | 'REJECTED';
   canReceiveOrders?: boolean; // If false, store cannot receive/accept order requests directly in app; helper enters note, price & status manually. Default is true.
+  isBlocked?: boolean;
+  blockedReason?: string;
+  adminBlockNote?: string;
+  blockedAt?: string;
+  blockedBy?: string;
 }
 
 export interface OrderFeedback {
@@ -526,6 +539,13 @@ export interface PricingSettings {
   insufficientCoinsTitle?: string;           // Admin customizable popup title when coins not enough
   insufficientCoinsMessage?: string;         // Admin customizable popup message when coins not enough
   rewardStoreTips?: string;                  // Tips / advice text block written by admin for customers
+
+  // Blocked User Custom Modal Settings (Admin Configurable)
+  blockedUserModalTitle?: string;
+  blockedUserModalSubtitle?: string;
+  blockedUserModalMessage?: string;
+  blockedUserModalButtonText?: string;
+  blockedUserModalContactUrl?: string;
 }
 
 export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';

@@ -35,6 +35,7 @@ import {
   UserCheck,
   Phone,
   Ban,
+  Lock,
   Tag,
   Trash2,
   TrendingUp,
@@ -86,6 +87,8 @@ import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AdminAddressesManager } from './admin/AdminAddressesManager';
 import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
+import { AdminBlockModal } from './admin/AdminBlockModal';
+import { BlockedUserModal } from './BlockedUserModal';
 import { AsyncButton } from './ui/AsyncButton';
 import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 import {
@@ -282,6 +285,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+
+  // Block User / Helper / Store with Admin Note Modal state
+  const [blockTarget, setBlockTarget] = useState<{
+    id: string;
+    name: string;
+    type: 'Customer' | 'Helper' | 'Store' | 'User';
+  } | null>(null);
+
+  // Blocked User Custom Modal Admin Configuration States
+  const [blockedUserModalTitle, setBlockedUserModalTitle] = useState<string>(
+    fallbackStore.pricingSettings?.blockedUserModalTitle || 'অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)'
+  );
+  const [blockedUserModalSubtitle, setBlockedUserModalSubtitle] = useState<string>(
+    fallbackStore.pricingSettings?.blockedUserModalSubtitle || 'আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে'
+  );
+  const [blockedUserModalMessage, setBlockedUserModalMessage] = useState<string>(
+    fallbackStore.pricingSettings?.blockedUserModalMessage ||
+      'নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। এই মুহূর্তে নতুন সার্ভিস রিকোয়েস্ট তৈরি বা নতুন অর্ডার গ্রহণ করা যাবে না। বিস্তারিত তথ্য বা সহায়তার জন্য অনুগ্রহ করে অ্যাডমিন বা সাপোর্টে যোগাযোগ করুন।'
+  );
+  const [blockedUserModalButtonText, setBlockedUserModalButtonText] = useState<string>(
+    fallbackStore.pricingSettings?.blockedUserModalButtonText || 'সাপোর্টে যোগাযোগ করুন (Contact Support)'
+  );
+  const [blockedUserModalContactUrl, setBlockedUserModalContactUrl] = useState<string>(
+    fallbackStore.pricingSettings?.blockedUserModalContactUrl || 'https://wa.me/8801800000000'
+  );
+  const [showBlockedUserModalPreview, setShowBlockedUserModalPreview] = useState<boolean>(false);
 
   // Quick User Coin Balance Editing state
   const [editingCoinsUser, setEditingCoinsUser] = useState<UserProfile | null>(null);
@@ -1501,6 +1530,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       bankInstructions: bankInstructions.trim() || undefined,
       cashInstructions: cashInstructions.trim() || undefined,
       storeTypes: parseStoreTypes(storeTypesText),
+      // Blocked user custom notice & modal settings
+      blockedUserModalTitle: blockedUserModalTitle.trim() || undefined,
+      blockedUserModalSubtitle: blockedUserModalSubtitle.trim() || undefined,
+      blockedUserModalMessage: blockedUserModalMessage.trim() || undefined,
+      blockedUserModalButtonText: blockedUserModalButtonText.trim() || undefined,
+      blockedUserModalContactUrl: blockedUserModalContactUrl.trim() || undefined,
       // Store form placeholders
       storeFormPlaceholders: {
         storeName: storeFormPh.storeName.trim() || undefined,
@@ -4993,9 +5028,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                         <td className="py-4 px-5">
                           {u.isBlocked ? (
-                            <span className="px-2.5 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[10px]">
-                              BLOCKED
-                            </span>
+                            <div className="space-y-1">
+                              <span className="px-2.5 py-1 rounded-full bg-red-100 text-red-800 font-black text-[10px] inline-flex items-center gap-1">
+                                <Ban className="w-3 h-3 text-red-600" />
+                                <span>BLOCKED</span>
+                              </span>
+                              {(u.adminBlockNote || u.blockedReason) && (
+                                <p className="text-[10px] text-red-700 font-bold flex items-center gap-1">
+                                  <Lock className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                                  <span className="truncate max-w-[140px]" title={u.adminBlockNote || u.blockedReason}>
+                                    Note: {u.adminBlockNote || u.blockedReason}
+                                  </span>
+                                </p>
+                              )}
+                            </div>
                           ) : (
                             <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[10px]">
                               ACTIVE
@@ -5024,7 +5070,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 setUsers(Array.from(fallbackStore.users.values()));
                                 showAlert('আনব্লক সম্পন্ন', 'ব্যবহারকারী একাউন্ট পুনরায় সক্রিয় করা হয়েছে।', 'success');
                               } else {
-                                setSelectedUserId(targetUser.uid);
+                                setBlockTarget({
+                                  id: targetUser.uid,
+                                  name: targetUser.displayName,
+                                  type: targetUser.isHelper ? 'Helper' : 'Customer',
+                                });
                               }
                             }}
                             onDeleteUser={async (targetUser) => {
@@ -5828,13 +5878,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               onClick={() => setSelectedHelper({ id: h.id, name: h.name })}
                             >
                               <td className="py-4 px-5">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-extrabold text-gray-900">{h.name}</span>
-                                  {isEdu && (
-                                    <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
-                                      <Check className="w-2.5 h-2.5 text-blue-600" />
-                                      <span>Edu</span>
-                                    </span>
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-extrabold text-gray-900">{h.name}</span>
+                                    {helperUser?.isBlocked && (
+                                      <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider flex items-center space-x-0.5">
+                                        <Ban className="w-2.5 h-2.5" />
+                                        <span>BLOCKED</span>
+                                      </span>
+                                    )}
+                                    {isEdu && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200" title="Edu Email Verified">
+                                        <Check className="w-2.5 h-2.5 text-blue-600" />
+                                        <span>Edu</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                  {helperUser?.isBlocked && (helperUser.adminBlockNote || helperUser.blockedReason) && (
+                                    <p className="text-[10px] text-red-700 font-bold flex items-center gap-1">
+                                      <Lock className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                                      <span className="truncate max-w-[140px]" title={helperUser.adminBlockNote || helperUser.blockedReason}>
+                                        Note: {helperUser.adminBlockNote || helperUser.blockedReason}
+                                      </span>
+                                    </p>
                                   )}
                                 </div>
                               </td>
@@ -5867,6 +5933,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <td className="py-4 px-5 font-extrabold text-indigo-900">৳{h.totalEarned}</td>
                               <td className="py-4 px-5 font-extrabold text-purple-900">৳{h.balance}</td>
                               <td className="py-4 px-5 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                                {helperUser?.isBlocked ? (
+                                  <button
+                                    onClick={async () => {
+                                      const conf = await showConfirm(
+                                        'আনব্লক নিশ্চিতকরণ',
+                                        `আপনি কি ${h.name}-কে আনব্লক করতে চান?`,
+                                        'হ্যাঁ, আনব্লক করুন',
+                                        'বাতিল'
+                                      );
+                                      if (!conf) return;
+                                      await fallbackStore.blockUser(h.id, false);
+                                      setUsers(Array.from(fallbackStore.users.values()));
+                                      showAlert('আনব্লক সম্পন্ন', `${h.name}-কে আনব্লক করা হয়েছে।`, 'success');
+                                    }}
+                                    className="py-1.5 px-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs transition-all"
+                                  >
+                                    Unblock
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setBlockTarget({ id: h.id, name: h.name, type: 'Helper' })}
+                                    className="py-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 font-extrabold text-xs transition-all"
+                                  >
+                                    Block
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => setSelectedUserId(h.id)}
                                   className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
@@ -6946,6 +7038,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* Blocked User Notice & Custom Modal Admin Configuration */}
+          <div className="p-5 rounded-3xl bg-rose-50/80 border border-rose-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-extrabold text-sm text-rose-950 uppercase tracking-wider flex items-center space-x-2">
+                  <Ban className="w-5 h-5 text-rose-600" />
+                  <span>ব্লকড ব্যবহারকারী নোটিশ ও কাস্টম পপআপ সেটিংস (Blocked User Modal & Notice Settings)</span>
+                </h4>
+                <p className="text-[11px] text-rose-800 font-medium mt-0.5">
+                  যেকোনো গ্রাহক, হেলপার বা স্টোর ব্লক করা হলে তাদের সামনে প্রদর্শিত নোটিশ ও যোগাযোগের বাটন কাস্টমাইজ করুন।
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBlockedUserModalPreview(true)}
+                className="py-2 px-3.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 shrink-0 self-start sm:self-auto cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Live Modal Preview</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                  পপআপ টাইটেল (Modal Title)
+                </label>
+                <input
+                  type="text"
+                  value={blockedUserModalTitle}
+                  onChange={(e) => setBlockedUserModalTitle(e.target.value)}
+                  placeholder="অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                  সাব-টাইটেল (Subtitle)
+                </label>
+                <input
+                  type="text"
+                  value={blockedUserModalSubtitle}
+                  onChange={(e) => setBlockedUserModalSubtitle(e.target.value)}
+                  placeholder="আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                বিস্তারিত বার্তা / মেসেজ (Notice Message)
+              </label>
+              <textarea
+                value={blockedUserModalMessage}
+                onChange={(e) => setBlockedUserModalMessage(e.target.value)}
+                rows={3}
+                placeholder="নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে..."
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-rose-600 leading-relaxed font-sans"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                  সাপোর্ট বাটন টেক্সট (Button Label)
+                </label>
+                <input
+                  type="text"
+                  value={blockedUserModalButtonText}
+                  onChange={(e) => setBlockedUserModalButtonText(e.target.value)}
+                  placeholder="সাপোর্টে যোগাযোগ করুন (Contact Support)"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                  সাপোর্ট লিংক বা হোয়াটসঅ্যাপ নম্বর (Support Link / WhatsApp)
+                </label>
+                <input
+                  type="text"
+                  value={blockedUserModalContactUrl}
+                  onChange={(e) => setBlockedUserModalContactUrl(e.target.value)}
+                  placeholder="https://wa.me/88018XXXXXXXX"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Order Timing Controls Block */}
           <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
             <h4 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider flex items-center space-x-2">
@@ -7954,7 +8138,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <div className="font-extrabold text-gray-900 flex items-center space-x-2">
                                 <Store className="w-4 h-4 text-purple-600 shrink-0" />
                                 <span>{s.name}</span>
+                                {s.isBlocked && (
+                                  <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider flex items-center space-x-0.5">
+                                    <Ban className="w-2.5 h-2.5" />
+                                    <span>BLOCKED</span>
+                                  </span>
+                                )}
                               </div>
+                              {s.isBlocked && (s.adminBlockNote || s.blockedReason) && (
+                                <p className="text-[10px] text-red-700 font-bold flex items-center gap-1 mt-0.5">
+                                  <Lock className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                                  <span className="truncate max-w-[140px]" title={s.adminBlockNote || s.blockedReason}>
+                                    Note: {s.adminBlockNote || s.blockedReason}
+                                  </span>
+                                </p>
+                              )}
                               <div className="mt-1 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
                                 <select
                                   value={sStatus}
@@ -8039,6 +8237,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </td>
                             <td className="py-4 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end space-x-1.5">
+                                {s.isBlocked ? (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const confirmed = await showConfirm(
+                                        'স্টোর আনব্লক নিশ্চিতকরণ',
+                                        `আপনি কি "${s.name}" স্টোরটি আনব্লক করতে চান?`,
+                                        'হ্যাঁ, আনব্লক করুন',
+                                        'বাতিল'
+                                      );
+                                      if (!confirmed) return;
+                                      await fallbackStore.blockShop(s.id, false);
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      showAlert('আনব্লক সম্পন্ন', `"${s.name}" স্টোরটি আনব্লক করা হয়েছে।`, 'success');
+                                    }}
+                                    className="p-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs"
+                                    title="Unblock Store"
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setBlockTarget({ id: s.id, name: s.name, type: 'Store' })}
+                                    className="p-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-xs"
+                                    title="Block Store"
+                                  >
+                                    <Ban className="w-4 h-4" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => setSelectedShopDetails(s)}
@@ -9545,6 +9773,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {/* Block Confirmation & Mandatory Admin Note Modal */}
+      {blockTarget && (
+        <AdminBlockModal
+          targetName={blockTarget.name}
+          targetType={blockTarget.type}
+          onConfirm={async (note) => {
+            if (blockTarget.type === 'Store') {
+              await fallbackStore.blockShop(blockTarget.id, true, note, currentUser?.displayName || 'Admin');
+              setShops(Array.from(fallbackStore.shops.values()));
+              showAlert('ব্লক সম্পন্ন', `"${blockTarget.name}" স্টোরটি ব্লক করা হয়েছে।`, 'info');
+            } else {
+              await fallbackStore.blockUser(blockTarget.id, true, note, currentUser?.displayName || 'Admin');
+              setUsers(Array.from(fallbackStore.users.values()));
+              showAlert('ব্লক সম্পন্ন', `${blockTarget.name}-কে ব্লক করা হয়েছে।`, 'info');
+            }
+          }}
+          onClose={() => setBlockTarget(null)}
+        />
+      )}
+
+      {/* Blocked User Custom Modal Live Admin Preview */}
+      {showBlockedUserModalPreview && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedUserModalPreview(false)}
+          customTitle={blockedUserModalTitle}
+          customMessage={blockedUserModalMessage}
+        />
       )}
     </div>
   );

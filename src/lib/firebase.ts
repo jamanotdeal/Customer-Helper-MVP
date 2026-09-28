@@ -467,7 +467,7 @@ class FallbackStore {
         doc(db, 'settings', 'pricing'),
         (docSnap) => {
           if (docSnap.exists()) {
-            this.pricingSettings = docSnap.data() as PricingSettings;
+            this.pricingSettings = { ...DEFAULT_PRICING_SETTINGS, ...(docSnap.data() as PricingSettings) };
             this.notify();
           }
         },
@@ -741,7 +741,7 @@ class FallbackStore {
 
       const savedPricing = this.safeParse<PricingSettings>('jamanot_pricing_store');
       if (savedPricing && typeof savedPricing === 'object') {
-        this.pricingSettings = savedPricing;
+        this.pricingSettings = { ...DEFAULT_PRICING_SETTINGS, ...savedPricing };
       }
     } catch (e) {
       console.warn('Local storage hydration error:', e);
@@ -1123,7 +1123,11 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+                const ord = this.resolveOrderLocations(change.doc.data() as Order);
+                this.orders.set(change.doc.id, ord);
+                if (ord.status === 'DELIVERED') {
+                  this.ensureCustomerOrderCoinsAwarded(userId, ord);
+                }
               }
             });
             this.notify();
@@ -1772,13 +1776,16 @@ class FallbackStore {
     }
   }
 
-  public async blockUser(uid: string, isBlocked: boolean, reason?: string) {
+  public async blockUser(uid: string, isBlocked: boolean, reason?: string, adminName?: string) {
     const existing = this.users.get(uid);
     if (!existing) return;
     const updated: UserProfile = {
       ...existing,
       isBlocked,
       blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      blockedAt: isBlocked ? new Date().toISOString() : undefined,
+      blockedBy: isBlocked ? adminName || 'Admin' : undefined,
     };
     this.users.set(uid, updated);
     this.notify();
@@ -1786,6 +1793,28 @@ class FallbackStore {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] blockUser note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async blockShop(shopId: string, isBlocked: boolean, reason?: string, adminName?: string) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const updated: Shop = {
+      ...existing,
+      isBlocked,
+      blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      blockedAt: isBlocked ? new Date().toISOString() : undefined,
+      blockedBy: isBlocked ? adminName || 'Admin' : undefined,
+      canReceiveOrders: isBlocked ? false : (existing.canReceiveOrders !== undefined ? existing.canReceiveOrders : true),
+      updatedAt: new Date().toISOString(),
+    };
+    this.shops.set(shopId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] blockShop note (stored locally):', e?.message || e);
     }
   }
 
@@ -1855,6 +1884,10 @@ class FallbackStore {
 
 
   public async addOrder(order: Order) {
+    const customer = this.users.get(order.customerId);
+    if (customer?.isBlocked) {
+      throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। নতুন রিকোয়েস্ট তৈরি করা সম্ভব নয়।');
+    }
     this.orders.set(order.id, order);
 
     const rule = this.pricingSettings.orderReceiverRule || 'commuter_first';
@@ -2425,10 +2458,13 @@ class FallbackStore {
   }
 
   public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
+    const shop = this.shops.get(shopOrder.shopId);
+    if (shop?.isBlocked) {
+      throw new Error('এই স্টোরটি বর্তমানে সাময়িকভাবে স্থগিত রয়েছে।');
+    }
     this.shopOrders.set(shopOrder.id, shopOrder);
     this.notify();
     // Notify the store owner if we know their userId
-    const shop = this.shops.get(shopOrder.shopId);
     if (shop?.ownerUserId) {
       this.addNotification({
         id: `notif-shop-order-${Date.now()}`,
@@ -3328,7 +3364,7 @@ class FallbackStore {
 
     if (target === 'all-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper) {
+        if (u.isHelper && !u.isBlocked) {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3346,7 +3382,7 @@ class FallbackStore {
       });
     } else if (target === 'all-commuter-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper && u.helperType !== 'dedicated') {
+        if (u.isHelper && !u.isBlocked && u.helperType !== 'dedicated') {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3364,7 +3400,7 @@ class FallbackStore {
       });
     } else if (target === 'all-dedicated-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper && u.helperType === 'dedicated') {
+        if (u.isHelper && !u.isBlocked && u.helperType === 'dedicated') {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3382,7 +3418,7 @@ class FallbackStore {
       });
     } else if (target === 'all-customers') {
       this.users.forEach((u) => {
-        if (!u.isHelper || u.role === 'customer') {
+        if (!u.isBlocked && (!u.isHelper || u.role === 'customer')) {
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -3391,7 +3427,7 @@ class FallbackStore {
     } else if (target.startsWith('segment:')) {
       const segName = target.replace('segment:', '');
       this.users.forEach((u) => {
-        if (this.doesUserMatchSegment(u, segName)) {
+        if (!u.isBlocked && this.doesUserMatchSegment(u, segName)) {
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -3399,9 +3435,11 @@ class FallbackStore {
       });
     } else if (target === 'all') {
       this.users.forEach((u) => {
-        const userList = this.notifications.get(u.uid) || [];
-        userList.unshift({ ...notif, userId: u.uid });
-        this.notifications.set(u.uid, userList);
+        if (!u.isBlocked) {
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
       });
     } else {
       const list = this.notifications.get(notif.userId) || [];
@@ -4122,29 +4160,89 @@ class FallbackStore {
     // 1. Update in-memory user if present
     const customer = this.users.get(userId);
     if (customer) {
+      const credited = new Set(customer.creditedOrderIds || []);
+      if (orderId) credited.add(orderId);
       const newCoinBalance = (customer.coins || 0) + earnedCoins;
       const newTotalEarned = (customer.totalEarnedCoins || 0) + earnedCoins;
       const updatedCustomer: UserProfile = {
         ...customer,
         coins: newCoinBalance,
         totalEarnedCoins: newTotalEarned,
+        creditedOrderIds: Array.from(credited),
       };
       this.users.set(userId, updatedCustomer);
       this.notify();
     }
 
+    if (orderId && typeof localStorage !== 'undefined') {
+      localStorage.setItem(`credited_order_coins_${userId}_${orderId}`, 'true');
+    }
+
     // 2. Atomic Firestore update so it always succeeds regardless of memory state
+    try {
+      const payload: any = {
+        coins: increment(earnedCoins),
+        totalEarnedCoins: increment(earnedCoins),
+      };
+      if (orderId) {
+        payload.creditedOrderIds = arrayUnion(orderId);
+      }
+      await setDoc(doc(db, 'users', userId), payload, { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] awardCoinsToCustomer error:', e?.message || e);
+    }
+  }
+
+  public async ensureCustomerOrderCoinsAwarded(userId: string, order: Order) {
+    if (!userId || !order || (order.status !== 'DELIVERED' && (order.status as string) !== 'COMPLETED')) return;
+    if (order.customerId !== userId) return;
+
+    let user = this.users.get(userId);
+    if (!user) {
+      user = (await this.fetchUserFromFirestore(userId)) || undefined;
+      if (!user) return;
+    }
+
+    const localCreditedKey = `credited_order_coins_${userId}_${order.id}`;
+    const localCredited = typeof localStorage !== 'undefined' && localStorage.getItem(localCreditedKey) === 'true';
+    const creditedSet = new Set(user.creditedOrderIds || []);
+
+    if (creditedSet.has(order.id) || localCredited) {
+      return;
+    }
+
+    const earnedCoins = order.coinsAwarded || getCoinsForService(order.service, this.pricingSettings);
+    if (earnedCoins <= 0) return;
+
+    creditedSet.add(order.id);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(localCreditedKey, 'true');
+    }
+
+    const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+    const currentLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins : currentCoins;
+
+    const updatedUser: UserProfile = {
+      ...user,
+      coins: currentCoins + earnedCoins,
+      totalEarnedCoins: currentLifetime + earnedCoins,
+      creditedOrderIds: Array.from(creditedSet),
+    };
+    this.users.set(userId, updatedUser);
+    this.notify();
+
     try {
       await setDoc(
         doc(db, 'users', userId),
         {
           coins: increment(earnedCoins),
           totalEarnedCoins: increment(earnedCoins),
+          creditedOrderIds: arrayUnion(order.id),
         },
         { merge: true }
       );
     } catch (e: any) {
-      console.warn('[Firestore] awardCoinsToCustomer error:', e?.message || e);
+      console.warn('[Firestore] ensureCustomerOrderCoinsAwarded sync error:', e?.message || e);
     }
   }
 
@@ -4156,65 +4254,91 @@ class FallbackStore {
       if (!user) return;
     }
 
-    // Only initialize if coins or totalEarnedCoins are completely unset
-    // Do NOT override manual admin adjustments or reductions
+    const customerOrders = Array.from(this.orders.values()).filter(
+      (o) => o.customerId === userId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+    );
+
+    // Reconcile any delivered orders that were never credited to creditedOrderIds
+    const creditedSet = new Set(user.creditedOrderIds || []);
+    let newlyCreditedCoins = 0;
+    const newlyCreditedOrderIds: string[] = [];
+
+    customerOrders.forEach((o) => {
+      const localCreditedKey = `credited_order_coins_${userId}_${o.id}`;
+      const localCredited = typeof localStorage !== 'undefined' && localStorage.getItem(localCreditedKey) === 'true';
+
+      if (!creditedSet.has(o.id) && !localCredited) {
+        const earned = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
+        if (earned > 0) {
+          newlyCreditedCoins += earned;
+          newlyCreditedOrderIds.push(o.id);
+          creditedSet.add(o.id);
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(localCreditedKey, 'true');
+          }
+        }
+      }
+    });
+
     const needsCoinsInit = typeof user.coins !== 'number';
     const needsLifetimeInit = typeof user.totalEarnedCoins !== 'number';
 
-    if (!needsCoinsInit && !needsLifetimeInit) {
+    if (newlyCreditedCoins === 0 && !needsCoinsInit && !needsLifetimeInit) {
       return;
     }
 
-    // Calculate coins from all delivered orders for this user
-    const customerOrders = Array.from(this.orders.values()).filter(
-      (o) => o.customerId === userId && o.status === 'DELIVERED'
-    );
+    let updatedCoins = typeof user.coins === 'number' ? user.coins + newlyCreditedCoins : 0;
+    let updatedLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins + newlyCreditedCoins : updatedCoins;
 
-    let deliveredEarnedCoins = 0;
-    customerOrders.forEach((o) => {
-      const c = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
-      deliveredEarnedCoins += c;
-    });
+    if (needsCoinsInit || needsLifetimeInit) {
+      let deliveredEarnedCoins = 0;
+      customerOrders.forEach((o) => {
+        const c = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
+        deliveredEarnedCoins += c;
+      });
 
-    // Calculate coins spent on claims & free delivery
-    const userClaims = Array.from(this.rewardClaims.values()).filter(
-      (c) => c.userId === userId && c.status !== 'REJECTED'
-    );
-    let spentOnClaims = 0;
-    userClaims.forEach((c) => {
-      spentOnClaims += c.requiredCoins || 0;
-    });
+      const userClaims = Array.from(this.rewardClaims.values()).filter(
+        (c) => c.userId === userId && c.status !== 'REJECTED'
+      );
+      let spentOnClaims = 0;
+      userClaims.forEach((c) => {
+        spentOnClaims += c.requiredCoins || 0;
+      });
 
-    const ordersWithRedeemedCoins = Array.from(this.orders.values()).filter(
-      (o) => o.customerId === userId && (o.coinsRedeemedForDelivery || 0) > 0 && (o.status === 'DELIVERED' || o.coinsDeductedForDelivery)
-    );
-    let spentOnFreeDelivery = 0;
-    ordersWithRedeemedCoins.forEach((o) => {
-      spentOnFreeDelivery += o.coinsRedeemedForDelivery || 0;
-    });
+      const ordersWithRedeemedCoins = Array.from(this.orders.values()).filter(
+        (o) => o.customerId === userId && (o.coinsRedeemedForDelivery || 0) > 0 && (o.status === 'DELIVERED' || o.coinsDeductedForDelivery)
+      );
+      let spentOnFreeDelivery = 0;
+      ordersWithRedeemedCoins.forEach((o) => {
+        spentOnFreeDelivery += o.coinsRedeemedForDelivery || 0;
+      });
 
-    const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
-    const expectedLifetime = Math.max(0, deliveredEarnedCoins);
+      const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
+      const expectedLifetime = Math.max(0, deliveredEarnedCoins);
 
-    const updatedCoins = needsCoinsInit ? expectedMinCoins : user.coins!;
-    const updatedLifetime = needsLifetimeInit ? Math.max(updatedCoins, expectedLifetime) : user.totalEarnedCoins!;
+      if (needsCoinsInit) updatedCoins = expectedMinCoins;
+      if (needsLifetimeInit) updatedLifetime = Math.max(updatedCoins, expectedLifetime);
+    }
 
     const updatedUser: UserProfile = {
       ...user,
       coins: updatedCoins,
       totalEarnedCoins: updatedLifetime,
+      creditedOrderIds: Array.from(creditedSet),
     };
+
     this.users.set(userId, updatedUser);
     this.notify();
+
     try {
-      await setDoc(
-        doc(db, 'users', userId),
-        {
-          coins: updatedCoins,
-          totalEarnedCoins: updatedLifetime,
-        },
-        { merge: true }
-      );
+      const updatePayload: any = {
+        coins: updatedCoins,
+        totalEarnedCoins: updatedLifetime,
+      };
+      if (newlyCreditedOrderIds.length > 0) {
+        updatePayload.creditedOrderIds = arrayUnion(...newlyCreditedOrderIds);
+      }
+      await setDoc(doc(db, 'users', userId), updatePayload, { merge: true });
     } catch (e) {
       console.warn('[Firestore] reconcileCustomerCoins sync error:', e);
     }
