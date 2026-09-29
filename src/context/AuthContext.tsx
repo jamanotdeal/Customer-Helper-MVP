@@ -788,6 +788,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateHelperLocation = (loc: { lat: number; lng: number; address?: string }) => {
     if (!user) return;
+    const prevLoc = user.helperLocation;
+    const latDiff = prevLoc?.lat != null ? Math.abs(prevLoc.lat - loc.lat) : 1;
+    const lngDiff = prevLoc?.lng != null ? Math.abs(prevLoc.lng - loc.lng) : 1;
+    const isMeaningfulChange = latDiff > 0.00015 || lngDiff > 0.00015; // ~15 meters
+    const lastUpdatedMs = prevLoc?.updatedAt ? new Date(prevLoc.updatedAt).getTime() : 0;
+    const isTimeThresholdMet = Date.now() - lastUpdatedMs > 3 * 60 * 1000; // 3 minutes
+
+    if (!isMeaningfulChange && !isTimeThresholdMet && prevLoc) {
+      return; // Skip redundant Firestore write when helper is stationary
+    }
+
     const helperLoc = {
       ...loc,
       address: loc.address || user.helperLocation?.address || 'Current Position',

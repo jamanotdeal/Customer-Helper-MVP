@@ -178,8 +178,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
     checkHelperPermissions();
 
-    // Periodic update every 12 seconds using low-accuracy (battery-friendly).
-    const intervalId = setInterval(() => captureHelperLocation(false), 12000);
+    // Periodic update every 25 seconds using low-accuracy (battery-friendly).
+    const intervalId = setInterval(() => captureHelperLocation(false), 25000);
     return () => clearInterval(intervalId);
   }, [user?.uid, user?.isHelper, user?.helperType]);
 

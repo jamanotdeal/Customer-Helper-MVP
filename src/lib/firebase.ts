@@ -1534,43 +1534,43 @@ class FallbackStore {
   }
 
   private async _fetchAdminUsers() {
-    const snap = await getDocs(query(collection(db, 'users'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'users'), limit(150)));
     snap.docs.forEach((d) => { const u = d.data() as UserProfile; this.users.set(u.uid, u); });
   }
 
   private async _fetchAdminWithdrawals() {
-    const snap = await getDocs(collection(db, 'withdrawals'));
+    const snap = await getDocs(query(collection(db, 'withdrawals'), limit(100)));
     snap.docs.forEach((d) => { const w = d.data() as WithdrawalRequest; this.withdrawals.set(w.id, w); });
   }
 
   private async _fetchAdminHelperApplications() {
-    const snap = await getDocs(collection(db, 'helperApplications'));
+    const snap = await getDocs(query(collection(db, 'helperApplications'), limit(100)));
     snap.docs.forEach((d) => { const a = d.data() as HelperApplication; this.helperApplications.set(a.id, a); });
   }
 
   private async _fetchAdminStoreApplications() {
-    const snap = await getDocs(collection(db, 'storeApplications'));
+    const snap = await getDocs(query(collection(db, 'storeApplications'), limit(100)));
     snap.docs.forEach((d) => { const a = d.data() as StoreApplication; this.storeApplications.set(a.id, a); });
   }
 
   private async _fetchAdminOrderFeedbacks() {
-    const snap = await getDocs(collection(db, 'orderFeedbacks'));
+    const snap = await getDocs(query(collection(db, 'orderFeedbacks'), limit(100)));
     snap.docs.forEach((d) => { const f = d.data() as OrderFeedback; this.orderFeedbacks.set(f.id, f); });
   }
 
   private async _fetchAdminFeeSuggestions() {
-    const snap = await getDocs(collection(db, 'feeSuggestions'));
+    const snap = await getDocs(query(collection(db, 'feeSuggestions'), limit(100)));
     snap.docs.forEach((d) => { this.feeSuggestions.set(d.id, d.data() as FeeSuggestion); });
   }
 
   private async _fetchAdminCustomModals() {
-    const snap = await getDocs(collection(db, 'customModals'));
+    const snap = await getDocs(query(collection(db, 'customModals'), limit(50)));
     snap.docs.forEach((d) => { const c = d.data() as AdminCustomModalConfig; this.customModals.set(c.id, c); });
   }
 
   public async fetchRewardPrizes(): Promise<RewardPrize[]> {
     try {
-      const snap = await getDocs(collection(db, 'rewardPrizes'));
+      const snap = await getDocs(query(collection(db, 'rewardPrizes'), limit(50)));
       const prizeMap = new Map<string, RewardPrize>();
       snap.docs.forEach((d) => {
         if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
@@ -1594,22 +1594,22 @@ class FallbackStore {
   }
 
   private async _fetchAdminShops() {
-    const snap = await getDocs(collection(db, 'shops'));
+    const snap = await getDocs(query(collection(db, 'shops'), limit(100)));
     snap.docs.forEach((d) => { const s = d.data() as Shop; this.shops.set(d.id, s); });
   }
 
   private async _fetchAdminShopOrders() {
-    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(150)));
     snap.docs.forEach((d) => { this.shopOrders.set(d.id, d.data() as ShopOrder); });
   }
 
   private async _fetchAdminWallets() {
-    const snap = await getDocs(collection(db, 'wallets'));
+    const snap = await getDocs(query(collection(db, 'wallets'), limit(100)));
     snap.docs.forEach((d) => { const w = d.data() as Wallet; this.wallets.set(w.userId, w); });
   }
 
   private async _fetchAdminWalletTransactions() {
-    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(150)));
     const map = new Map<string, WalletTransaction[]>();
     snap.docs.forEach((d) => {
       const tx = d.data() as WalletTransaction;
@@ -1624,7 +1624,7 @@ class FallbackStore {
   }
 
   private async _fetchAdminScheduledNotifications() {
-    const snap = await getDocs(collection(db, 'scheduledNotifications'));
+    const snap = await getDocs(query(collection(db, 'scheduledNotifications'), limit(50)));
     // Clear and reload to reflect deletions
     this.scheduledNotifications.clear();
     snap.docs.forEach((d) => { this.scheduledNotifications.set(d.id, d.data() as AppNotification); });

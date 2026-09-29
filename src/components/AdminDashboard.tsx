@@ -1106,7 +1106,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       try {
         const q = query(
           collection(db, 'orders'),
-          where('status', '==', 'DELIVERED')
+          where('status', '==', 'DELIVERED'),
+          limit(50)
         );
         const snap = await getDocs(q);
         let totalMs = 0;
@@ -1130,7 +1131,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const fetchServerAvgAcceptanceTime = async () => {
       try {
         const q = query(
-          collection(db, 'orders')
+          collection(db, 'orders'),
+          limit(50)
         );
         const snap = await getDocs(q);
         let totalMs = 0;

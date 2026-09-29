@@ -92,15 +92,15 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     };
   }, [user]);
 
-  // Real-time synchronization when active orders exist or when app returns to foreground
+  // Refresh customer orders once on mount / tab focus if needed (realtime updates are already streamed via fallbackStore's onSnapshot listener)
   useEffect(() => {
-    if (!user) return;
+    if (!user?.uid) return;
 
     const refreshOrders = () => {
       fallbackStore.fetchCustomerOrders(user.uid).catch(() => { });
     };
 
-    // Initial fetch from Firestore to ensure immediate freshness
+    // Initial fetch on mount / user change
     refreshOrders();
 
     const handleVisibility = () => {
@@ -112,19 +112,11 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     window.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', refreshOrders);
 
-    // If customer has any running/active orders, poll every 8 seconds to catch status updates immediately
-    const hasRunning = orders.some(isOrderActive);
-    let interval: NodeJS.Timeout | null = null;
-    if (hasRunning) {
-      interval = setInterval(refreshOrders, 8000);
-    }
-
     return () => {
       window.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', refreshOrders);
-      if (interval) clearInterval(interval);
     };
-  }, [user, orders]);
+  }, [user?.uid]);
 
   // Filter logic
   const filteredOrders = orders.filter((o) => {
