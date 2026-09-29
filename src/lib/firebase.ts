@@ -2290,6 +2290,21 @@ class FallbackStore {
     this.users.set(user.uid, user);
   }
 
+  /**
+   * Writes only `helperLocation`. Location is the most frequent profile write,
+   * and going through saveUser() for it re-sent the whole profile and ran its
+   * helper-application / order-sync side effects every time.
+   */
+  public async saveHelperLocation(uid: string, helperLocation: UserProfile['helperLocation']) {
+    const existing = this.users.get(uid);
+    if (existing) this.users.set(uid, { ...existing, helperLocation });
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore({ helperLocation }), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveHelperLocation note:', e?.message || e);
+    }
+  }
+
   public async saveUser(user: UserProfile) {
     const existing = this.users.get(user.uid);
     const mergedUser: UserProfile = {

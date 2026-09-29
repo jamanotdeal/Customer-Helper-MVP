@@ -30,6 +30,8 @@ public final class Prefs {
     private static final String K_LAT = "helperLat";
     private static final String K_LNG = "helperLng";
     private static final String K_LOC_AT = "helperLocUpdatedAt";
+    private static final String K_SAVED_LAT = "helperSavedLat";
+    private static final String K_SAVED_LNG = "helperSavedLng";
     private static final String K_RADIUS = "radiusKm";
     private static final String K_AUTO_OPEN = "autoOpenEnabled";
     private static final String K_SEEN = "seenNotifIds";
@@ -143,6 +145,23 @@ public final class Prefs {
 
     public static long locationUpdatedAt(Context c) { return sp(c).getLong(K_LOC_AT, 0L); }
 
+    // Last position LocationTracker wrote to Firestore — kept apart from the live
+    // fix above so a service restart doesn't re-save a position that hasn't moved.
+    public static double savedLat(Context c) {
+        return Double.longBitsToDouble(sp(c).getLong(K_SAVED_LAT, Double.doubleToLongBits(Double.NaN)));
+    }
+
+    public static double savedLng(Context c) {
+        return Double.longBitsToDouble(sp(c).getLong(K_SAVED_LNG, Double.doubleToLongBits(Double.NaN)));
+    }
+
+    public static void setSavedLocation(Context c, double lat, double lng) {
+        sp(c).edit()
+                .putLong(K_SAVED_LAT, Double.doubleToLongBits(lat))
+                .putLong(K_SAVED_LNG, Double.doubleToLongBits(lng))
+                .apply();
+    }
+
     public static float radiusKm(Context c) { return sp(c).getFloat(K_RADIUS, DEFAULT_RADIUS_KM); }
 
     /** Kept live by the duty service's settings/pricing listener, so the admin
@@ -222,6 +241,10 @@ public final class Prefs {
     /** Applies only the fields the caller actually supplied. */
     public static void apply(Context c, UserState s) {
         SharedPreferences.Editor e = sp(c).edit();
+        if (s.uid != null && !s.uid.equals(sp(c).getString(K_UID, null))) {
+            // Another account on this device: the saved position isn't theirs.
+            e.remove(K_SAVED_LAT).remove(K_SAVED_LNG);
+        }
         if (s.uid != null) e.putString(K_UID, s.uid);
         if (s.role != null) e.putString(K_ROLE, s.role);
         if (s.isHelper != null) e.putBoolean(K_IS_HELPER, s.isHelper);

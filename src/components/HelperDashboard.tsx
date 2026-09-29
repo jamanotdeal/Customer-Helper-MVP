@@ -119,8 +119,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 lng: pos.coords.longitude,
               },
               // A high-accuracy request is one the user (or the mount) asked
-              // for, so it is mirrored to Firestore immediately. Periodic polls
-              // go through the movement/interval throttle instead.
+              // for, so it always refreshes the on-screen position. Firestore
+              // is only written after real movement either way.
               { force: highAccuracy }
             );
             resolve(true);

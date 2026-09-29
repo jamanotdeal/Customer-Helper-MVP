@@ -36,8 +36,14 @@ public class LocationTracker {
     private static final String TAG = "DutyLoc";
 
     private static final long INTERVAL_MS = 3 * 60 * 1000L;      // 3 minutes
-    private static final float MIN_DISPLACEMENT_M = 150f;        // ignore drift
-    private static final long WRITE_THROTTLE_MS = 5 * 60 * 1000L; // Firestore writes
+    /**
+     * Movement needed, from the last position saved, before another is written.
+     * Orders are matched on a km-scale radius, so anything finer only costs
+     * writes. Mirrors WRITE_MIN_MOVE_M in AuthContext.
+     */
+    private static final float MIN_DISPLACEMENT_M = 200f;
+    /** Floor between writes, in case a fast-moving helper crosses it repeatedly. */
+    private static final long WRITE_THROTTLE_MS = 5 * 60 * 1000L;
 
     private final Context context;
     private final FusedLocationProviderClient client;
@@ -92,12 +98,24 @@ public class LocationTracker {
     private void onFix(double lat, double lng) {
         Prefs.setLocation(context, lat, lng);
 
+        // No time-based refresh: nothing reads the position's age, so saving an
+        // unchanged one was pure cost. Measured from the last saved position,
+        // which survives service restarts — the seed fix on every restart used
+        // to write even when the helper hadn't moved.
+        double savedLat = Prefs.savedLat(context);
+        double savedLng = Prefs.savedLng(context);
+        if (!Double.isNaN(savedLat) && !Double.isNaN(savedLng)) {
+            float[] dist = new float[1];
+            Location.distanceBetween(savedLat, savedLng, lat, lng, dist);
+            if (dist[0] < MIN_DISPLACEMENT_M) return;
+        }
+
         long now = System.currentTimeMillis();
         if (now - lastWriteAt < WRITE_THROTTLE_MS) return;
-        lastWriteAt = now;
 
         String uid = Prefs.uid(context);
         if (uid == null) return;
+        lastWriteAt = now;
 
         // Mirrors updateHelperLocation() in AuthContext so the other devices'
         // fan-out geofence sees the same shape.
@@ -105,8 +123,12 @@ public class LocationTracker {
         helperLocation.put("lat", lat);
         helperLocation.put("lng", lng);
         helperLocation.put("address", "Current Position");
-        helperLocation.put("updatedAt", new java.text.SimpleDateFormat(
-                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(new java.util.Date()));
+        // UTC to match the literal 'Z' — without it this wrote local time
+        // mislabelled as UTC, six hours off in Bangladesh.
+        java.text.SimpleDateFormat iso = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US);
+        iso.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        helperLocation.put("updatedAt", iso.format(new java.util.Date()));
 
         Map<String, Object> update = new HashMap<>();
         update.put("helperLocation", helperLocation);
@@ -115,6 +137,7 @@ public class LocationTracker {
             FirebaseFirestore.getInstance()
                     .collection("users").document(uid)
                     .set(update, com.google.firebase.firestore.SetOptions.merge())
+                    .addOnSuccessListener(v -> Prefs.setSavedLocation(context, lat, lng))
                     .addOnFailureListener(e -> Log.w(TAG, "helperLocation write: " + e.getMessage()));
         } catch (Exception e) {
             Log.w(TAG, "Firestore unavailable: " + e.getMessage());

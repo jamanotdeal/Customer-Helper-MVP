@@ -53,9 +53,9 @@ interface AuthContextType {
   submitStoreApplication: (appData: Omit<StoreApplication, 'id' | 'userId' | 'userName' | 'userEmail' | 'status' | 'createdAt'>) => Promise<void>;
   cancelStoreApplication: (appId: string) => Promise<void>;
   updateCustomerPreferences: (altPhone?: string, defaultDeliveryLocation?: any, missingItemPref?: any) => void;
-  // `force` bypasses the movement/interval throttling below — pass it for a fix
-  // the user asked for (mode switch, permission grant, first mount), never for a
-  // periodic poll.
+  // `force` always refreshes the on-screen position — pass it for a fix the user
+  // asked for (mode switch, permission grant, first mount), never for a periodic
+  // poll. Saving to Firestore still requires real movement either way.
   updateHelperLocation: (
     loc: { lat: number; lng: number; address?: string },
     options?: { force?: boolean }
@@ -71,10 +71,15 @@ const SUPER_ADMIN_EMAILS = ['ajnasim72@gmail.com'];
 // ─── Helper-location throttling (see updateHelperLocation) ──────────────────
 /** Below this, a new fix is GPS drift: it changes nothing on screen and no radius verdict. */
 const LOCAL_MIN_MOVE_M = 25;
-/** Mirrors MIN_DISPLACEMENT_M in LocationTracker.java. */
-const WRITE_MIN_MOVE_M = 100;
-/** Mirrors WRITE_THROTTLE_MS in LocationTracker.java, so a parked helper still refreshes. */
-const WRITE_MIN_INTERVAL_MS = 3 * 60 * 1000;
+/**
+ * Minimum movement, from the last position saved to Firestore, before another
+ * is saved. The only consumer is the order radius check (km-scale, 3.5 km by
+ * default), so a finer mirror costs writes without changing who gets an order.
+ * There is deliberately no time-based refresh: nothing reads helperLocation's
+ * age, so re-saving an unchanged position was pure cost. Mirrors
+ * MIN_DISPLACEMENT_M in LocationTracker.java.
+ */
+const WRITE_MIN_MOVE_M = 200;
 
 const isUserAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
@@ -192,7 +197,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Last position accepted into React state, and last one mirrored to Firestore.
   // Refs, not state: they gate renders and must never cause one.
   const lastLocalLocationRef = useRef<{ lat: number; lng: number } | null>(null);
-  const lastLocationWriteRef = useRef<{ lat: number; lng: number; at: number } | null>(null);
+  const lastLocationWriteRef = useRef<{ lat: number; lng: number } | null>(null);
 
   const buildProfile = (fbUser: import('firebase/auth').User, savedMode: ActiveMode): UserProfile => {
     const isHardcodedAdmin = isUserAdminEmail(fbUser.email);
@@ -579,7 +584,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (mode === 'helper') {
         getNativePosition({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
           .then((pos) => {
-            // Explicit mode switch: mirror it immediately, never throttled.
+            // Explicit mode switch: always refresh the on-screen position.
             updateHelperLocation({ lat: pos.lat, lng: pos.lng }, { force: true });
           })
           .catch((err) => console.warn('[AuthContext] Helper mode location note:', err?.message));
@@ -995,9 +1000,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     //     React state at all.
     //  2. The Firestore mirror (users/{uid}.helperLocation, read by other
     //     devices and by the push fan-out geofence in functions/index.js) is
-    //     written on the same cadence LocationTracker.java already uses in the
-    //     background, so foreground and background agree on how fresh a
-    //     helper's position needs to be.
+    //     only re-saved after WRITE_MIN_MOVE_M of real movement — the same rule
+    //     LocationTracker.java applies in the background.
     const prevLocal = lastLocalLocationRef.current;
     const movedM = prevLocal
       ? calculateDistanceKm(prevLocal.lat, prevLocal.lng, loc.lat, loc.lng) * 1000
@@ -1025,19 +1029,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       syncNativeUserState({ lat: helperLoc.lat, lng: helperLoc.lng }).catch(() => {});
     }
 
-    const lastWrite = lastLocationWriteRef.current;
-    const movedSinceWriteM = lastWrite
-      ? calculateDistanceKm(lastWrite.lat, lastWrite.lng, loc.lat, loc.lng) * 1000
+    // Measured from the last position actually saved — this session's write,
+    // or else the one already in Firestore — so reopening the app where the
+    // helper already was saves nothing.
+    const saved = lastLocationWriteRef.current
+      ?? (typeof user.helperLocation?.lat === 'number' && typeof user.helperLocation?.lng === 'number'
+        ? { lat: user.helperLocation.lat, lng: user.helperLocation.lng }
+        : null);
+    const movedSinceWriteM = saved
+      ? calculateDistanceKm(saved.lat, saved.lng, loc.lat, loc.lng) * 1000
       : Infinity;
-    const dueForWrite =
-      force ||
-      !lastWrite ||
-      movedSinceWriteM >= WRITE_MIN_MOVE_M ||
-      Date.now() - lastWrite.at >= WRITE_MIN_INTERVAL_MS;
 
-    if (dueForWrite) {
-      lastLocationWriteRef.current = { lat: loc.lat, lng: loc.lng, at: Date.now() };
-      fallbackStore.saveUser(updated);
+    if (addressChanged || movedSinceWriteM >= WRITE_MIN_MOVE_M) {
+      lastLocationWriteRef.current = { lat: loc.lat, lng: loc.lng };
+      fallbackStore.saveHelperLocation(user.uid, helperLoc);
     } else {
       // Keep the store's copy in step without a network round trip: the
       // subscription above rebuilds `user` from this map on every notify(), so
