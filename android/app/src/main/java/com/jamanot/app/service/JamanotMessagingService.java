@@ -95,6 +95,11 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         if ("new_order".equals(type)) {
             NotificationHelper.postOrderAlert(this, notifId, title, body, orderId);
 
+            // Same repeating alarm as the duty path — see AlertSound.startOrderAlarm.
+            if ("helper".equals(Prefs.role(this))) {
+                AlertSound.startOrderAlarm(this, 2_000L);
+            }
+
             // Bring the app up on the order itself. This is the whole point of
             // the FCM path: when an OEM battery manager has killed the process,
             // DutyForegroundService's listener is gone and this is the only code

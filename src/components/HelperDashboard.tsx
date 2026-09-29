@@ -6,7 +6,7 @@ import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
-import { isNativeApp } from '@/lib/native';
+import { isNativeApp, startNativeOrderAlarm, stopNativeOrderAlarm } from '@/lib/native';
 import { isHelperEligibleForOrder } from '@/lib/geofenceUtils';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
@@ -312,6 +312,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate([500, 250, 500, 250, 500]);
       }
+      // The native app rings from Java instead (see the native alarm effect
+      // below) — playing here as well would double every tone.
+      if (isNativeApp()) return;
       // AudioContext tone
       const ctx = audioCtxRef.current;
       if (!ctx) return;
@@ -396,27 +399,55 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       }
     }, 1500);
 
+    // Auto stop after 90 seconds of the helper actually having the app open.
+    // Time spent minimised doesn't count: the alarm must still be ringing when
+    // they come back to it.
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const armAutoStop = () => {
+      if (timeoutId) return;
+      timeoutId = setTimeout(() => setIsAlarmPlaying(false), 90000);
+    };
+    const disarmAutoStop = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = null;
+    };
+    if (!document.hidden) armAutoStop();
+
     // When the user brings the tab back to foreground, immediately play the
     // tone so they hear it even if they missed the notification sound.
     const onVisible = () => {
       if (!active) return;
       if (!document.hidden) {
         playBeep.current();
+        armAutoStop();
+      } else {
+        disarmAutoStop();
       }
     };
     document.addEventListener('visibilitychange', onVisible);
 
-    // Auto stop after 90 seconds
-    const timeoutId = setTimeout(() => {
-      setIsAlarmPlaying(false);
-    }, 90000);
-
     return () => {
       active = false;
       if (intervalId) clearInterval(intervalId);
-      if (timeoutId) clearTimeout(timeoutId);
+      disarmAutoStop();
       document.removeEventListener('visibilitychange', onVisible);
     };
+  }, [isAlarmPlaying, alarmEpoch]);
+
+  // ── Native alarm (Android app) ─────────────────────────────────────────────
+  // Java owns the repeating tone in the app, because the WebView falls silent
+  // as soon as the app is minimised. An order that arrives in the background has
+  // already started it from Java; this keeps it going while the popup is up and
+  // stops it the moment the popup is closed — which is the only thing that
+  // should silence it.
+  useEffect(() => {
+    if (!isNativeApp() || !isAlarmPlaying) return;
+    startNativeOrderAlarm();
+    return () => {
+      stopNativeOrderAlarm();
+    };
+    // alarmEpoch: a further order re-arms it, even if the native safety cap had
+    // already silenced the first run.
   }, [isAlarmPlaying, alarmEpoch]);
 
   // Track which ACTIVE orders the helper has viewed (clicked on the card)

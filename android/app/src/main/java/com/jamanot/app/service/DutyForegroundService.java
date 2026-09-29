@@ -405,6 +405,13 @@ public class DutyForegroundService extends Service {
         // 2. Baseline everyone gets: heads-up notification, no special permission.
         NotificationHelper.postOrderAlert(this, notifId, title, detail, orderId);
 
+        // A helper's order keeps ringing until they open the app and close the
+        // alert popup (JS stops it). Delayed one gap so it follows, rather than
+        // overlaps, the notification's own sound.
+        if ("helper".equals(Prefs.role(this))) {
+            AlertSound.startOrderAlarm(this, 2_000L);
+        }
+
         // 3. Escalation: bring the app itself to the front on this order, so the
         //    user lands on the alert modal rather than a native screen with a
         //    "View" button to tap. Requires "Display over other apps", the

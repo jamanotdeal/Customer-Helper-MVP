@@ -459,6 +459,36 @@ export function onOrderAlert(callback: (payload: { orderId: string }) => void): 
   };
 }
 
+// Whether an alert popup currently owns the native alarm. Java can start the
+// alarm by itself for an order that arrived while the app was in the
+// background; if the app then opens without that popup ever showing (order
+// already taken, helper not in helper mode), nothing would stop it — see
+// stopOrphanedOrderAlarm.
+let orderAlarmOwnedByPopup = false;
+
+/**
+ * Starts the repeating new-order tone in Java. Native only: unlike Web Audio it
+ * keeps ringing while the app is minimised, and it needs no user gesture.
+ */
+export async function startNativeOrderAlarm(): Promise<void> {
+  orderAlarmOwnedByPopup = true;
+  const p = (await jn())?.p;
+  if (p) await p.startOrderAlarm().catch(() => {});
+}
+
+export async function stopNativeOrderAlarm(): Promise<void> {
+  orderAlarmOwnedByPopup = false;
+  const p = (await jn())?.p;
+  if (p) await p.stopOrderAlarm().catch(() => {});
+}
+
+/** Silences an alarm Java started that no popup has since claimed. */
+export async function stopOrphanedOrderAlarm(): Promise<void> {
+  if (orderAlarmOwnedByPopup) return;
+  const p = (await jn())?.p;
+  if (p) await p.stopOrderAlarm().catch(() => {});
+}
+
 /**
  * Drains an orderId delivered by a cold-start intent — the case where Java
  * launched the app long before React mounted, so no event listener existed yet.

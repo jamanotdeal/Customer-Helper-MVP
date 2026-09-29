@@ -7,6 +7,9 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 /**
@@ -53,6 +56,111 @@ public final class AlertSound {
      */
     public static void playOrderTone(Context c) {
         play(c, NotificationHelper.orderSoundUri(c));
+    }
+
+    // ── Repeating new-order alarm ────────────────────────────────────────────
+    //
+    // The single tone above is not enough for a helper: an unanswered order has
+    // to keep ringing until they open the app and close the alert popup. That
+    // loop used to live only in the WebView, which stays silent whenever the app
+    // is closed or minimised — so the alarm stopped after the notification's own
+    // one-shot sound unless AutoOpen managed to raise the app, which needs the
+    // optional overlay permission and is further restricted on Android 15. The
+    // loop therefore runs here, and JS stops it when the popup is closed.
+
+    /** Gap between tones: the asset is ~1.2 s, so this reads as a steady "ting ting". */
+    private static final long ALARM_REPEAT_MS = 2_000L;
+
+    /** Safety cap so an ignored alert can't ring (and hold the CPU) indefinitely. */
+    private static final long ALARM_MAX_MS = 3 * 60_000L;
+
+    private static final Handler HANDLER = new Handler(Looper.getMainLooper());
+
+    private static boolean alarming = false;
+    private static long alarmStartedAt = 0L;
+    private static PowerManager.WakeLock alarmWakeLock;
+    private static Runnable alarmTick;
+
+    /**
+     * Starts the repeating new-order tone, or extends it if one is already
+     * ringing. Stopped by {@link #stopOrderAlarm} (JS, once the popup is closed)
+     * or by {@link #ALARM_MAX_MS}.
+     *
+     * @param initialDelayMs delay before the first tone — pass the repeat gap when
+     *                       a notification has just played its own sound, so the
+     *                       two don't overlap.
+     */
+    public static void startOrderAlarm(Context c, long initialDelayMs) {
+        if (c == null) return;
+        Context app = c.getApplicationContext();
+
+        synchronized (LOCK) {
+            alarmStartedAt = System.currentTimeMillis();
+            if (alarming) return; // Already ringing — the cap is extended above.
+            alarming = true;
+            acquireAlarmWakeLockLocked(app);
+
+            alarmTick = new Runnable() {
+                @Override
+                public void run() {
+                    synchronized (LOCK) {
+                        if (!alarming || alarmTick != this) return;
+                        if (System.currentTimeMillis() - alarmStartedAt >= ALARM_MAX_MS) {
+                            stopAlarmLocked(app);
+                            return;
+                        }
+                    }
+                    playOrderTone(app);
+                    HANDLER.postDelayed(this, ALARM_REPEAT_MS);
+                }
+            };
+            HANDLER.postDelayed(alarmTick, Math.max(0L, initialDelayMs));
+        }
+    }
+
+    /** Stops the repeating tone. Safe to call when nothing is ringing. */
+    public static void stopOrderAlarm(Context c) {
+        if (c == null) return;
+        synchronized (LOCK) {
+            stopAlarmLocked(c.getApplicationContext());
+        }
+    }
+
+    public static boolean isAlarming() {
+        synchronized (LOCK) {
+            return alarming;
+        }
+    }
+
+    private static void stopAlarmLocked(Context app) {
+        if (alarmTick != null) HANDLER.removeCallbacks(alarmTick);
+        alarmTick = null;
+        if (alarming) releaseLocked(app); // Cut off a tone mid-play too.
+        alarming = false;
+        if (alarmWakeLock != null) {
+            try {
+                if (alarmWakeLock.isHeld()) alarmWakeLock.release();
+            } catch (Exception ignored) {
+            }
+            alarmWakeLock = null;
+        }
+    }
+
+    /**
+     * Handler delays are measured in uptime, which stops while the CPU sleeps —
+     * with the screen off the loop would stall after the first tone without this.
+     * Timed to the cap, so the OS releases it even if nothing else does.
+     */
+    private static void acquireAlarmWakeLockLocked(Context app) {
+        try {
+            PowerManager pm = (PowerManager) app.getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return;
+            alarmWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jamanot:orderAlarm");
+            alarmWakeLock.setReferenceCounted(false);
+            alarmWakeLock.acquire(ALARM_MAX_MS + ALARM_REPEAT_MS);
+        } catch (Exception e) {
+            Log.w(TAG, "Alarm wake lock refused: " + e.getMessage());
+        }
     }
 
     private static void play(Context c, Uri sound) {

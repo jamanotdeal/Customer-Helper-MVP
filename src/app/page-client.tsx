@@ -18,11 +18,13 @@ import {
   hideNativeSplash,
   onOrderAlert,
   consumePendingOrderAlert,
+  stopOrphanedOrderAlarm,
   onPullToRefresh,
   finishRefresh,
   setPullToRefreshEnabled,
 } from '@/lib/native';
 import { fallbackStore } from '@/lib/firebase';
+import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { useModal } from '@/components/CustomModal';
 import { getReadiness, requestStep, openSettings, STEP_COPY, type PermissionStep } from '@/lib/permissions';
 
@@ -394,6 +396,31 @@ export default function PageClient() {
     return unsubscribe;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, activeMode, activeTab]);
+
+  // ─── Orphaned order alarm ─────────────────────────────────────────────────
+  // Java starts the repeating order tone on its own when an order arrives in the
+  // background, and the helper's alert popup stops it once closed. If the app
+  // is opened and no popup takes it over — the order was already taken, or the
+  // user isn't in helper mode — nothing else would ever stop it. The grace
+  // period covers a cold start, where the popup only appears once auth and the
+  // order listeners have caught up.
+  useEffect(() => {
+    if (!isNativeApp() || loading) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const check = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { stopOrphanedOrderAlarm(); }, 8000);
+    };
+    const unsubscribe = subscribeAppVisibility((visible) => {
+      if (visible) check();
+      else if (timer) clearTimeout(timer);
+    });
+    if (isAppVisible()) check();
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [loading]);
 
   // ─── Native pull-to-refresh ───────────────────────────────────────────────
   // Prefer a soft refresh: re-attach the Firestore listeners rather than

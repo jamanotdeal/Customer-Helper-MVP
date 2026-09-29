@@ -27,6 +27,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.jamanot.app.MainActivity;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.PendingAlerts;
+import com.jamanot.app.core.AlertSound;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.service.DutyForegroundService;
 import com.jamanot.app.work.DutyWatchdogWorker;
@@ -408,6 +409,8 @@ public class JamanotNativePlugin extends Plugin {
         Prefs.setOnDuty(c, false);
         DutyForegroundService.stop(c);
         DutyWatchdogWorker.cancel(c);
+        // Off duty (mode switch, logout): nothing left to answer, so stop ringing.
+        AlertSound.stopOrderAlarm(c);
         call.resolve();
     }
 
@@ -435,6 +438,23 @@ public class JamanotNativePlugin extends Plugin {
     }
 
     // ── Order alerts ────────────────────────────────────────────────────────
+
+    /**
+     * Repeating new-order tone. JS drives it while the alert popup is up, and
+     * Java starts it on its own for an order that arrives in the background;
+     * either way JS stops it once the popup is closed. See AlertSound.
+     */
+    @PluginMethod
+    public void startOrderAlarm(PluginCall call) {
+        AlertSound.startOrderAlarm(getContext(), 0L);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopOrderAlarm(PluginCall call) {
+        AlertSound.stopOrderAlarm(getContext());
+        call.resolve();
+    }
 
     /** Drains an orderId that arrived before the WebView was alive. */
     @PluginMethod

@@ -47,6 +47,10 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   useEffect(() => {
     setCountdown(autoDismissSeconds);
     const interval = setInterval(() => {
+      // Paused while the app is minimised: dismissing here stops the order
+      // alarm, and it has to keep ringing until the helper has actually seen
+      // this popup.
+      if (typeof document !== 'undefined' && document.hidden) return;
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
