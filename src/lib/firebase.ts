@@ -3568,11 +3568,12 @@ class FallbackStore {
     this.saveLocalStore();
     this.notify();
 
-    // In-app feedback: sound + vibration on the device that created the notification.
-    // (Useful for admin creating notifications while the app is open.)
-    playNotificationSound();
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+    // In-app feedback: sound + vibration on the device that created the notification (for manual admin notifications)
+    if (notif.type !== 'new_order') {
+      playNotificationSound();
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+      }
     }
 
     // NOTE: We no longer fire reg.showNotification() here because that would

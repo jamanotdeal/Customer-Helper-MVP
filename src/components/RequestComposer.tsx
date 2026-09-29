@@ -385,7 +385,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     const isConfirmed = await showConfirm(
       'Confirm Your Request',
-      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান? ভুলবশত বা টেস্ট করার জন্য হলে বাতিল করুন।',
+      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
       'Yes, Submit Request',
       'Cancel'
     );
@@ -547,7 +547,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
       await fallbackStore.addOrder(newOrder);
 
-      // Reset form
+      // Reset form fields
       setDescription('');
       setService('');
       setIsServiceDropdownOpen(false);
@@ -557,22 +557,26 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       setPickupAddressId(undefined);
       setDeliveryAddressId(undefined);
       setIsExpanded(false);
-      // Prompt notification permission on order submit so customer receives live helper updates
+      setSubmitting(false);
+
+      // Prompt notification permission in background without blocking customer flow
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
-        try {
-          const granted = await requestNativePushPermission();
-          if (granted && user?.uid) {
-            initFcmMessaging(user.uid).catch(() => {});
-          }
-        } catch (_) {}
+        requestNativePushPermission()
+          .then((granted) => {
+            if (granted && user?.uid) {
+              initFcmMessaging(user.uid).catch(() => {});
+            }
+          })
+          .catch(() => {});
       }
 
-      // Show admin-configured confirmation message
+      // Show admin-configured confirmation message modal
       const confirmMsg =
         fallbackStore.pricingSettings.orderConfirmationMessage ||
         'আমরা আপনার অনুরোধটি পেয়েছি। শীঘ্রই একজন হেলপার গ্রহণ করবেন।';
       await showAlert('ধন্যবাদ!', confirmMsg, 'success');
 
+      // Redirect user to order details page when they click the modal button
       onOrderCreated(newOrder);
     } catch (err: any) {
       console.error('[RequestComposer] Order creation failed:', err);
