@@ -11,7 +11,7 @@ export default function PrivacyPolicy() {
       {/* Header Bar */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-sm px-4 py-3">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center space-x-3 group">
+          <Link href="/" prefetch={false} className="flex items-center space-x-3 group">
             <div className="relative w-9 h-9 rounded-none overflow-hidden shadow-xs border border-emerald-200 bg-emerald-50">
               <Image
                 src="/Jamanot-Logo.png"
@@ -30,6 +30,7 @@ export default function PrivacyPolicy() {
 
           <Link
             href="/"
+            prefetch={false}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-xs font-bold transition-all"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -162,13 +163,13 @@ export default function PrivacyPolicy() {
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>© {new Date().getFullYear()} Jamanot. All rights reserved.</p>
           <div className="flex items-center space-x-4">
-            <Link href="/" className="hover:text-emerald-700 transition-colors">
+            <Link href="/" prefetch={false} className="hover:text-emerald-700 transition-colors">
               Home
             </Link>
-            <Link href="/terms" className="hover:text-emerald-700 transition-colors">
+            <Link href="/terms" prefetch={false} className="hover:text-emerald-700 transition-colors">
               Terms of Service
             </Link>
-            <Link href="/privacy" className="text-emerald-700 font-bold hover:underline">
+            <Link href="/privacy" prefetch={false} className="text-emerald-700 font-bold hover:underline">
               Privacy Policy
             </Link>
           </div>

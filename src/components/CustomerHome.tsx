@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
@@ -50,13 +50,21 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
+    if (!user) {
+      setSelectedOrderId(null);
+    }
+  }, [user]);
+
+  useEffect(() => {
     if (initialSelectedOrderId) {
-      setSelectedOrderId(initialSelectedOrderId);
+      if (user) {
+        setSelectedOrderId(initialSelectedOrderId);
+      }
       if (onClearInitialOrder) {
         onClearInitialOrder();
       }
     }
-  }, [initialSelectedOrderId, onClearInitialOrder]);
+  }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loaderRef = useRef<HTMLDivElement | null>(null);
@@ -84,15 +92,15 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     };
   }, [user]);
 
-  // Real-time synchronization when active orders exist or when app returns to foreground
+  // Refresh customer orders once on mount / tab focus if needed (realtime updates are already streamed via fallbackStore's onSnapshot listener)
   useEffect(() => {
-    if (!user) return;
+    if (!user?.uid) return;
 
     const refreshOrders = () => {
       fallbackStore.fetchCustomerOrders(user.uid).catch(() => { });
     };
 
-    // Initial fetch from Firestore to ensure immediate freshness
+    // Initial fetch on mount / user change
     refreshOrders();
 
     const handleVisibility = () => {
@@ -104,19 +112,11 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     window.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', refreshOrders);
 
-    // If customer has any running/active orders, poll every 8 seconds to catch status updates immediately
-    const hasRunning = orders.some(isOrderActive);
-    let interval: NodeJS.Timeout | null = null;
-    if (hasRunning) {
-      interval = setInterval(refreshOrders, 8000);
-    }
-
     return () => {
       window.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', refreshOrders);
-      if (interval) clearInterval(interval);
     };
-  }, [user, orders]);
+  }, [user?.uid]);
 
   // Filter logic
   const filteredOrders = orders.filter((o) => {
@@ -161,7 +161,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       {/* Primary Request Composer */}
       <RequestComposer
         onOrderCreated={(newOrder) => {
-          if (!user) {
+          if (!isUserAuthenticated(user)) {
             openAuthModal();
           } else {
             setSelectedOrderId(newOrder.id);
@@ -374,11 +374,11 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       {/* Customer Bottom Footer Links */}
       <footer className="-mx-4 px-4 pt-6 border-t border-gray-100 text-center text-xs text-gray-400 space-y-2">
         <div className="flex items-center justify-center space-x-4 font-semibold text-gray-500">
-          <Link href="/terms" className="hover:text-emerald-600 transition-colors">
+          <Link href="/terms" prefetch={false} className="hover:text-emerald-600 transition-colors">
             Terms of Service
           </Link>
           <span>•</span>
-          <Link href="/privacy" className="hover:text-emerald-600 transition-colors">
+          <Link href="/privacy" prefetch={false} className="hover:text-emerald-600 transition-colors">
             Privacy Policy
           </Link>
         </div>

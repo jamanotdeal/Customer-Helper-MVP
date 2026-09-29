@@ -111,7 +111,17 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
         hasBike,
         status,
       });
-      showAlert('Success', 'Helper application updated successfully.', 'success');
+
+      const existingUser = fallbackStore.users.get(application.userId);
+      if (existingUser) {
+        await fallbackStore.saveUser({
+          ...existingUser,
+          displayName: legalName.trim(),
+          alternativePhone: whatsapp.trim(),
+          phoneNumber: whatsapp.trim(),
+        });
+      }
+      showAlert('Success', 'Helper application & profile updated successfully.', 'success');
     } else {
       // Check if user already has an application
       const existingApp = Array.from(fallbackStore.helperApplications.values()).find(

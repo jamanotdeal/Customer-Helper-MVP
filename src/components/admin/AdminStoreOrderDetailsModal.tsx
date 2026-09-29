@@ -71,6 +71,7 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
   const [priceInput, setPriceInput] = useState<string>('');
   const [sellerName, setSellerName] = useState<string>('');
   const [sellerPhone, setSellerPhone] = useState<string>('');
+  const [helperNote, setHelperNote] = useState<string>('');
   const [storeNote, setStoreNote] = useState<string>('');
   const [currentStatus, setCurrentStatus] = useState<ShopOrderStatus>('PENDING');
   const [itemsWithPrice, setItemsWithPrice] = useState<ShopOrderItemPrice[]>([]);
@@ -86,6 +87,7 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
       setPriceInput(shopOrder.price !== undefined && shopOrder.price !== null ? String(shopOrder.price) : '');
       setSellerName(shopOrder.sellerName || '');
       setSellerPhone(shopOrder.sellerPhone || '');
+      setHelperNote(shopOrder.helperNote || '');
       setStoreNote(shopOrder.note || '');
       setCurrentStatus(shopOrder.status || 'PENDING');
       setItemsWithPrice(
@@ -212,6 +214,7 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
           shopId: selectedShopId || shopOrder.shopId,
           shopName: targetShop?.name || shopOrder.shopName,
           requestText: requestText.trim(),
+          helperNote: helperNote.trim() || undefined,
           itemsWithPrice: cleanItems,
           price: parsedPrice,
           sellerName: sellerName.trim() || undefined,
@@ -256,7 +259,7 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
     if (!printWindow) return;
 
     const itemsRows = itemsWithPrice.length > 0
-      ? itemsWithPrice.map((it) => `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.name}${it.unit ? ` (${it.unit})` : ''}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">৳${it.price ?? 0}</td></tr>`).join('')
+      ? itemsWithPrice.map((it) => `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.name}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">৳${it.price ?? 0}</td></tr>`).join('')
       : `<tr><td colspan="2" style="padding:6px 8px;border-bottom:1px solid #eee;">${shopOrder.requestText}</td></tr>`;
 
     printWindow.document.write(`
@@ -565,6 +568,19 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
                   onChange={(e) => setRequestText(e.target.value)}
                   placeholder="Items or notes typed by helper..."
                   className="w-full p-3 bg-white border border-gray-300 rounded-xl text-xs font-bold text-gray-900 placeholder:text-gray-500 focus:outline-none focus:border-purple-600 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black text-gray-950 uppercase block mb-1.5">
+                  Helper Instruction / Note
+                </label>
+                <textarea
+                  rows={2}
+                  value={helperNote}
+                  onChange={(e) => setHelperNote(e.target.value)}
+                  placeholder="Special instructions or notes typed by helper..."
+                  className="w-full p-3 bg-amber-50/60 border border-amber-300 rounded-xl text-xs font-bold text-gray-900 placeholder:text-gray-500 focus:outline-none focus:border-amber-600 resize-none"
                 />
               </div>
 

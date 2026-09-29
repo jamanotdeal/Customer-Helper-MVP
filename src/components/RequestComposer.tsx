@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order, ServerAddress } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore, saveCustomerPickupAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
@@ -14,17 +14,19 @@ import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
+import { BlockedUserModal } from './BlockedUserModal';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
 }
 
 export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
-  const { user, openAuthModal, updateCustomerPreferences } = useAuth();
+  const { user, openAuthModal, updateCustomerPreferences, activeMode } = useAuth();
   const { showAlert, showConfirm } = useModal();
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
 
   // Main description ("Ki korte hobe?")
   const [description, setDescription] = useState('');
@@ -306,6 +308,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     return () => unsub();
   }, [deliveryAddressId, deliveryAddress, deliveryLat, deliveryLng, pickupAddressId, pickupNote, pickupLat, pickupLng, user?.uid]);
 
+  const pendingExpandAfterLogin = useRef(false);
+
+  useEffect(() => {
+    if (isUserAuthenticated(user) && pendingExpandAfterLogin.current) {
+      pendingExpandAfterLogin.current = false;
+      setIsExpanded(true);
+    }
+  }, [user]);
+
   // Rotate placeholder every 2.8 s
   useEffect(() => {
     if (placeholders.length <= 1) return;
@@ -318,10 +329,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const rawPlaceholder = placeholders[placeholderIndex] || 'আপনাকে কীভাবে Help করতে পারি? যেমন: বাজার করতে হবে, ওষুধ আনতে হবে';
   const currentPlaceholder = rawPlaceholder.replace(/(\.{2,}|…)$/, '').trim();
 
-  // Handle focus / click on main input (Guard unauthenticated users)
+  // Handle focus / click on main input (Guard unauthenticated users & blocked users)
   const handleInputInteract = () => {
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
+      pendingExpandAfterLogin.current = true;
       openAuthModal();
+      return;
+    }
+    if (user.isBlocked) {
+      setShowBlockedModal(true);
       return;
     }
     setIsExpanded(true);
@@ -330,8 +346,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!user || !user.uid || (user as any).displayName === '?' || (!user.email && !user.displayName)) {
+    if (!isUserAuthenticated(user)) {
       openAuthModal();
+      return;
+    }
+
+    if (user.isBlocked) {
+      setShowBlockedModal(true);
       return;
     }
 
@@ -364,7 +385,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     const isConfirmed = await showConfirm(
       'Confirm Your Request',
-      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান? ভুলবশত বা টেস্ট করার জন্য হলে বাতিল করুন।',
+      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
       'Yes, Submit Request',
       'Cancel'
     );
@@ -375,180 +396,215 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     setSubmitting(true);
 
-    // Save preferences
-    saveAltPhone(altPhone);
+    try {
+      // Save preferences
+      saveAltPhone(altPhone);
 
-    // 1. Delivery address: record / upsert in server addresses and get id
-    let finalDeliveryAddressText = deliveryAddress.trim();
-    let effectiveDelivAddressId = deliveryAddressId;
+      // 1. Delivery address: record / upsert in server addresses and get id
+      let finalDeliveryAddressText = deliveryAddress.trim();
+      let effectiveDelivAddressId = deliveryAddressId;
 
-    if (finalDeliveryAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
-          lat: deliveryLat,
-          lng: deliveryLng,
-        });
-        if (sa?.id) {
-          effectiveDelivAddressId = sa.id;
-          finalDeliveryAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
+      if (finalDeliveryAddressText) {
+        try {
+          const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
+            lat: deliveryLat,
+            lng: deliveryLng,
+          });
+          if (sa?.id) {
+            effectiveDelivAddressId = sa.id;
+            finalDeliveryAddressText = sa.address;
+          }
+        } catch (_) {}
+      }
 
-    const finalDelivLoc: LocationData = {
-      address: finalDeliveryAddressText,
-      lat: deliveryLat,
-      lng: deliveryLng,
-      addressId: effectiveDelivAddressId,
-    };
-    saveDefaultDeliveryLocation(finalDelivLoc);
-    if (service) {
-      saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
-    }
-    updateCustomerPreferences(altPhone, finalDelivLoc, undefined);
+      const finalDelivLoc: LocationData = {
+        address: finalDeliveryAddressText,
+        lat: deliveryLat,
+        lng: deliveryLng,
+        addressId: effectiveDelivAddressId,
+      };
+      saveDefaultDeliveryLocation(finalDelivLoc);
+      if (service) {
+        saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
+      }
+      updateCustomerPreferences(altPhone, finalDelivLoc, undefined);
 
-    if (user?.uid && finalDeliveryAddressText) {
-      const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
-      setSavedAddresses(updated);
-      saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
-    }
+      if (user?.uid && finalDeliveryAddressText) {
+        const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
+        setSavedAddresses(updated);
+        saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
+      }
 
-    // 2. Pickup address: record / upsert in server addresses and get id
-    let finalPickupAddressText = pickupNote.trim();
-    let effectivePickupAddressId = pickupAddressId;
-    let pickupLoc: LocationData | undefined = undefined;
+      // 2. Pickup address: record / upsert in server addresses and get id
+      let finalPickupAddressText = pickupNote.trim();
+      let effectivePickupAddressId = pickupAddressId;
+      let pickupLoc: LocationData | undefined = undefined;
 
-    if (finalPickupAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+      if (finalPickupAddressText) {
+        try {
+          const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+            lat: pickupLat,
+            lng: pickupLng,
+          });
+          if (sa?.id) {
+            effectivePickupAddressId = sa.id;
+            finalPickupAddressText = sa.address;
+          }
+        } catch (_) {}
+
+        pickupLoc = {
+          address: finalPickupAddressText,
           lat: pickupLat,
           lng: pickupLng,
-        });
-        if (sa?.id) {
-          effectivePickupAddressId = sa.id;
-          finalPickupAddressText = sa.address;
-        }
-      } catch (_) {}
+          addressId: effectivePickupAddressId,
+        };
 
-      pickupLoc = {
-        address: finalPickupAddressText,
-        lat: pickupLat,
-        lng: pickupLng,
-        addressId: effectivePickupAddressId,
+        if (service && !isNoSavePickupService(service)) {
+          saveServicePickupLocation(service, pickupLoc, user?.uid);
+        }
+        if (user?.uid) {
+          const updated = addSavedPickupAddress(user.uid, pickupLoc);
+          setSavedPickupAddresses(updated);
+          saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
+        }
+      }
+
+      // Build a single-item list from the description
+      const singleItem: OrderItem = {
+        id: 'item-1',
+        name: description.trim(),
+        qty: '1',
       };
 
-      if (service && !isNoSavePickupService(service)) {
-        saveServicePickupLocation(service, pickupLoc, user?.uid);
+      // Calculate initial estimated delivery fee
+      const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
+        ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
+        : 0;
+      const estdFee = calculateEstimatedFee({
+        distanceKm: Math.ceil(distKm),
+        weightKg: 0,
+        isReturnRequested: false,
+        productPrice: 0,
+      }, fallbackStore.pricingSettings).totalFee;
+      const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
+
+      const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
+      const isFree = useFreeDelivery && (user.coins || 0) >= reqCoins;
+      const discountPct = fallbackStore.pricingSettings.freeDeliveryDiscountPercent ?? 100;
+      const finalDeliveryFee = isFree
+        ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
+        : initialFee;
+
+      const isStoreUser = Boolean(
+        user.isStoreApproved ||
+        user.role === 'store' ||
+        Boolean(user.storeId) ||
+        (activeMode as string) === 'store'
+      );
+
+      // Generate zero-padded 5-digit order ID
+      const orderNum = Math.floor(Math.random() * 90000) + 10000;
+      const newOrder: Order = {
+        id: `${orderNum}`,
+        customerId: user.uid,
+        customerName: user.displayName || 'Customer',
+        customerPhone: altPhone,
+        alternativePhone: altPhone,
+        title: service,
+        service: service,
+        items: [singleItem],
+        missingItemPreference: undefined,
+        pickupLocation: pickupLoc,
+        deliveryLocation: finalDelivLoc,
+        additionalNote: undefined,
+        status: 'PENDING',
+        deliveryFee: finalDeliveryFee,
+        originalDeliveryFee: initialFee,
+        isFreeDelivery: isFree,
+        deliveryDiscountPercent: isFree ? discountPct : undefined,
+        coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
+        isStoreOrder: isStoreUser,
+        creatorRole: isStoreUser ? 'store' : (user.isHelper ? 'helper' : 'customer'),
+        appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
+          ? {
+              amount: unpaidDue.totalAmount,
+              note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
+              sourceOrderIds: unpaidDue.sourceOrderIds,
+            }
+          : undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        statusHistory: [
+          {
+            id: `sh-${Date.now()}`,
+            status: 'PENDING',
+            timestamp: new Date().toISOString(),
+            actor: isStoreUser ? 'Store' : 'Customer',
+            note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
+          },
+        ],
+      };
+
+      await fallbackStore.addOrder(newOrder);
+
+      // Reset form fields
+      setDescription('');
+      setService('');
+      setIsServiceDropdownOpen(false);
+      setPickupNote('');
+      setPickupLat(undefined);
+      setPickupLng(undefined);
+      setPickupAddressId(undefined);
+      setDeliveryAddressId(undefined);
+      setIsExpanded(false);
+      setSubmitting(false);
+
+      // Prompt notification permission in background without blocking customer flow
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
+        requestNativePushPermission()
+          .then((granted) => {
+            if (granted && user?.uid) {
+              initFcmMessaging(user.uid).catch(() => {});
+            }
+          })
+          .catch(() => {});
       }
-      if (user?.uid) {
-        const updated = addSavedPickupAddress(user.uid, pickupLoc);
-        setSavedPickupAddresses(updated);
-        saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
-      }
+
+      // Show admin-configured confirmation message modal
+      const confirmMsg =
+        fallbackStore.pricingSettings.orderConfirmationMessage ||
+        'আমরা আপনার অনুরোধটি পেয়েছি। শীঘ্রই একজন হেলপার গ্রহণ করবেন।';
+      await showAlert('ধন্যবাদ!', confirmMsg, 'success');
+
+      // Redirect user to order details page when they click the modal button
+      onOrderCreated(newOrder);
+    } catch (err: any) {
+      console.error('[RequestComposer] Order creation failed:', err);
+      await showAlert('ত্রুটি', err?.message || 'রিকোয়েস্ট সাবমিট করতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।', 'error');
+    } finally {
+      setSubmitting(false);
     }
-
-    // Build a single-item list from the description
-    const singleItem: OrderItem = {
-      id: 'item-1',
-      name: description.trim(),
-      qty: '1',
-    };
-
-    // Calculate initial estimated delivery fee
-    const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
-      ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
-      : 0;
-    const estdFee = calculateEstimatedFee({
-      distanceKm: Math.ceil(distKm),
-      weightKg: 0,
-      isReturnRequested: false,
-      productPrice: 0,
-    }, fallbackStore.pricingSettings).totalFee;
-    const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
-
-    const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
-    const isFree = useFreeDelivery && (user.coins || 0) >= reqCoins;
-    const discountPct = fallbackStore.pricingSettings.freeDeliveryDiscountPercent ?? 100;
-    const finalDeliveryFee = isFree
-      ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
-      : initialFee;
-
-    // Generate zero-padded 5-digit order ID
-    const orderNum = Math.floor(Math.random() * 90000) + 10000;
-    const newOrder: Order = {
-      id: `${orderNum}`,
-      customerId: user.uid,
-      customerName: user.displayName || 'Customer',
-      customerPhone: altPhone,
-      alternativePhone: altPhone,
-      title: service,
-      service: service,
-      items: [singleItem],
-      missingItemPreference: undefined,
-      pickupLocation: pickupLoc,
-      deliveryLocation: finalDelivLoc,
-      additionalNote: undefined,
-      status: 'PENDING',
-      deliveryFee: finalDeliveryFee,
-      originalDeliveryFee: initialFee,
-      isFreeDelivery: isFree,
-      deliveryDiscountPercent: isFree ? discountPct : undefined,
-      coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
-      appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
-        ? {
-            amount: unpaidDue.totalAmount,
-            note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
-            sourceOrderIds: unpaidDue.sourceOrderIds,
-          }
-        : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      statusHistory: [
-        {
-          id: `sh-${Date.now()}`,
-          status: 'PENDING',
-          timestamp: new Date().toISOString(),
-          actor: 'Customer',
-          note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
-        },
-      ],
-    };
-
-    await fallbackStore.addOrder(newOrder);
-
-    // Reset form
-    setDescription('');
-    setService('');
-    setIsServiceDropdownOpen(false);
-    setPickupNote('');
-    setPickupLat(undefined);
-    setPickupLng(undefined);
-    setPickupAddressId(undefined);
-    setDeliveryAddressId(undefined);
-    setIsExpanded(false);
-    // Prompt notification permission on order submit so customer receives live helper updates
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
-      try {
-        const granted = await requestNativePushPermission();
-        if (granted && user?.uid) {
-          initFcmMessaging(user.uid).catch(() => {});
-        }
-      } catch (_) {}
-    }
-
-    // Show admin-configured confirmation message
-    const confirmMsg =
-      fallbackStore.pricingSettings.orderConfirmationMessage ||
-      'আমরা আপনার অনুরোধটি পেয়েছি। শীঘ্রই একজন হেলপার গ্রহণ করবেন।';
-    await showAlert('ধন্যবাদ!', confirmMsg, 'success');
-
-    onOrderCreated(newOrder);
   };
 
   const timingStatus = isOrderTimingOpen(fallbackStore.pricingSettings);
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
+      {user?.isBlocked && (
+        <div
+          onClick={() => setShowBlockedModal(true)}
+          className="mb-4 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start space-x-3 cursor-pointer hover:bg-red-100/70 transition-colors shadow-xs"
+        >
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <h4 className="font-extrabold text-xs sm:text-sm text-red-950">আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে</h4>
+            <p className="text-[11px] text-red-800 font-medium">
+              নিরাপত্তা বা নীতিমালার কারণে নতুন রিকোয়েস্ট তৈরি করা সাময়িকভাবে বন্ধ আছে। বিস্তারিত জানতে ক্লিক করুন।
+            </p>
+          </div>
+        </div>
+      )}
+
       {user && !timingStatus.isOpen ? (
         <div className="text-center py-6 px-4 space-y-4 animate-in fade-in duration-300">
           <div className="inline-flex p-4 rounded-3xl bg-amber-50 border border-amber-200 text-amber-800 shadow-xs">
@@ -655,6 +711,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     id="pickup-address-input"
                     label="কোথা থেকে আনতে হবে বা করতে হবে? (ঐচ্ছিক)"
                     value={pickupNote}
+                    userLocation={
+                      pickupLat && pickupLng
+                        ? { lat: pickupLat, lng: pickupLng }
+                        : deliveryLat && deliveryLng
+                        ? { lat: deliveryLat, lng: deliveryLng }
+                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                        : undefined
+                    }
                     onChange={(val, loc) => {
                       setPickupNote(val);
                       if (loc) {
@@ -687,6 +752,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     label="ডেলিভারি ঠিকানা"
                     required
                     value={deliveryAddress}
+                    userLocation={
+                      deliveryLat && deliveryLng
+                        ? { lat: deliveryLat, lng: deliveryLng }
+                        : pickupLat && pickupLng
+                        ? { lat: pickupLat, lng: pickupLng }
+                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                        : undefined
+                    }
                     onChange={(val, loc) => {
                       setDeliveryAddress(val);
                       if (errors.deliveryAddress) setErrors((prev) => ({ ...prev, deliveryAddress: undefined }));
@@ -757,7 +831,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                   return (
                     <div
                       onClick={() => {
-                        if (!user) {
+                        if (!isUserAuthenticated(user)) {
                           openAuthModal();
                           return;
                         }
@@ -781,7 +855,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                           className="w-4 h-4 accent-amber-600 rounded cursor-pointer shrink-0 pointer-events-none"
                         />
                         <span className="text-xs sm:text-sm font-bold text-gray-900">
-                          Get Free Delivery
+                          Get Free Delivery!
                         </span>
                       </div>
                     </div>
@@ -843,7 +917,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           onClick={() => setShowInsufficientCoinsModal(false)}
         >
           <div
-            className="w-full max-w-[340px] bg-white rounded-3xl p-6 shadow-2xl border border-gray-100 relative animate-in zoom-in-95 duration-150 text-center"
+            className="w-full max-w-[340px] bg-white rounded-3xl p-5 shadow-2xl border border-gray-100 relative animate-in zoom-in-95 duration-150 text-center"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close Button */}
@@ -857,18 +931,25 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
             </button>
 
             <div className="pt-2 px-1">
+              <div className="w-11 h-11 mx-auto mb-2.5 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shadow-2xs">
+                <Sparkles className="w-5 h-5" />
+              </div>
               <h3 className="font-extrabold text-base text-gray-900 tracking-tight leading-snug">
-                {fallbackStore.pricingSettings.insufficientCoinsTitle || 'Get Free Delivery'}
+                {fallbackStore.pricingSettings.insufficientCoinsTitle || 'ফ্রি ডেলিভারি'}
               </h3>
-              <p className="mt-2.5 text-xs sm:text-[13px] text-gray-600 font-medium leading-relaxed whitespace-pre-line">
-                {fallbackStore.pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই! ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
+              <p className="mt-2 text-xs sm:text-[13px] text-gray-600 font-medium leading-relaxed">
+                {fallbackStore.pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই। ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
               </p>
+              <div className="mt-3 py-2 px-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs font-semibold text-amber-900 flex items-center justify-between">
+                <span>প্রয়োজন: <strong>{fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50} Coins</strong></span>
+                <span>আপনার আছে: <strong className="text-emerald-700">{user?.coins || 0} Coins</strong></span>
+              </div>
             </div>
 
             <button
               type="button"
               onClick={() => setShowInsufficientCoinsModal(false)}
-              className="mt-5 w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs shadow-sm shadow-emerald-600/20 transition-all cursor-pointer"
+              className="mt-4 w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer"
             >
               ঠিক আছে
             </button>
@@ -944,6 +1025,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
           </div>
         </div>,
         document.body
+      )}
+
+      {/* Blocked User Custom Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole="customer"
+        />
       )}
     </div>
   );

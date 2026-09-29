@@ -17,6 +17,7 @@ import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
 import { isNativeApp } from '@/lib/native';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
+import { BlockedUserModal } from './BlockedUserModal';
 
 
 // Helper to suppress "বাজার-সদাই করে দিন" service label in Store Mode
@@ -29,21 +30,58 @@ const formatServiceName = (name?: string) => {
   return trimmed;
 };
 
-// Helper to divide request text by comma or extract saved items with price & unit
+// Helper to detect if an item text is a note
+const isNoteItem = (name: string) => {
+  const trimmed = name.trim();
+  return /^(?:নোট|note|নোটঃ)\s*[:：]/i.test(trimmed) || /^(?:নোট|note)\s+/i.test(trimmed);
+};
+
+// Helper to cleanly extract items text and helper note from a ShopOrder
+export const extractShopOrderNoteAndItems = (shopOrder: ShopOrder | null) => {
+  if (!shopOrder) return { itemsText: '', helperNote: '' };
+
+  let helperNote = (shopOrder.helperNote || '').trim();
+  let requestText = (shopOrder.requestText || '').trim();
+
+  // If itemsWithPrice contains a note item mistakenly saved in past
+  if (shopOrder.itemsWithPrice && shopOrder.itemsWithPrice.length > 0) {
+    const noteItem = shopOrder.itemsWithPrice.find((it) => isNoteItem(it.name));
+    if (noteItem && !helperNote) {
+      helperNote = noteItem.name.replace(/^(?:নোট|note|নোটঃ)\s*[:：]?\s*/i, '').trim();
+    }
+  }
+
+  // If helperNote is still empty, extract note from requestText if present
+  if (!helperNote && requestText) {
+    const notePattern = /(?:^|\n|,)\s*(?:নোট|Note|নোটঃ|Note:)\s*[:：]?\s*([\s\S]+)$/i;
+    const match = requestText.match(notePattern);
+    if (match) {
+      helperNote = match[1].trim();
+      requestText = requestText.substring(0, match.index).replace(/[, \t]+$/, '').trim();
+    }
+  }
+
+  return { itemsText: requestText, helperNote };
+};
+
+// Helper to divide request text by comma or extract saved items with price
 const parseShopOrderItems = (shopOrder: ShopOrder | null): { name: string; unit: string; price: string }[] => {
   if (!shopOrder) return [];
   if (shopOrder.itemsWithPrice && shopOrder.itemsWithPrice.length > 0) {
-    return shopOrder.itemsWithPrice.map((item) => ({
-      name: item.name,
-      unit: item.unit || '',
-      price: item.price !== undefined && item.price !== null ? String(item.price) : '',
-    }));
+    return shopOrder.itemsWithPrice
+      .filter((item) => !isNoteItem(item.name))
+      .map((item) => ({
+        name: item.name,
+        unit: item.unit || '',
+        price: item.price !== undefined && item.price !== null ? String(item.price) : '',
+      }));
   }
-  if (!shopOrder.requestText) return [];
-  const splitItems = shopOrder.requestText
+  const { itemsText } = extractShopOrderNoteAndItems(shopOrder);
+  if (!itemsText) return [];
+  const splitItems = itemsText
     .split(/,|\n/)
     .map((s) => s.replace(/^["'\s]+|["'\s]+$/g, '').trim())
-    .filter(Boolean);
+    .filter((s) => Boolean(s) && !isNoteItem(s));
 
   if (splitItems.length > 0) {
     return splitItems.map((name) => ({
@@ -52,11 +90,7 @@ const parseShopOrderItems = (shopOrder: ShopOrder | null): { name: string; unit:
       price: '',
     }));
   }
-  return [{
-    name: shopOrder.requestText.trim(),
-    unit: '',
-    price: shopOrder.price !== undefined && shopOrder.price !== null ? String(shopOrder.price) : '',
-  }];
+  return [];
 };
 
 // Live counterup timer component matching format "1h 16m 03s"
@@ -96,11 +130,15 @@ const formatOrderDateTime = (isoString?: string) => {
 interface StoreDashboardProps {
   activeTab?: string;
   setActiveTab?: (tab: string) => void;
+  initialSelectedOrderId?: string | null;
+  onClearInitialOrder?: () => void;
 }
 
 export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   activeTab: parentActiveTab,
   setActiveTab: parentSetActiveTab,
+  initialSelectedOrderId,
+  onClearInitialOrder,
 }) => {
   const { user } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
@@ -224,18 +262,78 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
   }, [user]);
 
+  const isStoreBlocked = Boolean(
+    user?.isBlocked ||
+    (storeId ? fallbackStore.shops.get(storeId)?.isBlocked : false)
+  );
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+
   // Track viewed shop order IDs in local state and sync with fallbackStore
   const [unviewedShopOrderIds, setUnviewedShopOrderIds] = useState<Set<string>>(new Set());
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
 
   // Audio Context & Sound/Vibration alarm loop for Store
   useEffect(() => {
-    if (unviewedShopOrderIds.size > 0) {
+    if (unviewedShopOrderIds.size > 0 && !isStoreBlocked) {
       setIsAlarmPlaying(true);
     } else {
       setIsAlarmPlaying(false);
     }
-  }, [unviewedShopOrderIds]);
+  }, [unviewedShopOrderIds, isStoreBlocked]);
+
+  useEffect(() => {
+    if (!user) {
+      setSelectedOrderId(null);
+      setSelectedShopOrderId(null);
+      setShowRequestComposer(false);
+    }
+  }, [user]);
+
+  // Handle incoming order query param / notification deep-link
+  useEffect(() => {
+    if (initialSelectedOrderId) {
+      // 1. Check direct shopOrder match or parentOrderId match
+      let targetShopOrder = fallbackStore.shopOrders.get(initialSelectedOrderId);
+      if (!targetShopOrder) {
+        targetShopOrder = Array.from(fallbackStore.shopOrders.values()).find(
+          (so) => so.parentOrderId === initialSelectedOrderId || so.id === initialSelectedOrderId
+        );
+      }
+
+      if (targetShopOrder) {
+        if (targetShopOrder.status === 'PENDING') {
+          // New request for store: show custom new order modal alert!
+          setLocalActiveTab('ORDERS');
+          setOrdersSubTab('NEW');
+          setUnviewedShopOrderIds((prev) => {
+            const updated = new Set(prev);
+            updated.add(targetShopOrder!.id);
+            return updated;
+          });
+          setIsAlarmPlaying(true);
+        } else {
+          // Already accepted / running / completed: open details
+          setLocalActiveTab('ORDERS');
+          if (targetShopOrder.status === 'ACCEPTED') {
+            setOrdersSubTab('RUNNING');
+          } else {
+            setOrdersSubTab('COMPLETED');
+          }
+          setSelectedShopOrderId(targetShopOrder.id);
+        }
+      } else {
+        const ord = fallbackStore.orders.get(initialSelectedOrderId);
+        if (ord && ord.customerId === user?.uid) {
+          setLocalActiveTab('MY_REQUESTS');
+          setSelectedOrderId(ord.id);
+        }
+      }
+
+      if (onClearInitialOrder) {
+        onClearInitialOrder();
+      }
+    }
+  }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
   useEffect(() => {
     if (!isAlarmPlaying) return;
@@ -804,15 +902,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return itemPrices.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
   }, [itemPrices]);
 
-  // Check if all divided items have both valid pricing (> 0) and unit specified
+  // Check if all divided items have valid pricing (> 0)
   const isAllItemsComplete = useMemo(() => {
     if (itemPrices.length === 0) return false;
     return itemPrices.every(
       (item) =>
         item.price.trim() !== '' &&
         !isNaN(parseFloat(item.price)) &&
-        parseFloat(item.price) > 0 &&
-        item.unit.trim() !== ''
+        parseFloat(item.price) > 0
     );
   }, [itemPrices]);
 
@@ -897,6 +994,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
     }
 
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+
     setUpdatingCost(true);
     try {
       await persistItemPrices(soId, itemPrices);
@@ -930,6 +1032,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // Handle operations
   const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+
     if (newStatus === 'DELIVERED') {
       showAlert('সতর্কতা', 'দোকানদার সরাসরি ডেলিভার্ড স্ট্যাটাস সেট করতে পারবেন না। মূল অর্ডারটি সম্পন্ন হলে এটি স্বয়ংক্রিয়ভাবে Delivered হবে।', 'warning');
       return;
@@ -946,12 +1053,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       }
     }
 
-    // Requirement: To pass the Processing (PREPARING) status (e.g. to READY or HANDOVER), store MUST add pricing and unit for all items!
+    // Requirement: To pass the Processing (PREPARING) status (e.g. to READY or HANDOVER), store MUST add pricing for all items!
     if (['READY', 'HANDOVER'].includes(newStatus)) {
       if (!isAllItemsComplete) {
         showAlert(
-          'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
-          'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+          'সকল আইটেমের মূল্য আবশ্যক',
+          'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
           'warning'
         );
         return;
@@ -1109,90 +1216,60 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
             {currentShopOrder.status === 'PENDING' ? (
               <>
-                {/* Order Items & Pricing Card (Divided by comma) */}
+                {/* Order Items Card (Read-only before accepting) */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
                       {formatServiceName(getParentOrder(currentShopOrder.parentOrderId)?.service) || 'অর্ডার আইটেমসমূহ (Order Items)'}
                     </h3>
+                    <span className="text-[10px] font-extrabold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                      অপেক্ষমাণ (Pending)
+                    </span>
                   </div>
 
                   {itemPrices.length > 0 ? (
-                    <div className="space-y-2.5">
+                    <div className="space-y-2">
                       {itemPrices.map((item, idx) => (
                         <div
                           key={idx}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-gray-50/80 p-2.5 rounded-2xl border border-gray-200/80"
+                          className="flex items-center justify-between bg-gray-50/90 p-3 rounded-2xl border border-gray-200/70"
                         >
-                          <div className="min-w-0 flex-1">
-                            <span className="font-bold text-xs text-gray-800 break-words">
+                          <div className="flex items-center space-x-2.5 min-w-0">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                            <span className="font-bold text-xs sm:text-sm text-gray-900 break-words">
                               {item.name}
                             </span>
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <div className="w-16 sm:w-18 shrink-0">
-                              <input
-                                type="text"
-                                placeholder="ইউনিট *"
-                                value={item.unit}
-                                disabled={isCanceled || isDelivered}
-                                onChange={(e) => handleItemFieldChange(idx, 'unit', e.target.value)}
-                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
-                                className="w-full px-1.5 py-1 bg-white border border-gray-200 rounded-xl text-[11px] font-semibold outline-none focus:border-emerald-500 disabled:opacity-70 text-gray-900 placeholder:text-gray-400 text-center"
-                              />
-                            </div>
-                            <div className="relative w-16 sm:w-18 shrink-0">
-                              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-[11px] font-bold pointer-events-none">
-                                ৳
-                              </span>
-                              <input
-                                type="number"
-                                placeholder="মূল্য *"
-                                value={item.price}
-                                disabled={isCanceled || isDelivered}
-                                onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
-                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
-                                className="w-full pl-4 pr-1.5 py-1 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400"
-                              />
-                            </div>
-                          </div>
                         </div>
                       ))}
-
-                      {/* Total Cost Sum Row */}
-                      <div className="flex items-center justify-between p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
-                            মোট পণ্য মূল্য (Total Cost):
-                          </span>
-                          {autoSaveStatus === 'saving' && (
-                            <span className="text-[11px] font-bold text-amber-600 animate-pulse flex items-center gap-1">
-                              <Loader2 className="w-3 h-3 animate-spin" /> সংরক্ষণ হচ্ছে...
-                            </span>
-                          )}
-                          {autoSaveStatus === 'saved' && (
-                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
-                              <Check className="w-3 h-3" /> সংরক্ষিত
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-sm font-black text-emerald-900 font-mono">
-                          ৳{totalCalculatedCost}
-                        </span>
-                      </div>
                     </div>
                   ) : (
                     <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                      {currentShopOrder.requestText
-                        ? currentShopOrder.requestText
-                          .replace(/^["'\s]+|["'\s]+$/g, '')
-                          .trim()
-                          .replace(/[ \t]+/g, ' ')
-                          .replace(/\n\s*\n+/g, '\n')
-                        : ''}
+                      {extractShopOrderNoteAndItems(currentShopOrder).itemsText || currentShopOrder.requestText}
                     </div>
                   )}
                 </div>
+
+                {/* Helper's Special Instruction / Note Card (if present) */}
+                {(() => {
+                  const { helperNote } = extractShopOrderNoteAndItems(currentShopOrder);
+                  if (!helperNote) return null;
+                  return (
+                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-3xl p-4 shadow-soft space-y-2">
+                      <div className="flex items-center space-x-2">
+                        <MessageSquare className="w-4 h-4 text-amber-700 shrink-0" />
+                        <h4 className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider">
+                          হেলপারের বিশেষ নোট (Helper's Note)
+                        </h4>
+                      </div>
+                      <div className="bg-white/85 p-3 rounded-2xl border border-amber-200/60">
+                        <p className="text-xs sm:text-sm font-bold text-amber-950 leading-relaxed whitespace-pre-wrap">
+                          {helperNote}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Helper Contact Details */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
@@ -1230,33 +1307,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   )}
                 </div>
 
-                {/* Requirement 4: Store Private Note Card (Right after Helper Contact Details) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
-                      <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
-                    </label>
-                    <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
-                  </div>
-                  <textarea
-                    placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
-                    value={noteInput}
-                    disabled={isCanceled || isDelivered}
-                    onChange={(e) => setNoteInput(e.target.value)}
-                    rows={3}
-                    className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
-                  />
-                  {!isCanceled && !isDelivered && (
-                    <button
-                      onClick={() => handleSaveNote(currentShopOrder.id)}
-                      disabled={updatingNote}
-                      className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs flex items-center justify-center gap-1"
-                    >
-                      <span>{updatingNote ? 'Saving Note...' : 'নোট সংরক্ষণ করুন (Save Note)'}</span>
-                    </button>
-                  )}
-                </div>
-
                 {/* 3 Buttons Side by Side (Left: দেখতেছি [30%], Middle: Accept [flex-1], Right: Cancel [30%]) */}
                 <div className="flex space-x-1.5 pt-2">
                   <button
@@ -1272,14 +1322,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     onClick={async () => {
                       const confirmed = await showConfirm(
                         'অর্ডার গ্রহণ করুন',
-                        'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
+                        'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর পণ্যের মূল্য যোগ করতে পারবেন।',
                         'হ্যাঁ, Accept করুন',
                         'বাতিল'
                       );
                       if (!confirmed) return;
                       fallbackStore.markShopOrderViewed(currentShopOrder.id);
                       handleUpdateStatus(currentShopOrder.id, 'ACCEPTED');
-                      setSelectedShopOrderId(null);
                     }}
                     className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all active:scale-95 text-center"
                   >
@@ -1327,8 +1376,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                 if (step.status === 'HANDOVER' || step.status === 'READY') {
                                   if (!isAllItemsComplete) {
                                     showAlert(
-                                      'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
-                                      'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                      'সকল আইটেমের মূল্য আবশ্যক',
+                                      'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
                                       'warning'
                                     );
                                     return;
@@ -1375,8 +1424,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             onClick={() => {
                               if (!isAllItemsComplete) {
                                 showAlert(
-                                  'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
-                                  'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                  'সকল আইটেমের মূল্য আবশ্যক',
+                                  'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
                                   'warning'
                                 );
                                 return;
@@ -1392,8 +1441,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             onClick={() => {
                               if (!isAllItemsComplete) {
                                 showAlert(
-                                  'সকল আইটেমের মূল্য ও ইউনিট আবশ্যক',
-                                  'হস্তান্তর করার পূর্বে প্রতিটি আইটেমের জন্য মূল্য এবং ইউনিট (যেমন: ১ কেজি, ২ পিস) উল্লেখ করা আবশ্যক।',
+                                  'সকল আইটেমের মূল্য আবশ্যক',
+                                  'হস্তান্তর করার পূর্বে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
                                   'warning'
                                 );
                                 return;
@@ -1410,7 +1459,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   </div>
                 )}
 
-                {/* Requirement 1 & 2: Order Items Card with Comma Divided Items and Pricing */}
+                {/* Requirement 1 & 2: Order Items Card with Pricing (Unit input removed) */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
@@ -1428,39 +1477,26 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       {itemPrices.map((item, idx) => (
                         <div
                           key={idx}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-gray-50/80 p-2.5 rounded-2xl border border-gray-200/80"
+                          className="flex items-center justify-between gap-3 bg-gray-50/90 p-3 rounded-2xl border border-gray-200/80 hover:border-gray-300 transition-all"
                         >
                           <div className="min-w-0 flex-1">
-                            <span className="font-bold text-xs text-gray-800 break-words">
+                            <span className="font-bold text-xs sm:text-sm text-gray-900 break-words">
                               {item.name}
                             </span>
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <div className="w-16 sm:w-18 shrink-0">
-                              <input
-                                 type="text"
-                                 placeholder="ইউনিট *"
-                                 value={item.unit}
-                                 disabled={isCanceled || isDelivered}
-                                 onChange={(e) => handleItemFieldChange(idx, 'unit', e.target.value)}
-                                 onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
-                                 className="w-full px-1.5 py-1 bg-white border border-gray-200 rounded-xl text-[11px] font-semibold outline-none focus:border-emerald-500 disabled:opacity-70 text-gray-900 placeholder:text-gray-400 text-center"
-                              />
-                            </div>
-                            <div className="relative w-16 sm:w-18 shrink-0">
-                              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-[11px] font-bold pointer-events-none">
-                                ৳
-                              </span>
-                              <input
-                                type="number"
-                                placeholder="মূল্য *"
-                                value={item.price}
-                                disabled={isCanceled || isDelivered}
-                                onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
-                                onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
-                                className="w-full pl-4 pr-1.5 py-1 bg-white border border-gray-200 rounded-xl text-xs font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400"
-                              />
-                            </div>
+                          <div className="relative w-24 sm:w-28 shrink-0">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold pointer-events-none">
+                              ৳
+                            </span>
+                            <input
+                              type="number"
+                              placeholder="মূল্য *"
+                              value={item.price}
+                              disabled={isCanceled || isDelivered}
+                              onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
+                              onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
+                              className="w-full pl-6 pr-2.5 py-1.5 bg-white border border-gray-200 rounded-xl text-xs sm:text-sm font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400 shadow-2xs"
+                            />
                           </div>
                         </div>
                       ))}
@@ -1489,16 +1525,31 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     </div>
                   ) : (
                     <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                      {currentShopOrder.requestText
-                        ? currentShopOrder.requestText
-                          .replace(/^["'\s]+|["'\s]+$/g, '')
-                          .trim()
-                          .replace(/[ \t]+/g, ' ')
-                          .replace(/\n\s*\n+/g, '\n')
-                        : ''}
+                      {extractShopOrderNoteAndItems(currentShopOrder).itemsText || currentShopOrder.requestText}
                     </div>
                   )}
                 </div>
+
+                {/* Helper's Special Instruction / Note Card (if present) */}
+                {(() => {
+                  const { helperNote } = extractShopOrderNoteAndItems(currentShopOrder);
+                  if (!helperNote) return null;
+                  return (
+                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-3xl p-4 shadow-soft space-y-2">
+                      <div className="flex items-center space-x-2">
+                        <MessageSquare className="w-4 h-4 text-amber-700 shrink-0" />
+                        <h4 className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider">
+                          হেলপারের বিশেষ নোট (Helper's Note)
+                        </h4>
+                      </div>
+                      <div className="bg-white/85 p-3 rounded-2xl border border-amber-200/60">
+                        <p className="text-xs sm:text-sm font-bold text-amber-950 leading-relaxed whitespace-pre-wrap">
+                          {helperNote}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Helper Contact Details (right after Request Details block) */}
                 <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
@@ -1599,6 +1650,32 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
     return (
       <div className="space-y-5 pb-24 animate-in fade-in duration-200">
+        {/* ── Blocked Store Alert Banner ── */}
+        {isStoreBlocked && (
+          <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-300">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 rounded-2xl bg-red-100 text-red-600 shrink-0">
+                <ShieldAlert className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-xs text-red-900">
+                  দোকান সাময়িকভাবে স্থগিত (Store Blocked)
+                </h4>
+                <p className="text-[11px] text-red-700 font-medium leading-relaxed">
+                  আপনার স্টোর অ্যাকাউন্টটি অ্যাডমিন কর্তৃক স্থগিত করা হয়েছে। নতুন অর্ডার গ্রহণ বা রিকোয়েস্ট তৈরি সাময়িকভাবে বন্ধ আছে।
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowBlockedModal(true)}
+              className="px-3.5 py-2 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-extrabold shadow-sm transition-all shrink-0"
+            >
+              বিস্তারিত
+            </button>
+          </div>
+        )}
+
         {/* ─── Tab Bar in Emerald Green ──────────────────────────────────────────────────────── */}
         <div className="flex space-x-1.5 bg-gray-100 p-1.5 rounded-2xl">
           <button
@@ -1810,8 +1887,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                           </h5>
                           <p className="text-xs text-gray-600 font-medium truncate">
                             {so.itemsWithPrice && so.itemsWithPrice.length > 0
-                              ? so.itemsWithPrice.map((i) => `${i.name}${i.price !== undefined ? ` (৳${i.price})` : ''}`).join(', ')
-                              : so.requestText}
+                              ? so.itemsWithPrice.filter((i) => !isNoteItem(i.name)).map((i) => `${i.name}${i.price !== undefined ? ` (৳${i.price})` : ''}`).join(', ')
+                              : extractShopOrderNoteAndItems(so).itemsText || so.requestText}
                           </p>
                         </div>
 
@@ -2140,6 +2217,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           }}
         />
       )}
+
+      {/* Blocked User / Store Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole="store"
+        />
+      )}
     </>
   );
 };
@@ -2241,13 +2326,28 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
               </span>
             </div>
 
-            {/* Request text */}
-            <div className="bg-red-50/60 border border-red-100 rounded-2xl p-3.5">
-              <p className="text-[10px] text-red-800 font-bold uppercase tracking-wide mb-1">অর্ডার / প্রোডাক্ট বিবরণ</p>
-              <p className="text-sm text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
-                {shopOrder.requestText}
-              </p>
-            </div>
+            {/* Request text & Helper note */}
+            {(() => {
+              const { itemsText, helperNote } = extractShopOrderNoteAndItems(shopOrder);
+              return (
+                <div className="space-y-2">
+                  <div className="bg-red-50/60 border border-red-100 rounded-2xl p-3.5">
+                    <p className="text-[10px] text-red-800 font-bold uppercase tracking-wide mb-1">অর্ডার / প্রোডাক্ট বিবরণ</p>
+                    <p className="text-sm text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
+                      {itemsText || shopOrder.requestText}
+                    </p>
+                  </div>
+                  {helperNote && (
+                    <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-3">
+                      <p className="text-[10px] text-amber-800 font-bold uppercase tracking-wide mb-0.5">হেলপারের বিশেষ নোট (Helper's Note)</p>
+                      <p className="text-xs text-amber-950 font-bold leading-relaxed whitespace-pre-wrap">
+                        {helperNote}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Helper Info with Phone Number */}
             <div className="flex items-center space-x-3 bg-gray-50 p-3 rounded-2xl border border-gray-100">

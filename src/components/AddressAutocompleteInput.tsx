@@ -18,6 +18,7 @@ export interface AddressAutocompleteInputProps {
   serviceCategory?: string;
   savedLocalAddresses?: LocationData[];
   serverAddresses?: ServerAddress[];
+  userLocation?: { lat: number; lng: number };
   className?: string;
   inputClassName?: string;
   maxLength?: number;
@@ -58,7 +59,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Dynamic server search results (only queried when user types)
+  // Dynamic server search results (from local DB/server table)
   const [serverSearchResults, setServerSearchResults] = useState<ServerAddress[]>([]);
 
   // Keyboard navigation index
@@ -78,7 +79,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
   // Normalize string for fuzzy/substring matching
   const normalize = (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ');
 
-  // Debounced server address search — ONLY runs when user types something
+  // Debounced server address search from fallbackStore
   useEffect(() => {
     const q = (value || '').trim();
     if (!q) {
@@ -93,8 +94,8 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         if (isMounted) {
           setServerSearchResults(results);
         }
-      } catch (_) {}
-    }, 80);
+      } catch (_) { }
+    }, 60);
 
     return () => {
       isMounted = false;
@@ -102,13 +103,13 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     };
   }, [value]);
 
-  // Compute suggestions based on query and service category
-  const suggestions = useMemo(() => {
+  // Calculate Saved Address Suggestions (Local & Server)
+  const savedSuggestions = useMemo(() => {
     const q = normalize(value || '');
     const list: UnifiedSuggestion[] = [];
     const seenTexts = new Set<string>();
 
-    // 1. Add Local Saved Addresses
+    // Add Local Saved Addresses
     savedLocalAddresses.forEach((loc, index) => {
       if (!loc || !loc.address) return;
       const cleanAddr = loc.address.trim();
@@ -129,7 +130,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
       });
     });
 
-    // 2. Add Server Addresses (ONLY when user is actively searching)
+    // Add Server Addresses (ONLY when user is actively searching)
     const activeServerList = q
       ? (serverSearchResults.length > 0 ? serverSearchResults : (propServerAddresses || []))
       : [];
@@ -153,7 +154,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
       });
     });
 
-    // When input is empty: show only top local saved addresses (by default server addresses do not load)
+    // When input is empty: show only top local saved addresses
     if (!q) {
       return list.filter((item) => item.isLocalSaved).slice(0, 4);
     }
@@ -179,7 +180,6 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         } else if (fullSearchable.includes(q)) {
           baseScore += 50;
         } else if (queryTokens.length > 0) {
-          // Token-by-token matching for multi-word queries (e.g. "মিরপুর ১০")
           let tokenMatches = 0;
           for (const token of queryTokens) {
             if (fullSearchable.includes(token)) {
@@ -194,12 +194,10 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
           }
         }
 
-        // If NO match was found at all, score is 0
         if (baseScore === 0) {
           return { item, score: 0 };
         }
 
-        // Only add bonus points if the query matched
         if (item.isRecent) baseScore += 5;
         if (item.isLocalSaved) baseScore += 3;
         if (item.lat && item.lng) baseScore += 2;
@@ -209,7 +207,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
       .filter((res) => res.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((res) => res.item)
-      .slice(0, 4);
+      .slice(0, 5);
 
     return matched;
   }, [value, savedLocalAddresses, serverSearchResults, propServerAddresses, serviceCategory]);
@@ -239,7 +237,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isOpen || suggestions.length === 0) {
+    if (!isOpen || savedSuggestions.length === 0) {
       if (e.key === 'ArrowDown') {
         setIsOpen(true);
       }
@@ -248,14 +246,14 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : 0));
+      setSelectedIndex((prev) => (prev < savedSuggestions.length - 1 ? prev + 1 : 0));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev > 0 ? prev - 1 : suggestions.length - 1));
+      setSelectedIndex((prev) => (prev > 0 ? prev - 1 : savedSuggestions.length - 1));
     } else if (e.key === 'Enter') {
-      if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
+      if (selectedIndex >= 0 && selectedIndex < savedSuggestions.length) {
         e.preventDefault();
-        handleSelect(suggestions[selectedIndex]);
+        handleSelect(savedSuggestions[selectedIndex]);
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false);
@@ -297,11 +295,10 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
           placeholder={placeholder}
           maxLength={maxLength}
           autoComplete="off"
-          className={`w-full ${icon ? 'pl-10' : 'pl-4'} pr-10 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-all ${
-            error
+          className={`w-full ${icon ? 'pl-10' : 'pl-4'} pr-10 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-all ${error
               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
               : 'border-gray-200 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10'
-          } ${inputClassName}`}
+            } ${inputClassName}`}
         />
 
         {/* Action icons right (Clear or Dropdown arrow) */}
@@ -345,21 +342,22 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         </div>
       </div>
 
-      {/* Suggestion Dropdown */}
-      {isOpen && suggestions.length > 0 && (
+      {/* Suggestion Dropdown: only shown when matching local/server saved addresses exist */}
+      {isOpen && savedSuggestions.length > 0 && (
         <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-2xl shadow-xl border border-emerald-100/80 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
           <div className="px-3 py-2 bg-gradient-to-r from-emerald-50/60 to-slate-50 border-b border-emerald-100/50 flex items-center justify-between text-[11px] font-bold text-emerald-900">
-            <span className="flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-emerald-600" />
-              <span>{value ? 'প্রস্তাবিত ঠিকানা' : 'সেভ করা ঠিকানা'}</span>
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{value ? 'প্রস্তাবিত সেভ করা ঠিকানা' : 'সেভ করা ঠিকানা'}</span>
             </span>
             <span className="text-[10px] text-gray-400 font-normal">ক্লিক করে বেছে নিন</span>
           </div>
 
           <div className="divide-y divide-gray-50 max-h-60 overflow-y-auto">
-            {suggestions.map((item, idx) => {
+            {savedSuggestions.map((item, idx) => {
               const isCurrentExact = normalize(item.address) === normalize(value);
               const isKeySelected = idx === selectedIndex;
+
               return (
                 <button
                   key={item.key}
@@ -374,22 +372,20 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
                     e.stopPropagation();
                     handleSelect(item);
                   }}
-                  className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 transition-colors group cursor-pointer ${
-                    isKeySelected
+                  className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 transition-colors group cursor-pointer ${isKeySelected
                       ? 'bg-emerald-100/80'
                       : isCurrentExact
-                      ? 'bg-emerald-50/90'
-                      : 'hover:bg-emerald-50/70'
-                  }`}
+                        ? 'bg-emerald-50/90'
+                        : 'hover:bg-emerald-50/70'
+                    }`}
                 >
                   <div
-                    className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                      item.isRecent
+                    className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${item.isRecent
                         ? 'bg-amber-100/80 text-amber-700'
                         : item.isServerSaved
-                        ? 'bg-blue-50 text-blue-600 border border-blue-100'
-                        : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                    }`}
+                          ? 'bg-blue-50 text-blue-600 border border-blue-100'
+                          : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                      }`}
                   >
                     {item.isRecent ? (
                       <Clock className="w-3.5 h-3.5" />
@@ -399,13 +395,13 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-900 leading-snug group-hover:text-emerald-800 transition-colors">
-                      {item.address}
+                    <p className="text-xs font-bold text-gray-900 leading-snug group-hover:text-emerald-800 transition-colors truncate">
+                      {item.shortName || item.address}
                     </p>
-                    {item.shortName && (
-                      <p className="text-[11px] text-emerald-700 font-semibold truncate mt-0.5 flex items-center gap-1">
-                        <span className="text-[10px] text-gray-400 font-normal">📍</span>
-                        <span>{item.shortName}</span>
+                    {item.shortName && item.shortName !== item.address && (
+                      <p className="text-[11px] text-gray-500 font-normal truncate mt-0.5 flex items-center gap-1">
+                        <span className="text-[10px] text-gray-400">📍</span>
+                        <span>{item.address}</span>
                       </p>
                     )}
                   </div>
@@ -422,3 +418,4 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     </div>
   );
 };
+

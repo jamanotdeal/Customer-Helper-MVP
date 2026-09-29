@@ -605,7 +605,7 @@ class FallbackStore {
         doc(db, 'settings', 'pricing'),
         (docSnap) => {
           if (docSnap.exists()) {
-            this.pricingSettings = docSnap.data() as PricingSettings;
+            this.pricingSettings = { ...DEFAULT_PRICING_SETTINGS, ...(docSnap.data() as PricingSettings) };
             this.notify();
           }
         },
@@ -987,7 +987,7 @@ class FallbackStore {
 
       const savedPricing = this.safeParse<PricingSettings>('jamanot_pricing_store');
       if (savedPricing && typeof savedPricing === 'object') {
-        this.pricingSettings = savedPricing;
+        this.pricingSettings = { ...DEFAULT_PRICING_SETTINGS, ...savedPricing };
       }
     } catch (e) {
       console.warn('Local storage hydration error:', e);
@@ -1068,7 +1068,10 @@ class FallbackStore {
 
       active = onSnapshot(
         q,
-        (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
+        (snapshot) => {
+          mainDocs = snapshot.docs;
+          emit();
+        },
         (err: any) => {
           if (orderBySpec === 'createdAt' && err?.code === 'failed-precondition' && !disposed) {
             console.warn(
@@ -1083,15 +1086,50 @@ class FallbackStore {
       );
     };
 
+    // Segment broadcasts (`segment:<name>`) can't be listed in an `in` filter —
+    // custom segment names are arbitrary — so they get their own prefix-range
+    // listener. Both result sets are merged before reaching the handler, which
+    // rebuilds the per-user list from whatever docs it is given.
+    let mainDocs: any[] = [];
+    let segmentDocs: any[] = [];
+    const emit = () => this._handleNotificationSnapshot({ docs: [...mainDocs, ...segmentDocs] }, userId);
+
+    const unsubSegments = onSnapshot(
+      query(
+        collection(db, 'notifications'),
+        where('userId', '>=', 'segment:'),
+        where('userId', '<', 'segment;'),
+        limit(30)
+      ),
+      (snapshot) => {
+        segmentDocs = snapshot.docs;
+        emit();
+      },
+      (err: any) => console.warn(`[Firestore] ${label} segment notifications sync note:`, err)
+    );
+
     attach('createdAt');
     return () => {
       disposed = true;
       if (active) active();
+      unsubSegments();
     };
   }
 
+  /**
+   * Segment broadcasts are one shared `segment:<name>` doc for every user, so
+   * membership can only be decided on the receiving device. Unknown or blocked
+   * users get nothing rather than every segment's campaign.
+   */
+  private _isSegmentNotifForUser(target: string, uid: string): boolean {
+    if (!target.startsWith('segment:')) return false;
+    const profile = this.users.get(uid);
+    if (!profile || profile.isBlocked) return false;
+    return this.doesUserMatchSegment(profile, target.slice('segment:'.length));
+  }
+
   private _handleNotificationSnapshot(snapshot: any, userId: string) {
-    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers']);
+    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers', 'all-stores']);
     // Fix 4: Max notifications to store per user in memory.
     const MAX_NOTIFS_PER_USER = 100;
 
@@ -1107,8 +1145,11 @@ class FallbackStore {
       // already opened them.
       const data: AppNotification =
         !raw.read && this._readNotifIds.has(raw.id) ? { ...raw, read: true } : raw;
+      const isSegment = !!data.userId && data.userId.startsWith('segment:');
+      if (isSegment && !this._isSegmentNotifForUser(data.userId, userId)) return;
+      const isBroadcast = BROADCAST_IDS.has(data.userId) || isSegment;
       // Broadcast notifications are stored under the current user's uid locally
-      const storeKey = BROADCAST_IDS.has(data.userId) ? userId : data.userId;
+      const storeKey = isBroadcast ? userId : data.userId;
       const userList = map.get(storeKey) || [];
       userList.push(data);
       map.set(storeKey, userList);
@@ -1179,7 +1220,9 @@ class FallbackStore {
           notif.userId === uid ||
           notif.userId === 'all' ||
           helperBroadcastEligible ||
-          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
+          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin') ||
+          (notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId))) ||
+          (!!notif.userId && this._isSegmentNotifForUser(notif.userId, uid));
 
         if (targets && !notif.read) {
           if (isFirstSnapshot) {
@@ -1503,13 +1546,17 @@ class FallbackStore {
       // Only this customer's orders (realtime)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('customerId', '==', userId), limit(50)),
+          query(collection(db, 'orders'), where('customerId', '==', userId), limit(100)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+                const ord = this.resolveOrderLocations(change.doc.data() as Order);
+                this.orders.set(change.doc.id, ord);
+                if (ord.status === 'DELIVERED') {
+                  this.ensureCustomerOrderCoinsAwarded(userId, ord);
+                }
               }
             });
             this.notify();
@@ -1544,18 +1591,16 @@ class FallbackStore {
         onSnapshot(
           collection(db, 'rewardPrizes'),
           (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(change.doc.id)) {
-                deleteDoc(doc(db, 'rewardPrizes', change.doc.id)).catch(() => { });
-                this.rewardPrizes.delete(change.doc.id);
+            const prizeMap = new Map<string, RewardPrize>();
+            snapshot.docs.forEach((docSnap) => {
+              if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(docSnap.id)) {
+                deleteDoc(doc(db, 'rewardPrizes', docSnap.id)).catch(() => { });
                 return;
               }
-              if (change.type === 'removed') {
-                this.rewardPrizes.delete(change.doc.id);
-              } else {
-                this.rewardPrizes.set(change.doc.id, change.doc.data() as RewardPrize);
-              }
+              prizeMap.set(docSnap.id, docSnap.data() as RewardPrize);
             });
+            this.rewardPrizes = prizeMap;
+            this.saveLocalStore();
             this.notify();
           },
           (err) => console.warn('[Firestore] Customer rewardPrizes sync note:', err)
@@ -1605,20 +1650,19 @@ class FallbackStore {
       const helperGroup =
         helperType === 'dedicated' ? 'all-dedicated-helpers' : 'all-commuter-helpers';
 
-      // Active/in-progress orders that any helper can see (realtime)
+      // Recent orders stream (realtime, latest 150 orders ordered by createdAt desc)
+      // This ensures any newly created order is immediately received by helpers in realtime
       unsubs.push(
         onSnapshot(
           query(
             collection(db, 'orders'),
-            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
-            limit(100)
+            orderBy('createdAt', 'desc'),
+            limit(150)
           ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                // Always remove: if the doc was hard-deleted by admin, we must clear it.
-                // If it merely changed status (leaving this query scope), the second
-                // listener (helperId == userId, all statuses) will keep/re-add it.
+                // If doc was removed from Firestore, delete it
                 this.orders.delete(change.doc.id);
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
@@ -1627,6 +1671,28 @@ class FallbackStore {
             this.notify();
           },
           (err) => console.warn('[Firestore] Helper active orders sync note:', err)
+        )
+      );
+
+      // Unassigned pending requests stream (realtime, ensures all new requests are received immediately)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'orders'),
+            where('status', '==', 'PENDING'),
+            limit(100)
+          ),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper pending orders sync note:', err)
         )
       );
 
@@ -1898,69 +1964,82 @@ class FallbackStore {
   }
 
   private async _fetchAdminUsers() {
-    const snap = await getDocs(query(collection(db, 'users'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'users'), limit(150)));
     snap.docs.forEach((d) => { const u = d.data() as UserProfile; this.users.set(u.uid, u); });
   }
 
   private async _fetchAdminWithdrawals() {
-    const snap = await getDocs(collection(db, 'withdrawals'));
+    const snap = await getDocs(query(collection(db, 'withdrawals'), limit(100)));
     snap.docs.forEach((d) => { const w = d.data() as WithdrawalRequest; this.withdrawals.set(w.id, w); });
   }
 
   private async _fetchAdminHelperApplications() {
-    const snap = await getDocs(collection(db, 'helperApplications'));
+    const snap = await getDocs(query(collection(db, 'helperApplications'), limit(100)));
     snap.docs.forEach((d) => { const a = d.data() as HelperApplication; this.helperApplications.set(a.id, a); });
   }
 
   private async _fetchAdminStoreApplications() {
-    const snap = await getDocs(collection(db, 'storeApplications'));
+    const snap = await getDocs(query(collection(db, 'storeApplications'), limit(100)));
     snap.docs.forEach((d) => { const a = d.data() as StoreApplication; this.storeApplications.set(a.id, a); });
   }
 
   private async _fetchAdminOrderFeedbacks() {
-    const snap = await getDocs(collection(db, 'orderFeedbacks'));
+    const snap = await getDocs(query(collection(db, 'orderFeedbacks'), limit(100)));
     snap.docs.forEach((d) => { const f = d.data() as OrderFeedback; this.orderFeedbacks.set(f.id, f); });
   }
 
   private async _fetchAdminFeeSuggestions() {
-    const snap = await getDocs(collection(db, 'feeSuggestions'));
+    const snap = await getDocs(query(collection(db, 'feeSuggestions'), limit(100)));
     snap.docs.forEach((d) => { this.feeSuggestions.set(d.id, d.data() as FeeSuggestion); });
   }
 
   private async _fetchAdminCustomModals() {
-    const snap = await getDocs(collection(db, 'customModals'));
+    const snap = await getDocs(query(collection(db, 'customModals'), limit(50)));
     snap.docs.forEach((d) => { const c = d.data() as AdminCustomModalConfig; this.customModals.set(c.id, c); });
   }
 
+  public async fetchRewardPrizes(): Promise<RewardPrize[]> {
+    try {
+      const snap = await getDocs(query(collection(db, 'rewardPrizes'), limit(50)));
+      const prizeMap = new Map<string, RewardPrize>();
+      snap.docs.forEach((d) => {
+        if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
+          deleteDoc(doc(db, 'rewardPrizes', d.id)).catch(() => { });
+          return;
+        }
+        prizeMap.set(d.id, d.data() as RewardPrize);
+      });
+      this.rewardPrizes = prizeMap;
+      this.saveLocalStore();
+      this.notify();
+      return Array.from(prizeMap.values());
+    } catch (e: any) {
+      console.warn('[Firestore] fetchRewardPrizes note:', e?.message || e);
+      return Array.from(this.rewardPrizes.values());
+    }
+  }
+
   private async _fetchAdminRewardPrizes() {
-    const snap = await getDocs(collection(db, 'rewardPrizes'));
-    snap.docs.forEach((d) => {
-      if (['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'].includes(d.id)) {
-        deleteDoc(doc(db, 'rewardPrizes', d.id)).catch(() => { });
-        this.rewardPrizes.delete(d.id);
-        return;
-      }
-      this.rewardPrizes.set(d.id, d.data() as RewardPrize);
-    });
+    await this.fetchRewardPrizes();
   }
 
   private async _fetchAdminShops() {
-    const snap = await getDocs(collection(db, 'shops'));
+    const snap = await getDocs(query(collection(db, 'shops'), limit(100)));
     snap.docs.forEach((d) => { const s = d.data() as Shop; this.shops.set(d.id, s); });
   }
 
   private async _fetchAdminShopOrders() {
-    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(150)));
     snap.docs.forEach((d) => { this.shopOrders.set(d.id, d.data() as ShopOrder); });
   }
 
   private async _fetchAdminWallets() {
-    const snap = await getDocs(collection(db, 'wallets'));
+    const snap = await getDocs(query(collection(db, 'wallets'), limit(100)));
     snap.docs.forEach((d) => { const w = d.data() as Wallet; this.wallets.set(w.userId, w); });
   }
 
   private async _fetchAdminWalletTransactions() {
-    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(500)));
+    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(150)));
     const map = new Map<string, WalletTransaction[]>();
     snap.docs.forEach((d) => {
       const tx = d.data() as WalletTransaction;
@@ -1975,7 +2054,7 @@ class FallbackStore {
   }
 
   private async _fetchAdminScheduledNotifications() {
-    const snap = await getDocs(collection(db, 'scheduledNotifications'));
+    const snap = await getDocs(query(collection(db, 'scheduledNotifications'), limit(50)));
     // Clear and reload to reflect deletions
     this.scheduledNotifications.clear();
     snap.docs.forEach((d) => { this.scheduledNotifications.set(d.id, d.data() as AppNotification); });
@@ -2212,22 +2291,100 @@ class FallbackStore {
   }
 
   public async saveUser(user: UserProfile) {
-    this.users.set(user.uid, user);
+    const existing = this.users.get(user.uid);
+    const mergedUser: UserProfile = {
+      ...(existing || {}),
+      ...user,
+      coins: user.coins !== undefined ? user.coins : existing?.coins,
+      totalEarnedCoins: user.totalEarnedCoins !== undefined ? user.totalEarnedCoins : existing?.totalEarnedCoins,
+    };
+    this.users.set(user.uid, mergedUser);
+    this.saveLocalStore();
     this.notify();
     try {
       await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] saveUser note (stored locally):', e?.message || e);
     }
+
+    // If user is a helper or has an application, sync application legalName & whatsapp and orders
+    const helperApp = Array.from(this.helperApplications.values()).find((a) => a.userId === user.uid);
+    if (helperApp) {
+      let appChanged = false;
+      const updatedApp = { ...helperApp };
+      if (mergedUser.displayName && mergedUser.displayName !== '?' && helperApp.legalName !== mergedUser.displayName) {
+        updatedApp.legalName = mergedUser.displayName;
+        appChanged = true;
+      }
+      const newPhone = mergedUser.alternativePhone || mergedUser.phoneNumber;
+      if (newPhone && helperApp.whatsapp !== newPhone) {
+        updatedApp.whatsapp = newPhone;
+        appChanged = true;
+      }
+      if (appChanged) {
+        this.helperApplications.set(helperApp.id, updatedApp);
+        try {
+          await setDoc(doc(db, 'helperApplications', helperApp.id), cleanForFirestore(updatedApp), { merge: true });
+        } catch (_) {}
+      }
+    }
+
+    if (mergedUser.isHelper || helperApp) {
+      const helperName = mergedUser.displayName;
+      const helperPhone = mergedUser.alternativePhone || mergedUser.phoneNumber;
+      if (helperName || helperPhone) {
+        this.syncHelperDataAcrossOrders(mergedUser.uid, helperName, helperPhone);
+      }
+    }
   }
 
-  public async blockUser(uid: string, isBlocked: boolean, reason?: string) {
+  public async syncHelperDataAcrossOrders(helperId: string, newName?: string, newPhone?: string) {
+    if (!helperId) return;
+    const ordersToUpdate: Order[] = [];
+    this.orders.forEach((o) => {
+      if (o.helperId === helperId) {
+        let changed = false;
+        const updated = { ...o };
+        if (newName && updated.helperName !== newName) {
+          updated.helperName = newName;
+          changed = true;
+        }
+        if (newPhone && updated.helperPhone !== newPhone) {
+          updated.helperPhone = newPhone;
+          changed = true;
+        }
+        if (changed) {
+          this.orders.set(o.id, updated);
+          ordersToUpdate.push(updated);
+        }
+      }
+    });
+
+    if (ordersToUpdate.length > 0) {
+      this.saveLocalStore();
+      this.notify();
+      try {
+        await Promise.all(
+          ordersToUpdate.slice(0, 50).map((ord) =>
+            setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true })
+          )
+        );
+      } catch (err) {
+        console.warn('[Firestore] syncHelperDataAcrossOrders note:', err);
+      }
+    }
+  }
+
+  public async blockUser(uid: string, isBlocked: boolean, reason?: string, adminName?: string) {
     const existing = this.users.get(uid);
     if (!existing) return;
     const updated: UserProfile = {
       ...existing,
       isBlocked,
       blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      blockedAt: isBlocked ? new Date().toISOString() : undefined,
+      blockedBy: isBlocked ? adminName || 'Admin' : undefined,
     };
     this.users.set(uid, updated);
     this.notify();
@@ -2235,6 +2392,28 @@ class FallbackStore {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] blockUser note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async blockShop(shopId: string, isBlocked: boolean, reason?: string, adminName?: string) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const updated: Shop = {
+      ...existing,
+      isBlocked,
+      blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
+      blockedAt: isBlocked ? new Date().toISOString() : undefined,
+      blockedBy: isBlocked ? adminName || 'Admin' : undefined,
+      canReceiveOrders: isBlocked ? false : (existing.canReceiveOrders !== undefined ? existing.canReceiveOrders : true),
+      updatedAt: new Date().toISOString(),
+    };
+    this.shops.set(shopId, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] blockShop note (stored locally):', e?.message || e);
     }
   }
 
@@ -2304,6 +2483,10 @@ class FallbackStore {
 
 
   public async addOrder(order: Order) {
+    const customer = this.users.get(order.customerId);
+    if (customer?.isBlocked) {
+      throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। নতুন রিকোয়েস্ট তৈরি করা সম্ভব নয়।');
+    }
     this.orders.set(order.id, order);
 
     const rule = this.pricingSettings.orderReceiverRule || 'commuter_first';
@@ -2350,7 +2533,18 @@ class FallbackStore {
   }
 
   public async updateOrder(orderId: string, updater: (order: Order) => Order) {
-    const existing = this.orders.get(orderId);
+    let existing = this.orders.get(orderId);
+    if (!existing) {
+      try {
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (snap.exists()) {
+          existing = this.resolveOrderLocations(snap.data() as Order);
+          this.orders.set(orderId, existing);
+        }
+      } catch (e: any) {
+        console.warn('[Firestore] updateOrder fetch fallback error:', e?.message || e);
+      }
+    }
     if (!existing) return;
 
     const previousStatus = existing.status;
@@ -2874,6 +3068,10 @@ class FallbackStore {
   }
 
   public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
+    const shop = this.shops.get(shopOrder.shopId);
+    if (shop?.isBlocked) {
+      throw new Error('এই স্টোরটি বর্তমানে সাময়িকভাবে স্থগিত রয়েছে।');
+    }
     this.shopOrders.set(shopOrder.id, shopOrder);
     this.notify();
     // Notify the store owner if this shop belongs to one
@@ -3812,7 +4010,7 @@ class FallbackStore {
 
     if (target === 'all-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper) {
+        if (u.isHelper && !u.isBlocked) {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3830,7 +4028,7 @@ class FallbackStore {
       });
     } else if (target === 'all-commuter-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper && u.helperType !== 'dedicated') {
+        if (u.isHelper && !u.isBlocked && u.helperType !== 'dedicated') {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3848,7 +4046,7 @@ class FallbackStore {
       });
     } else if (target === 'all-dedicated-helpers') {
       this.users.forEach((u) => {
-        if (u.isHelper && u.helperType === 'dedicated') {
+        if (u.isHelper && !u.isBlocked && u.helperType === 'dedicated') {
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -3866,7 +4064,7 @@ class FallbackStore {
       });
     } else if (target === 'all-customers') {
       this.users.forEach((u) => {
-        if (!u.isHelper || u.role === 'customer') {
+        if (!u.isBlocked && (!u.isHelper || u.role === 'customer')) {
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -3875,7 +4073,7 @@ class FallbackStore {
     } else if (target.startsWith('segment:')) {
       const segName = target.replace('segment:', '');
       this.users.forEach((u) => {
-        if (this.doesUserMatchSegment(u, segName)) {
+        if (!u.isBlocked && this.doesUserMatchSegment(u, segName)) {
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -3883,9 +4081,11 @@ class FallbackStore {
       });
     } else if (target === 'all') {
       this.users.forEach((u) => {
-        const userList = this.notifications.get(u.uid) || [];
-        userList.unshift({ ...notif, userId: u.uid });
-        this.notifications.set(u.uid, userList);
+        if (!u.isBlocked) {
+          const userList = this.notifications.get(u.uid) || [];
+          userList.unshift({ ...notif, userId: u.uid });
+          this.notifications.set(u.uid, userList);
+        }
       });
     } else {
       const list = this.notifications.get(notif.userId) || [];
@@ -3897,11 +4097,12 @@ class FallbackStore {
     this.saveLocalStore();
     this.notify();
 
-    // In-app feedback: sound + vibration on the device that created the notification.
-    // (Useful for admin creating notifications while the app is open.)
-    playNotificationSound();
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+    // In-app feedback: sound + vibration on the device that created the notification (for manual admin notifications)
+    if (notif.type !== 'new_order') {
+      playNotificationSound();
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
+      }
     }
 
     // NOTE: We no longer fire reg.showNotification() here because that would
@@ -4191,25 +4392,39 @@ class FallbackStore {
     const updated = { ...existing, ...updatedFields };
     this.helperApplications.set(appId, updated);
 
+    const user = this.users.get(updated.userId);
     if (updated.status === 'APPROVED' && existing.status !== 'APPROVED') {
-      const user = this.users.get(updated.userId);
       if (user) {
         const isDedicated = updated.applicationType === 'dedicated' || !updated.applicationType;
         const updatedUser: UserProfile = {
           ...user,
+          displayName: updated.legalName ? updated.legalName.trim() : user.displayName,
           isHelper: true,
           helperType: isDedicated ? 'dedicated' : (user.helperType || 'commuter'),
-          alternativePhone: updated.whatsapp || user.alternativePhone,
+          alternativePhone: updated.whatsapp ? updated.whatsapp.trim() : user.alternativePhone,
         };
         this.users.set(updated.userId, updatedUser);
         await this.saveUser(updatedUser);
       }
     } else if (updated.status !== 'APPROVED' && existing.status === 'APPROVED') {
-      const user = this.users.get(updated.userId);
       if (user) {
         const updatedUser = {
           ...user,
+          displayName: updated.legalName ? updated.legalName.trim() : user.displayName,
           isHelper: false,
+          alternativePhone: updated.whatsapp ? updated.whatsapp.trim() : user.alternativePhone,
+        };
+        this.users.set(updated.userId, updatedUser);
+        await this.saveUser(updatedUser);
+      }
+    } else if (user) {
+      const needsNameUpdate = updatedFields.legalName && updatedFields.legalName.trim() !== user.displayName;
+      const needsPhoneUpdate = updatedFields.whatsapp && updatedFields.whatsapp.trim() !== user.alternativePhone;
+      if (needsNameUpdate || needsPhoneUpdate) {
+        const updatedUser: UserProfile = {
+          ...user,
+          displayName: updatedFields.legalName ? updatedFields.legalName.trim() : user.displayName,
+          alternativePhone: updatedFields.whatsapp ? updatedFields.whatsapp.trim() : user.alternativePhone,
         };
         this.users.set(updated.userId, updatedUser);
         await this.saveUser(updatedUser);
@@ -4619,6 +4834,7 @@ class FallbackStore {
 
   public async saveRewardPrize(prize: RewardPrize): Promise<void> {
     this.rewardPrizes.set(prize.id, prize);
+    this.saveLocalStore();
     this.notify();
     try {
       await setDoc(doc(db, 'rewardPrizes', prize.id), cleanForFirestore(prize), { merge: true });
@@ -4629,6 +4845,7 @@ class FallbackStore {
 
   public async deleteRewardPrize(prizeId: string): Promise<void> {
     this.rewardPrizes.delete(prizeId);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'rewardPrizes', prizeId));
@@ -4643,99 +4860,156 @@ class FallbackStore {
     // 1. Update in-memory user if present
     const customer = this.users.get(userId);
     if (customer) {
+      const credited = new Set(customer.creditedOrderIds || []);
+      if (orderId) credited.add(orderId);
       const newCoinBalance = (customer.coins || 0) + earnedCoins;
       const newTotalEarned = (customer.totalEarnedCoins || 0) + earnedCoins;
       const updatedCustomer: UserProfile = {
         ...customer,
         coins: newCoinBalance,
         totalEarnedCoins: newTotalEarned,
+        creditedOrderIds: Array.from(credited),
       };
       this.users.set(userId, updatedCustomer);
       this.notify();
     }
 
+    if (orderId && typeof localStorage !== 'undefined') {
+      localStorage.setItem(`credited_order_coins_${userId}_${orderId}`, 'true');
+    }
+
     // 2. Atomic Firestore update so it always succeeds regardless of memory state
     try {
-      await setDoc(
-        doc(db, 'users', userId),
-        {
-          coins: increment(earnedCoins),
-          totalEarnedCoins: increment(earnedCoins),
-        },
-        { merge: true }
-      );
+      const payload: any = {
+        coins: increment(earnedCoins),
+        totalEarnedCoins: increment(earnedCoins),
+      };
+      if (orderId) {
+        payload.creditedOrderIds = arrayUnion(orderId);
+      }
+      await setDoc(doc(db, 'users', userId), payload, { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] awardCoinsToCustomer error:', e?.message || e);
     }
   }
 
-  public async reconcileCustomerCoins(userId: string) {
-    if (!userId) return;
+  public async ensureCustomerOrderCoinsAwarded(userId: string, order: Order) {
+    if (!userId || !order || (order.status !== 'DELIVERED' && (order.status as string) !== 'COMPLETED')) return;
+    if (order.customerId !== userId) return;
+
     let user = this.users.get(userId);
     if (!user) {
       user = (await this.fetchUserFromFirestore(userId)) || undefined;
       if (!user) return;
     }
 
-    // Only initialize if coins or totalEarnedCoins are completely unset
-    // Do NOT override manual admin adjustments or reductions
-    const needsCoinsInit = typeof user.coins !== 'number';
-    const needsLifetimeInit = typeof user.totalEarnedCoins !== 'number';
+    const localCreditedKey = `credited_order_coins_${userId}_${order.id}`;
+    const localCredited = typeof localStorage !== 'undefined' && localStorage.getItem(localCreditedKey) === 'true';
+    const creditedSet = new Set(user.creditedOrderIds || []);
 
-    if (!needsCoinsInit && !needsLifetimeInit) {
+    if (creditedSet.has(order.id) || localCredited) {
       return;
     }
 
-    // Calculate coins from all delivered orders for this user
+    const earnedCoins = order.coinsAwarded || getCoinsForService(order.service, this.pricingSettings);
+    if (earnedCoins <= 0) return;
+
+    creditedSet.add(order.id);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(localCreditedKey, 'true');
+    }
+
+    const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+    const currentLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins : currentCoins;
+
+    const updatedUser: UserProfile = {
+      ...user,
+      coins: currentCoins + earnedCoins,
+      totalEarnedCoins: currentLifetime + earnedCoins,
+      creditedOrderIds: Array.from(creditedSet),
+    };
+    this.users.set(userId, updatedUser);
+    this.notify();
+
+    try {
+      await setDoc(
+        doc(db, 'users', userId),
+        {
+          coins: increment(earnedCoins),
+          totalEarnedCoins: increment(earnedCoins),
+          creditedOrderIds: arrayUnion(order.id),
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.warn('[Firestore] ensureCustomerOrderCoinsAwarded sync error:', e?.message || e);
+    }
+  }
+
+  public async reconcileCustomerCoins(userId: string) {
+    if (!userId) return;
+    let user = this.users.get(userId);
+    if (!user || typeof user.coins !== 'number') {
+      const fetched = await this.fetchUserFromFirestore(userId);
+      if (fetched) user = fetched;
+    }
+    if (!user) return;
+
     const customerOrders = Array.from(this.orders.values()).filter(
-      (o) => o.customerId === userId && o.status === 'DELIVERED'
+      (o) => o.customerId === userId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
     );
 
-    let deliveredEarnedCoins = 0;
+    // Reconcile any delivered orders that were never credited to creditedOrderIds
+    const creditedSet = new Set(user.creditedOrderIds || []);
+    let newlyCreditedCoins = 0;
+    const newlyCreditedOrderIds: string[] = [];
+
     customerOrders.forEach((o) => {
-      const c = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
-      deliveredEarnedCoins += c;
+      const localCreditedKey = `credited_order_coins_${userId}_${o.id}`;
+      const localCredited = typeof localStorage !== 'undefined' && localStorage.getItem(localCreditedKey) === 'true';
+
+      if (!creditedSet.has(o.id) && !localCredited) {
+        const earned = o.coinsAwarded || getCoinsForService(o.service, this.pricingSettings);
+        if (earned > 0) {
+          newlyCreditedCoins += earned;
+          newlyCreditedOrderIds.push(o.id);
+          creditedSet.add(o.id);
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(localCreditedKey, 'true');
+          }
+        }
+      }
     });
 
-    // Calculate coins spent on claims & free delivery
-    const userClaims = Array.from(this.rewardClaims.values()).filter(
-      (c) => c.userId === userId && c.status !== 'REJECTED'
-    );
-    let spentOnClaims = 0;
-    userClaims.forEach((c) => {
-      spentOnClaims += c.requiredCoins || 0;
-    });
+    if (newlyCreditedCoins === 0) {
+      return;
+    }
 
-    const ordersWithRedeemedCoins = Array.from(this.orders.values()).filter(
-      (o) => o.customerId === userId && (o.coinsRedeemedForDelivery || 0) > 0 && (o.status === 'DELIVERED' || o.coinsDeductedForDelivery)
-    );
-    let spentOnFreeDelivery = 0;
-    ordersWithRedeemedCoins.forEach((o) => {
-      spentOnFreeDelivery += o.coinsRedeemedForDelivery || 0;
-    });
+    const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+    const currentLifetime = typeof user.totalEarnedCoins === 'number' ? user.totalEarnedCoins : currentCoins;
 
-    const expectedMinCoins = Math.max(0, deliveredEarnedCoins - spentOnClaims - spentOnFreeDelivery);
-    const expectedLifetime = Math.max(0, deliveredEarnedCoins);
-
-    const updatedCoins = needsCoinsInit ? expectedMinCoins : user.coins!;
-    const updatedLifetime = needsLifetimeInit ? Math.max(updatedCoins, expectedLifetime) : user.totalEarnedCoins!;
+    const updatedCoins = currentCoins + newlyCreditedCoins;
+    const updatedLifetime = currentLifetime + newlyCreditedCoins;
 
     const updatedUser: UserProfile = {
       ...user,
       coins: updatedCoins,
       totalEarnedCoins: updatedLifetime,
+      creditedOrderIds: Array.from(creditedSet),
     };
+
     this.users.set(userId, updatedUser);
     this.notify();
+
     try {
-      await setDoc(
-        doc(db, 'users', userId),
-        {
-          coins: updatedCoins,
-          totalEarnedCoins: updatedLifetime,
-        },
-        { merge: true }
-      );
+      const updatePayload: any = {
+        coins: increment(newlyCreditedCoins),
+        totalEarnedCoins: increment(newlyCreditedCoins),
+      };
+      if (newlyCreditedOrderIds.length > 0) {
+        updatePayload.creditedOrderIds = arrayUnion(...newlyCreditedOrderIds);
+      }
+      await setDoc(doc(db, 'users', userId), updatePayload, { merge: true });
     } catch (e) {
       console.warn('[Firestore] reconcileCustomerCoins sync error:', e);
     }
@@ -5203,8 +5477,11 @@ class FallbackStore {
 
   public resolveOrderLocations(order: Order): Order {
     if (!order) return order;
+    // Self-healing: If an order has a helper assigned (helperId) but status is still PENDING, ensure it reflects ACCEPTED
+    const effectiveStatus = (order.helperId && order.status === 'PENDING') ? 'ACCEPTED' : order.status;
     return {
       ...order,
+      status: effectiveStatus,
       deliveryLocation: order.deliveryLocation ? this.resolveLocation(order.deliveryLocation)! : order.deliveryLocation,
       pickupLocation: order.pickupLocation ? this.resolveLocation(order.pickupLocation) : order.pickupLocation,
     };

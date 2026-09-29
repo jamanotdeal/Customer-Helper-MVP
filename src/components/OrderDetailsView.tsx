@@ -255,11 +255,62 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     return () => clearInterval(interval);
   }, [orderId]);
 
+  // If user is not logged in or logs out, automatically close all modals and exit details view
+  useEffect(() => {
+    if (!user) {
+      setShowEditModal(false);
+      setShowCancelModal(false);
+      setShowDueModal(false);
+      setShowFeedbackModal(false);
+      onBack();
+    }
+  }, [user, onBack]);
+
+  if (!user) {
+    return null;
+  }
+
   if (!order) {
     return (
       <div className="p-8 text-center text-gray-500">
         <p>Order not found.</p>
         <button onClick={onBack} className="mt-4 px-4 py-2 bg-emerald-600 text-white rounded-xl">Back</button>
+      </div>
+    );
+  }
+
+  const isOwnerCustomer = Boolean(user && order && user.uid === order.customerId);
+  const isAdminUser = Boolean(user && (user.isAdmin || user.role === 'admin' || user.email?.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com'));
+  const isAssignedHelper = Boolean(user && order && order.helperId && user.uid === order.helperId);
+  const isPendingHelper = Boolean(user && order && !order.helperId && (user.isHelper || user.role === 'helper'));
+
+  // If logged in as customer/helper but not owner/assigned/admin, disallow view
+  if (!isOwnerCustomer && !isAdminUser && !isAssignedHelper && !isPendingHelper) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
+        <button
+          onClick={onBack}
+          className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors py-2 font-bold text-sm"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>ফিরে যান (Back)</span>
+        </button>
+
+        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-amber-100 shadow-sm my-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-inner">
+            <ShieldCheck className="w-10 h-10" />
+          </div>
+          <h3 className="font-extrabold text-gray-900 text-lg">অ্যাক্সেস অনুমোদিত নয় (Access Denied)</h3>
+          <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
+            আপনি এই অর্ডারের বিবরণ দেখার জন্য অনুমোদিত নন।
+          </p>
+          <button
+            onClick={onBack}
+            className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
+          >
+            হোমে ফিরে যান
+          </button>
+        </div>
       </div>
     );
   }
@@ -299,11 +350,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Helper contact info
   const helperInfo = order.helperId ? fallbackStore.users.get(order.helperId) : null;
-  const helperName = order.helperName || helperInfo?.displayName || 'Your Helper';
   const helperAppEntry = order.helperId
     ? Array.from(fallbackStore.helperApplications.values()).find((a) => a.userId === order.helperId && a.status === 'APPROVED')
     : null;
-  const helperPhone = order.helperPhone || helperInfo?.alternativePhone || helperAppEntry?.whatsapp || null;
+  const helperName = helperInfo?.displayName || helperAppEntry?.legalName || order.helperName || 'Your Helper';
+  const helperPhone = helperInfo?.alternativePhone || helperInfo?.phoneNumber || helperAppEntry?.whatsapp || order.helperPhone || null;
 
   const getWhatsAppUrl = (phone: string) => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -344,6 +395,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   };
 
   const handleCancelOrder = () => {
+    if (!canCancel) return;
     setCancelReason('');
     setCancelError('');
     setShowCancelModal(true);
@@ -381,6 +433,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Open edit modal pre-filled with current order data
   const openEditModal = () => {
+    if (!canEdit) return;
     if (order.status === 'ARRIVED' || order.status === 'DELIVERED' || order.status === 'CANCELED') return;
     const resolvedOrder = fallbackStore.resolveOrderLocations(order);
     setEditService(resolvedOrder.service || resolvedOrder.title || '');
@@ -509,8 +562,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     setShowEditModal(false);
   };
 
-  const canCancel = (order.status === 'PENDING' || order.status === 'ACCEPTED') && user?.uid === order.customerId;
-  const canEdit = order.status !== 'ARRIVED' && order.status !== 'DELIVERED' && (order.status as string) !== 'CANCELED';
+  const canCancel = Boolean(user && (order.status === 'PENDING' || order.status === 'ACCEPTED') && user.uid === order.customerId);
+  const canEdit = Boolean(
+    user &&
+    (isOwnerCustomer || isAdminUser) &&
+    order.status !== 'ARRIVED' &&
+    order.status !== 'DELIVERED' &&
+    (order.status as string) !== 'CANCELED'
+  );
   const isDelivered = order.status === 'DELIVERED';
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
   const isCanceled = (order.status as string) === 'CANCELED';
@@ -640,10 +699,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             {order.editHistory && order.editHistory.length > 0 && (
               <div className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
                 {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
-                  <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                    <span className="font-bold text-amber-900">{c.field}:</span>
-                    <div className="font-medium text-right">
-                      <span className="line-through text-amber-700/60 mr-1.5 text-[10px]">{c.oldValue || 'None'}</span>
+                  <div key={idx} className="text-left space-y-1 text-[11px]">
+                    {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                      <span className="font-bold text-amber-900 block">{c.field}:</span>
+                    )}
+                    <div className="text-left flex flex-wrap items-center gap-2">
+                      {c.oldValue && c.oldValue !== 'None' && (
+                        <span className="line-through text-amber-700/60 text-[10px]">{c.oldValue}</span>
+                      )}
                       <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
                         {c.newValue}
                       </span>
@@ -710,9 +773,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         {(order.helperId || showAdminAccepted) && (
           <div className="bg-white rounded-3xl border border-emerald-100 p-4 shadow-soft space-y-3">
             <div className="flex items-center space-x-3">
-              <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
-                {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
-              </div>
+              {order.helperId && helperInfo?.photoURL ? (
+                <img
+                  src={helperInfo.photoURL}
+                  alt={helperName}
+                  className="w-11 h-11 rounded-2xl object-cover shadow-md shrink-0 border border-emerald-200"
+                />
+              ) : (
+                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
+                  {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
+                </div>
+              )}
               <div>
                 <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
                   {order.helperId ? 'Your Helper' : 'Admin Support'}
@@ -795,7 +866,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               return (
                 <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
                   <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
-                    {it.name}{itemPricing?.unit ? ` (${itemPricing.unit})` : ''}
+                    {it.name}
                   </span>
                   {itemPricing?.price !== undefined && (
                     <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
@@ -830,43 +901,65 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         </div>
 
         {/* ── MINIMALIST ORDER EDIT HISTORY LOG ── */}
-        {order.editHistory && order.editHistory.length > 0 && (
-          <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
-                <FileText className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Order Update History</span>
-              </h3>
-              <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
-                {order.editHistory.length} edit{order.editHistory.length > 1 ? 's' : ''}
-              </span>
-            </div>
+        {order.editHistory && order.editHistory.length > 0 && (() => {
+          const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
+          if (!latestHistoryItem) return null;
 
-            <div className="space-y-2">
-              {order.editHistory.slice().reverse().map((historyItem) => (
-                <div key={historyItem.id} className="p-3 rounded-2xl bg-gray-50/80 border border-gray-100 text-xs space-y-1.5">
-                  <div className="flex items-center justify-between text-[10px] text-gray-500 font-semibold border-b border-gray-200/60 pb-1">
-                    <span>Updated on {formatPlacedDateTime(historyItem.timestamp)}</span>
-                    <span className="font-bold text-gray-700">{historyItem.editedByName || historyItem.editedBy}</span>
-                  </div>
-                  <div className="space-y-1 pt-0.5">
-                    {historyItem.changes.map((c, idx) => (
-                      <div key={idx} className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
-                        <span className="font-semibold text-gray-600">{c.field}:</span>
-                        <div className="text-right font-medium">
-                          <span className="line-through text-gray-400 text-[10px] mr-1.5">{c.oldValue || 'None'}</span>
-                          <span className="text-gray-900 font-bold bg-white border border-gray-200 px-2 py-0.5 rounded-lg inline-block text-[11px]">
-                            {c.newValue}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+          const getEditorLabel = () => {
+            const by = (latestHistoryItem.editedBy || '').toLowerCase();
+            const name = (latestHistoryItem.editedByName || '').toLowerCase();
+            if (by === order.customerId?.toLowerCase() || by === user?.uid?.toLowerCase() || by === 'customer' || name.includes('customer') || name === 'you') {
+              return 'Me';
+            }
+            if (by === order.helperId?.toLowerCase() || by === 'helper' || name.includes('helper')) {
+              return 'Helper';
+            }
+            if (by === 'admin' || name.includes('admin')) {
+              return 'Admin';
+            }
+            return 'Customer';
+          };
+
+          const editorLabel = getEditorLabel();
+
+          return (
+            <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
+                  <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Order Update History</span>
+                </h3>
+                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+                  Edited by {editorLabel}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-gray-50/80 border border-gray-100 text-xs space-y-2">
+                <div className="flex items-center justify-between text-[10px] text-gray-500 font-semibold border-b border-gray-200/60 pb-1.5">
+                  <span>Updated on {formatPlacedDateTime(latestHistoryItem.timestamp)}</span>
+                  <span className="font-bold text-gray-700">{editorLabel}</span>
                 </div>
-              ))}
+                <div className="space-y-1.5 pt-0.5">
+                  {latestHistoryItem.changes.map((c, idx) => (
+                    <div key={idx} className="text-left space-y-1">
+                      {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                        <div className="font-semibold text-gray-600 text-[11px]">{c.field}</div>
+                      )}
+                      <div className="text-left flex flex-wrap items-center gap-2">
+                        {c.oldValue && c.oldValue !== 'None' && (
+                          <span className="line-through text-gray-400 text-xs">{c.oldValue}</span>
+                        )}
+                        <span className="text-gray-900 font-bold bg-white border border-gray-200 px-2.5 py-1 rounded-xl inline-block text-xs">
+                          {c.newValue}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── ADDRESSES ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
@@ -1014,11 +1107,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                             <span className="font-extrabold text-xs text-gray-900 leading-tight block">
                               {storeDisplayName}
                             </span>
-                            {isMyself && (
-                              <span className="text-[9px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.2 rounded-md border border-purple-200 inline-block mt-0.5">
-                                Custom Cost (কাস্টম খরচ)
-                              </span>
-                            )}
+                            {isMyself && so.sellerPhone ? (
+                              <a
+                                href={`tel:${so.sellerPhone}`}
+                                className="text-[10px] font-bold text-purple-800 hover:text-purple-950 bg-purple-50 hover:bg-purple-100 px-1.5 py-0.5 rounded-md border border-purple-200 inline-flex items-center gap-1 mt-0.5 font-mono transition-colors"
+                              >
+                                <Phone className="w-2.5 h-2.5 text-purple-600 shrink-0" />
+                                <span>{so.sellerPhone}</span>
+                              </a>
+                            ) : null}
                             {!isMyself && shop?.type && (
                               <span className="text-[9px] font-bold text-gray-600 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
                                 {shop.type}
@@ -1034,8 +1131,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         </div>
                       </div>
 
-                      {/* Store Numbers (Manager + Owner or Custom Seller) */}
-                      {(ownerNum || managerNum || customSellerNum) && (
+                      {/* Store Numbers (Manager + Owner for Store) */}
+                      {!isMyself && (ownerNum || managerNum) && (
                         <div className="flex items-center gap-2 flex-wrap pt-0.5">
                           {ownerNum && (
                             <a
@@ -1058,17 +1155,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                               <span className="font-mono font-black">{managerNum}</span>
                             </a>
                           )}
-
-                          {customSellerNum && (
-                            <a
-                              href={`tel:${customSellerNum}`}
-                              className="text-[10px] font-bold text-purple-800 hover:text-purple-900 flex items-center gap-1 bg-purple-50 hover:bg-purple-100 px-2 py-0.5 rounded-lg border border-purple-200/80 transition-all active:scale-95 shadow-2xs"
-                              title="কল করুন"
-                            >
-                              <Phone className="w-2.5 h-2.5 text-purple-600 shrink-0" />
-                              <span className="font-mono font-black">{customSellerNum}</span>
-                            </a>
-                          )}
                         </div>
                       )}
 
@@ -1077,7 +1163,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs space-y-1.5">
                           {so.itemsWithPrice.map((it, iIdx) => (
                             <div key={iIdx} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-b-0">
-                              <span className="text-gray-800 font-semibold">{it.name}{it.unit ? ` (${it.unit})` : ''}</span>
+                              <span className="text-gray-800 font-semibold">{it.name}</span>
                               <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
                             </div>
                           ))}

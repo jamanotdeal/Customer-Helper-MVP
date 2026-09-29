@@ -529,10 +529,13 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                 {user.isBlocked && (
                   <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start space-x-3">
                     <ShieldAlert className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                    <div>
+                    <div className="space-y-1">
                       <h4 className="font-extrabold text-sm text-red-950">এই ব্যবহারকারী একাউন্ট বর্তমানে ব্লকড (BLOCKED)!</h4>
-                      <p className="text-xs text-red-800 mt-0.5">
-                        কারণ: "{user.blockedReason || 'অ্যাডমিন দ্বারা সীমাবদ্ধ'}"
+                      <p className="text-xs text-red-800">
+                        🔒 <strong>অ্যাডমিন ইন্টারনাল নোট:</strong> "{user.adminBlockNote || user.blockedReason || 'অ্যাডমিন দ্বারা সীমাবদ্ধ'}"
+                      </p>
+                      <p className="text-[10px] text-red-600 font-medium">
+                        (এই নোটটি শুধুমাত্র অ্যাডমিন দেখতে পাবেন। ব্যবহারকারীর কাছে অ্যাডমিন সেটিংসের নোটিশ যাবে।)
                       </p>
                     </div>
                   </div>
@@ -1378,46 +1381,54 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                     <span>Block / Unblock User Controls</span>
                   </h4>
 
-                  {user.isBlocked ? (
-                    <div className="space-y-2">
-                      <p className="text-red-700 font-bold">
-                        স্ট্যাটাস: বর্তমানে ব্লকড (কারণ: "{user.blockedReason || 'অ্যাডমিন স্ট্যাটাস'}")
-                      </p>
-                      <button
-                        onClick={handleToggleBlock}
-                        className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-sm transition-all"
-                      >
-                        Unblock User Account
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <p className="text-gray-600">
-                        ব্যবহারকারী ব্লক করা হলে সে নতুন রিকোয়েস্ট পাঠাতে বা ডেলিভারি গ্রহণ করতে পারবে না।
-                      </p>
-
-                      {!showBlockReasonForm ? (
-                        <button
-                          onClick={handleToggleBlock}
-                          className="py-2.5 px-5 bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-xl text-xs shadow-sm transition-all flex items-center space-x-1.5"
-                        >
-                          <Ban className="w-4 h-4" />
-                          <span>Block User Account</span>
-                        </button>
+                      {user.isBlocked ? (
+                        <div className="space-y-2">
+                          <div className="p-3 bg-red-50 rounded-xl border border-red-200">
+                            <p className="text-red-900 font-bold text-xs">
+                              🔒 অ্যাডমিন নোট: "{user.adminBlockNote || user.blockedReason || 'অ্যাডমিন স্ট্যাটাস'}"
+                            </p>
+                            <span className="text-[10px] text-red-600 font-medium block mt-0.5">
+                              (শুধুমাত্র অ্যাডমিন দেখতে পান)
+                            </span>
+                          </div>
+                          <button
+                            onClick={handleToggleBlock}
+                            className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-sm transition-all"
+                          >
+                            Unblock User Account
+                          </button>
+                        </div>
                       ) : (
-                        <form onSubmit={handleConfirmBlockWithReason} className="p-4 bg-red-50 rounded-2xl border border-red-200 space-y-3">
-                          <label className="font-extrabold text-red-950 text-xs block">
-                            ব্লক করার কারণ উল্লেখ করুন:
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Fraudulent behavior, repeated order cancellation..."
-                            value={blockReasonInput}
-                            onChange={(e) => setBlockReasonInput(e.target.value)}
-                            className="w-full p-3 bg-white border border-red-200 rounded-xl text-xs font-medium focus:outline-none"
-                            required
-                          />
-                          <div className="flex gap-2">
+                        <div className="space-y-3">
+                          <p className="text-gray-600">
+                            ব্যবহারকারী ব্লক করা হলে সে নতুন রিকোয়েস্ট পাঠাতে বা অর্ডার গ্রহণ করতে পারবে না।
+                          </p>
+
+                          {!showBlockReasonForm ? (
+                            <button
+                              onClick={handleToggleBlock}
+                              className="py-2.5 px-5 bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-xl text-xs shadow-sm transition-all flex items-center space-x-1.5"
+                            >
+                              <Ban className="w-4 h-4" />
+                              <span>Block User Account</span>
+                            </button>
+                          ) : (
+                            <form onSubmit={handleConfirmBlockWithReason} className="p-4 bg-red-50 rounded-2xl border border-red-200 space-y-3">
+                              <label className="font-extrabold text-red-950 text-xs block">
+                                ব্লকের কারণ ও অ্যাডমিন নোট (Admin Internal Note - Required):
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. Fraudulent behavior, fake order, customer misconduct..."
+                                value={blockReasonInput}
+                                onChange={(e) => setBlockReasonInput(e.target.value)}
+                                className="w-full p-3 bg-white border border-red-200 rounded-xl text-xs font-medium focus:outline-none"
+                                required
+                              />
+                              <p className="text-[10px] text-red-700">
+                                🔒 এই নোটটি শুধুমাত্র অ্যাডমিন দেখতে পাবেন। ব্যবহারকারীর কাছে অ্যাডমিন সেটিংসের মেসেজ যাবে।
+                              </p>
+                              <div className="flex gap-2">
                             <button
                               type="submit"
                               className="py-2 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold"

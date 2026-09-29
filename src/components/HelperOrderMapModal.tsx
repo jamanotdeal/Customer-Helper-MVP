@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Map, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter } from 'lucide-react';
+import { Map, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder, AllowedAreaPolygon } from '@/types';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
@@ -52,6 +52,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   usePullToRefreshLock(isOpen);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const layersRef = useRef<any[]>([]);
   const areaLayersRef = useRef<any[]>([]);
 
@@ -60,6 +61,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   const [leafletLib, setLeafletLib] = useState<any>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [selectedType, setSelectedType] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showSearchResults, setShowSearchResults] = useState(false);
   const hasFitBoundsRef = useRef(false);
 
   // Invalidate map size on fullscreen toggle
@@ -79,6 +82,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       hasFitBoundsRef.current = false;
       setIsFullscreen(false);
       setSelectedType('ALL');
+      setSearchQuery('');
+      setShowSearchResults(false);
       if (helperLocation?.lat && helperLocation?.lng) {
         setCurrentHelperLoc({
           address: 'You',
@@ -90,9 +95,24 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       }
     } else {
       setCurrentHelperLoc(null);
+      setSearchQuery('');
+      setShowSearchResults(false);
       hasFitBoundsRef.current = false;
     }
   }, [isOpen]);
+
+  // Close search results dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowSearchResults(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Track helper position via GPS if not provided in props
   useEffect(() => {
@@ -205,8 +225,39 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   }, [allAvailableShops]);
 
   const displayedShops = useMemo(() => {
-    return allAvailableShops.filter((shop) => isShopMatchingType(shop, selectedType));
-  }, [allAvailableShops, selectedType]);
+    const query = searchQuery.trim().toLowerCase();
+    return allAvailableShops.filter((shop) => {
+      if (!isShopMatchingType(shop, selectedType)) return false;
+      if (!query) return true;
+      const name = (shop.name || '').toLowerCase();
+      const address = (shop.location?.address || '').toLowerCase();
+      const type = getShopType(shop).toLowerCase();
+      const desc = (shop.description || '').toLowerCase();
+      const contact = (shop.contactPerson || '').toLowerCase();
+      const phone = (shop.whatsapp || '').toLowerCase();
+      return (
+        name.includes(query) ||
+        address.includes(query) ||
+        type.includes(query) ||
+        desc.includes(query) ||
+        contact.includes(query) ||
+        phone.includes(query)
+      );
+    });
+  }, [allAvailableShops, selectedType, searchQuery]);
+
+  const handleLocateStore = (shop: Shop) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const lat = shop.location?.lat;
+    const lng = shop.location?.lng;
+    if (lat && lng) {
+      map.flyTo([lat, lng], 17, {
+        animate: true,
+        duration: 0.8,
+      });
+    }
+  };
 
   const requestedShopIds = useMemo(() => new Set(
     (shopOrders || [])
@@ -515,34 +566,133 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
           </div>
         </div>
 
-        {/* Stores Filter Strip */}
-        <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-slate-50 border-b border-gray-200/80 text-xs font-bold z-20 overflow-x-auto">
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Store Type Filter */}
-            <div className="flex items-center gap-1.5 bg-white border border-purple-200/80 rounded-xl px-2.5 py-1.5 shadow-xs">
-              <Filter className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-              <select
-                value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value)}
-                className="bg-transparent text-xs font-bold text-purple-950 outline-none cursor-pointer pr-1"
-              >
-                <option value="ALL">All Store Types ({allAvailableShops.length})</option>
-                {availableTypes.map((t) => {
-                  const count = allAvailableShops.filter((s) => isShopMatchingType(s, t)).length;
-                  return (
-                    <option key={t} value={t}>
-                      {t} ({count})
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-          </div>
+        {/* Stores Filter & Search Strip */}
+        <div className="shrink-0 px-3 sm:px-4 py-2 bg-slate-50 border-b border-gray-200/80 text-xs font-bold z-30">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              {/* Store Search Input */}
+              <div ref={searchContainerRef} className="relative flex-1 min-w-[170px] sm:max-w-xs">
+                <div className="flex items-center gap-1.5 bg-white border border-gray-300 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-100 rounded-xl px-2.5 py-1.5 shadow-xs transition-all">
+                  <Search className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setShowSearchResults(true);
+                    }}
+                    onFocus={() => {
+                      if (searchQuery.trim().length > 0) {
+                        setShowSearchResults(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (displayedShops.length > 0) {
+                          handleLocateStore(displayedShops[0]);
+                          setShowSearchResults(false);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setShowSearchResults(false);
+                      }
+                    }}
+                    placeholder="দোকান খুঁজুন (Search store)..."
+                    className="w-full bg-transparent text-xs text-gray-900 font-medium placeholder:text-gray-400 outline-none"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setShowSearchResults(false);
+                      }}
+                      className="p-0.5 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 cursor-pointer"
+                      title="Clear search"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[10px] text-gray-500 font-semibold hidden sm:inline">
-              ম্যাপের দোকানে ক্লিক করে সরাসরি অর্ডার পাঠান
-            </span>
+                {/* Dropdown Suggestions */}
+                {showSearchResults && searchQuery.trim().length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl z-50 p-1 divide-y divide-gray-50 animate-in fade-in-50 zoom-in-95 duration-100">
+                    {displayedShops.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-gray-500 font-medium">
+                        কোনো দোকান পাওয়া যায়নি ("{searchQuery}")
+                      </div>
+                    ) : (
+                      <>
+                        <div className="px-2.5 py-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+                          <span>পাওয়া গেছে ({displayedShops.length})</span>
+                          <span className="text-purple-600 font-semibold lowercase">ক্লিক করে ম্যাপে যান</span>
+                        </div>
+                        {displayedShops.slice(0, 10).map((shop) => (
+                          <div
+                            key={shop.id}
+                            className="p-2 hover:bg-purple-50/80 rounded-xl transition-colors cursor-pointer flex items-center justify-between gap-2 group"
+                            onClick={() => {
+                              handleLocateStore(shop);
+                              setShowSearchResults(false);
+                            }}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-xs text-gray-900 truncate">
+                                  {shop.name}
+                                </span>
+                                {getShopType(shop) && (
+                                  <span className="shrink-0 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">
+                                    {getShopType(shop)}
+                                  </span>
+                                )}
+                              </div>
+                              {shop.location?.address && (
+                                <p className="text-[10px] text-gray-500 truncate mt-0.5">
+                                  📍 {shop.location.address}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="px-2 py-1 bg-purple-100 group-hover:bg-purple-600 text-purple-700 group-hover:text-white text-[10px] font-bold rounded-lg transition-colors">
+                                ম্যাপে যান
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Store Type Filter */}
+              <div className="flex items-center gap-1.5 bg-white border border-purple-200/80 rounded-xl px-2.5 py-1.5 shadow-xs shrink-0">
+                <Filter className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                <select
+                  value={selectedType}
+                  onChange={(e) => setSelectedType(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-purple-950 outline-none cursor-pointer pr-1 max-w-[130px] sm:max-w-none"
+                >
+                  <option value="ALL">All Store Types ({allAvailableShops.length})</option>
+                  {availableTypes.map((t) => {
+                    const count = allAvailableShops.filter((s) => isShopMatchingType(s, t)).length;
+                    return (
+                      <option key={t} value={t}>
+                        {t} ({count})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            </div>
+
+            <div className="hidden sm:flex items-center gap-2 shrink-0">
+              <span className="text-[10px] text-gray-500 font-semibold">
+                ম্যাপের দোকানে ক্লিক করে সরাসরি অর্ডার পাঠান
+              </span>
+            </div>
           </div>
         </div>
 

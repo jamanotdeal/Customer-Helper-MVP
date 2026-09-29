@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { fallbackStore } from '@/lib/firebase';
 import { RewardPrize, RewardClaim, PricingSettings } from '@/types';
 import { useModal } from './CustomModal';
@@ -14,15 +14,14 @@ import {
   Clock,
   XCircle,
   AlertCircle,
-  Info,
   X,
   Truck,
-  Flame,
   Send,
+  Zap,
 } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
 
-// Reusable Clean Single Coin Icon - Crisp standard geometry for all screen densities
+// Reusable Clean Single Coin Icon
 export const SingleCoinIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
     viewBox="0 0 24 24"
@@ -30,11 +29,8 @@ export const SingleCoinIcon: React.FC<{ className?: string }> = ({ className = '
     className={className}
     xmlns="http://www.w3.org/2000/svg"
   >
-    {/* Clean circular coin body and outer rim */}
     <circle cx="12" cy="12" r="9.5" fill="currentColor" fillOpacity="0.22" stroke="currentColor" strokeWidth="1.8" />
-    {/* Inner crisp accent rim */}
     <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.65" />
-    {/* Clean centered star emblem */}
     <polygon
       points="12,7 13.5,10.3 17,10.8 14.5,13.2 15.1,16.6 12,14.9 8.9,16.6 9.5,13.2 7,10.8 10.5,10.3"
       fill="currentColor"
@@ -68,11 +64,18 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
   const [myClaims, setMyClaims] = useState<RewardClaim[]>([]);
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>(fallbackStore.pricingSettings);
 
+  // Auto fetch latest active prizes from server whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      fallbackStore.fetchRewardPrizes().catch(() => {});
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     const syncData = () => {
       setPricingSettings({ ...fallbackStore.pricingSettings });
 
-      // Purge any legacy demo dummy prizes
+      // Purge legacy demo dummy prizes
       const legacyDummyIds = ['prize-free-delivery', 'prize-voucher-50', 'prize-gift-box'];
       legacyDummyIds.forEach((id) => {
         if (fallbackStore.rewardPrizes.has(id)) {
@@ -80,11 +83,11 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
         }
       });
 
-      // Load prizes created by Admin (No dummy prizes)
+      // Load prizes created by Admin
       const activePrizes = Array.from(fallbackStore.rewardPrizes.values())
         .filter((p) => p.isEnabled !== false && !legacyDummyIds.includes(p.id))
         .sort((a, b) => a.requiredCoins - b.requiredCoins);
-      
+
       setPrizes(activePrizes);
 
       // Load user claims
@@ -108,29 +111,21 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
   const currentCoins = user?.coins || 0;
   const lifetimeCoins = user?.totalEarnedCoins || currentCoins;
-
-  // Calculate Tier
-  const getTierInfo = (coins: number) => {
-    if (coins >= 500) return { name: 'Platinum', badgeClass: 'bg-white/25 text-white border-white/40' };
-    if (coins >= 200) return { name: 'Gold', badgeClass: 'bg-yellow-400/30 text-yellow-200 border-yellow-300/40' };
-    if (coins >= 50) return { name: 'Silver', badgeClass: 'bg-white/20 text-white border-white/30' };
-    return null;
-  };
-
-  const tier = getTierInfo(lifetimeCoins);
+  const freeDeliveryTarget = pricingSettings.freeDeliveryRequiredCoins ?? 50;
+  const isFreeDeliveryEligible = currentCoins >= freeDeliveryTarget;
+  const progressPercent = Math.min(100, Math.round((currentCoins / Math.max(1, freeDeliveryTarget)) * 100));
 
   const handleClaimSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !claimingPrize) return;
 
-    // Check if user already has an active pending claim for this same prize
     const isAlreadyPending = myClaims.some(
       (c) => c.prizeId === claimingPrize.id && c.status === 'PENDING'
     );
     if (isAlreadyPending) {
       showAlert(
-        'দাবি অপেক্ষমাণ',
-        'এই পুরস্কারের একটি দাবি ইতোমধ্যে পর্যালোচনার জন্য জমা রয়েছে। এডমিন এটি অনুমোদন বা বাতিল করার পর আপনি আবার দাবি করতে পারবেন।',
+        'Claim Pending',
+        'A claim for this prize is already submitted and waiting for review. You can claim again after admin approval.',
         'warning'
       );
       setClaimingPrize(null);
@@ -139,8 +134,8 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
     if (currentCoins < claimingPrize.requiredCoins) {
       showAlert(
-        'পর্যাপ্ত কয়েন নেই',
-        `এই পুরস্কার দাবি করতে আপনার ${claimingPrize.requiredCoins} কয়েন প্রয়োজন। আপনার বর্তমান ব্যালেন্স: ${currentCoins} কয়েন।`,
+        'Not Enough Coins',
+        `You need ${claimingPrize.requiredCoins} coins to claim this prize. Your current balance: ${currentCoins} coins.`,
         'warning'
       );
       return;
@@ -161,8 +156,8 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
       });
 
       showAlert(
-        'দাবি সফলভাবে জমা হয়েছে!',
-        `আপনার "${claimingPrize.title}" পুরস্কার দাবিটি এডমিনের কাছে পর্যালোচনার জন্য পাঠানো হয়েছে। এডমিন অনুমোদন দিলে কয়েন কাটা হবে ও আপনি নোটিফিকেশন পাবেন।`,
+        'Claim Submitted!',
+        `Your request for "${claimingPrize.title}" has been submitted. Coins will be deducted after admin approval.`,
         'success'
       );
 
@@ -171,7 +166,7 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
       setActiveTab('my_claims');
     } catch (err: any) {
       console.error('Error submitting claim:', err);
-      showAlert('ত্রুটি', err?.message || 'দাবি জমা দিতে সমস্যা হয়েছে। আবার চেষ্টা করুন।', 'error');
+      showAlert('Error', err?.message || 'Failed to submit claim. Please try again.', 'error');
     } finally {
       setSubmittingClaim(false);
     }
@@ -183,153 +178,147 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-emerald-100 flex flex-col max-h-[92vh] max-h-[92dvh] overflow-hidden animate-in zoom-in-95 duration-200"
+        className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-emerald-100 flex flex-col max-h-[90vh] max-h-[90dvh] overflow-hidden animate-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header Gamified Card (Rich Green Theme) */}
-        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-800 p-5 text-white overflow-hidden shrink-0 shadow-sm">
-          <div className="absolute -right-6 -bottom-6 w-32 h-32 bg-white/10 rounded-full blur-xl pointer-events-none" />
-          <div className="absolute left-1/3 -top-10 w-24 h-24 bg-emerald-300/20 rounded-full blur-2xl pointer-events-none" />
+        {/* Minimalist Gamified Header Card */}
+        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-800 p-4 sm:p-5 text-white overflow-hidden shrink-0 shadow-sm">
+          <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-white/10 rounded-full blur-xl pointer-events-none" />
 
           {/* Close button */}
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-black/20 hover:bg-black/30 text-white transition-colors cursor-pointer z-10"
+            className="absolute top-3.5 right-3.5 p-1.5 rounded-full bg-black/20 hover:bg-black/30 text-white transition-colors cursor-pointer z-10"
             aria-label="Close modal"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
 
-          <div className="flex items-center space-x-3">
-            {/* Single Clean Coin Icon */}
-            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-inner shrink-0">
-              <SingleCoinIcon className="w-7 h-7 text-yellow-300 drop-shadow-sm" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h2 className="text-xl font-black tracking-tight text-white font-sans">
-                  জামানত কয়েন ও রিওয়ার্ড
-                </h2>
-                {tier && (
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border uppercase tracking-wider ${tier.badgeClass}`}>
-                    {tier.name}
-                  </span>
-                )}
+          {/* Title & Coin Balance */}
+          <div className="flex items-center justify-between pr-8">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-inner shrink-0">
+                <SingleCoinIcon className="w-5 h-5 text-yellow-300 drop-shadow-xs" />
               </div>
-              <p className="text-xs text-emerald-100 font-medium">
-                অর্ডার সম্পন্ন করুন, কয়েন জমিয়ে ফ্রি গিফট নিন!
-              </p>
+              <div>
+                <h2 className="text-base font-extrabold text-white tracking-tight leading-tight">
+                  Jamanot Coins & Rewards
+                </h2>
+                <p className="text-[11px] text-emerald-100 font-medium">
+                  Total Earned: {lifetimeCoins} Coins
+                </p>
+              </div>
             </div>
-          </div>
 
-          {/* Coin Balance Highlight Block */}
-          <div className="mt-4 p-3.5 rounded-2xl bg-emerald-950/40 backdrop-blur-md border border-emerald-400/30 flex items-center justify-between">
-            <div>
-              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
-                আপনার বর্তমান ব্যালেন্স
-              </span>
-              <div className="flex items-baseline space-x-1.5 mt-0.5">
-                <span className="text-2xl font-black text-yellow-300 tracking-tight font-sans">
+            {/* Current Balance Tag */}
+            <div className="text-right">
+              <div className="flex items-baseline justify-end space-x-1">
+                <span className="text-2xl font-black text-yellow-300 font-sans tracking-tight">
                   {currentCoins}
                 </span>
-                <span className="text-xs font-bold text-emerald-100">Coins</span>
-              </div>
-            </div>
-
-            <div className="text-right">
-              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
-                সর্বমোট অর্জিত
-              </span>
-              <div className="flex items-center justify-end space-x-1 mt-0.5">
-                <SingleCoinIcon className="w-3.5 h-3.5 text-yellow-300" />
-                <span className="text-sm font-extrabold text-white">
-                  {lifetimeCoins} Coins
-                </span>
+                <span className="text-[11px] font-bold text-emerald-100">Coins</span>
               </div>
             </div>
           </div>
 
-          {/* Tips Block directly under the coin balance block */}
-          {pricingSettings.rewardStoreTips && (
-            <div className="mt-3 p-3 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 text-white text-xs leading-relaxed">
-              <div className="flex items-center space-x-1.5 font-extrabold text-yellow-300 mb-1">
-                <Sparkles className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
-                <span>টিপস ও নির্দেশনা:</span>
+          {/* Free Delivery Dynamic Progress Banner */}
+          <div className="mt-3.5 p-3 rounded-2xl bg-emerald-950/45 backdrop-blur-md border border-emerald-400/30">
+            <div className="flex items-center justify-between text-xs mb-1.5 font-bold">
+              <div className="flex items-center space-x-1.5 text-yellow-300">
+                <Truck className="w-3.5 h-3.5 shrink-0" />
+                <span>Free Delivery ({freeDeliveryTarget} Coins)</span>
               </div>
-              <p className="text-[11px] font-medium text-emerald-50 whitespace-pre-line leading-relaxed">
-                {pricingSettings.rewardStoreTips}
-              </p>
+              <span className={`text-[11px] font-black ${isFreeDeliveryEligible ? 'text-emerald-300' : 'text-emerald-200'}`}>
+                {isFreeDeliveryEligible ? 'Unlocked ✓' : `${currentCoins}/${freeDeliveryTarget}`}
+              </span>
             </div>
-          )}
+
+            {/* Progress Bar */}
+            <div className="w-full bg-black/30 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 rounded-full ${
+                  isFreeDeliveryEligible
+                    ? 'bg-gradient-to-r from-yellow-300 to-emerald-300'
+                    : 'bg-gradient-to-r from-amber-400 to-yellow-300'
+                }`}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+
+            <p className="text-[11px] text-emerald-100 mt-1.5 font-medium leading-tight">
+              {isFreeDeliveryEligible ? (
+                <span className="text-emerald-200">
+                  🎉 You are eligible for free delivery! Select the option when creating your request.
+                </span>
+              ) : (
+                <span>
+                  Need <strong className="text-yellow-300 font-bold">{Math.max(0, freeDeliveryTarget - currentCoins)} more coins</strong> for free delivery.
+                </span>
+              )}
+            </p>
+          </div>
         </div>
 
-        {/* Insufficient Coins Notice (if opened from free delivery click) */}
+        {/* Insufficient Notice (if opened from action) */}
         {initialMode === 'insufficient_coins' && (
-          <div className="p-3 bg-emerald-50 border-b border-emerald-200 flex items-start space-x-2.5 shrink-0">
-            <AlertCircle className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-            <div className="text-xs text-emerald-950 leading-relaxed font-medium">
-              <p className="font-bold text-emerald-900">
-                {insufficientMessage || pricingSettings.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই!'}
-              </p>
-              {typeof requiredCoinsForAction === 'number' && (
-                <p className="text-[11px] text-emerald-800 mt-0.5">
-                  প্রয়োজন: <strong>{requiredCoinsForAction} কয়েন</strong> (আপনার আছে: <strong>{currentCoins} কয়েন</strong>, আরও <strong>{Math.max(0, requiredCoinsForAction - currentCoins)} কয়েন</strong> দরকার)
-                </p>
-              )}
-            </div>
+          <div className="p-2.5 px-4 bg-amber-50 border-b border-amber-200 flex items-center space-x-2 shrink-0">
+            <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+            <p className="text-xs text-amber-900 font-medium leading-tight truncate">
+              {insufficientMessage || `Need ${requiredCoinsForAction ?? freeDeliveryTarget} coins (You have ${currentCoins} coins)`}
+            </p>
           </div>
         )}
 
-        {/* Tabs Bar */}
-        <div className="flex border-b border-emerald-100 px-4 shrink-0 bg-white">
+        {/* Minimalist Tabs Bar */}
+        <div className="flex border-b border-gray-100 px-3 shrink-0 bg-white">
           <button
             onClick={() => setActiveTab('prizes')}
-            className={`flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
               activeTab === 'prizes'
                 ? 'border-emerald-600 text-emerald-700'
-                : 'border-transparent text-gray-500 hover:text-emerald-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
           >
-            <Gift className="w-4 h-4" />
-            <span>প্রাইজ পুল ({prizes.length})</span>
+            <Gift className="w-3.5 h-3.5" />
+            <span>Prize Pool ({prizes.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('my_claims')}
-            className={`flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
               activeTab === 'my_claims'
                 ? 'border-emerald-600 text-emerald-700'
-                : 'border-transparent text-gray-500 hover:text-emerald-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
           >
-            <Award className="w-4 h-4" />
-            <span>আমার দাবি ({myClaims.length})</span>
+            <Award className="w-3.5 h-3.5" />
+            <span>My Claims ({myClaims.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('how_to_earn')}
-            className={`flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
               activeTab === 'how_to_earn'
                 ? 'border-emerald-600 text-emerald-700'
-                : 'border-transparent text-gray-500 hover:text-emerald-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
           >
-            <Info className="w-4 h-4" />
-            <span>কয়েন আয়ের নিয়ম</span>
+            <Zap className="w-3.5 h-3.5" />
+            <span>Coin Rates</span>
           </button>
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="p-4 overflow-y-auto flex-1 space-y-3">
+        <div className="p-3.5 sm:p-4 overflow-y-auto flex-1 space-y-2.5">
           {/* TAB 1: PRIZE POOL */}
           {activeTab === 'prizes' && (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {prizes.length === 0 ? (
-                <div className="text-center py-12 px-4 bg-emerald-50/40 rounded-2xl border border-dashed border-emerald-200">
-                  <Gift className="w-10 h-10 text-emerald-300 mx-auto mb-2" />
-                  <p className="text-sm font-bold text-gray-800">বর্তমানে কোনো পুরস্কার সক্রিয় নেই</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    এডমিন নতুন পুরস্কার যোগ করলে এখানে দেখতে পাবেন। কয়েন জমিয়ে রাখুন!
+                <div className="text-center py-10 px-4 bg-emerald-50/30 rounded-2xl border border-dashed border-emerald-200">
+                  <Gift className="w-8 h-8 text-emerald-400 mx-auto mb-1.5" />
+                  <p className="text-xs font-bold text-gray-800">No prizes available right now</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Keep saving coins, exciting new prizes are coming soon!
                   </p>
                 </div>
               ) : (
@@ -343,96 +332,95 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                   return (
                     <div
                       key={prize.id}
-                      className={`p-4 rounded-2xl border transition-all ${
+                      className={`p-3 rounded-2xl border transition-all ${
                         isPendingForThisPrize
-                          ? 'bg-amber-50/50 border-amber-200'
+                          ? 'bg-amber-50/40 border-amber-200'
                           : canClaim
-                          ? 'bg-emerald-50/40 border-emerald-200 hover:border-emerald-300 shadow-xs'
-                          : 'bg-gray-50/70 border-gray-200 opacity-90'
+                          ? 'bg-emerald-50/30 border-emerald-200 hover:border-emerald-300'
+                          : 'bg-gray-50/70 border-gray-200'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start space-x-3">
-                          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                             isPendingForThisPrize
-                              ? 'bg-amber-500 text-white shadow-xs'
+                              ? 'bg-amber-500 text-white'
                               : canClaim
-                              ? 'bg-emerald-600 text-white shadow-xs'
+                              ? 'bg-emerald-600 text-white'
                               : 'bg-gray-200 text-gray-500'
                           }`}>
                             {prize.discountPercent ? (
-                              <Truck className="w-6 h-6" />
+                              <Truck className="w-4 h-4" />
                             ) : (
-                              <Gift className="w-6 h-6" />
+                              <Gift className="w-4 h-4" />
                             )}
                           </div>
-                          <div>
-                            <div className="flex items-center space-x-2">
-                              <h3 className="text-sm font-extrabold text-gray-900 leading-tight">
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-1.5 truncate">
+                              <h3 className="text-xs sm:text-sm font-bold text-gray-900 truncate">
                                 {prize.title}
                               </h3>
                               {isPendingForThisPrize && (
-                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 flex items-center space-x-1">
-                                  <Clock className="w-3 h-3 text-amber-600 animate-pulse" />
-                                  <span>দাবি অপেক্ষমাণ</span>
+                                <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                                  Pending
                                 </span>
                               )}
                             </div>
                             {prize.description && (
-                              <p className="text-xs text-gray-600 mt-0.5 leading-relaxed font-medium">
+                              <p className="text-[11px] text-gray-500 truncate font-medium">
                                 {prize.description}
                               </p>
                             )}
                           </div>
                         </div>
 
-                        {/* Required Coins Badge with clean single coin */}
-                        <span className="shrink-0 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300 flex items-center space-x-1">
+                        {/* Required Coins Badge */}
+                        <div className="shrink-0 flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
                           <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-700" />
                           <span>{prize.requiredCoins}</span>
-                        </span>
+                        </div>
                       </div>
 
-                      <div className="mt-3.5 pt-3 border-t border-gray-200/60 flex items-center justify-between">
+                      <div className="mt-2.5 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
                         {isPendingForThisPrize ? (
-                          <span className="text-[11px] font-bold text-amber-700 flex items-center space-x-1">
-                            <Clock className="w-3.5 h-3.5 text-amber-600" />
-                            <span>দাবি পর্যালোচনায় আছে (এডমিনের অনুমোদনের অপেক্ষায়)</span>
+                          <span className="font-semibold text-amber-700 flex items-center space-x-1">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            <span>Pending approval</span>
                           </span>
                         ) : canClaim ? (
-                          <span className="text-[11px] font-bold text-emerald-700 flex items-center space-x-1">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>আপনার পর্যাপ্ত কয়েন আছে!</span>
+                          <span className="font-bold text-emerald-700 flex items-center space-x-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Ready to claim</span>
                           </span>
                         ) : (
-                          <span className="text-[11px] font-semibold text-gray-500">
-                            আরও <strong className="text-emerald-800 font-bold">{needed} কয়েন</strong> প্রয়োজন
+                          <span className="font-medium text-gray-500">
+                            Need <strong className="text-emerald-800 font-bold">{needed} more coins</strong>
                           </span>
                         )}
 
                         <button
                           type="button"
                           onClick={() => {
-                            if (!user) {
+                            if (!isUserAuthenticated(user)) {
                               openAuthModal();
                               return;
                             }
                             if (isPendingForThisPrize) {
-                              showAlert('দাবি অপেক্ষমাণ', 'এই পুরস্কারের একটি দাবি ইতোমধ্যে পর্যালোচনার জন্য জমা রয়েছে। এডমিন এটি অনুমোদন বা বাতিল করার পর আপনি আবার দাবি করতে পারবেন।', 'warning');
+                              showAlert('Claim Pending', 'A claim for this prize is already pending review.', 'warning');
                               return;
                             }
                             setClaimingPrize(prize);
                           }}
                           disabled={isPendingForThisPrize || !canClaim}
-                          className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
                             isPendingForThisPrize
                               ? 'bg-amber-100 text-amber-800 border border-amber-300 cursor-not-allowed opacity-90'
                               : canClaim
-                              ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-sm active:scale-95'
+                              ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 text-white shadow-xs active:scale-95'
                               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                           }`}
                         >
-                          {isPendingForThisPrize ? 'অপেক্ষমাণ' : canClaim ? 'Claim it' : 'লকড'}
+                          {isPendingForThisPrize ? 'Pending' : canClaim ? 'Claim' : 'Get'}
                         </button>
                       </div>
                     </div>
@@ -444,21 +432,21 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
           {/* TAB 2: MY CLAIMS */}
           {activeTab === 'my_claims' && (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {myClaims.length === 0 ? (
-                <div className="text-center py-10 px-4 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-                  <Award className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm font-bold text-gray-700">কোনো দাবি পাওয়া যায়নি</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    প্রাইজ পুল থেকে আপনার পছন্দের পুরস্কার দাবি করতে পারেন।
+                <div className="text-center py-8 px-4 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                  <Award className="w-8 h-8 text-gray-300 mx-auto mb-1.5" />
+                  <p className="text-xs font-bold text-gray-700">No claims found</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    You can claim rewards from the Prize Pool using your coins.
                   </p>
                 </div>
               ) : (
                 myClaims.map((claim) => {
                   const statusConfig = {
-                    PENDING: { label: 'অপেক্ষমাণ (Pending)', class: 'bg-amber-100 text-amber-800 border-amber-200', icon: Clock },
-                    APPROVED: { label: 'অনুমোদিত (Approved)', class: 'bg-emerald-100 text-emerald-800 border-emerald-200', icon: CheckCircle2 },
-                    REJECTED: { label: 'বাতিল (Rejected)', class: 'bg-red-100 text-red-800 border-red-200', icon: XCircle },
+                    PENDING: { label: 'Pending', class: 'bg-amber-100 text-amber-800 border-amber-200', icon: Clock },
+                    APPROVED: { label: 'Approved', class: 'bg-emerald-100 text-emerald-800 border-emerald-200', icon: CheckCircle2 },
+                    REJECTED: { label: 'Rejected', class: 'bg-red-100 text-red-800 border-red-200', icon: XCircle },
                   }[claim.status] || { label: claim.status, class: 'bg-gray-100 text-gray-800 border-gray-200', icon: Clock };
 
                   const StatusIcon = statusConfig.icon;
@@ -466,36 +454,33 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                   return (
                     <div
                       key={claim.id}
-                      className="p-3.5 rounded-2xl bg-white border border-gray-200 shadow-xs space-y-2"
+                      className="p-3 rounded-2xl bg-white border border-gray-200 shadow-2xs space-y-1.5"
                     >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h4 className="text-sm font-extrabold text-gray-900">
-                            {claim.prizeTitle}
-                          </h4>
-                          <span className="text-[11px] text-gray-500 font-medium">
-                            দাবি তারিখ: {new Date(claim.createdAt).toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-
-                        <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border flex items-center space-x-1 ${statusConfig.class}`}>
-                          <StatusIcon className="w-3.5 h-3.5" />
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-extrabold text-gray-900 truncate">
+                          {claim.prizeTitle}
+                        </h4>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border flex items-center space-x-1 shrink-0 ${statusConfig.class}`}>
+                          <StatusIcon className="w-3 h-3" />
                           <span>{statusConfig.label}</span>
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs pt-1 border-t border-gray-100 font-medium text-gray-600">
+                      <div className="flex items-center justify-between text-[11px] font-medium text-gray-600">
                         <span className="flex items-center space-x-1">
-                          <span>কয়েন খরচ:</span>
-                          <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-700" />
-                          <strong className="text-emerald-800 font-bold">{claim.requiredCoins}</strong>
+                          <span>Cost:</span>
+                          <SingleCoinIcon className="w-3 h-3 text-emerald-700" />
+                          <strong className="text-emerald-800 font-bold">{claim.requiredCoins} Coins</strong>
                         </span>
-                        {claim.reviewNote && (
-                          <span className="text-gray-700 italic">
-                            এডমিন নোট: {claim.reviewNote}
-                          </span>
-                        )}
+                        <span className="text-gray-400 text-[10px]">
+                          {new Date(claim.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
                       </div>
+                      {claim.reviewNote && (
+                        <p className="text-[11px] text-gray-600 italic bg-gray-50 p-1.5 rounded-lg border border-gray-100">
+                          Note: {claim.reviewNote}
+                        </p>
+                      )}
                     </div>
                   );
                 })
@@ -503,47 +488,45 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             </div>
           )}
 
-          {/* TAB 3: HOW TO EARN */}
+          {/* TAB 3: COIN RATES */}
           {activeTab === 'how_to_earn' && (
-            <div className="space-y-3 text-xs text-gray-700 leading-relaxed font-medium">
-              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200">
-                <h4 className="font-extrabold text-emerald-900 flex items-center space-x-1.5 mb-1.5">
-                  <Flame className="w-4 h-4 text-emerald-600" />
-                  <span>কয়েন আয়ের নিয়মাবলী</span>
-                </h4>
-                <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  প্রতিটি ডেলিভারি সফলভাবে সম্পন্ন হলে স্বয়ংক্রিয়ভাবে আপনার একাউন্টে কয়েন যোগ হবে। সার্ভিসের ধরন অনুযায়ী কয়েন পরিমাণ নির্ধারিত হয়:
+            <div className="space-y-2.5 text-xs">
+              <div className="rounded-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100">
+                {Object.entries(pricingSettings.serviceCoins || {}).map(([svc, coins]) => (
+                  <div key={svc} className="px-3 py-2 flex items-center justify-between bg-white">
+                    <span className="text-gray-800 font-semibold truncate pr-2 text-xs">{svc}</span>
+                    <span className="font-extrabold text-emerald-700 flex items-center space-x-1 shrink-0 text-xs">
+                      <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>+{coins}</span>
+                    </span>
+                  </div>
+                ))}
+                <div className="px-3 py-2 flex items-center justify-between bg-gray-50/60 text-xs">
+                  <span className="text-gray-700 font-medium">Standard Service (Default)</span>
+                  <span className="font-extrabold text-emerald-700 flex items-center space-x-1 shrink-0">
+                    <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>+{pricingSettings.defaultOrderCoins ?? 10}</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Dynamic Free Delivery Hint */}
+              <div className="p-2.5 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 text-[11px] text-emerald-950 flex items-center space-x-2">
+                <Truck className="w-4 h-4 text-emerald-700 shrink-0" />
+                <p className="leading-snug">
+                  You need at least <strong>{freeDeliveryTarget} coins</strong> for free delivery on your orders.
                 </p>
               </div>
 
-              {/* Service Rates Table */}
-              <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                <div className="bg-emerald-50/70 px-3.5 py-2 font-bold text-emerald-900 text-[11px]">
-                  সার্ভিস অনুযায়ী কয়েন রেট:
+              {/* Custom Admin Tips (if present, shown minimally) */}
+              {pricingSettings.rewardStoreTips && (
+                <div className="p-2.5 bg-amber-50/60 rounded-2xl border border-amber-200/60 text-[11px] text-amber-950 flex items-start space-x-2">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed whitespace-pre-line font-medium">
+                    {pricingSettings.rewardStoreTips}
+                  </p>
                 </div>
-                <div className="divide-y divide-gray-100">
-                  {Object.entries(pricingSettings.serviceCoins || {}).map(([svc, coins]) => (
-                    <div key={svc} className="px-3.5 py-2 flex items-center justify-between">
-                      <span className="text-gray-800 font-semibold">{svc}</span>
-                      <span className="font-extrabold text-emerald-700 flex items-center space-x-1">
-                        <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>+{coins} Coins</span>
-                      </span>
-                    </div>
-                  ))}
-                  <div className="px-3.5 py-2 flex items-center justify-between bg-gray-50/50">
-                    <span className="text-gray-700 font-medium">অন্যান্য সকল সাধারণ সার্ভিস (ডিফল্ট)</span>
-                    <span className="font-extrabold text-emerald-700 flex items-center space-x-1">
-                      <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>+{pricingSettings.defaultOrderCoins || 10} Coins</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 text-[11px] text-emerald-900 leading-relaxed">
-                <strong>ফ্রি ডেলিভারি টিপস:</strong> আপনার কাছে <strong>{pricingSettings.freeDeliveryRequiredCoins || 50} কয়েন</strong> থাকলেই রিকোয়েস্ট তৈরি করার সময় &quot;ফ্রি ডেলিভারি&quot; অপশন সিলেক্ট করে ডেলিভারি চার্জ সম্পূর্ণ ফ্রি নিতে পারবেন!
-              </div>
+              )}
             </div>
           )}
         </div>
@@ -551,10 +534,10 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
         {/* Claim Confirmation Modal Overlay */}
         {claimingPrize && (
           <div className="absolute inset-0 z-30 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-emerald-200 space-y-3">
+            <div className="w-full max-w-sm bg-white rounded-3xl p-4 sm:p-5 shadow-2xl border border-emerald-200 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-extrabold text-gray-900">
-                  পুরস্কার দাবির নিশ্চিতকরণ
+                <h3 className="text-sm font-extrabold text-gray-900">
+                  Confirm Reward Claim
                 </h3>
                 <button
                   type="button"
@@ -565,28 +548,25 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                 </button>
               </div>
 
-              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 space-y-1">
-                <p className="font-bold text-sm text-gray-900">{claimingPrize.title}</p>
+              <div className="p-2.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 space-y-1">
+                <p className="font-bold text-gray-900">{claimingPrize.title}</p>
                 <div className="flex items-center space-x-1">
-                  <span>খরচ হবে:</span>
+                  <span>Cost:</span>
                   <SingleCoinIcon className="w-3.5 h-3.5 text-emerald-700" />
-                  <strong className="text-emerald-900 font-extrabold">{claimingPrize.requiredCoins} কয়েন</strong>
+                  <strong className="text-emerald-900 font-extrabold">{claimingPrize.requiredCoins} Coins</strong>
                 </div>
-                <p className="text-[11px] text-gray-600">
-                  দাবি জমা দেওয়ার পর এডমিন অনুমোদন দিলে কয়েন কাটা হবে।
-                </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  নোট বা ঠিকানা (ঐচ্ছিক):
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Note / Delivery Address (Optional):
                 </label>
                 <textarea
                   value={claimNote}
                   onChange={(e) => setClaimNote(e.target.value)}
-                  placeholder="যেমন: ডেলিভারি ঠিকানা বা কোনো বিশেষ অনুরোধ..."
-                  rows={3}
-                  className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-emerald-500"
+                  placeholder="e.g. Delivery address or special instructions..."
+                  rows={2}
+                  className="w-full p-2 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -594,19 +574,19 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setClaimingPrize(null)}
-                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer"
+                  className="flex-1 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer"
                 >
-                  বাতিল
+                  Cancel
                 </button>
 
                 <AsyncButton
                   type="button"
                   onClick={handleClaimSubmit}
                   isLoading={submittingClaim}
-                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 text-white text-xs font-extrabold shadow-sm active:scale-95 cursor-pointer"
+                  className="flex-1 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 text-white text-xs font-extrabold shadow-xs active:scale-95 cursor-pointer"
                 >
-                  <Send className="w-3.5 h-3.5 mr-1" />
-                  <span>দাবি পাঠান</span>
+                  <Send className="w-3 h-3 mr-1" />
+                  <span>Submit Claim</span>
                 </AsyncButton>
               </div>
             </div>

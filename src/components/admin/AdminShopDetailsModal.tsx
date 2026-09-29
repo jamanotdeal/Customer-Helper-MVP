@@ -15,13 +15,17 @@ import {
   MessageSquare,
   Globe,
   FileText,
+  Ban,
+  ShieldAlert,
 } from 'lucide-react';
+import { AdminBlockModal } from './AdminBlockModal';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
   onClose: () => void;
   onEdit: (shop: Shop) => void;
   onDeleted?: () => void;
+  onShopUpdated?: () => void;
 }
 
 export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
@@ -29,8 +33,11 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   onClose,
   onEdit,
   onDeleted,
+  onShopUpdated,
 }) => {
   const { showConfirm, showAlert } = useModal();
+  const [showBlockModal, setShowBlockModal] = React.useState(false);
+  const [currentShop, setCurrentShop] = React.useState<Shop>(shop);
   const [currentStatus, setCurrentStatus] = React.useState<'Approved' | 'Pending' | 'Rejected'>(
     shop.status === 'Pending' || shop.status === 'PENDING'
       ? 'Pending'
@@ -115,10 +122,39 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
   const commission = Math.round(totalSales * ((shop.commissionPercent || 0) / 100));
 
+  const handleToggleBlock = async () => {
+    if (currentShop.isBlocked) {
+      const confirmed = await showConfirm(
+        'স্টোর আনব্লক নিশ্চিতকরণ',
+        `আপনি কি "${currentShop.name}" স্টোরটি আনব্লক করতে চান?`,
+        'হ্যাঁ, আনব্লক করুন',
+        'বাতিল'
+      );
+      if (!confirmed) return;
+
+      await fallbackStore.blockShop(shop.id, false);
+      const updated = { ...currentShop, isBlocked: false, adminBlockNote: undefined, blockedReason: undefined };
+      setCurrentShop(updated);
+      showAlert('আনব্লক সম্পন্ন', `"${currentShop.name}" স্টোরটি পুনরায় সক্রিয় করা হয়েছে।`, 'success');
+      if (onShopUpdated) onShopUpdated();
+    } else {
+      setShowBlockModal(true);
+    }
+  };
+
+  const handleConfirmBlock = async (note: string) => {
+    await fallbackStore.blockShop(shop.id, true, note);
+    const updated = { ...currentShop, isBlocked: true, adminBlockNote: note, blockedReason: note };
+    setCurrentShop(updated);
+    showAlert('ব্লক সম্পন্ন', `"${currentShop.name}" স্টোরটি ব্লক করা হয়েছে।`, 'info');
+    if (onShopUpdated) onShopUpdated();
+  };
+
   const handleStatusChange = async (newStatus: 'Approved' | 'Pending' | 'Rejected') => {
     setCurrentStatus(newStatus);
     await fallbackStore.updateShopStatus(shop.id, newStatus);
     showAlert('সফল', `দোকানের স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
+    if (onShopUpdated) onShopUpdated();
   };
 
   const handleDelete = async () => {
@@ -168,6 +204,12 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
                 <span className="inline-block px-2.5 py-0.5 rounded-full bg-purple-500/30 border border-purple-300/30 text-purple-200 text-[10px] font-extrabold uppercase tracking-wider">
                   {shop.type}
                 </span>
+                {currentShop.isBlocked && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-red-500 text-white font-black text-[10px] uppercase tracking-wider flex items-center space-x-1 shadow-xs">
+                    <Ban className="w-3 h-3" />
+                    <span>BLOCKED</span>
+                  </span>
+                )}
                 <select
                   value={currentStatus}
                   onChange={(e) => handleStatusChange(e.target.value as any)}
@@ -207,6 +249,22 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+          {/* Block Warning Banner if store is blocked */}
+          {currentShop.isBlocked && (
+            <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start space-x-3">
+              <ShieldAlert className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h4 className="font-extrabold text-sm text-red-950">এই স্টোরটি বর্তমানে ব্লকড (BLOCKED)!</h4>
+                <p className="text-xs text-red-800">
+                  🔒 <strong>অ্যাডমিন ইন্টারনাল নোট:</strong> "{currentShop.adminBlockNote || currentShop.blockedReason || 'অ্যাডমিন দ্বারা সীমাবদ্ধ'}"
+                </p>
+                <p className="text-[10px] text-red-600 font-medium">
+                  (এই নোটটি শুধুমাত্র অ্যাডমিন দেখতে পাবেন। গ্রাহকদের কাছে এই স্টোরে অর্ডার পাঠানো বন্ধ থাকবে।)
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Order Metrics Section */}
           <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-4 shadow-md space-y-3">
@@ -407,7 +465,20 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center space-x-2.5 shrink-0">
+        <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center space-x-2 shrink-0 flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleToggleBlock}
+            className={`py-3 px-3.5 rounded-2xl font-extrabold text-xs shadow-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95 ${
+              currentShop.isBlocked
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                : 'bg-amber-600 hover:bg-amber-700 text-white'
+            }`}
+          >
+            <Ban className="w-3.5 h-3.5" />
+            <span>{currentShop.isBlocked ? 'Unblock Store' : 'Block Store'}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => { onEdit(shop); onClose(); }}
@@ -434,6 +505,16 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             Close
           </button>
         </div>
+
+        {/* Admin Block Note Modal */}
+        {showBlockModal && (
+          <AdminBlockModal
+            targetName={currentShop.name}
+            targetType="Store"
+            onConfirm={handleConfirmBlock}
+            onClose={() => setShowBlockModal(false)}
+          />
+        )}
       </div>
     </div>
   );

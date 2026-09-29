@@ -169,7 +169,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                     onClick={() => setShowRewardModal(true)}
                     className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 text-emerald-950 transition-all shadow-xs active:scale-95 cursor-pointer"
                     aria-label="Coins & Rewards"
-                    title="জামানত কয়েন ও রিওয়ার্ড"
+                    title="Jamanot Coins & Rewards"
                   >
                     <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-amber-400 to-yellow-300 flex items-center justify-center shadow-xs shrink-0 ring-1 ring-amber-300/60">
                       <SingleCoinIcon className="w-3.5 h-3.5 text-amber-950" />

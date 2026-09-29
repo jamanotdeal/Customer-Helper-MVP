@@ -17,7 +17,9 @@ import {
   VolumeX,
   Clock,
   Zap,
+  Store,
 } from 'lucide-react';
+import { isOrderFromStore } from '@/utils/orderUtils';
 
 export interface NewOrderAlertOverlayProps {
   newOrderIds: Set<string>;
@@ -87,7 +89,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   if (!order) return null;
 
   const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
+    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
     : null;
 
   const progressPercent = Math.max(0, Math.min(100, (countdown / autoDismissSeconds) * 100));
@@ -165,9 +167,17 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
           <div className="p-5 space-y-4">
             {/* Order ID & Fee row */}
             <div className="flex items-center justify-between">
-              <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2.5 py-0.5 rounded-md shadow-xs">
-                #{order.id}
-              </span>
+              <div className="flex items-center space-x-1.5">
+                <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2.5 py-0.5 rounded-md shadow-xs">
+                  #{order.id}
+                </span>
+                {isOrderFromStore(order) && (
+                  <span className="px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-black flex items-center gap-1 shadow-sm">
+                    <Store className="w-3 h-3" />
+                    <span>Store</span>
+                  </span>
+                )}
+              </div>
               <div className="flex items-center space-x-2">
                 {order.productCost && order.productCost > 0 ? (
                   <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-extrabold">
@@ -260,8 +270,17 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
                   <Phone className="w-4 h-4" />
                 </div>
                 <div>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">কাস্টমার</p>
-                  <p className="text-sm text-gray-800 font-semibold">{order.customerName}</p>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">
+                    {isOrderFromStore(order) ? 'স্টোর / কাস্টমার' : 'কাস্টমার'}
+                  </p>
+                  <p className="text-sm text-gray-800 font-semibold flex items-center gap-1.5">
+                    <span>{order.customerName}</span>
+                    {isOrderFromStore(order) && (
+                      <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
+                        STORE
+                      </span>
+                    )}
+                  </p>
                 </div>
               </div>
             )}

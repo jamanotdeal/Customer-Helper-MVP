@@ -38,6 +38,7 @@ import { FeeDetailsPage } from '@/components/FeeDetailsPage';
 import { StoreDashboard } from '@/components/StoreDashboard';
 import { PwaSmartPrompt } from '@/components/PwaSmartPrompt';
 import { InAppBrowserModal } from '@/components/InAppBrowserModal';
+import { BlockedUserModal } from '@/components/BlockedUserModal';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
@@ -48,6 +49,15 @@ export default function PageClient() {
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
   const [pendingReplyFeedback, setPendingReplyFeedback] = useState<OrderFeedback | null>(null);
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [hasPromptedBlockedUser, setHasPromptedBlockedUser] = useState(false);
+
+  useEffect(() => {
+    if (user?.isBlocked && !hasPromptedBlockedUser) {
+      setShowBlockedModal(true);
+      setHasPromptedBlockedUser(true);
+    }
+  }, [user?.isBlocked, hasPromptedBlockedUser]);
 
   const handleSelectOrder = (orderId: string) => {
     // Switch view modes/tabs based on order and user profile
@@ -120,7 +130,7 @@ export default function PageClient() {
           const completionTime = new Date(completionTimeStr).getTime();
           const now = Date.now();
           const diffHours = (now - completionTime) / (1000 * 60 * 60);
-          return diffHours >= 0 && diffHours <= 8;
+          return diffHours >= 0 && diffHours <= 72;
         } catch (e) {
           return false;
         }
@@ -227,20 +237,8 @@ export default function PageClient() {
     return cleanup;
   }, [showNotifications]);
 
-  // Auto-register service worker & request push notification permission (only for Helper or Store on load)
+  // Walk the signed-in user through any missing permissions (see runPermissionLadder)
   useEffect(() => {
-    // Native builds bundle their assets and use the Java notification path, so
-    // registering the service worker would only add latency and duplicate alerts.
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && !isNativeApp()) {
-      navigator.serviceWorker
-        .register('/sw.js', { updateViaCache: 'none' })
-        .then((reg) => {
-          console.log('ServiceWorker registered:', reg.scope);
-          reg.update().catch(() => { });
-        })
-        .catch((err) => console.warn('ServiceWorker registration note:', err));
-    }
-
     if (user) {
       runPermissionLadder();
     }
@@ -476,6 +474,7 @@ export default function PageClient() {
   // Sync activeTab when user or activeMode changes
   useEffect(() => {
     if (!user) {
+      setInitialSelectedOrderId(null);
       if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
         setActiveTab('request');
       }
@@ -524,7 +523,14 @@ export default function PageClient() {
 
     // 3. Store view check: Store type users ONLY see Store views
     if (isStoreUser) {
-      return <StoreDashboard activeTab={activeTab} setActiveTab={(tab) => setActiveTab(tab as any)} />;
+      return (
+        <StoreDashboard
+          activeTab={activeTab}
+          setActiveTab={(tab) => setActiveTab(tab as any)}
+          initialSelectedOrderId={initialSelectedOrderId}
+          onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+        />
+      );
     }
 
     // 4. Helper view check: Helper type users view Helper views
@@ -733,7 +739,15 @@ export default function PageClient() {
       <InAppBrowserModal />
 
       {/* PWA Smart First-Visit Detection & Prompts */}
-      <PwaSmartPrompt />
+      {<PwaSmartPrompt />}
+
+      {/* Blocked User Notice Modal */}
+      {showBlockedModal && (
+        <BlockedUserModal
+          onClose={() => setShowBlockedModal(false)}
+          targetRole={activeMode === 'helper' ? 'helper' : activeMode === 'store' ? 'store' : 'customer'}
+        />
+      )}
     </div>
   );
 }
