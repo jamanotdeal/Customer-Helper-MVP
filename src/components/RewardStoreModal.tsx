@@ -92,7 +92,6 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
 
       // Load user claims
       if (user) {
-        fallbackStore.reconcileCustomerCoins(user.uid);
         const claims = Array.from(fallbackStore.rewardClaims.values())
           .filter((c) => c.userId === user.uid)
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

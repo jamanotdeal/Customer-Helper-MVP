@@ -105,8 +105,6 @@ export default function PageClient() {
     }
 
     const checkDeliveredOrderPopups = () => {
-      fallbackStore.reconcileCustomerCoins(user.uid);
-
       const userOrders = Array.from(fallbackStore.orders.values()).filter(
         (o) => o.customerId === user.uid && o.status === 'DELIVERED'
       );
