@@ -396,183 +396,190 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
     setSubmitting(true);
 
-    // Save preferences
-    saveAltPhone(altPhone);
+    try {
+      // Save preferences
+      saveAltPhone(altPhone);
 
-    // 1. Delivery address: record / upsert in server addresses and get id
-    let finalDeliveryAddressText = deliveryAddress.trim();
-    let effectiveDelivAddressId = deliveryAddressId;
+      // 1. Delivery address: record / upsert in server addresses and get id
+      let finalDeliveryAddressText = deliveryAddress.trim();
+      let effectiveDelivAddressId = deliveryAddressId;
 
-    if (finalDeliveryAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
-          lat: deliveryLat,
-          lng: deliveryLng,
-        });
-        if (sa?.id) {
-          effectiveDelivAddressId = sa.id;
-          finalDeliveryAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
+      if (finalDeliveryAddressText) {
+        try {
+          const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
+            lat: deliveryLat,
+            lng: deliveryLng,
+          });
+          if (sa?.id) {
+            effectiveDelivAddressId = sa.id;
+            finalDeliveryAddressText = sa.address;
+          }
+        } catch (_) {}
+      }
 
-    const finalDelivLoc: LocationData = {
-      address: finalDeliveryAddressText,
-      lat: deliveryLat,
-      lng: deliveryLng,
-      addressId: effectiveDelivAddressId,
-    };
-    saveDefaultDeliveryLocation(finalDelivLoc);
-    if (service) {
-      saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
-    }
-    updateCustomerPreferences(altPhone, finalDelivLoc, undefined);
+      const finalDelivLoc: LocationData = {
+        address: finalDeliveryAddressText,
+        lat: deliveryLat,
+        lng: deliveryLng,
+        addressId: effectiveDelivAddressId,
+      };
+      saveDefaultDeliveryLocation(finalDelivLoc);
+      if (service) {
+        saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
+      }
+      updateCustomerPreferences(altPhone, finalDelivLoc, undefined);
 
-    if (user?.uid && finalDeliveryAddressText) {
-      const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
-      setSavedAddresses(updated);
-      saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
-    }
+      if (user?.uid && finalDeliveryAddressText) {
+        const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
+        setSavedAddresses(updated);
+        saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
+      }
 
-    // 2. Pickup address: record / upsert in server addresses and get id
-    let finalPickupAddressText = pickupNote.trim();
-    let effectivePickupAddressId = pickupAddressId;
-    let pickupLoc: LocationData | undefined = undefined;
+      // 2. Pickup address: record / upsert in server addresses and get id
+      let finalPickupAddressText = pickupNote.trim();
+      let effectivePickupAddressId = pickupAddressId;
+      let pickupLoc: LocationData | undefined = undefined;
 
-    if (finalPickupAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+      if (finalPickupAddressText) {
+        try {
+          const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
+            lat: pickupLat,
+            lng: pickupLng,
+          });
+          if (sa?.id) {
+            effectivePickupAddressId = sa.id;
+            finalPickupAddressText = sa.address;
+          }
+        } catch (_) {}
+
+        pickupLoc = {
+          address: finalPickupAddressText,
           lat: pickupLat,
           lng: pickupLng,
-        });
-        if (sa?.id) {
-          effectivePickupAddressId = sa.id;
-          finalPickupAddressText = sa.address;
-        }
-      } catch (_) {}
+          addressId: effectivePickupAddressId,
+        };
 
-      pickupLoc = {
-        address: finalPickupAddressText,
-        lat: pickupLat,
-        lng: pickupLng,
-        addressId: effectivePickupAddressId,
+        if (service && !isNoSavePickupService(service)) {
+          saveServicePickupLocation(service, pickupLoc, user?.uid);
+        }
+        if (user?.uid) {
+          const updated = addSavedPickupAddress(user.uid, pickupLoc);
+          setSavedPickupAddresses(updated);
+          saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
+        }
+      }
+
+      // Build a single-item list from the description
+      const singleItem: OrderItem = {
+        id: 'item-1',
+        name: description.trim(),
+        qty: '1',
       };
 
-      if (service && !isNoSavePickupService(service)) {
-        saveServicePickupLocation(service, pickupLoc, user?.uid);
-      }
-      if (user?.uid) {
-        const updated = addSavedPickupAddress(user.uid, pickupLoc);
-        setSavedPickupAddresses(updated);
-        saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
-      }
-    }
+      // Calculate initial estimated delivery fee
+      const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
+        ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
+        : 0;
+      const estdFee = calculateEstimatedFee({
+        distanceKm: Math.ceil(distKm),
+        weightKg: 0,
+        isReturnRequested: false,
+        productPrice: 0,
+      }, fallbackStore.pricingSettings).totalFee;
+      const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
 
-    // Build a single-item list from the description
-    const singleItem: OrderItem = {
-      id: 'item-1',
-      name: description.trim(),
-      qty: '1',
-    };
+      const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
+      const isFree = useFreeDelivery && (user.coins || 0) >= reqCoins;
+      const discountPct = fallbackStore.pricingSettings.freeDeliveryDiscountPercent ?? 100;
+      const finalDeliveryFee = isFree
+        ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
+        : initialFee;
 
-    // Calculate initial estimated delivery fee
-    const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
-      ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
-      : 0;
-    const estdFee = calculateEstimatedFee({
-      distanceKm: Math.ceil(distKm),
-      weightKg: 0,
-      isReturnRequested: false,
-      productPrice: 0,
-    }, fallbackStore.pricingSettings).totalFee;
-    const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
+      const isStoreUser = Boolean(
+        user.isStoreApproved ||
+        user.role === 'store' ||
+        Boolean(user.storeId) ||
+        (activeMode as string) === 'store'
+      );
 
-    const reqCoins = fallbackStore.pricingSettings.freeDeliveryRequiredCoins ?? 50;
-    const isFree = useFreeDelivery && (user.coins || 0) >= reqCoins;
-    const discountPct = fallbackStore.pricingSettings.freeDeliveryDiscountPercent ?? 100;
-    const finalDeliveryFee = isFree
-      ? (discountPct === 100 ? 0 : Math.round(initialFee * (100 - discountPct) / 100))
-      : initialFee;
+      // Generate zero-padded 5-digit order ID
+      const orderNum = Math.floor(Math.random() * 90000) + 10000;
+      const newOrder: Order = {
+        id: `${orderNum}`,
+        customerId: user.uid,
+        customerName: user.displayName || 'Customer',
+        customerPhone: altPhone,
+        alternativePhone: altPhone,
+        title: service,
+        service: service,
+        items: [singleItem],
+        missingItemPreference: undefined,
+        pickupLocation: pickupLoc,
+        deliveryLocation: finalDelivLoc,
+        additionalNote: undefined,
+        status: 'PENDING',
+        deliveryFee: finalDeliveryFee,
+        originalDeliveryFee: initialFee,
+        isFreeDelivery: isFree,
+        deliveryDiscountPercent: isFree ? discountPct : undefined,
+        coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
+        isStoreOrder: isStoreUser,
+        creatorRole: isStoreUser ? 'store' : (user.isHelper ? 'helper' : 'customer'),
+        appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
+          ? {
+              amount: unpaidDue.totalAmount,
+              note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
+              sourceOrderIds: unpaidDue.sourceOrderIds,
+            }
+          : undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        statusHistory: [
+          {
+            id: `sh-${Date.now()}`,
+            status: 'PENDING',
+            timestamp: new Date().toISOString(),
+            actor: isStoreUser ? 'Store' : 'Customer',
+            note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
+          },
+        ],
+      };
 
-    const isStoreUser = Boolean(
-      user.isStoreApproved ||
-      user.role === 'store' ||
-      Boolean(user.storeId) ||
-      (activeMode as string) === 'store'
-    );
+      await fallbackStore.addOrder(newOrder);
 
-    // Generate zero-padded 5-digit order ID
-    const orderNum = Math.floor(Math.random() * 90000) + 10000;
-    const newOrder: Order = {
-      id: `${orderNum}`,
-      customerId: user.uid,
-      customerName: user.displayName || 'Customer',
-      customerPhone: altPhone,
-      alternativePhone: altPhone,
-      title: service,
-      service: service,
-      items: [singleItem],
-      missingItemPreference: undefined,
-      pickupLocation: pickupLoc,
-      deliveryLocation: finalDelivLoc,
-      additionalNote: undefined,
-      status: 'PENDING',
-      deliveryFee: finalDeliveryFee,
-      originalDeliveryFee: initialFee,
-      isFreeDelivery: isFree,
-      deliveryDiscountPercent: isFree ? discountPct : undefined,
-      coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
-      isStoreOrder: isStoreUser,
-      creatorRole: isStoreUser ? 'store' : (user.isHelper ? 'helper' : 'customer'),
-      appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
-        ? {
-            amount: unpaidDue.totalAmount,
-            note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
-            sourceOrderIds: unpaidDue.sourceOrderIds,
+      // Reset form
+      setDescription('');
+      setService('');
+      setIsServiceDropdownOpen(false);
+      setPickupNote('');
+      setPickupLat(undefined);
+      setPickupLng(undefined);
+      setPickupAddressId(undefined);
+      setDeliveryAddressId(undefined);
+      setIsExpanded(false);
+      // Prompt notification permission on order submit so customer receives live helper updates
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
+        try {
+          const granted = await requestNativePushPermission();
+          if (granted && user?.uid) {
+            initFcmMessaging(user.uid).catch(() => {});
           }
-        : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      statusHistory: [
-        {
-          id: `sh-${Date.now()}`,
-          status: 'PENDING',
-          timestamp: new Date().toISOString(),
-          actor: isStoreUser ? 'Store' : 'Customer',
-          note: isFree ? `Request created (Free Delivery via ${reqCoins} Coins)` : 'Request created',
-        },
-      ],
-    };
+        } catch (_) {}
+      }
 
-    await fallbackStore.addOrder(newOrder);
+      // Show admin-configured confirmation message
+      const confirmMsg =
+        fallbackStore.pricingSettings.orderConfirmationMessage ||
+        'আমরা আপনার অনুরোধটি পেয়েছি। শীঘ্রই একজন হেলপার গ্রহণ করবেন।';
+      await showAlert('ধন্যবাদ!', confirmMsg, 'success');
 
-    // Reset form
-    setDescription('');
-    setService('');
-    setIsServiceDropdownOpen(false);
-    setPickupNote('');
-    setPickupLat(undefined);
-    setPickupLng(undefined);
-    setPickupAddressId(undefined);
-    setDeliveryAddressId(undefined);
-    setIsExpanded(false);
-    // Prompt notification permission on order submit so customer receives live helper updates
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
-      try {
-        const granted = await requestNativePushPermission();
-        if (granted && user?.uid) {
-          initFcmMessaging(user.uid).catch(() => {});
-        }
-      } catch (_) {}
+      onOrderCreated(newOrder);
+    } catch (err: any) {
+      console.error('[RequestComposer] Order creation failed:', err);
+      await showAlert('ত্রুটি', err?.message || 'রিকোয়েস্ট সাবমিট করতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।', 'error');
+    } finally {
+      setSubmitting(false);
     }
-
-    // Show admin-configured confirmation message
-    const confirmMsg =
-      fallbackStore.pricingSettings.orderConfirmationMessage ||
-      'আমরা আপনার অনুরোধটি পেয়েছি। শীঘ্রই একজন হেলপার গ্রহণ করবেন।';
-    await showAlert('ধন্যবাদ!', confirmMsg, 'success');
-
-    onOrderCreated(newOrder);
   };
 
   const timingStatus = isOrderTimingOpen(fallbackStore.pricingSettings);

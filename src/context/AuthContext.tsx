@@ -423,8 +423,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(updated);
       fallbackStore.saveUser(updated);
 
-      // Switch Firestore listeners to match the new active mode (customer ⇔ helper ⇔ store)
-      if (mode === 'customer' || mode === 'helper' || mode === 'store') {
+      // Switch Firestore listeners to match the new active mode (customer ⇔ helper ⇔ store ⇔ admin)
+      if (mode === 'customer' || mode === 'helper' || mode === 'store' || mode === 'admin') {
         fallbackStore.initListenersForRole(mode, user.uid, user.helperType, user.storeId);
       }
 

@@ -487,6 +487,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       }
     };
 
+    if (user?.uid) {
+      fallbackStore.initListenersForRole('helper', user.uid, user.helperType, user.storeId);
+    }
     syncOrders();
     const unsub = fallbackStore.subscribe(syncOrders);
     return () => {

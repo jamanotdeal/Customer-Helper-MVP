@@ -783,15 +783,16 @@ class FallbackStore {
   //      Fix 2: _knownNotifIds is now persisted to sessionStorage so page refreshes
   //             don't re-fire all previously seen notifications.
   private _handleNotificationSnapshot(snapshot: any, userId: string) {
-    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers']);
+    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers', 'all-stores']);
     // Fix 4: Max notifications to store per user in memory.
     const MAX_NOTIFS_PER_USER = 100;
 
     const map = new Map<string, AppNotification[]>();
     snapshot.docs.forEach((docSnap: any) => {
       const data = docSnap.data() as AppNotification;
+      const isBroadcast = BROADCAST_IDS.has(data.userId) || (data.userId && data.userId.startsWith('segment:'));
       // Broadcast notifications are stored under the current user's uid locally
-      const storeKey = BROADCAST_IDS.has(data.userId) ? userId : data.userId;
+      const storeKey = isBroadcast ? userId : data.userId;
       const userList = map.get(storeKey) || [];
       userList.push(data);
       map.set(storeKey, userList);
@@ -847,7 +848,8 @@ class FallbackStore {
           notif.userId === uid ||
           notif.userId === 'all' ||
           helperBroadcastEligible ||
-          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin');
+          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin') ||
+          (notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId)));
 
         if (targets && !notif.read) {
           if (isInitial) {
@@ -1067,8 +1069,8 @@ class FallbackStore {
         onSnapshot(
           query(
             collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-stores']),
-            limit(50)
+            orderBy('createdAt', 'desc'),
+            limit(100)
           ),
           (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
           (err) => console.warn('[Firestore] Store notifications sync note:', err)
@@ -1117,7 +1119,7 @@ class FallbackStore {
       // Only this customer's orders (realtime)
       unsubs.push(
         onSnapshot(
-          query(collection(db, 'orders'), where('customerId', '==', userId), limit(50)),
+          query(collection(db, 'orders'), where('customerId', '==', userId), limit(100)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
@@ -1141,8 +1143,8 @@ class FallbackStore {
         onSnapshot(
           query(
             collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-customers']),
-            limit(50)
+            orderBy('createdAt', 'desc'),
+            limit(100)
           ),
           (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
           (err) => console.warn('[Firestore] Customer notifications sync note:', err)
@@ -1228,23 +1230,19 @@ class FallbackStore {
 
       // ── HELPER role ───────────────────────────────────────────────────────────
     } else if (role === 'helper') {
-      const helperGroup =
-        helperType === 'dedicated' ? 'all-dedicated-helpers' : 'all-commuter-helpers';
-
-      // Active/in-progress orders that any helper can see (realtime)
+      // Recent orders stream (realtime, latest 150 orders ordered by createdAt desc)
+      // This ensures any newly created order is immediately received by helpers in realtime
       unsubs.push(
         onSnapshot(
           query(
             collection(db, 'orders'),
-            where('status', 'in', ['PENDING', 'ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'SCHEDULED']),
-            limit(100)
+            orderBy('createdAt', 'desc'),
+            limit(150)
           ),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                // Always remove: if the doc was hard-deleted by admin, we must clear it.
-                // If it merely changed status (leaving this query scope), the second
-                // listener (helperId == userId, all statuses) will keep/re-add it.
+                // If doc was removed from Firestore, delete it
                 this.orders.delete(change.doc.id);
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
@@ -1253,6 +1251,28 @@ class FallbackStore {
             this.notify();
           },
           (err) => console.warn('[Firestore] Helper active orders sync note:', err)
+        )
+      );
+
+      // Unassigned pending requests stream (realtime, ensures all new requests are received immediately)
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'orders'),
+            where('status', '==', 'PENDING'),
+            limit(100)
+          ),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.orders.delete(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper pending orders sync note:', err)
         )
       );
 
@@ -1293,13 +1313,13 @@ class FallbackStore {
         )
       );
 
-      // Own notifications + all-helpers broadcast + helperType-specific (realtime)
+      // Notifications (realtime stream, filtered client-side by _handleNotificationSnapshot)
       unsubs.push(
         onSnapshot(
           query(
             collection(db, 'notifications'),
-            where('userId', 'in', [userId, 'all', 'all-helpers', helperGroup]),
-            limit(60)
+            orderBy('createdAt', 'desc'),
+            limit(100)
           ),
           (snapshot) => this._handleNotificationSnapshot(snapshot, userId),
           (err) => console.warn('[Firestore] Helper notifications sync note:', err)

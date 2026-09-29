@@ -591,7 +591,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
         const seen = new Set<string>();
         return copy.filter((o) => {
-          if (!fallbackStore.orders.has(o.id)) return false;
           if (seen.has(o.id)) return false;
           seen.add(o.id);
           return true;
@@ -612,7 +611,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
         const seen = new Set<string>();
         return copy.filter((o) => {
-          if (!fallbackStore.orders.has(o.id)) return false;
           if (seen.has(o.id)) return false;
           seen.add(o.id);
           return true;
@@ -785,12 +783,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
     };
 
+    if (currentUser?.uid) {
+      fallbackStore.initListenersForRole('admin', currentUser.uid);
+    }
     syncAdminData();
     const unsub = fallbackStore.subscribe(syncAdminData);
     return () => {
       unsub();
     };
-  }, []);
+  }, [currentUser?.uid]);
 
   // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
 
