@@ -400,21 +400,28 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       // Save preferences
       saveAltPhone(altPhone);
 
-      // 1. Delivery address: record / upsert in server addresses and get id
+      // 1. Resolve delivery + pickup addresses IN PARALLEL (no need to do them sequentially)
       let finalDeliveryAddressText = deliveryAddress.trim();
       let effectiveDelivAddressId = deliveryAddressId;
+      let finalPickupAddressText = pickupNote.trim();
+      let effectivePickupAddressId = pickupAddressId;
 
-      if (finalDeliveryAddressText) {
-        try {
-          const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
-            lat: deliveryLat,
-            lng: deliveryLng,
-          });
-          if (sa?.id) {
-            effectiveDelivAddressId = sa.id;
-            finalDeliveryAddressText = sa.address;
-          }
-        } catch (_) {}
+      const [delivResult, pickResult] = await Promise.allSettled([
+        finalDeliveryAddressText
+          ? fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, { lat: deliveryLat, lng: deliveryLng })
+          : Promise.resolve(null),
+        finalPickupAddressText
+          ? fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, { lat: pickupLat, lng: pickupLng })
+          : Promise.resolve(null),
+      ]);
+
+      if (delivResult.status === 'fulfilled' && delivResult.value?.id) {
+        effectiveDelivAddressId = delivResult.value.id;
+        finalDeliveryAddressText = delivResult.value.address;
+      }
+      if (pickResult.status === 'fulfilled' && pickResult.value?.id) {
+        effectivePickupAddressId = pickResult.value.id;
+        finalPickupAddressText = pickResult.value.address;
       }
 
       const finalDelivLoc: LocationData = {
@@ -435,23 +442,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
       }
 
-      // 2. Pickup address: record / upsert in server addresses and get id
-      let finalPickupAddressText = pickupNote.trim();
-      let effectivePickupAddressId = pickupAddressId;
       let pickupLoc: LocationData | undefined = undefined;
-
       if (finalPickupAddressText) {
-        try {
-          const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
-            lat: pickupLat,
-            lng: pickupLng,
-          });
-          if (sa?.id) {
-            effectivePickupAddressId = sa.id;
-            finalPickupAddressText = sa.address;
-          }
-        } catch (_) {}
-
         pickupLoc = {
           address: finalPickupAddressText,
           lat: pickupLat,
@@ -528,7 +520,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
           ? {
               amount: unpaidDue.totalAmount,
-              note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
+              note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
               sourceOrderIds: unpaidDue.sourceOrderIds,
             }
           : undefined,
@@ -545,6 +537,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         ],
       };
 
+      // Save to server first (awaited — order must be confirmed on Firestore before proceeding)
       await fallbackStore.addOrder(newOrder);
 
       // Reset form fields
@@ -559,7 +552,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       setIsExpanded(false);
       setSubmitting(false);
 
-      // Prompt notification permission in background without blocking customer flow
+      // Prompt notification permission in background — must NOT block submit flow
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
         requestNativePushPermission()
           .then((granted) => {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { BottomNav } from '@/components/BottomNav';
@@ -54,12 +54,57 @@ export default function PageClient() {
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [hasPromptedBlockedUser, setHasPromptedBlockedUser] = useState(false);
 
+  // Pull-to-refresh state
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullStartY = useRef<number | null>(null);
+  const PULL_THRESHOLD = 80;
+
   useEffect(() => {
     if (user?.isBlocked && !hasPromptedBlockedUser) {
       setShowBlockedModal(true);
       setHasPromptedBlockedUser(true);
     }
   }, [user?.isBlocked, hasPromptedBlockedUser]);
+
+  // Pull-to-refresh touch handlers
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (window.scrollY === 0) {
+        pullStartY.current = e.touches[0].clientY;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (pullStartY.current === null) return;
+      const dy = e.touches[0].clientY - pullStartY.current;
+      if (dy > 0 && window.scrollY === 0) {
+        setPullDistance(Math.min(dy, 120));
+      }
+    };
+
+    const handleTouchEnd = () => {
+      if (pullDistance >= PULL_THRESHOLD) {
+        setIsRefreshing(true);
+        setTimeout(() => window.location.reload(), 300);
+      } else {
+        setPullDistance(0);
+      }
+      pullStartY.current = null;
+    };
+
+    document.addEventListener('touchstart', handleTouchStart, { passive: true });
+    document.addEventListener('touchmove', handleTouchMove, { passive: true });
+    document.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [pullDistance]);
 
   const handleSelectOrder = (orderId: string) => {
     // Switch view modes/tabs based on order and user profile
@@ -115,8 +160,6 @@ export default function PageClient() {
     }
 
     const checkDeliveredOrderPopups = () => {
-      fallbackStore.reconcileCustomerCoins(user.uid);
-
       const userOrders = Array.from(fallbackStore.orders.values()).filter(
         (o) => o.customerId === user.uid && o.status === 'DELIVERED'
       );
@@ -666,6 +709,37 @@ export default function PageClient() {
 
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
+      {/* Pull-to-Refresh Indicator */}
+      {!isAdminView && (pullDistance > 0 || isRefreshing) && (
+        <div
+          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none"
+          style={{
+            height: `${Math.min(pullDistance, 70)}px`,
+            transition: pullDistance === 0 ? 'height 0.2s ease' : 'none',
+          }}
+        >
+          <div className="flex flex-col items-center gap-1">
+            <div
+              className={`w-8 h-8 rounded-full border-2 border-emerald-500 border-t-transparent ${
+                isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
+              }`}
+              style={{
+                transform: !isRefreshing ? `rotate(${(pullDistance / PULL_THRESHOLD) * 270}deg)` : undefined,
+                opacity: Math.min(pullDistance / PULL_THRESHOLD, 1),
+              }}
+            />
+            {pullDistance > 30 && !isRefreshing && (
+              <span className="text-[10px] font-bold text-emerald-600">
+                {pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
+              </span>
+            )}
+            {isRefreshing && (
+              <span className="text-[10px] font-bold text-emerald-600">Refreshing…</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <AppHeader
         onOpenNotifications={() => setShowNotifications(true)}
