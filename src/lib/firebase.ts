@@ -1419,10 +1419,10 @@ class FallbackStore {
             if (!docSnap.exists()) return;
             const incoming = docSnap.data() as UserProfile;
             const current = this.users.get(userId);
+            const merged = this.mergeUserProfile(userId, incoming);
             // Only notify on a real change — this fires on our own writes too,
             // and AuthContext rebuilds the user object on every notification.
-            if (current && JSON.stringify(current) === JSON.stringify(incoming)) return;
-            this.users.set(userId, incoming);
+            if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
             this.notify();
           },
           (err) => console.warn('[Firestore] Own profile sync note:', err)
@@ -1651,7 +1651,9 @@ class FallbackStore {
           (docSnap) => {
             if (docSnap.exists()) {
               const u = docSnap.data() as UserProfile;
-              this.users.set(userId, u);
+              const current = this.users.get(userId);
+              const merged = this.mergeUserProfile(userId, u);
+              if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
               this.notify();
             }
           },
@@ -1816,7 +1818,9 @@ class FallbackStore {
           (docSnap) => {
             if (docSnap.exists()) {
               const u = docSnap.data() as UserProfile;
-              this.users.set(userId, u);
+              const current = this.users.get(userId);
+              const merged = this.mergeUserProfile(userId, u);
+              if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
               this.notify();
             }
           },
@@ -2280,14 +2284,36 @@ class FallbackStore {
     return await this.fetchUserFromFirestore(uid);
   }
 
+  public mergeUserProfile(userId: string, incoming: Partial<UserProfile>): UserProfile {
+    const existing = this.users.get(userId);
+    const merged: UserProfile = {
+      ...(existing || ({} as UserProfile)),
+      ...incoming,
+      uid: userId,
+      displayName: incoming.displayName && incoming.displayName !== '?' && incoming.displayName.trim() !== ''
+        ? incoming.displayName
+        : (existing?.displayName && existing.displayName !== '?' && existing.displayName.trim() !== ''
+            ? existing.displayName
+            : (incoming.email ? incoming.email.split('@')[0] : (existing?.email ? existing.email.split('@')[0] : 'Customer User'))),
+      email: incoming.email || existing?.email || '',
+      photoURL: incoming.photoURL || existing?.photoURL,
+    };
+    this.users.set(userId, merged);
+    this.saveLocalStore();
+    return merged;
+  }
+
   public async fetchUserFromFirestore(uid: string): Promise<UserProfile | null> {
     try {
       const snap = await getDoc(doc(db, 'users', uid));
       if (snap.exists()) {
         const u = snap.data() as UserProfile;
-        this.users.set(uid, u);
-        this.notify();
-        return u;
+        const current = this.users.get(uid);
+        const merged = this.mergeUserProfile(uid, u);
+        if (!current || JSON.stringify(current) !== JSON.stringify(merged)) {
+          this.notify();
+        }
+        return merged;
       }
     } catch (e: any) {
       console.warn('[Firestore] fetchUserFromFirestore error:', e?.message || e);

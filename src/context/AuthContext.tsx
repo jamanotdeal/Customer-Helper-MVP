@@ -199,15 +199,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastLocalLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const lastLocationWriteRef = useRef<{ lat: number; lng: number } | null>(null);
 
-  const buildProfile = (fbUser: import('firebase/auth').User, savedMode: ActiveMode): UserProfile => {
-    const isHardcodedAdmin = isUserAdminEmail(fbUser.email);
-    const isHardcodedSuperAdmin = isUserSuperAdminEmail(fbUser.email);
-    const isEduVerified = checkEduVerified(fbUser.email);
+  const buildProfile = (
+    fbUser: import('firebase/auth').User,
+    savedMode: ActiveMode,
+    nativeCredential?: { displayName?: string; email?: string; photoUrl?: string }
+  ): UserProfile => {
+    const rawEmail = fbUser.email || nativeCredential?.email || '';
+    const isHardcodedAdmin = isUserAdminEmail(rawEmail);
+    const isHardcodedSuperAdmin = isUserSuperAdminEmail(rawEmail);
+    const isEduVerified = checkEduVerified(rawEmail);
     let profile = fallbackStore.users.get(fbUser.uid);
 
     // If not found by UID, search by email to prevent creating duplicate users on re-login
-    if (!profile && fbUser.email) {
-      const targetEmail = fbUser.email.trim().toLowerCase();
+    if (!profile && rawEmail) {
+      const targetEmail = rawEmail.trim().toLowerCase();
       const existingByEmail = Array.from(fallbackStore.users.values()).find(
         (u) => u.email && u.email.trim().toLowerCase() === targetEmail
       );
@@ -217,8 +222,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile = {
           ...existingByEmail,
           uid: fbUser.uid,
-          displayName: fbUser.displayName && fbUser.displayName !== '?' ? fbUser.displayName : existingByEmail.displayName,
-          photoURL: fbUser.photoURL || existingByEmail.photoURL,
+          displayName:
+            (fbUser.displayName && fbUser.displayName !== '?' && fbUser.displayName.trim() !== '' ? fbUser.displayName.trim() : '') ||
+            (nativeCredential?.displayName && nativeCredential.displayName !== '?' && nativeCredential.displayName.trim() !== '' ? nativeCredential.displayName.trim() : '') ||
+            existingByEmail.displayName,
+          photoURL: fbUser.photoURL || nativeCredential?.photoUrl || existingByEmail.photoURL,
+          email: rawEmail || existingByEmail.email,
         };
         // Migrate all associated orders, wallets, apps, and feedbacks from oldUid to new UID
         fallbackStore.migrateUserUid(oldUid, fbUser.uid);
@@ -226,9 +235,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    const fallbackDisplayName = fbUser.displayName && fbUser.displayName !== '?' 
-      ? fbUser.displayName 
-      : (fbUser.email ? fbUser.email.split('@')[0] : 'Customer User');
+    const effectiveDisplayName =
+      (fbUser.displayName && fbUser.displayName !== '?' && fbUser.displayName.trim() !== '' ? fbUser.displayName.trim() : '') ||
+      (nativeCredential?.displayName && nativeCredential.displayName !== '?' && nativeCredential.displayName.trim() !== '' ? nativeCredential.displayName.trim() : '');
+
+    const effectivePhotoURL = fbUser.photoURL || nativeCredential?.photoUrl || profile?.photoURL || undefined;
+
+    const fallbackDisplayName =
+      effectiveDisplayName ||
+      (rawEmail ? rawEmail.split('@')[0] : (profile?.email ? profile.email.split('@')[0] : 'Customer User'));
 
     const effectiveIsSuperAdmin = isHardcodedSuperAdmin || Boolean(profile?.isSuperAdmin);
     const effectiveIsAdmin = isHardcodedAdmin || Boolean(profile?.isAdmin) || effectiveIsSuperAdmin;
@@ -236,9 +251,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!profile) {
       profile = {
         uid: fbUser.uid,
-        email: fbUser.email || '',
+        email: rawEmail,
         displayName: fallbackDisplayName,
-        photoURL: fbUser.photoURL || undefined,
+        photoURL: effectivePhotoURL,
         role: effectiveIsAdmin ? 'admin' : 'customer',
         isHelper: false,
         helperType: 'commuter',
@@ -251,18 +266,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(profile);
     } else {
       let needsSave = false;
-      if (profile.displayName === '?' || !profile.displayName) {
+      if (!profile.displayName || profile.displayName === '?' || !profile.displayName.trim()) {
         profile = { ...profile, displayName: fallbackDisplayName };
         needsSave = true;
-      } else if (fbUser.displayName && fbUser.displayName !== '?' && fbUser.displayName !== profile.displayName) {
-        // Sync updated name from Google account if user changes their Google name
-        profile = { ...profile, displayName: fbUser.displayName };
+      } else if (effectiveDisplayName && effectiveDisplayName !== profile.displayName) {
+        profile = { ...profile, displayName: effectiveDisplayName };
         needsSave = true;
       }
 
-      // Sync updated Google profile photo if user updates photo in Google account
-      if (fbUser.photoURL && fbUser.photoURL !== profile.photoURL) {
-        profile = { ...profile, photoURL: fbUser.photoURL };
+      if ((!profile.email || !profile.email.trim()) && rawEmail) {
+        profile = { ...profile, email: rawEmail };
+        needsSave = true;
+      }
+
+      // Sync updated profile photo
+      if (effectivePhotoURL && effectivePhotoURL !== profile.photoURL) {
+        profile = { ...profile, photoURL: effectivePhotoURL };
         needsSave = true;
       }
 
@@ -351,13 +370,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!prevUser) return null;
         const updatedUser = fallbackStore.users.get(prevUser.uid);
         if (!updatedUser) return prevUser;
-        // The store notifies on every snapshot it receives — an order status
-        // change five kilometres away included. Rebuilding the profile object
-        // each time handed React a new identity and re-rendered every consumer
-        // of this context, which is most of the app. A profile is small, so
-        // comparing it is far cheaper than the render it avoids.
-        if (JSON.stringify(prevUser) === JSON.stringify(updatedUser)) return prevUser;
-        return { ...updatedUser };
+        // Guard against any snapshot or background update clobbering existing valid profile fields
+        const safeUser: UserProfile = {
+          ...prevUser,
+          ...updatedUser,
+          displayName:
+            updatedUser.displayName && updatedUser.displayName !== '?' && updatedUser.displayName.trim() !== ''
+              ? updatedUser.displayName
+              : (prevUser.displayName && prevUser.displayName !== '?' && prevUser.displayName.trim() !== ''
+                  ? prevUser.displayName
+                  : (updatedUser.email ? updatedUser.email.split('@')[0] : (prevUser.email ? prevUser.email.split('@')[0] : 'Customer User'))),
+          email: updatedUser.email || prevUser.email || '',
+          photoURL: updatedUser.photoURL || prevUser.photoURL,
+        };
+        if (JSON.stringify(prevUser) === JSON.stringify(safeUser)) return prevUser;
+        return safeUser;
       });
     });
 
@@ -384,6 +411,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 1. Immediately build and apply profile so React state has user instantly
       let profile = buildProfile(fbUser, currentSavedMode);
+      if (profile.displayName && !fbUser.displayName) {
+        updateProfile(fbUser, { displayName: profile.displayName }).catch(() => {});
+      }
+      if (profile.photoURL && !fbUser.photoURL) {
+        updateProfile(fbUser, { photoURL: profile.photoURL }).catch(() => {});
+      }
       applyProfile(profile, currentSavedMode);
       setLoading(false);
 
@@ -674,15 +707,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // truth, so everything below this branch is shared with the web path.
         if (isNativeApp()) {
           try {
-            const { idToken } = await nativeGoogleSignIn();
+            const nativeCred = await nativeGoogleSignIn();
+            const { idToken, email, displayName, photoUrl } = nativeCred;
             const nativeRes = await signInWithCredential(
               auth,
               GoogleAuthProvider.credential(idToken)
             );
             if (nativeRes.user) {
+              if (displayName || photoUrl) {
+                updateProfile(nativeRes.user, {
+                  displayName: displayName || nativeRes.user.displayName,
+                  photoURL: photoUrl || nativeRes.user.photoURL,
+                }).catch(() => {});
+              }
               const savedMode = getSavedActiveMode();
-              const profile = buildProfile(nativeRes.user, savedMode);
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('jamanot_active_user_uid', nativeRes.user.uid);
+              }
+              fallbackStore.currentUserId = nativeRes.user.uid;
+
+              let profile = buildProfile(nativeRes.user, savedMode, { displayName, email, photoUrl });
               applyProfile(profile, savedMode);
+              setLoading(false);
+
+              // Background sync identical to web
+              (async () => {
+                try {
+                  await fallbackStore.fetchUserFromFirestore(nativeRes.user.uid);
+                  let updated = buildProfile(nativeRes.user, savedMode, { displayName, email, photoUrl });
+                  const synced = await fallbackStore.syncApprovedRolesForUser(updated);
+                  if (synced) updated = synced;
+                  applyProfile(updated, savedMode);
+
+                  const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (updated.isAdmin || updated.role === 'admin' || isUserAdminEmail(updated.email))
+                    ? 'admin'
+                    : (updated.isStoreApproved || updated.role === 'store' || Boolean(updated.storeId))
+                    ? 'store'
+                    : (updated.isHelper || updated.role === 'helper')
+                    ? 'helper'
+                    : 'customer';
+                  fallbackStore.initListenersForRole(listenerRole, nativeRes.user.uid, updated.helperType, updated.storeId);
+                  pushNativeState(updated, listenerRole).catch(() => {});
+                } catch (e) {
+                  console.warn('[Auth] Native background sync note:', e);
+                }
+              })();
             }
           } finally {
             // Always clear the loading state. Without this a rejected or stalled

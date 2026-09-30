@@ -250,7 +250,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                 <div>
                   <div className="flex items-center gap-1.5">
                     <h3 className="font-bold text-gray-900 text-base leading-tight">
-                      {user.displayName}
+                      {user.displayName && user.displayName !== '?' ? user.displayName : (user.email ? user.email.split('@')[0] : 'User')}
                     </h3>
                     {user.isEduVerified && (
                       <span
