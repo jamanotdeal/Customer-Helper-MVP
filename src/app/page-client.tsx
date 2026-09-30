@@ -847,10 +847,10 @@ export default function PageClient() {
       <CustomModalInjector currentEvent="FIRST_VISIT" />
 
       {/* In-App Browser (Facebook/Messenger/Instagram) Detection & 1-Click Launch */}
-      <InAppBrowserModal />
+      {!isNativeApp() && <InAppBrowserModal />}
 
       {/* PWA Smart First-Visit Detection & Prompts */}
-      {<PwaSmartPrompt />}
+      {!isNativeApp() && <PwaSmartPrompt />}
 
       {/* Blocked User Notice Modal */}
       {showBlockedModal && (

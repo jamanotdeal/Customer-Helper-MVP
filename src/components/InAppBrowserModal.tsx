@@ -13,6 +13,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import Image from 'next/image';
+import { isNativeApp } from '@/lib/native';
 
 import { fallbackStore } from '@/lib/firebase';
 import { PricingSettings } from '@/types';
@@ -30,6 +31,19 @@ export const InAppBrowserModal: React.FC = () => {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    // Never run or bind in the native mobile app
+    if (
+      isNativeApp() ||
+      Boolean((window as any).Capacitor?.isNativePlatform?.()) ||
+      (window as any).isNativeApp === true ||
+      (typeof document !== 'undefined' && document.documentElement.classList.contains('capacitor')) ||
+      (window.location.hostname === 'localhost' && !window.location.port) ||
+      window.location.protocol === 'capacitor:' ||
+      window.location.protocol === 'ionic:'
+    ) {
+      return;
+    }
 
     setPricingSettings({ ...fallbackStore.pricingSettings });
     const unsub = fallbackStore.subscribe(() => {
@@ -50,8 +64,18 @@ export const InAppBrowserModal: React.FC = () => {
     };
   }, []);
 
+  const isNative = typeof window !== 'undefined' && (
+    isNativeApp() ||
+    Boolean((window as any).Capacitor?.isNativePlatform?.()) ||
+    (window as any).isNativeApp === true ||
+    (typeof document !== 'undefined' && document.documentElement.classList.contains('capacitor')) ||
+    (window.location.hostname === 'localhost' && !window.location.port) ||
+    window.location.protocol === 'capacitor:' ||
+    window.location.protocol === 'ionic:'
+  );
+
   const isEnabled = pricingSettings.inAppBrowserPromptEnabled !== false;
-  if (!inAppInfo.isInApp || !isEnabled) return null;
+  if (isNative || !inAppInfo.isInApp || !isEnabled) return null;
 
   const promptTitle = pricingSettings.inAppBrowserPromptTitle || 'ব্রাউজারে ওপেন করুন';
   const promptSubtitle = pricingSettings.inAppBrowserPromptSubtitle || 'Open in Chrome or Safari';
@@ -69,12 +93,16 @@ export const InAppBrowserModal: React.FC = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
     } else {
+      let fallbackUrl = window.location.origin;
+      if (!fallbackUrl || fallbackUrl.includes('localhost') || fallbackUrl.startsWith('capacitor:') || fallbackUrl.startsWith('ionic:')) {
+        fallbackUrl = 'https://jamanot.com';
+      }
       try {
-        navigator.clipboard.writeText(window.location.origin);
+        navigator.clipboard.writeText(fallbackUrl);
         setCopied(true);
         setTimeout(() => setCopied(false), 3000);
       } catch (_) {
-        alert(`লিংক: ${window.location.origin}`);
+        alert(`লিংক: ${fallbackUrl}`);
       }
     }
   };

@@ -26,7 +26,27 @@ export const detectInAppBrowser = (): InAppBrowserInfo => {
     /iPhone|iPad|iPod/i.test(ua) ||
     (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
 
-  // Check for standalone PWA / TWA first - these are legitimate installed apps, not social in-app webviews
+  // 1. Check if running inside the native mobile app (Capacitor Android/iOS).
+  // The mobile app is NEVER an in-app browser and must NEVER show this prompt.
+  const cap = (window as any).Capacitor;
+  const isNativeShell = Boolean(
+    (cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform()) ||
+    (cap && typeof cap.getPlatform === 'function' && cap.getPlatform() !== 'web') ||
+    (window as any).isNativeApp === true ||
+    (typeof document !== 'undefined' && document.documentElement.classList.contains('capacitor')) ||
+    (typeof window.location !== 'undefined' && (
+      window.location.protocol === 'capacitor:' ||
+      window.location.protocol === 'ionic:' ||
+      (window.location.hostname === 'localhost' && !window.location.port)
+    )) ||
+    /Capacitor|JamanotApp/i.test(ua)
+  );
+
+  if (isNativeShell) {
+    return { isInApp: false, appName: '', isAndroid, isIos };
+  }
+
+  // 2. Check for standalone PWA / TWA - these are legitimate installed apps, not social in-app webviews
   const isStandalone =
     window.matchMedia('(display-mode: standalone)').matches ||
     window.matchMedia('(display-mode: fullscreen)').matches ||
@@ -78,7 +98,10 @@ export const detectInAppBrowser = (): InAppBrowserInfo => {
 export const openInExternalBrowser = () => {
   if (typeof window === 'undefined') return;
 
-  const currentUrl = window.location.href;
+  let currentUrl = window.location.href;
+  if (!currentUrl || currentUrl.includes('localhost') || currentUrl.startsWith('capacitor:') || currentUrl.startsWith('ionic:')) {
+    currentUrl = 'https://jamanot.com';
+  }
   const noProtocolUrl = currentUrl.replace(/^https?:\/\//, '');
   const { isAndroid } = detectInAppBrowser();
 
@@ -114,7 +137,10 @@ export const openInExternalBrowser = () => {
 export const copyCurrentWebsiteUrl = async (): Promise<boolean> => {
   if (typeof window === 'undefined') return false;
 
-  const url = window.location.origin;
+  let url = window.location.origin;
+  if (!url || url.includes('localhost') || url.startsWith('capacitor:') || url.startsWith('ionic:')) {
+    url = 'https://jamanot.com';
+  }
 
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {

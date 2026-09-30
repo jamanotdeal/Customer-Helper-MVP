@@ -4,6 +4,7 @@ const config: CapacitorConfig = {
   // Reverse-domain app identifier — used by Play Store / App Store
   appId: 'com.jamanot.app',
   appName: 'Jamanot',
+  appendUserAgent: 'JamanotApp',
 
   // Capacitor loads the Next.js static export produced by `BUILD_TARGET=native next build`
   webDir: 'out',
