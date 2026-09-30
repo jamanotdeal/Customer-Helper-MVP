@@ -494,8 +494,11 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         (activeMode as string) === 'store'
       );
 
-      // Generate zero-padded 5-digit order ID
-      const orderNum = Math.floor(Math.random() * 90000) + 10000;
+      // Generate unique order ID
+      let orderNum = Math.floor(Math.random() * 90000) + 10000;
+      while (fallbackStore.orders.has(`${orderNum}`)) {
+        orderNum = Math.floor(Math.random() * 900000) + 100000;
+      }
       const newOrder: Order = {
         id: `${orderNum}`,
         customerId: user.uid,

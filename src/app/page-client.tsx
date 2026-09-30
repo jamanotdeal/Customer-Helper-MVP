@@ -96,9 +96,14 @@ export default function PageClient() {
     };
   }, [pullDistance]);
 
-  const handleSelectOrder = (orderId: string) => {
+  const handleSelectOrder = async (orderId: string) => {
+    if (!orderId) return;
+
     // Switch view modes/tabs based on order and user profile
-    const order = fallbackStore.orders.get(orderId);
+    let order = fallbackStore.orders.get(orderId);
+    if (!order) {
+      order = await fallbackStore.getOrder(orderId);
+    }
 
     if (user && order) {
       const isCustomer = order.customerId === user.uid;
@@ -135,6 +140,11 @@ export default function PageClient() {
           setActiveTab('helper_tasks');
           setActiveMode('helper');
         }
+      } else if (user.isHelper) {
+        // Fallback: If order details could not be resolved yet but the user is a helper,
+        // switch to helper view so HelperDashboard can load/resolve the initial order
+        setActiveTab('helper_tasks');
+        setActiveMode('helper');
       }
     }
   };
