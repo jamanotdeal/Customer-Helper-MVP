@@ -25,7 +25,11 @@ interface OrderDetailsViewProps {
 
 export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onBack }) => {
   const { user } = useAuth();
-  const [order, setOrder] = useState<Order | null>(null);
+  const [order, setOrder] = useState<Order | null>(() => {
+    const cached = fallbackStore.orders.get(orderId);
+    return cached ? fallbackStore.resolveOrderLocations({ ...cached }) : null;
+  });
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(() => !fallbackStore.orders.get(orderId));
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   // Whether to show the "Admin Accepted" reassurance banner (customer-only, PENDING + no helper + N minutes passed)
   const [showAdminAccepted, setShowAdminAccepted] = useState(false);
@@ -140,12 +144,28 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   };
 
   useEffect(() => {
+    let isCancelled = false;
     const syncOrder = () => {
       const current = fallbackStore.orders.get(orderId);
-      if (current) setOrder(fallbackStore.resolveOrderLocations({ ...current }));
+      if (current) {
+        setOrder(fallbackStore.resolveOrderLocations({ ...current }));
+        setIsInitialLoading(false);
+      }
     };
     syncOrder();
     const unsub = fallbackStore.subscribe(syncOrder);
+
+    // If not in cache, actively trigger fallback getOrder
+    if (!fallbackStore.orders.get(orderId)) {
+      fallbackStore.getOrder(orderId).then((ord) => {
+        if (!isCancelled) {
+          if (ord) setOrder(fallbackStore.resolveOrderLocations({ ...ord }));
+          setIsInitialLoading(false);
+        }
+      }).catch(() => {
+        if (!isCancelled) setIsInitialLoading(false);
+      });
+    }
 
     // Direct realtime document listener for immediate status update (e.g. Delivered by Helper/Admin)
     let unsubDoc: (() => void) | undefined;
@@ -154,6 +174,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         unsubDoc = onSnapshot(
           doc(db, 'orders', orderId),
           (docSnap) => {
+            if (isCancelled) return;
+            setIsInitialLoading(false);
             if (docSnap.exists()) {
               const updated = docSnap.data() as Order;
               if (updated && updated.id) {
@@ -161,16 +183,23 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 fallbackStore.orders.set(orderId, resolved);
                 setOrder({ ...resolved });
               }
+            } else {
+              setOrder(null);
             }
           },
-          (err) => console.warn('[OrderDetailsView] live order doc listener note:', err)
+          (err) => {
+            console.warn('[OrderDetailsView] live order doc listener note:', err);
+            if (!isCancelled) setIsInitialLoading(false);
+          }
         );
       } catch (e) {
         console.warn('[OrderDetailsView] live order doc listener setup error:', e);
+        if (!isCancelled) setIsInitialLoading(false);
       }
     }
 
     return () => {
+      isCancelled = true;
       unsub();
       if (unsubDoc) unsubDoc();
     };
@@ -268,6 +297,16 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   if (!user) {
     return null;
+  }
+
+  if (isInitialLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-gray-100 shadow-sm my-4">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+        <h3 className="font-extrabold text-gray-700 text-base">অর্ডারের বিবরণ লোড করা হচ্ছে...</h3>
+        <p className="text-xs text-gray-400">অনুগ্রহ করে কিছুক্ষণ অপেক্ষা করুন</p>
+      </div>
+    );
   }
 
   if (!order) {

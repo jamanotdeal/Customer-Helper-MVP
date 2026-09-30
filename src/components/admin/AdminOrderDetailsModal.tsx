@@ -60,15 +60,35 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
   // Reactive live order state bound to fallbackStore updates
   const [order, setOrder] = useState<Order | undefined>(() => fallbackStore.orders.get(orderId));
+  const [isLoading, setIsLoading] = useState<boolean>(() => !fallbackStore.orders.get(orderId));
 
   useEffect(() => {
+    let isCancelled = false;
     const sync = () => {
       const fresh = fallbackStore.orders.get(orderId);
-      setOrder(fresh ? { ...fresh } : undefined);
+      if (fresh) {
+        setOrder({ ...fresh });
+        setIsLoading(false);
+      }
     };
     sync();
+
+    if (!fallbackStore.orders.get(orderId)) {
+      fallbackStore.getOrder(orderId).then((ord) => {
+        if (!isCancelled) {
+          if (ord) setOrder({ ...ord });
+          setIsLoading(false);
+        }
+      }).catch(() => {
+        if (!isCancelled) setIsLoading(false);
+      });
+    }
+
     const unsub = fallbackStore.subscribe(sync);
-    return () => unsub();
+    return () => {
+      isCancelled = true;
+      unsub();
+    };
   }, [orderId]);
 
   // Map state and refs for accurate pickup/delivery route visualization
@@ -667,6 +687,17 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     });
     showAlert('ঠিকানা আপডেট করা হয়েছে', 'ঠিকানা সফলভাবে পরিবর্তন করা হয়েছে এবং কাস্টমারকে জানানো হয়েছে।', 'success');
   };
+
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="bg-white p-6 rounded-3xl max-w-sm w-full text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm font-bold text-gray-700">অর্ডারের বিবরণ লোড হচ্ছে...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!order) {
     return (

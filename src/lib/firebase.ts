@@ -2516,13 +2516,47 @@ class FallbackStore {
   }
 
 
+  public async getOrder(orderId: string): Promise<Order | undefined> {
+    if (!orderId) return undefined;
+    const existing = this.orders.get(orderId);
+    if (existing) return existing;
+
+    try {
+      const snap = await getDoc(doc(db, 'orders', orderId));
+      if (snap.exists()) {
+        const order = this.resolveOrderLocations(snap.data() as Order);
+        this.orders.set(orderId, order);
+        this.notify();
+        return order;
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] getOrder fetch fallback error:', e?.message || e);
+    }
+    return undefined;
+  }
+
   public async addOrder(order: Order) {
     const customer = this.users.get(order.customerId);
     if (customer?.isBlocked) {
       throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। নতুন রিকোয়েস্ট তৈরি করা সম্ভব নয়।');
     }
-    this.orders.set(order.id, order);
 
+    // 1. Temporarily place in local memory
+    this.orders.set(order.id, order);
+    this.notify();
+
+    // 2. Persist to Firestore FIRST — must succeed before alerting helpers
+    try {
+      await setDoc(doc(db, 'orders', order.id), cleanForFirestore(order));
+    } catch (e: any) {
+      // Rollback local memory so app state matches server truth
+      this.orders.delete(order.id);
+      this.notify();
+      console.error('[Firestore] addOrder failed to persist to Firestore:', e?.message || e);
+      throw e;
+    }
+
+    // 3. ONLY after the order is confirmed in Firestore, dispatch helper notification
     const rule = this.pricingSettings.orderReceiverRule || 'commuter_first';
     const targetGroup =
       rule === 'dedicated_first'
@@ -2533,26 +2567,22 @@ class FallbackStore {
 
     const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
 
-    // Dynamic notification to helpers with Service Name/Title & Description
-    this.addNotification({
-      // Tied to the order, so a retry of addOrder cannot announce it twice.
-      id: `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`,
-      userId: targetGroup,
-      title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
-      body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation.address})`,
-      orderId: order.id,
-      read: false,
-      createdAt: new Date().toISOString(),
-      targetRole: 'helper',
-      type: 'new_order',
-    });
-
-    this.notify();
-
     try {
-      await setDoc(doc(db, 'orders', order.id), cleanForFirestore(order));
-    } catch (e: any) {
-      console.warn('[Firestore] addOrder note (saved locally):', e?.message || e);
+      await this.addNotification({
+        // Tied to the order, so a retry of addOrder cannot announce it twice.
+        id: `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`,
+        userId: targetGroup,
+        title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
+        body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation.address})`,
+        orderId: order.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        targetRole: 'helper',
+        type: 'new_order',
+      });
+    } catch (notifErr: any) {
+      console.warn('[Firestore] Broadcast new order notification note:', notifErr?.message || notifErr);
+      // Non-blocking notification error: do NOT fail the order since it was already saved
     }
   }
 
@@ -2569,15 +2599,7 @@ class FallbackStore {
   public async updateOrder(orderId: string, updater: (order: Order) => Order) {
     let existing = this.orders.get(orderId);
     if (!existing) {
-      try {
-        const snap = await getDoc(doc(db, 'orders', orderId));
-        if (snap.exists()) {
-          existing = this.resolveOrderLocations(snap.data() as Order);
-          this.orders.set(orderId, existing);
-        }
-      } catch (e: any) {
-        console.warn('[Firestore] updateOrder fetch fallback error:', e?.message || e);
-      }
+      existing = await this.getOrder(orderId);
     }
     if (!existing) return;
 
@@ -3108,25 +3130,34 @@ class FallbackStore {
     }
     this.shopOrders.set(shopOrder.id, shopOrder);
     this.notify();
-    // Notify the store owner if this shop belongs to one
-    const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
-    if (ownerUserId) {
-      this.addNotification({
-        id: coalescedNotifId('shop-order', shopOrder.id),
-        userId: ownerUserId,
-        title: `নতুন অর্ডার: ${shopOrder.helperName}`,
-        body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
-        orderId: shopOrder.parentOrderId,
-        read: false,
-        createdAt: new Date().toISOString(),
-        targetRole: 'store',
-        type: 'new_order',
-      });
-    }
+
     try {
       await setDoc(doc(db, 'shopOrders', shopOrder.id), cleanForFirestore(shopOrder));
     } catch (e: any) {
-      console.warn('[Firestore] addShopOrder note (saved locally):', e?.message || e);
+      this.shopOrders.delete(shopOrder.id);
+      this.notify();
+      console.error('[Firestore] addShopOrder failed to persist to Firestore:', e?.message || e);
+      throw e;
+    }
+
+    // Notify the store owner if this shop belongs to one
+    try {
+      const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
+      if (ownerUserId) {
+        await this.addNotification({
+          id: coalescedNotifId('shop-order', shopOrder.id),
+          userId: ownerUserId,
+          title: `নতুন অর্ডার: ${shopOrder.helperName}`,
+          body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
+          orderId: shopOrder.parentOrderId,
+          read: false,
+          createdAt: new Date().toISOString(),
+          targetRole: 'store',
+          type: 'new_order',
+        });
+      }
+    } catch (notifErr: any) {
+      console.warn('[Firestore] Broadcast shop order notification note:', notifErr?.message || notifErr);
     }
   }
 

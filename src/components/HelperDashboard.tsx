@@ -41,51 +41,87 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [loadingSelectedOrder, setLoadingSelectedOrder] = useState(false);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
 
   useEffect(() => {
+    let isCancelled = false;
     if (initialSelectedOrderId) {
-      const order = fallbackStore.orders.get(initialSelectedOrderId);
-      if (order) {
-        if (order.helperId && order.helperId !== user?.uid && order.customerId !== user?.uid && !user?.isAdmin) {
-          showAlert(
-            'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
-            'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
-            'warning'
-          );
-          if (onClearInitialOrder) {
-            onClearInitialOrder();
+      const handleInitialOrder = async () => {
+        let order = fallbackStore.orders.get(initialSelectedOrderId);
+        if (!order) {
+          setLoadingSelectedOrder(true);
+          try {
+            order = await fallbackStore.getOrder(initialSelectedOrderId);
+          } finally {
+            if (!isCancelled) {
+              setLoadingSelectedOrder(false);
+            }
           }
-          return;
         }
+        if (isCancelled) return;
 
-        if (order.status === 'PENDING') {
-          setActiveTab('NEW');
-          // When a new request arrives / auto opens app, show the custom new order modal alert
-          if (!user?.isBlocked) {
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(order.id);
-              return updated;
-            });
-            setIsAlarmPlaying(true);
+        if (order) {
+          if (order.helperId && order.helperId !== user?.uid && order.customerId !== user?.uid && !user?.isAdmin) {
+            showAlert(
+              'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+              'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+              'warning'
+            );
+            if (onClearInitialOrder) {
+              onClearInitialOrder();
+            }
+            return;
           }
-          if (onClearInitialOrder) {
-            onClearInitialOrder();
+
+          if (order.status === 'PENDING') {
+            setActiveTab('NEW');
+            // When a new request arrives / auto opens app, show the custom new order modal alert
+            if (!user?.isBlocked) {
+              setNewOrderIds((prev) => {
+                const updated = new Set(prev);
+                updated.add(order!.id);
+                return updated;
+              });
+              setIsAlarmPlaying(true);
+            }
+            if (onClearInitialOrder) {
+              onClearInitialOrder();
+            }
+            return;
+          } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
+            setActiveTab('ACTIVE');
+          } else if (order.status === 'DELIVERED') {
+            setActiveTab('COMPLETED');
           }
-          return;
-        } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
-          setActiveTab('ACTIVE');
-        } else if (order.status === 'DELIVERED') {
-          setActiveTab('COMPLETED');
         }
-      }
-      setSelectedOrderId(initialSelectedOrderId);
-      if (onClearInitialOrder) {
-        onClearInitialOrder();
-      }
+        setSelectedOrderId(initialSelectedOrderId);
+        if (onClearInitialOrder) {
+          onClearInitialOrder();
+        }
+      };
+
+      handleInitialOrder();
     }
+    return () => {
+      isCancelled = true;
+    };
   }, [initialSelectedOrderId, onClearInitialOrder, user]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    if (selectedOrderId && !fallbackStore.orders.get(selectedOrderId)) {
+      setLoadingSelectedOrder(true);
+      fallbackStore.getOrder(selectedOrderId).finally(() => {
+        if (!isCancelled) {
+          setLoadingSelectedOrder(false);
+        }
+      });
+    }
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedOrderId]);
 
   useEffect(() => {
     if (!user) {
@@ -945,6 +981,16 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           activeOrdersCount={activeOrders.length}
           activeOrderLimit={activeOrderLimit}
         />
+      );
+    }
+
+    if (loadingSelectedOrder) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-gray-100 shadow-sm my-4">
+          <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+          <h3 className="font-extrabold text-gray-700 text-base">অর্ডারের বিবরণ লোড করা হচ্ছে...</h3>
+          <p className="text-xs text-gray-400">অনুগ্রহ করে কিছুক্ষণ অপেক্ষা করুন</p>
+        </div>
       );
     }
 
