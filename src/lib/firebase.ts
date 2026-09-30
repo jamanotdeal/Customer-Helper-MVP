@@ -1125,8 +1125,30 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                const ord = this.resolveOrderLocations(change.doc.data() as Order);
-                this.orders.set(change.doc.id, ord);
+                const incoming = this.resolveOrderLocations(change.doc.data() as Order);
+                const previous = this.orders.get(change.doc.id);
+
+                // Customer-side coin deduction safety net:
+                // If the order just became DELIVERED and has a free delivery coin claim
+                // that hasn't been deducted yet, trigger deduction now on the customer's
+                // own device where their profile is guaranteed to be loaded.
+                if (
+                  incoming.status === 'DELIVERED' &&
+                  previous?.status !== 'DELIVERED' &&
+                  (incoming.isFreeDelivery || (incoming.coinsRedeemedForDelivery || 0) > 0) &&
+                  !incoming.coinsDeductedForDelivery
+                ) {
+                  const coinsToDeduct = incoming.coinsRedeemedForDelivery || this.pricingSettings.freeDeliveryRequiredCoins || 50;
+                  // Mark locally immediately so UI reflects it
+                  incoming.coinsDeductedForDelivery = true;
+                  incoming.coinsDeductedAt = new Date().toISOString();
+                  // Deduct coins and persist the flag on the order doc
+                  this.deductCoinsForFreeDelivery(userId, coinsToDeduct, incoming.id).then(() => {
+                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => {});
+                  }).catch(() => {});
+                }
+
+                this.orders.set(change.doc.id, incoming);
               }
             });
             this.notify();
@@ -2070,8 +2092,8 @@ class FallbackStore {
         notifTitle = 'রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
         notifBody = `${updated.helperName || 'হেলপার'} আপনার অর্ডার #${updated.id} গ্রহণ করেছেন।`;
       } else if (updated.status === 'PURCHASED_EXECUTED') {
-        notifTitle = 'পণ্য ক্রয় সম্পন্ন!';
-        notifBody = `${updated.helperName || 'হেলপার'} আপনার প্রয়োজনীয় জিনিসপত্র কিনেছেন।`;
+        notifTitle = 'Helper Purchasing/Executing your task.';
+        notifBody = `${updated.helperName || 'Helper'} is purchasing/executing your task right now. Please wait!`;
       } else if (updated.status === 'ON_THE_WAY') {
         notifTitle = 'হেলপার আপনার পথে আছেন!';
         notifBody = `${updated.helperName || 'হেলপার'} ডেলিভারি দিতে রওনা হয়েছেন।`;
@@ -4418,25 +4440,50 @@ class FallbackStore {
     return { success: true, user: updatedUser, delta };
   }
 
-  public async deductCoinsForFreeDelivery(userId: string, coinsToDeduct: number, _orderId: string): Promise<boolean> {
+  public async deductCoinsForFreeDelivery(userId: string, coinsToDeduct: number, orderId: string): Promise<boolean> {
     if (!userId || !coinsToDeduct || coinsToDeduct <= 0) return false;
-    let user = this.users.get(userId);
-    if (!user) {
-      user = (await this.fetchUserFromFirestore(userId)) || undefined;
-    }
-    const currentCoins = typeof user?.coins === 'number' ? user.coins : 0;
-    const updatedCoins = Math.max(0, currentCoins - coinsToDeduct);
-    if (user) {
-      const updatedUser = { ...user, coins: updatedCoins };
-      this.users.set(userId, updatedUser);
-      this.notify();
-    }
+
     try {
+      // Always fetch fresh coin balance from Firestore — do NOT rely on local cache.
+      // This ensures correctness when called from any device (helper, admin, etc.)
+      // where the customer's profile may not be loaded locally.
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (!userSnap.exists()) {
+        console.warn('[deductCoinsForFreeDelivery] User not found:', userId);
+        return false;
+      }
+      const freshUser = userSnap.data() as UserProfile;
+      const currentCoins = typeof freshUser.coins === 'number' ? freshUser.coins : 0;
+      const updatedCoins = Math.max(0, currentCoins - coinsToDeduct);
+
+      // Update locally if the user is cached
+      const cachedUser = this.users.get(userId);
+      if (cachedUser) {
+        this.users.set(userId, { ...cachedUser, coins: updatedCoins });
+        this.notify();
+      }
+
+      // Persist to Firestore
       await setDoc(doc(db, 'users', userId), { coins: updatedCoins }, { merge: true });
+
+      // Record a coin transaction for the deduction
+      const txId = `ctx-free-delivery-${orderId}-${Date.now()}`;
+      const tx: CoinTransaction = {
+        id: txId,
+        userId,
+        amount: -coinsToDeduct,
+        type: 'FREE_DELIVERY',
+        description: `Free delivery redeemed for order #${orderId}`,
+        orderId,
+        createdAt: new Date().toISOString(),
+      };
+      setDoc(doc(db, 'coinTransactions', txId), cleanForFirestore(tx)).catch(() => {});
+
+      return true;
     } catch (e) {
       console.warn('[Firestore] deductCoinsForFreeDelivery error:', e);
+      return false;
     }
-    return true;
   }
   // ─── Store Application CRUD ───────────────────────────────────────────────
 
