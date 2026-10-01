@@ -140,7 +140,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
 }) => {
-  const { user } = useAuth();
+  const { user, setActiveMode } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
   const [ordersSubTab, setOrdersSubTab] = useState<'NEW' | 'RUNNING' | 'COMPLETED'>('NEW');
@@ -259,8 +259,16 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     const foundShop = Array.from(fallbackStore.shops.values()).find(
       (s) => s.ownerUserId === user?.uid
     );
-    return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
+    return foundShop?.id || undefined;
   }, [user]);
+
+  // If user is not an approved store or has no shop, switch back to customer mode
+  useEffect(() => {
+    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store' || Boolean(user?.storeId));
+    if (user && !isStore) {
+      setActiveMode('customer');
+    }
+  }, [user, setActiveMode]);
 
   const isStoreBlocked = Boolean(
     user?.isBlocked ||

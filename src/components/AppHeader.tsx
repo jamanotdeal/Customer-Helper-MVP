@@ -92,7 +92,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
       user.isStoreApproved ||
       Boolean(user.storeId) ||
       user.role === 'store' ||
-      activeMode === 'store' ||
       Boolean((user as any).storeType) ||
       storeAppStatus === 'APPROVED'
     )
