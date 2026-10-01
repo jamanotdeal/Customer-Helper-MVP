@@ -318,18 +318,42 @@ export default function PageClient() {
     return cleanup;
   }, [showNotifications]);
 
-  // Walk the signed-in user through any missing permissions (see runPermissionLadder)
+  // Walk the signed-in helper/store user through any missing permissions (see runPermissionLadder).
+  // Customer role accounts and customer mode must never be prompted with the helper/store permission ladder.
   useEffect(() => {
-    if (user) {
-      runPermissionLadder();
+    if (!user) return;
+    const isCustomerAccount =
+      user.role === 'customer' ||
+      (!user.isHelper && !user.isStoreApproved && !user.isStore && !user.isAdmin && user.role !== 'helper' && user.role !== 'store' && user.role !== 'admin');
+
+    if (isCustomerAccount || activeMode === 'customer') {
+      return;
     }
+
+    runPermissionLadder();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, activeMode]);
 
   // Sequentially prompts every missing permission via popup. Required steps
   // (notifications, location) loop until granted; optional steps ask once and
   // remember the dismissal so the user isn't nagged on every launch.
+  // Note: Only intended for Helpers and Stores on duty who receive incoming order alerts.
   const runPermissionLadder = async () => {
+    if (!user) return;
+
+    const isCustomerAccount =
+      user.role === 'customer' ||
+      (!user.isHelper && !user.isStoreApproved && !user.isStore && !user.isAdmin && user.role !== 'helper' && user.role !== 'store' && user.role !== 'admin');
+
+    const isHelperOrStore = Boolean(
+      (user.isHelper || user.role === 'helper' || activeMode === 'helper') ||
+      (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId) || activeMode === 'store')
+    );
+
+    if (isCustomerAccount || activeMode === 'customer' || !isHelperOrStore) {
+      return;
+    }
+
     if (!isNativeApp()) {
       // Browser fallback: keep only the notification prompt, since the OS-level
       // permissions below don't apply.
