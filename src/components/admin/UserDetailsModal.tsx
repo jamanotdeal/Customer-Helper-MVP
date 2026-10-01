@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { UserProfile, Order } from '@/types';
+import { UserProfile, Order, UserRole } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
@@ -94,6 +94,9 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   const [coinsReasonInput, setCoinsReasonInput] = useState('');
   const [savingCoins, setSavingCoins] = useState(false);
 
+  // Change user account type
+  const [savingRole, setSavingRole] = useState(false);
+
   React.useEffect(() => {
     if (user) {
       setEditName(user.displayName);
@@ -126,6 +129,46 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
       if (onUserUpdated) onUserUpdated();
     } else {
       showAlert('ব্যর্থ', 'কয়েন আপডেট করা সম্ভব হয়নি।', 'error');
+    }
+  };
+
+  const handleChangeUserType = async (newRole: UserRole) => {
+    if (!user) return;
+    if (newRole === user.role) return;
+
+    const roleLabel =
+      newRole === 'customer' ? 'Customer'
+      : newRole === 'store' ? 'Store'
+      : 'Helper';
+
+    const confirmed = await showConfirm(
+      'Account Type পরিবর্তন',
+      `আপনি কি ${user.displayName}-এর account type "${roleLabel}" হিসেবে পরিবর্তন করতে চান?`,
+      `হ্যাঁ, ${roleLabel} করুন`,
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    setSavingRole(true);
+    try {
+      const updatedUser: UserProfile = {
+        ...user,
+        role: newRole,
+        isHelper: newRole === 'helper',
+        isStore: newRole === 'store',
+        isStoreApproved: newRole === 'store' ? true : false,
+      };
+      await fallbackStore.saveUser(updatedUser);
+      showAlert(
+        'Account Type আপডেট সম্পন্ন',
+        `${user.displayName}-এর account type সফলভাবে "${roleLabel}" হিসেবে পরিবর্তন করা হয়েছে।`,
+        'success'
+      );
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      showAlert('ত্রুটি', `Account type পরিবর্তন করতে ব্যর্থ হয়েছে: ${err?.message || err}`, 'error');
+    } finally {
+      setSavingRole(false);
     }
   };
 
@@ -768,6 +811,29 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                         <p><strong>Saved Delivery Address:</strong> <span className="font-extrabold text-emerald-800">{user.defaultDeliveryLocation?.address || 'N/A'}</span></p>
                         <p><strong>Preferred Missing Item Action:</strong> {user.missingItemPreference || 'DEFAULT (SKIP)'}</p>
                         <p><strong>Primary Mode:</strong> {user.lastActiveMode}</p>
+
+                        {/* Account Type (Role) Change */}
+                        <div className="pt-2 mt-1 border-t border-slate-200">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <span className="font-bold text-slate-700 text-xs">Account Type:</span>
+                            <div className="flex items-center gap-2">
+                              <select
+                                value={['customer', 'store', 'helper'].includes(user.role) ? user.role : 'customer'}
+                                disabled={savingRole}
+                                onChange={(e) => handleChangeUserType(e.target.value as UserRole)}
+                                className="px-2.5 py-1.5 bg-white border border-purple-300 rounded-xl text-xs font-extrabold text-purple-950 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer disabled:opacity-60"
+                              >
+                                <option value="customer">👤 Customer</option>
+                                <option value="store">🏪 Store</option>
+                                <option value="helper">🚲 Helper</option>
+                              </select>
+                              {savingRole && (
+                                <span className="text-[10px] text-purple-600 font-bold animate-pulse">Saving...</span>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-1">Changing account type updates the user's role and syncs their helper/store flags accordingly.</p>
+                        </div>
                       </div>
                     )}
                   </div>
