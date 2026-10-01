@@ -559,78 +559,55 @@ export default function PageClient() {
       {/* Pull-to-Refresh Indicator */}
       {!isAdminView && (pullDistance > 0 || isRefreshing) && (
         <div
-          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none px-4"
+          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none"
           style={{
-            transform: `translateY(${Math.min(pullDistance * 0.65 + 8, 64)}px)`,
+            transform: `translateY(${isRefreshing ? 20 : Math.min(pullDistance * 0.65 - 8, 56)}px)`,
             opacity: isRefreshing ? 1 : Math.min(1, Math.max(0, (pullDistance - 15) / 30)),
-            transition: isRefreshing
-              ? 'all 0.35s cubic-bezier(0.16, 1, 0.3, 1)'
-              : pullDistance === 0
+            transition: isRefreshing || pullDistance === 0
               ? 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
               : 'none',
           }}
         >
-          <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-emerald-100/90 flex items-center gap-3">
-            {/* Circular Progress & Reload Icon */}
-            <div className="relative w-7 h-7 flex items-center justify-center shrink-0">
-              <svg className="w-7 h-7 -rotate-90" viewBox="0 0 28 28">
-                <circle
-                  cx="14"
-                  cy="14"
-                  r="11"
-                  className="stroke-slate-100"
-                  strokeWidth="2.5"
-                  fill="transparent"
-                />
-                <circle
-                  cx="14"
-                  cy="14"
-                  r="11"
-                  className={`transition-all duration-75 ${
-                    pullDistance >= PULL_THRESHOLD || isRefreshing ? 'stroke-emerald-600' : 'stroke-emerald-500'
-                  }`}
-                  strokeWidth="2.5"
-                  fill="transparent"
-                  strokeDasharray={2 * Math.PI * 11}
-                  strokeDashoffset={
-                    isRefreshing
-                      ? 0
-                      : 2 * Math.PI * 11 * (1 - Math.min(1, pullDistance / PULL_THRESHOLD))
-                  }
-                  strokeLinecap="round"
-                />
-              </svg>
-
-              <div
-                className={`absolute inset-0 flex items-center justify-center text-emerald-600 ${
-                  isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
+          {/* Only the circular spinner — no text */}
+          <div className="relative w-9 h-9 flex items-center justify-center bg-white/95 backdrop-blur-md rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] border border-emerald-100/80">
+            <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
+              <circle
+                cx="18"
+                cy="18"
+                r="14"
+                className="stroke-slate-100"
+                strokeWidth="2.5"
+                fill="transparent"
+              />
+              <circle
+                cx="18"
+                cy="18"
+                r="14"
+                className={`transition-all duration-75 ${
+                  pullDistance >= PULL_THRESHOLD || isRefreshing ? 'stroke-emerald-600' : 'stroke-emerald-500'
                 }`}
-                style={{
-                  transform: !isRefreshing
-                    ? `rotate(${Math.min(360, (pullDistance / PULL_THRESHOLD) * 360)}deg)`
-                    : undefined,
-                }}
-              >
-                <RotateCw className="w-3.5 h-3.5" />
-              </div>
-            </div>
-
-            {/* Status Feedback */}
-            <div className="flex flex-col text-left">
-              <span className="text-xs font-bold text-slate-800 leading-tight">
-                {isRefreshing
-                  ? 'রিফ্রেশ হচ্ছে...'
-                  : pullDistance >= PULL_THRESHOLD
-                  ? 'ছেড়ে দিন রিলোড করতে'
-                  : 'রিফ্রেশ করতে নিচে টানুন'}
-              </span>
-              {!isRefreshing && (
-                <span className="text-[10px] font-semibold text-emerald-600 leading-tight">
-                  {pullDistance >= PULL_THRESHOLD
-                    ? 'প্রস্তুত ✓'
-                    : `${Math.round(Math.min(100, (pullDistance / PULL_THRESHOLD) * 100))}%`}
-                </span>
-              )}
+                strokeWidth="2.5"
+                fill="transparent"
+                strokeDasharray={2 * Math.PI * 14}
+                strokeDashoffset={
+                  isRefreshing
+                    ? 0
+                    : 2 * Math.PI * 14 * (1 - Math.min(1, pullDistance / PULL_THRESHOLD))
+                }
+                strokeLinecap="round"
+              />
+            </svg>
+            <div
+              className={`relative z-10 flex items-center justify-center text-emerald-600 ${
+                isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
+              }`}
+              style={{
+                transform: !isRefreshing
+                  ? `rotate(${Math.min(360, (pullDistance / PULL_THRESHOLD) * 360)}deg)`
+                  : undefined,
+              }}
+            >
+              <RotateCw className="w-4 h-4" />
             </div>
           </div>
         </div>
