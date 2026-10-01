@@ -548,7 +548,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     fallbackStore.updateOrder(orderId, (o) => ({
       ...o,
       items: newItems,
-      title: newItems[0]?.name || o.title,
+      title: o.service || o.title,
       lastEditedBy: 'admin' as const,
       lastEditedAt: new Date().toISOString(),
       editHistory: [

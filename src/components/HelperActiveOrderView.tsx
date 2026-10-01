@@ -915,7 +915,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
       fallbackStore.updateOrder(order.id, (o) => ({
         ...o,
-        title: newItems[0]?.name || o.title,
+        title: o.service || o.title,
         items: newItems.length > 0 ? newItems : [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
         lastEditedAt: nowIso,
         lastEditedBy: 'helper',
@@ -1113,6 +1113,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [uncheckedError, setUncheckedError] = useState('');
 
   const handleUpdateStatusWithCheck = (newStatus: OrderStatus, note?: string) => {
+    // Helper can freely transition to Processing (PURCHASED_EXECUTED) before adding costs/items
+    if (newStatus === 'PURCHASED_EXECUTED') {
+      handleUpdateStatus(newStatus, note);
+      return;
+    }
+
     const activeShopOrders = shopOrders.filter(
       (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
     );
@@ -1186,6 +1192,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
     if (targetIdx < currentIdx) {
       handleUpdateStatus(targetStatus, `Status reverted back to ${targetStatus}`);
+      return;
+    }
+
+    if (targetStatus === 'PURCHASED_EXECUTED') {
+      handleUpdateStatus(targetStatus);
       return;
     }
 
@@ -2758,11 +2769,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {/* Main Action (Forward) */}
                 {(order.status === 'ACCEPTED' || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
                   <button
-                    onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
+                    onClick={() => handleUpdateStatus('PURCHASED_EXECUTED')}
                     className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
                   >
                     <PackageCheck className="w-5 h-5" />
-                    <span>Mark as Purchased / Executed</span>
+                    <span>Mark as Processing</span>
                   </button>
                 )}
 

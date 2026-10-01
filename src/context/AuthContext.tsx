@@ -243,7 +243,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser((prevUser) => {
         if (!prevUser) return null;
         const updatedUser = fallbackStore.users.get(prevUser.uid);
-        return updatedUser ? { ...updatedUser } : prevUser;
+        if (!updatedUser) return prevUser;
+
+        const isStillStore = Boolean(updatedUser.isStoreApproved || updatedUser.role === 'store' || Boolean(updatedUser.storeId));
+        const currentSavedMode = getSavedActiveMode();
+        if ((currentSavedMode === 'store' || activeMode === 'store') && !isStillStore) {
+          const nextMode = updatedUser.role === 'helper' || updatedUser.isHelper ? 'helper' : 'customer';
+          setActiveModeState(nextMode);
+          saveActiveMode(nextMode);
+          fallbackStore.initListenersForRole(nextMode, updatedUser.uid, updatedUser.helperType);
+        }
+
+        return { ...updatedUser };
       });
     });
 
@@ -355,6 +366,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Guard against lingering store mode if user permissions were revoked
+  useEffect(() => {
+    if (!user) return;
+    const isStore = Boolean(user.isStoreApproved || user.role === 'store' || Boolean(user.storeId));
+    if (activeMode === 'store' && !isStore) {
+      const nextMode = user.role === 'helper' || user.isHelper ? 'helper' : 'customer';
+      setActiveModeState(nextMode);
+      saveActiveMode(nextMode);
+      fallbackStore.initListenersForRole(nextMode, user.uid, user.helperType);
+    }
+  }, [user, activeMode]);
+
   const enableCommuterHelperWithLocation = async (): Promise<boolean> => {
     if (!user) return false;
 
@@ -412,6 +435,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       saveActiveMode('store');
       return;
     }
+    if (mode === 'store') {
+      setActiveModeState('customer');
+      saveActiveMode('customer');
+      return;
+    }
     if (mode === 'helper' && user && !user.isHelper) {
       enableCommuterHelperWithLocation();
       return;
@@ -424,9 +452,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(updated);
 
       // Switch Firestore listeners to match the new active mode (customer ⇔ helper ⇔ store ⇔ admin)
-      if (mode === 'customer' || mode === 'helper' || mode === 'store' || mode === 'admin') {
-        fallbackStore.initListenersForRole(mode, user.uid, user.helperType, user.storeId);
-      }
+      fallbackStore.initListenersForRole(mode, user.uid, user.helperType, user.storeId);
 
       // When switching to helper mode, get native GPS location for maximum accuracy
       if (mode === 'helper') {

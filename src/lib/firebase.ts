@@ -997,6 +997,51 @@ class FallbackStore {
     if (role === 'store') {
       const effectiveStoreId = storeId || `store-${userId}`;
 
+      // Live user profile sync (so role/permission updates or store deletions take effect immediately)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'users', userId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const u = docSnap.data() as UserProfile;
+              this.users.set(userId, u);
+              this.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Store user doc sync note:', err)
+        )
+      );
+
+      // Live shop doc sync (so if shop is deleted by admin, store mode exits immediately)
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'shops', effectiveStoreId),
+          (docSnap) => {
+            if (!docSnap.exists()) {
+              this.shops.delete(effectiveStoreId);
+              const current = this.users.get(userId);
+              if (current && (current.storeId === effectiveStoreId || current.isStore || current.isStoreApproved || current.role === 'store')) {
+                const updatedUser: UserProfile = {
+                  ...current,
+                  isStore: false,
+                  isStoreApproved: false,
+                  storeId: undefined,
+                  role: current.role === 'store' ? 'customer' : current.role,
+                  lastActiveMode: current.lastActiveMode === 'store' ? 'customer' : current.lastActiveMode,
+                };
+                this.users.set(userId, updatedUser);
+              }
+              this.notify();
+            } else {
+              const s = docSnap.data() as Shop;
+              this.shops.set(effectiveStoreId, { ...s, id: effectiveStoreId });
+              this.notify();
+            }
+          },
+          (err) => console.warn('[Firestore] Store shop doc sync note:', err)
+        )
+      );
+
       // Shop orders submitted to this store (realtime)
       unsubs.push(
         onSnapshot(
@@ -1718,7 +1763,7 @@ class FallbackStore {
     let next = profile;
     let changed = false;
 
-    // ── Store applications ────────────────────────────────────────────────────
+    // ── Store applications & Shop Existence ──────────────────────────────────
     try {
       const snap = await getDocs(
         query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
@@ -1732,27 +1777,40 @@ class FallbackStore {
         }
       });
 
-      // No application history at all — leave the store flags alone
-      if (apps.length > 0) {
-        const approved = apps.some((a) => a.status === 'APPROVED');
-        const shopId = `store-${profile.uid}`;
+      const approved = apps.some((a) => a.status === 'APPROVED');
+      const shopId = next.storeId || `store-${profile.uid}`;
 
-        if (approved) {
-          if (!next.isStore || !next.isStoreApproved || next.storeId !== shopId) {
-            next = { ...next, isStore: true, isStoreApproved: true, storeId: shopId, lastActiveMode: 'store' };
-            changed = true;
-          }
-        } else if (next.isStore || next.isStoreApproved || next.storeId) {
-          // Application exists but is not approved — clear any stale store flags
-          next = {
-            ...next,
-            isStore: false,
-            isStoreApproved: false,
-            storeId: undefined,
-            lastActiveMode: next.lastActiveMode === 'store' ? 'customer' : next.lastActiveMode,
-          };
+      // Verify that the shop document actually exists in Firestore / memory
+      let shopExists = this.shops.has(shopId);
+      if (!shopExists) {
+        try {
+          const shopSnap = await getDoc(doc(db, 'shops', shopId));
+          shopExists = shopSnap.exists();
+        } catch (_) { }
+      }
+
+      if (approved && shopExists) {
+        if (!next.isStore || !next.isStoreApproved || next.storeId !== shopId) {
+          next = { ...next, isStore: true, isStoreApproved: true, storeId: shopId, lastActiveMode: 'store' };
           changed = true;
         }
+      } else if (next.isStore || next.isStoreApproved || next.storeId || next.role === 'store') {
+        // Shop was deleted or application not approved — revoke store role and reset to customer
+        apps.forEach((a) => {
+          if (a.status === 'APPROVED') {
+            this.storeApplications.delete(a.id);
+            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => {});
+          }
+        });
+        next = {
+          ...next,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+          role: next.role === 'store' ? 'customer' : next.role,
+          lastActiveMode: next.lastActiveMode === 'store' ? 'customer' : next.lastActiveMode,
+        };
+        changed = true;
       }
     } catch (e: any) {
       console.warn('[Firestore] syncApprovedRolesForUser store note:', e?.message || e);
@@ -4029,13 +4087,126 @@ class FallbackStore {
   }
 
   public async deleteShop(shopId: string) {
+    let existing = this.shops.get(shopId);
+    if (!existing) {
+      try {
+        const snap = await getDoc(doc(db, 'shops', shopId));
+        if (snap.exists()) {
+          existing = snap.data() as Shop;
+        }
+      } catch (_) {}
+    }
     this.shops.delete(shopId);
     this.notify();
+
     try {
       await deleteDoc(doc(db, 'shops', shopId));
     } catch (e: any) {
       console.warn('[Firestore] deleteShop note (saved locally):', e?.message || e);
     }
+
+    // Identify owner user ID(s)
+    let ownerUserId = existing?.ownerUserId;
+    if (!ownerUserId && shopId.startsWith('store-')) {
+      ownerUserId = shopId.replace('store-', '');
+    }
+
+    const userIdsToRevoke = new Set<string>();
+    if (ownerUserId) userIdsToRevoke.add(ownerUserId);
+
+    this.users.forEach((u) => {
+      if (u.storeId === shopId || (ownerUserId && u.uid === ownerUserId)) {
+        userIdsToRevoke.add(u.uid);
+      }
+    });
+
+    try {
+      const uSnap = await getDocs(query(collection(db, 'users'), where('storeId', '==', shopId)));
+      uSnap.forEach((d) => userIdsToRevoke.add(d.id));
+    } catch (_) { }
+
+    // Remove or cancel associated store applications
+    const appIdsToDelete: string[] = [];
+    this.storeApplications.forEach((app) => {
+      if (app.id === existing?.applicationId || (ownerUserId && app.userId === ownerUserId)) {
+        appIdsToDelete.push(app.id);
+      }
+    });
+
+    try {
+      if (existing?.applicationId) {
+        await deleteDoc(doc(db, 'storeApplications', existing.applicationId));
+      }
+      if (ownerUserId) {
+        const appSnap = await getDocs(query(collection(db, 'storeApplications'), where('userId', '==', ownerUserId)));
+        appSnap.forEach((d) => {
+          appIdsToDelete.push(d.id);
+          deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => {});
+        });
+      }
+    } catch (_) { }
+
+    appIdsToDelete.forEach((id) => this.storeApplications.delete(id));
+
+    // Revoke store role and store flags on all associated users
+    for (const uid of Array.from(userIdsToRevoke)) {
+      const storeOwner = await this.getUserForUpdate(uid);
+      const updatedUser: UserProfile = storeOwner
+        ? {
+            ...storeOwner,
+            isStore: false,
+            isStoreApproved: false,
+            storeId: undefined,
+            role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
+            lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
+          }
+        : {
+            uid,
+            displayName: existing?.name || 'User',
+            email: existing?.ownerUserEmail || '',
+            role: 'customer',
+            isHelper: false,
+            isStore: false,
+            isStoreApproved: false,
+            storeId: undefined,
+            lastActiveMode: 'customer',
+            createdAt: new Date().toISOString(),
+          };
+
+      this.users.set(uid, updatedUser);
+      try {
+        await this.saveUser(updatedUser);
+      } catch (_) { }
+
+      try {
+        await setDoc(
+          doc(db, 'users', uid),
+          {
+            isStore: false,
+            isStoreApproved: false,
+            storeId: null,
+            role: 'customer',
+            lastActiveMode: 'customer',
+          },
+          { merge: true }
+        );
+      } catch (_) { }
+
+      // Add a notification for the store owner
+      this.addNotification({
+        id: `notif-store-del-${Date.now()}`,
+        userId: uid,
+        title: 'স্টোর মুছে ফেলা হয়েছে',
+        body: existing?.name
+          ? `আপনার "${existing.name}" স্টোরটি মুছে ফেলা হয়েছে এবং আপনার অ্যাকাউন্ট সাধারণ কাস্টমার অ্যাকাউন্টে ফিরিয়ে দেওয়া হয়েছে।`
+          : 'আপনার স্টোরটি মুছে ফেলা হয়েছে এবং আপনার অ্যাকাউন্ট সাধারণ কাস্টমার অ্যাকাউন্টে ফিরিয়ে দেওয়া হয়েছে।',
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    this.saveLocalStore();
+    this.notify();
   }
 
   public async submitOrderFeedback(feedback: OrderFeedback) {
@@ -4684,6 +4855,7 @@ class FallbackStore {
           isStore: false,
           isStoreApproved: false,
           storeId: undefined,
+          role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
           lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
         };
         this.users.set(existing.userId, updatedUser);

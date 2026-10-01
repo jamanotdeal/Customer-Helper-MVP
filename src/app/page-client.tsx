@@ -17,6 +17,7 @@ import {
 } from '@/lib/native';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '@/components/CustomModal';
+import { RotateCw } from 'lucide-react';
 
 import { Order, OrderFeedback } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
@@ -48,7 +49,8 @@ export default function PageClient() {
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const pullStartY = useRef<number | null>(null);
-  const PULL_THRESHOLD = 80;
+  const pullStartX = useRef<number | null>(null);
+  const PULL_THRESHOLD = 90;
 
   useEffect(() => {
     if (user?.isBlocked && !hasPromptedBlockedUser) {
@@ -57,32 +59,56 @@ export default function PageClient() {
     }
   }, [user?.isBlocked, hasPromptedBlockedUser]);
 
-  // Pull-to-refresh touch handlers
+  // Pull-to-refresh touch handlers with damping and horizontal swipe filtering
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleTouchStart = (e: TouchEvent) => {
-      if (window.scrollY === 0) {
+      if (window.scrollY <= 0 && !isRefreshing) {
         pullStartY.current = e.touches[0].clientY;
+        pullStartX.current = e.touches[0].clientX;
       }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (pullStartY.current === null) return;
-      const dy = e.touches[0].clientY - pullStartY.current;
-      if (dy > 0 && window.scrollY === 0) {
-        setPullDistance(Math.min(dy, 120));
+      if (pullStartY.current === null || isRefreshing) return;
+
+      const currentY = e.touches[0].clientY;
+      const currentX = e.touches[0].clientX;
+      const dy = currentY - pullStartY.current;
+      const dx = currentX - (pullStartX.current || currentX);
+
+      // Cancel pull if horizontal swipe is dominant
+      if (Math.abs(dx) > dy * 0.9 && dy < 35) {
+        pullStartY.current = null;
+        setPullDistance(0);
+        return;
+      }
+
+      // Check if user is at top of page and dragging downwards with smooth damping
+      if (window.scrollY <= 0 && dy > 15) {
+        const activeDy = dy - 15;
+        const dampedDistance = Math.min(115, Math.pow(activeDy, 0.76) * 2.1);
+        setPullDistance(dampedDistance);
+      } else if (dy <= 0) {
+        setPullDistance(0);
       }
     };
 
     const handleTouchEnd = () => {
+      if (isRefreshing) return;
+
       if (pullDistance >= PULL_THRESHOLD) {
         setIsRefreshing(true);
-        setTimeout(() => window.location.reload(), 300);
+        setPullDistance(56);
+        setTimeout(() => {
+          window.location.reload();
+        }, 550);
       } else {
         setPullDistance(0);
       }
       pullStartY.current = null;
+      pullStartX.current = null;
     };
 
     document.addEventListener('touchstart', handleTouchStart, { passive: true });
@@ -94,7 +120,7 @@ export default function PageClient() {
       document.removeEventListener('touchmove', handleTouchMove);
       document.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [pullDistance]);
+  }, [pullDistance, isRefreshing]);
 
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
@@ -348,12 +374,19 @@ export default function PageClient() {
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId) || activeMode === 'store')
+    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))
   );
 
   const isHelperUser = Boolean(
     user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
   );
+
+  // Auto-switch away from store mode if user lost store access
+  useEffect(() => {
+    if (user && activeMode === 'store' && !isStoreUser) {
+      setActiveMode('customer');
+    }
+  }, [user, activeMode, isStoreUser, setActiveMode]);
 
   // Sync activeTab when user or activeMode changes
   useEffect(() => {
@@ -526,30 +559,79 @@ export default function PageClient() {
       {/* Pull-to-Refresh Indicator */}
       {!isAdminView && (pullDistance > 0 || isRefreshing) && (
         <div
-          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none"
+          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none px-4"
           style={{
-            height: `${Math.min(pullDistance, 70)}px`,
-            transition: pullDistance === 0 ? 'height 0.2s ease' : 'none',
+            transform: `translateY(${Math.min(pullDistance * 0.65 + 8, 64)}px)`,
+            opacity: isRefreshing ? 1 : Math.min(1, Math.max(0, (pullDistance - 15) / 30)),
+            transition: isRefreshing
+              ? 'all 0.35s cubic-bezier(0.16, 1, 0.3, 1)'
+              : pullDistance === 0
+              ? 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+              : 'none',
           }}
         >
-          <div className="flex flex-col items-center gap-1">
-            <div
-              className={`w-8 h-8 rounded-full border-2 border-emerald-500 border-t-transparent ${
-                isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
-              }`}
-              style={{
-                transform: !isRefreshing ? `rotate(${(pullDistance / PULL_THRESHOLD) * 270}deg)` : undefined,
-                opacity: Math.min(pullDistance / PULL_THRESHOLD, 1),
-              }}
-            />
-            {pullDistance > 30 && !isRefreshing && (
-              <span className="text-[10px] font-bold text-emerald-600">
-                {pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
+          <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-emerald-100/90 flex items-center gap-3">
+            {/* Circular Progress & Reload Icon */}
+            <div className="relative w-7 h-7 flex items-center justify-center shrink-0">
+              <svg className="w-7 h-7 -rotate-90" viewBox="0 0 28 28">
+                <circle
+                  cx="14"
+                  cy="14"
+                  r="11"
+                  className="stroke-slate-100"
+                  strokeWidth="2.5"
+                  fill="transparent"
+                />
+                <circle
+                  cx="14"
+                  cy="14"
+                  r="11"
+                  className={`transition-all duration-75 ${
+                    pullDistance >= PULL_THRESHOLD || isRefreshing ? 'stroke-emerald-600' : 'stroke-emerald-500'
+                  }`}
+                  strokeWidth="2.5"
+                  fill="transparent"
+                  strokeDasharray={2 * Math.PI * 11}
+                  strokeDashoffset={
+                    isRefreshing
+                      ? 0
+                      : 2 * Math.PI * 11 * (1 - Math.min(1, pullDistance / PULL_THRESHOLD))
+                  }
+                  strokeLinecap="round"
+                />
+              </svg>
+
+              <div
+                className={`absolute inset-0 flex items-center justify-center text-emerald-600 ${
+                  isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
+                }`}
+                style={{
+                  transform: !isRefreshing
+                    ? `rotate(${Math.min(360, (pullDistance / PULL_THRESHOLD) * 360)}deg)`
+                    : undefined,
+                }}
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </div>
+            </div>
+
+            {/* Status Feedback */}
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold text-slate-800 leading-tight">
+                {isRefreshing
+                  ? 'রিফ্রেশ হচ্ছে...'
+                  : pullDistance >= PULL_THRESHOLD
+                  ? 'ছেড়ে দিন রিলোড করতে'
+                  : 'রিফ্রেশ করতে নিচে টানুন'}
               </span>
-            )}
-            {isRefreshing && (
-              <span className="text-[10px] font-bold text-emerald-600">Refreshing…</span>
-            )}
+              {!isRefreshing && (
+                <span className="text-[10px] font-semibold text-emerald-600 leading-tight">
+                  {pullDistance >= PULL_THRESHOLD
+                    ? 'প্রস্তুত ✓'
+                    : `${Math.round(Math.min(100, (pullDistance / PULL_THRESHOLD) * 100))}%`}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

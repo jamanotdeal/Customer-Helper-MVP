@@ -115,7 +115,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
-    'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'CUSTOMERS' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
+    'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
@@ -152,7 +152,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [exactTotalCollection, setExactTotalCollection] = useState<number | null>(null);
   const [exactCustomerAccounts, setExactCustomerAccounts] = useState<number | null>(null);
   const [exactActiveHelpers, setExactActiveHelpers] = useState<number | null>(null);
-  const [exactCustomersCount, setExactCustomersCount] = useState<number | null>(null);
   const [exactShopsCount, setExactShopsCount] = useState<number | null>(null);
   const [exactFeedbacksCount, setExactFeedbacksCount] = useState<number | null>(null);
   const [exactCustomModalsCount, setExactCustomModalsCount] = useState<number | null>(null);
@@ -463,8 +462,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [ordersAppliedSearchQuery, setOrdersAppliedSearchQuery] = useState('');
   const [usersSearchQuery, setUsersSearchQuery] = useState('');
   const [usersAppliedSearchQuery, setUsersAppliedSearchQuery] = useState('');
-  const [customersSearchQuery, setCustomersSearchQuery] = useState('');
-  const [customersAppliedSearchQuery, setCustomersAppliedSearchQuery] = useState('');
   const [helpersSearchQuery, setHelpersSearchQuery] = useState('');
   const [helpersAppliedSearchQuery, setHelpersAppliedSearchQuery] = useState('');
   const [withdrawalsSearchQuery, setWithdrawalsSearchQuery] = useState('');
@@ -795,10 +792,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
 
-  // Server-side fetching effects - fetches full orders list when on ORDERS, USERS_LIST, CUSTOMERS, or HELPERS tabs
+  // Server-side fetching effects - fetches full orders list when on ORDERS, USERS_LIST, or HELPERS tabs
   useEffect(() => {
     const fetchOrders = async () => {
-      if (activeTab !== 'ORDERS' && activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
+      if (activeTab !== 'ORDERS' && activeTab !== 'USERS_LIST' && activeTab !== 'HELPERS') return;
       // Always fetch all orders from server to support full pagination & filtering
       if (serverOrders !== null) return; // already fetched
 
@@ -852,8 +849,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     const fetchUsers = async () => {
-      if (activeTab !== 'USERS_LIST' && activeTab !== 'CUSTOMERS' && activeTab !== 'HELPERS') return;
-      const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : activeTab === 'CUSTOMERS' ? customersAppliedSearchQuery : helpersAppliedSearchQuery;
+      if (activeTab !== 'USERS_LIST' && activeTab !== 'HELPERS') return;
+      const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : helpersAppliedSearchQuery;
       const hasFilter = Boolean(currentQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= users.length;
       if (!hasFilter && !needsPageFetch) {
@@ -873,7 +870,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchUsers();
-  }, [activeTab, usersAppliedSearchQuery, customersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortByCoins, currentPage, pageSize, users.length]);
+  }, [activeTab, usersAppliedSearchQuery, helpersAppliedSearchQuery, usersStartDate, usersEndDate, audienceFilter, statusFilter, usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortByCoins, currentPage, pageSize, users.length]);
 
   useEffect(() => {
     const fetchShops = async () => {
@@ -1063,17 +1060,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const ordersColl = collection(db, 'orders');
         const usersColl = collection(db, 'users');
         const helpersQuery = query(usersColl, where('isHelper', '==', true));
-        const customersQuery = query(usersColl, where('role', '==', 'customer'));
         const shopsColl = collection(db, 'shops');
         const feedbackColl = collection(db, 'orderFeedbacks');
         const modalsColl = collection(db, 'customModals');
         const wdColl = collection(db, 'withdrawals');
 
-        const [ordersSnap, usersSnap, helpersSnap, customersSnap, shopsSnap, feedbackSnap, modalsSnap, wdSnap, orderAggSnap] = await Promise.all([
+        const [ordersSnap, usersSnap, helpersSnap, shopsSnap, feedbackSnap, modalsSnap, wdSnap, orderAggSnap] = await Promise.all([
           getCountFromServer(ordersColl),
           getCountFromServer(usersColl),
           getCountFromServer(helpersQuery),
-          getCountFromServer(customersQuery),
           getCountFromServer(shopsColl),
           getCountFromServer(feedbackColl),
           getCountFromServer(modalsColl),
@@ -1087,7 +1082,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setExactTotalOrders(ordersSnap.data().count);
         setExactCustomerAccounts(usersSnap.data().count);
         setExactActiveHelpers(helpersSnap.data().count);
-        setExactCustomersCount(customersSnap.data().count);
         setExactShopsCount(shopsSnap.data().count);
         setExactFeedbacksCount(feedbackSnap.data().count);
         setExactCustomModalsCount(modalsSnap.data().count);
@@ -1854,101 +1848,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
 
-  // 2. Customer Aggregated List
-  const getProcessedCustomers = () => {
-    const usersList = serverUsers !== null ? serverUsers : users;
-    const customerMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        phone: string;
-        email?: string;
-        createdAt: string;
-        totalOrders: number;
-        completedOrders: number;
-        canceledOrders: number;
-        activeOrders: number;
-        totalSpent: number;
-      }
-    >();
-
-    // Seed from users list
-    usersList.forEach((u) => {
-      customerMap.set(u.uid, {
-        id: u.uid,
-        name: u.displayName || 'Anonymous User',
-        phone: u.alternativePhone || 'N/A',
-        email: u.email,
-        createdAt: u.createdAt || new Date().toISOString(),
-        totalOrders: 0,
-        completedOrders: 0,
-        canceledOrders: 0,
-        activeOrders: 0,
-        totalSpent: 0,
-      });
-    });
-
-    // Aggregate from allOrders (full history) so order counts are always accurate,
-    // not just from the recent in-memory snapshot (orders).
-    allOrders.forEach((o) => {
-      const existing = customerMap.get(o.customerId) || {
-        id: o.customerId,
-        name: o.customerName || 'Customer',
-        phone: o.customerPhone || 'N/A',
-        createdAt: o.createdAt,
-        totalOrders: 0,
-        completedOrders: 0,
-        canceledOrders: 0,
-        activeOrders: 0,
-        totalSpent: 0,
-      };
-
-      existing.totalOrders += 1;
-      if (o.status === 'DELIVERED') {
-        existing.completedOrders += 1;
-        existing.totalSpent += (o.productCost || 0) + o.deliveryFee;
-      } else if (o.status === 'CANCELED') {
-        existing.canceledOrders += 1;
-      } else {
-        existing.activeOrders += 1;
-      }
-
-      customerMap.set(o.customerId, existing);
-    });
-
-    const customerUids = new Set(
-      usersList.filter((u) => !u.isHelper && u.role !== 'store' && u.role !== 'admin').map((u) => u.uid)
-    );
-
-    let list = Array.from(customerMap.values()).filter(
-      (c) => c.totalOrders > 0 || customerUids.has(c.id)
-    );
-
-    // Search query filter
-    if (customersAppliedSearchQuery.trim()) {
-      const q = customersAppliedSearchQuery.toLowerCase().trim();
-      list = list.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.phone.includes(q) ||
-          c.id.toLowerCase().includes(q) ||
-          (c.email && c.email.toLowerCase().includes(q))
-      );
-    }
-
-    // Sorting
-    list.sort((a, b) => {
-      if (sortBy === 'ORDERS_HIGH') return b.totalOrders - a.totalOrders;
-      if (sortBy === 'SPENT_HIGH') return b.totalSpent - a.totalSpent;
-      if (sortBy === 'OLDEST') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-
-    return list;
-  };
-
-  // 3. Helper Aggregated List
+  // 2. Helper Aggregated List
   const getProcessedHelpers = () => {
     const helperMap = new Map<
       string,
@@ -2332,7 +2232,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { key: 'FEEDBACK', label: 'Order Feedback', icon: Star, color: 'text-amber-500' },
     { key: 'CUSTOM_MODALS', label: 'Custom Modals', icon: Sparkles, color: 'text-purple-600' },
     { key: 'NOTIFICATIONS', label: 'Notification History', icon: Bell, color: 'text-purple-600' },
-    { key: 'CUSTOMERS', label: 'Customers', icon: User, color: 'text-indigo-600' },
     { key: 'REVENUE', label: 'Revenue Analytics', icon: TrendingUp, color: 'text-emerald-600' },
     { key: 'WITHDRAWALS', label: 'Commissions Requests', icon: DollarSign, color: 'text-purple-600' },
     { key: 'PRICING', label: 'Pricing', icon: DollarSign, color: 'text-emerald-600' },
@@ -2777,20 +2676,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         )}
 
-        {isTabAllowed('CUSTOMERS') && (
-          <button
-            onClick={() => setActiveTab('CUSTOMERS')}
-            data-active={activeTab === 'CUSTOMERS'}
-            className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'CUSTOMERS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
-              }`}
-          >
-            <User className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>Customers ({exactCustomersCount !== null ? exactCustomersCount : (users.filter(u => !u.isHelper).length)})</span>
-          </button>
-        )}
-
         {isTabAllowed('REVENUE') && (
           <button
             onClick={() => setActiveTab('REVENUE')}
@@ -2889,8 +2774,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               return { value: ordersSearchQuery, onChange: setOrdersSearchQuery, onSearch: () => { setCurrentPage(1); setOrdersAppliedSearchQuery(ordersSearchQuery); }, placeholder: "Search orders by ID, customer name, phone, item name..." };
             case 'USERS_LIST':
               return { value: usersSearchQuery, onChange: setUsersSearchQuery, onSearch: () => { setCurrentPage(1); setUsersAppliedSearchQuery(usersSearchQuery); }, placeholder: "Search users by name, UID, email, phone..." };
-            case 'CUSTOMERS':
-              return { value: customersSearchQuery, onChange: setCustomersSearchQuery, onSearch: () => { setCurrentPage(1); setCustomersAppliedSearchQuery(customersSearchQuery); }, placeholder: "Search customers by name, phone, email, UID..." };
             case 'HELPERS':
               return { value: helpersSearchQuery, onChange: setHelpersSearchQuery, onSearch: () => { setCurrentPage(1); setHelpersAppliedSearchQuery(helpersSearchQuery); }, placeholder: "Search helpers by name, phone, email, NID..." };
             case 'WITHDRAWALS':
@@ -2939,7 +2822,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isFetchingServer ? 'Loading...' : 'Search'}
               </button>
               {/* Refresh button — visible on all non-realtime, non-settings tabs */}
-              {(['ORDERS', 'USERS_LIST', 'CUSTOMERS', 'HELPERS', 'WITHDRAWALS', 'SHOPS', 'FEEDBACK', 'CUSTOM_MODALS', 'REWARDS', 'REVENUE', 'GROWTH'] as string[]).includes(activeTab) && (
+              {(['ORDERS', 'USERS_LIST', 'HELPERS', 'WITHDRAWALS', 'SHOPS', 'FEEDBACK', 'CUSTOM_MODALS', 'REWARDS', 'REVENUE', 'GROWTH'] as string[]).includes(activeTab) && (
                 <button
                   id="admin-refresh-btn"
                   onClick={() => handleAdminRefresh()}
@@ -3127,7 +3010,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <option value="FEE_LOW">Delivery Fee (Low to High)</option>
                   </>
                 )}
-                {(activeTab === 'CUSTOMERS' || activeTab === 'HELPERS') && (
+                {activeTab === 'HELPERS' && (
                   <>
                     <option value="ORDERS_HIGH">Most Orders / Completed</option>
                     <option value="SPENT_HIGH">Highest Spent / Earned</option>
@@ -3377,7 +3260,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <div className="text-[11px] text-gray-400">{ord.customerPhone}</div>
                                 </td>
                                 <td className="py-3.5 px-5">
-                                  <div className="font-bold text-gray-900 max-w-xs truncate">{ord.title || ord.items?.[0]?.name || 'Order'}</div>
+                                  <div className="font-bold text-gray-900 max-w-xs truncate">{ord.service || ord.title || ord.items?.[0]?.name || 'Order'}</div>
                                   <div className="text-[11px] text-gray-500">{(ord.items || []).length} items</div>
                                 </td>
                                 <td className="py-3.5 px-5 font-extrabold text-emerald-700">
@@ -4196,8 +4079,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <div className="text-[11px] text-gray-400 font-medium">{ord.customerPhone}</div>
                         </td>
                         <td className="py-4 px-5">
-                          {ord.title && (
-                            <div className="font-bold text-gray-900 text-xs mb-0.5">{ord.title}</div>
+                          {(ord.service || ord.title) && (
+                            <div className="font-bold text-gray-900 text-xs mb-0.5">{ord.service || ord.title}</div>
                           )}
                           <div className="text-[11px] text-gray-500 font-medium flex items-center gap-1">
                             <Clock className="w-3 h-3 text-purple-600 shrink-0" />
@@ -5152,77 +5035,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         />
       )}
 
-      {/* --- TAB 3: CUSTOMERS STATS TAB --- */}
-      {activeTab === 'CUSTOMERS' && isTabAllowed('CUSTOMERS') && (() => {
-        const processed = getProcessedCustomers();
-        const hasCustomersFilter = Boolean(customersAppliedSearchQuery.trim());
-        const overrideCustomersCount = (serverUsers === null && !hasCustomersFilter && exactCustomersCount !== null) ? exactCustomersCount : undefined;
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideCustomersCount);
-
-        return (
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-base text-gray-900">Customer Statistics & Order Histories</h3>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
-                {exactCustomersCount !== null ? exactCustomersCount.toLocaleString() : totalItems} total customers
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-600 min-w-[650px]">
-                <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
-                  <tr>
-                    <th className="py-3.5 px-5">Customer Name</th>
-                    <th className="py-3.5 px-5">Phone Number</th>
-                    <th className="py-3.5 px-5">Total Orders Placed</th>
-                    <th className="py-3.5 px-5">Completed Orders</th>
-                    <th className="py-3.5 px-5">Total Spent</th>
-                    <th className="py-3.5 px-5 text-right">Order History</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedItems.map((c) => (
-                    <tr
-                      key={c.id}
-                      className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                      onClick={() => setSelectedCustomer({ id: c.id, name: c.name, phone: c.phone })}
-                    >
-                      <td className="py-4 px-5 font-extrabold text-gray-900">{c.name}</td>
-                      <td className="py-4 px-5 font-bold text-gray-700">{c.phone}</td>
-                      <td className="py-4 px-5 font-black text-gray-900">{c.totalOrders} orders</td>
-                      <td className="py-4 px-5 font-bold text-emerald-600">{c.completedOrders} completed</td>
-                      <td className="py-4 px-5 font-extrabold text-purple-900">৳{c.totalSpent}</td>
-                      <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => setSelectedCustomer({ id: c.id, name: c.name, phone: c.phone })}
-                          className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all"
-                        >
-                          View Full History
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination Controls */}
-            <PaginationControl
-              currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              pageSize={pageSize}
-              onPageChange={(p) => setCurrentPage(p)}
-              onPageSizeChange={(s) => {
-                setPageSize(s);
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-        );
-      })()}
-
-      {/* --- TAB 4: HELPER STATS TAB --- */}
+      {/* --- TAB 3: HELPER STATS TAB --- */}
       {activeTab === 'HELPERS' && isTabAllowed('HELPERS') && (() => {
         const processed = getProcessedHelpers();
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
@@ -8328,6 +8141,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     if (!confirmed) return;
                                     await fallbackStore.deleteShop(s.id);
                                     setShops(Array.from(fallbackStore.shops.values()));
+                                    setServerShops((prev) => (prev ? prev.filter((shop) => shop.id !== s.id) : null));
+                                    setExactShopsCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
                                     showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
                                   }}
                                   className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
