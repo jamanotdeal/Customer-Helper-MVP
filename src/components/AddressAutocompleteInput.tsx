@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { LocationData, ServerAddress } from '@/types';
-import { MapPin, Clock, X, ChevronDown, Check, Sparkles } from 'lucide-react';
+import { LocationData, ServerAddress, Shop } from '@/types';
+import { MapPin, Clock, X, ChevronDown, Check, Sparkles, Store } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 
 export interface AddressAutocompleteInputProps {
@@ -35,6 +35,8 @@ interface UnifiedSuggestion {
   isServiceMatch?: boolean;
   isLocalSaved?: boolean;
   isServerSaved?: boolean;
+  isStore?: boolean;
+  storeType?: string;
   isRecent?: boolean;
 }
 
@@ -62,6 +64,9 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
   // Dynamic server search results (from local DB/server table)
   const [serverSearchResults, setServerSearchResults] = useState<ServerAddress[]>([]);
 
+  // Active shops/stores list
+  const [shopsList, setShopsList] = useState<Shop[]>(() => Array.from(fallbackStore.shops.values()));
+
   // Keyboard navigation index
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
@@ -74,6 +79,25 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Sync shops live from fallbackStore and fetch if empty
+  useEffect(() => {
+    const syncShops = () => {
+      setShopsList(Array.from(fallbackStore.shops.values()));
+    };
+    syncShops();
+    const unsub = fallbackStore.subscribe(syncShops);
+
+    if (fallbackStore.shops.size === 0) {
+      fallbackStore.getAllShops().then((shops) => {
+        if (shops && shops.length > 0) {
+          setShopsList(shops);
+        }
+      }).catch(() => {});
+    }
+
+    return () => unsub();
   }, []);
 
   // Normalize string for fuzzy/substring matching
@@ -103,13 +127,13 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     };
   }, [value]);
 
-  // Calculate Saved Address Suggestions (Local & Server)
+  // Calculate Saved Address & Store Suggestions (Local, Store & Server)
   const savedSuggestions = useMemo(() => {
     const q = normalize(value || '');
     const list: UnifiedSuggestion[] = [];
     const seenTexts = new Set<string>();
 
-    // Add Local Saved Addresses
+    // 1. Add Local Saved Addresses
     savedLocalAddresses.forEach((loc, index) => {
       if (!loc || !loc.address) return;
       const cleanAddr = loc.address.trim();
@@ -130,7 +154,37 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
       });
     });
 
-    // Add Server Addresses (ONLY when user is actively searching)
+    // 2. Add Approved Store Addresses
+    const activeShops = shopsList.filter((s) => {
+      if (!s || s.isBlocked) return false;
+      if (s.status && (s.status === 'Rejected' || s.status === 'REJECTED')) return false;
+      return Boolean(s.name || s.location?.address);
+    });
+
+    activeShops.forEach((shop) => {
+      const shopAddress = (shop.location?.address || shop.name || '').trim();
+      const shopName = (shop.name || '').trim();
+      const shopType = (shop.type || '').trim();
+      const shopDetails = (shop.description || shop.type || shop.location?.details || '').trim();
+      const normalizedKey = normalize(`store-${shop.id}-${shopName}-${shopAddress}`);
+
+      if (!normalizedKey || seenTexts.has(normalizedKey)) return;
+      seenTexts.add(normalizedKey);
+
+      list.push({
+        key: `store-${shop.id}`,
+        address: shopAddress,
+        shortName: shopName,
+        lat: shop.location?.lat,
+        lng: shop.location?.lng,
+        details: shopDetails,
+        addressId: shop.id,
+        isStore: true,
+        storeType: shopType,
+      });
+    });
+
+    // 3. Add Server Addresses (when user is actively searching)
     const activeServerList = q
       ? (serverSearchResults.length > 0 ? serverSearchResults : (propServerAddresses || []))
       : [];
@@ -154,9 +208,11 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
       });
     });
 
-    // When input is empty: show only top local saved addresses
+    // When input is empty: show top local saved addresses followed by top store addresses
     if (!q) {
-      return list.filter((item) => item.isLocalSaved).slice(0, 4);
+      const topLocal = list.filter((item) => item.isLocalSaved).slice(0, 3);
+      const topStores = list.filter((item) => item.isStore).slice(0, 4);
+      return [...topLocal, ...topStores];
     }
 
     const queryTokens = q.split(/[\s,]+/).filter(Boolean);
@@ -166,20 +222,41 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         const itemText = normalize(item.address);
         const itemShort = normalize(item.shortName || '');
         const itemDetails = normalize(item.details || '');
-        const fullSearchable = `${itemText} ${itemShort} ${itemDetails}`.trim();
+        const itemStoreType = normalize(item.storeType || '');
+        const fullSearchable = `${itemText} ${itemShort} ${itemDetails} ${itemStoreType}`.trim();
 
         let baseScore = 0;
 
-        // Exact match or prefix match on address
-        if (itemText.startsWith(q)) {
-          baseScore += 100;
-        } else if (itemShort && itemShort.startsWith(q)) {
-          baseScore += 90;
-        } else if (itemText.includes(q)) {
-          baseScore += 60;
-        } else if (fullSearchable.includes(q)) {
-          baseScore += 50;
-        } else if (queryTokens.length > 0) {
+        if (item.isStore) {
+          // Store specific scoring prioritization
+          if (itemShort.startsWith(q)) {
+            baseScore += 130;
+          } else if (itemShort.includes(q)) {
+            baseScore += 95;
+          } else if (itemText.startsWith(q)) {
+            baseScore += 110;
+          } else if (itemText.includes(q)) {
+            baseScore += 80;
+          } else if (itemStoreType.includes(q) || itemDetails.includes(q)) {
+            baseScore += 70;
+          } else if (fullSearchable.includes(q)) {
+            baseScore += 55;
+          }
+        } else {
+          // Regular saved & server address scoring
+          if (itemText.startsWith(q)) {
+            baseScore += 100;
+          } else if (itemShort && itemShort.startsWith(q)) {
+            baseScore += 90;
+          } else if (itemText.includes(q)) {
+            baseScore += 65;
+          } else if (fullSearchable.includes(q)) {
+            baseScore += 50;
+          }
+        }
+
+        // Token matching across all fields
+        if (queryTokens.length > 0) {
           let tokenMatches = 0;
           for (const token of queryTokens) {
             if (fullSearchable.includes(token)) {
@@ -187,9 +264,9 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
             }
           }
           if (tokenMatches > 0) {
-            baseScore += (tokenMatches / queryTokens.length) * 40;
+            baseScore += (tokenMatches / queryTokens.length) * 45;
             if (tokenMatches === queryTokens.length) {
-              baseScore += 25;
+              baseScore += 30;
             }
           }
         }
@@ -199,29 +276,35 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         }
 
         if (item.isRecent) baseScore += 5;
-        if (item.isLocalSaved) baseScore += 3;
-        if (item.lat && item.lng) baseScore += 2;
+        if (item.isStore) baseScore += 8;
+        if (item.isLocalSaved) baseScore += 4;
+        if (item.lat && item.lng) baseScore += 3;
 
         return { item, score: baseScore };
       })
       .filter((res) => res.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((res) => res.item)
-      .slice(0, 5);
+      .slice(0, 6);
 
     return matched;
-  }, [value, savedLocalAddresses, serverSearchResults, propServerAddresses, serviceCategory]);
+  }, [value, savedLocalAddresses, shopsList, serverSearchResults, propServerAddresses, serviceCategory]);
 
   const handleSelect = (item: UnifiedSuggestion) => {
+    // If selecting a store that has both store name and address, format appropriately
+    const effectiveAddressText = item.shortName && item.address && !item.address.toLowerCase().includes(item.shortName.toLowerCase())
+      ? `${item.shortName}, ${item.address}`
+      : (item.address || item.shortName || '');
+
     const loc: LocationData = {
-      address: item.address,
+      address: effectiveAddressText,
       lat: item.lat,
       lng: item.lng,
       name: item.shortName,
       details: item.details,
       addressId: item.addressId,
     };
-    onChange(item.address, loc);
+    onChange(effectiveAddressText, loc);
     if (onSelectSuggestion) {
       onSelectSuggestion(loc);
     }
@@ -342,20 +425,23 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
         </div>
       </div>
 
-      {/* Suggestion Dropdown: only shown when matching local/server saved addresses exist */}
+      {/* Suggestion Dropdown: shown when matching local/store/server saved addresses exist */}
       {isOpen && savedSuggestions.length > 0 && (
         <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-2xl shadow-xl border border-emerald-100/80 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
           <div className="px-3 py-2 bg-gradient-to-r from-emerald-50/60 to-slate-50 border-b border-emerald-100/50 flex items-center justify-between text-[11px] font-bold text-emerald-900">
             <span className="flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{value ? 'প্রস্তাবিত সেভ করা ঠিকানা' : 'সেভ করা ঠিকানা'}</span>
+              <span>{value ? 'প্রস্তাবিত ঠিকানা ও স্টোর' : 'সেভ করা ঠিকানা ও স্টোর'}</span>
             </span>
             <span className="text-[10px] text-gray-400 font-normal">ক্লিক করে বেছে নিন</span>
           </div>
 
-          <div className="divide-y divide-gray-50 max-h-60 overflow-y-auto">
+          <div className="divide-y divide-gray-50 max-h-64 overflow-y-auto">
             {savedSuggestions.map((item, idx) => {
-              const isCurrentExact = normalize(item.address) === normalize(value);
+              const effectiveText = item.shortName && item.address && !item.address.toLowerCase().includes(item.shortName.toLowerCase())
+                ? `${item.shortName}, ${item.address}`
+                : (item.address || item.shortName || '');
+              const isCurrentExact = normalize(effectiveText) === normalize(value) || normalize(item.address) === normalize(value);
               const isKeySelected = idx === selectedIndex;
 
               return (
@@ -380,14 +466,18 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
                     }`}
                 >
                   <div
-                    className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${item.isRecent
-                        ? 'bg-amber-100/80 text-amber-700'
-                        : item.isServerSaved
-                          ? 'bg-blue-50 text-blue-600 border border-blue-100'
-                          : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                    className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${item.isStore
+                        ? 'bg-purple-50 text-purple-700 border border-purple-200/80'
+                        : item.isRecent
+                          ? 'bg-amber-100/80 text-amber-700'
+                          : item.isServerSaved
+                            ? 'bg-blue-50 text-blue-600 border border-blue-100'
+                            : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
                       }`}
                   >
-                    {item.isRecent ? (
+                    {item.isStore ? (
+                      <Store className="w-3.5 h-3.5" />
+                    ) : item.isRecent ? (
                       <Clock className="w-3.5 h-3.5" />
                     ) : (
                       <MapPin className="w-3.5 h-3.5" />
@@ -395,10 +485,22 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-900 leading-snug group-hover:text-emerald-800 transition-colors truncate">
-                      {item.shortName || item.address}
-                    </p>
-                    {item.shortName && item.shortName !== item.address && (
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-bold text-gray-900 leading-snug group-hover:text-emerald-800 transition-colors truncate">
+                        {item.shortName || item.address}
+                      </span>
+                      {item.isStore && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-purple-100 text-purple-800 shrink-0">
+                          🏪 স্টোর
+                        </span>
+                      )}
+                      {item.storeType && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-slate-100 text-slate-600 shrink-0 truncate max-w-[80px]">
+                          {item.storeType}
+                        </span>
+                      )}
+                    </div>
+                    {item.address && (
                       <p className="text-[11px] text-gray-500 font-normal truncate mt-0.5 flex items-center gap-1">
                         <span className="text-[10px] text-gray-400">📍</span>
                         <span>{item.address}</span>
@@ -418,4 +520,3 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     </div>
   );
 };
-

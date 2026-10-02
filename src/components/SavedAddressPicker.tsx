@@ -3,7 +3,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { LocationData } from '@/types';
-import { MapPin, X, Map, Clock } from 'lucide-react';
+import { MapPin, X, Map, Clock, Store } from 'lucide-react';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
 
 interface SavedAddressPickerProps {
@@ -100,6 +100,7 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
           ) : (
             savedAddresses.map((addr, idx) => {
               const active = isSelected(addr);
+              const isStore = (addr as any).isStore || (addr.addressId && addr.addressId.startsWith('store-'));
               return (
                 <button
                   key={idx}
@@ -115,10 +116,14 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
                     className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 transition-all ${
                       active
                         ? 'bg-emerald-100 border-emerald-400 text-emerald-700'
-                        : 'bg-white border-gray-200 group-hover:border-emerald-300 group-hover:bg-emerald-50'
+                        : isStore
+                          ? 'bg-purple-50 border-purple-200 text-purple-700'
+                          : 'bg-white border-gray-200 group-hover:border-emerald-300 group-hover:bg-emerald-50'
                     }`}
                   >
-                    {idx === 0 ? (
+                    {isStore ? (
+                      <Store className="w-3.5 h-3.5" />
+                    ) : idx === 0 ? (
                       <Clock className={`w-3.5 h-3.5 ${active ? 'text-emerald-700' : 'text-emerald-600'}`} />
                     ) : (
                       <MapPin
@@ -129,8 +134,22 @@ export const SavedAddressPicker: React.FC<SavedAddressPickerProps> = ({
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-900 leading-snug line-clamp-2">{formatShortAddress(addr.address)}</p>
-                    {idx === 0 && (
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <p className="text-xs font-bold text-gray-900 leading-snug line-clamp-2">
+                        {addr.name || formatShortAddress(addr.address)}
+                      </p>
+                      {isStore && (
+                        <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-100 text-purple-800 shrink-0">
+                          🏪 স্টোর
+                        </span>
+                      )}
+                    </div>
+                    {addr.name && addr.name !== addr.address && (
+                      <p className="text-[11px] text-gray-500 line-clamp-1 mt-0.5">
+                        📍 {formatShortAddress(addr.address)}
+                      </p>
+                    )}
+                    {idx === 0 && !isStore && (
                       <span className="inline-block mt-1 text-[9px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                         সর্বশেষ ব্যবহৃত
                       </span>

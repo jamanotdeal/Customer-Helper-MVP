@@ -21,8 +21,6 @@
 }
 
 html {
-  /* Prevent rubber-band scroll on iOS when at top/bottom */
-  overscroll-behavior: none;
   /* Prevent text size adjustment on orientation change */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -41,8 +39,6 @@ body {
   user-select: none;
   /* Momentum scrolling on iOS Safari */
   -webkit-overflow-scrolling: touch;
-  /* Prevent scroll bounce at body level */
-  overscroll-behavior: none;
 }
 
 /* Re-enable text selection for input fields and content areas */
