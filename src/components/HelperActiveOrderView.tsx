@@ -3347,17 +3347,34 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       )}
 
       {/* 1. Shop Order Request Modal */}
-      {placeOrderShop && (
+      {placeOrderShop && (() => {
+        const gMapUrl = placeOrderShop.location?.lat && placeOrderShop.location?.lng
+          ? `https://www.google.com/maps/dir/?api=1&destination=${placeOrderShop.location.lat},${placeOrderShop.location.lng}&travelmode=driving`
+          : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(placeOrderShop.location?.address || placeOrderShop.name)}`;
+        return (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
-            <button
-              type="button"
-              onClick={() => setPlaceOrderShop(null)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="flex items-center space-x-3">
+            <div className="absolute top-4 right-4 flex items-center gap-1.5 z-10">
+              <a
+                href={gMapUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-sm transition-all active:scale-95 border border-emerald-400/40 cursor-pointer"
+                title="Google Maps Direction"
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                <span>Map</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => setPlaceOrderShop(null)}
+                className="p-1.5 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex items-center space-x-3 pr-24">
               <div className="p-2.5 rounded-2xl bg-purple-100 text-purple-700">
                 <Store className="w-6 h-6" />
               </div>
@@ -3558,7 +3575,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* 2. Shop Request Details Modal */}
       {viewRequestDetails && (() => {

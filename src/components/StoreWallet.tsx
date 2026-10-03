@@ -36,7 +36,34 @@ export const StoreWallet: React.FC = () => {
   // Pagination / Day-by-Day history for Wallet Ledger
   const [daysToLoad, setDaysToLoad] = useState<number>(1);
 
-  const storeId = user?.storeId;
+  const storeId = useMemo(() => {
+    if (user?.storeId) return user.storeId;
+    const foundShop = Array.from(fallbackStore.shops.values()).find(
+      (s) => s.ownerUserId === user?.uid || s.id === `store-${user?.uid}`
+    );
+    return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
+  }, [user]);
+
+  const shopDoc = useMemo(() => {
+    if (!storeId && !user?.uid) return null;
+    if (storeId && fallbackStore.shops.has(storeId)) {
+      return fallbackStore.shops.get(storeId) || null;
+    }
+    return Array.from(fallbackStore.shops.values()).find(
+      (s) => (storeId && s.id === storeId) || (user?.uid && s.ownerUserId === user.uid) || (user?.uid && s.id === `store-${user.uid}`)
+    ) || null;
+  }, [storeId, user]);
+
+  const commissionRate = useMemo(() => {
+    const rate = Number(shopDoc?.commissionPercent);
+    if (!isNaN(rate) && rate > 0) return rate;
+    const app = Array.from(fallbackStore.storeApplications.values()).find(
+      (a) => (user?.uid && a.userId === user.uid) || (shopDoc?.applicationId && a.id === shopDoc.applicationId)
+    );
+    const appRate = Number(app?.commissionPercent);
+    if (!isNaN(appRate) && appRate > 0) return appRate;
+    return 0;
+  }, [shopDoc, user]);
 
   const getPaymentInstructions = () => {
     const settings = fallbackStore.pricingSettings;
@@ -134,12 +161,13 @@ export const StoreWallet: React.FC = () => {
   };
 
   const fetchCompletedPage = async (isFirstPage: boolean) => {
-    if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
+    const effectiveShopId = shopDoc?.id || storeId;
+    if (!effectiveShopId || completedLoading || (!completedHasMore && !isFirstPage)) return;
     setCompletedLoading(true);
     try {
       let q = query(
         collection(db, 'shopOrders'),
-        where('shopId', '==', storeId),
+        where('shopId', '==', effectiveShopId),
         orderBy('createdAt', 'desc'),
         limit(15)
       );
@@ -182,22 +210,24 @@ export const StoreWallet: React.FC = () => {
   };
 
   useEffect(() => {
-    if (storeId) {
+    const effectiveShopId = shopDoc?.id || storeId;
+    if (effectiveShopId) {
       fetchCompletedPage(true);
     }
-  }, [storeId]);
+  }, [storeId, shopDoc]);
 
   useEffect(() => {
     const syncWallet = () => {
-      if (user && storeId) {
-        const w = fallbackStore.getStoreWallet(user.uid, storeId, completedParentOrders);
-        const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
+      if (user) {
+        const effectiveShopId = shopDoc?.id || storeId || `store-${user.uid}`;
+        const w = fallbackStore.getStoreWallet(user.uid, effectiveShopId, completedParentOrders, completedShopOrders);
+        const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid || item.helperId === effectiveShopId);
         
         // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
         const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => {
-          if (so.shopId !== storeId) return false;
-          if (so.status === 'CANCELED') return true;
-          if (so.status === 'HANDOVER') return true;
+          const matches = so.shopId === effectiveShopId || so.shopId === storeId || so.shopId === `store-${user.uid}`;
+          if (!matches) return false;
+          if (so.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'DELIVERED') return true;
           const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
           return parentOrder?.status === 'DELIVERED' || parentOrder?.status === 'CANCELED';
         });
@@ -213,7 +243,7 @@ export const StoreWallet: React.FC = () => {
     return () => {
       unsub();
     };
-  }, [user, storeId, completedParentOrders]);
+  }, [user, storeId, shopDoc, completedParentOrders, completedShopOrders]);
 
   // Combine active storeShopOrders and completed completedShopOrders
   const combinedShopOrdersList = useMemo(() => {
@@ -230,14 +260,14 @@ export const StoreWallet: React.FC = () => {
   // Positive: Store Sales (Earnings) -> showing the commission owed
   // Negative: Payback (Withdrawal) requests that are approved
   const ledgerTransactions = useMemo(() => {
-    const shopDoc = storeId ? fallbackStore.shops.get(storeId) : null;
-    const commissionRate = shopDoc?.commissionPercent ?? 0;
-
     const list: { id: string; type: 'EARNING' | 'PAYBACK' | 'CANCELED'; amount: number; description: string; createdAt: string }[] = [];
+    const seenParentIds = new Set<string>();
 
     combinedShopOrdersList.forEach((so) => {
+      seenParentIds.add(so.parentOrderId);
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
       const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
 
       if (isCanceled) {
@@ -248,15 +278,45 @@ export const StoreWallet: React.FC = () => {
           description: `Order #${so.parentOrderId.slice(-4)} Canceled (No Commission)`,
           createdAt: so.updatedAt || so.createdAt,
         });
-      } else {
+      } else if (isCompleted) {
         const commission = Math.round(sales * (commissionRate / 100));
         list.push({
           id: `order-${so.parentOrderId}`,
           type: 'EARNING',
           amount: commission, // Store owes this commission to platform
-          description: `Order #${so.parentOrderId.slice(-4)} completed (Commission ${commissionRate}%: ৳${commission})`,
+          description: `Order #${so.parentOrderId.slice(-4)} completed (Sales ৳${sales} · Commission ${commissionRate}%: ৳${commission})`,
           createdAt: parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt,
         });
+      }
+    });
+
+    // Also include completed main orders that matched this shop if not already in shopOrders
+    const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
+    Array.from(fallbackStore.orders.values()).forEach((mo) => {
+      const matches = mo.shopId === effectiveShopId || mo.selectedShopIds?.includes(effectiveShopId) || (storeId && mo.selectedShopIds?.includes(storeId));
+      if (matches && !seenParentIds.has(mo.id)) {
+        const isCanceled = mo.status === 'CANCELED';
+        const isCompleted = mo.status === 'DELIVERED';
+        const sales = mo.productCost || 0;
+
+        if (isCanceled) {
+          list.push({
+            id: `main-order-cancel-${mo.id}`,
+            type: 'CANCELED',
+            amount: sales,
+            description: `Order #${mo.id.slice(-4)} Canceled (No Commission)`,
+            createdAt: mo.updatedAt || mo.createdAt,
+          });
+        } else if (isCompleted) {
+          const commission = Math.round(sales * (commissionRate / 100));
+          list.push({
+            id: `main-order-${mo.id}`,
+            type: 'EARNING',
+            amount: commission,
+            description: `Order #${mo.id.slice(-4)} completed (Sales ৳${sales} · Commission ${commissionRate}%: ৳${commission})`,
+            createdAt: mo.deliveredAt || mo.createdAt,
+          });
+        }
       }
     });
 
@@ -273,7 +333,7 @@ export const StoreWallet: React.FC = () => {
     });
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [combinedShopOrdersList, withdrawals, storeId, completedParentOrders]);
+  }, [combinedShopOrdersList, withdrawals, storeId, shopDoc, commissionRate, completedParentOrders, user]);
 
   // Filtered Ledger based on selected Date Range
   const filteredTransactions = useMemo(() => {
@@ -342,24 +402,52 @@ export const StoreWallet: React.FC = () => {
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
-    const shopDoc = storeId ? fallbackStore.shops.get(storeId) : null;
-    const commissionRate = shopDoc?.commissionPercent ?? 0;
-
     let totalSales = 0;
     let commissionDue = 0;
     let paidCommission = 0;
     let canceledAmount = 0;
+    const seenParentIds = new Set<string>();
 
     filteredShopOrders.forEach((so) => {
+      seenParentIds.add(so.parentOrderId);
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
       const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
 
       totalSales += sales;
       if (isCanceled) {
         canceledAmount += sales;
-      } else {
+      } else if (isCompleted) {
         commissionDue += Math.round(sales * (commissionRate / 100));
+      }
+    });
+
+    // Also include filtered main orders that don't have separate shop orders
+    const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
+    Array.from(fallbackStore.orders.values()).forEach((mo) => {
+      const matches = mo.shopId === effectiveShopId || mo.selectedShopIds?.includes(effectiveShopId) || (storeId && mo.selectedShopIds?.includes(storeId));
+      if (matches && !seenParentIds.has(mo.id)) {
+        const orderDate = mo.deliveredAt || mo.createdAt;
+        const t = new Date(orderDate).getTime();
+        let inDateRange = true;
+        if (!isNaN(t)) {
+          if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) inDateRange = false;
+          if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) inDateRange = false;
+        }
+
+        if (inDateRange) {
+          const isCanceled = mo.status === 'CANCELED';
+          const isCompleted = mo.status === 'DELIVERED';
+          const sales = mo.productCost || 0;
+
+          totalSales += sales;
+          if (isCanceled) {
+            canceledAmount += sales;
+          } else if (isCompleted) {
+            commissionDue += Math.round(sales * (commissionRate / 100));
+          }
+        }
       }
     });
 
@@ -370,11 +458,12 @@ export const StoreWallet: React.FC = () => {
     });
 
     return { totalSales, commissionDue, paidCommission, canceledAmount };
-  }, [filteredShopOrders, filteredWithdrawals, storeId]);
+  }, [filteredShopOrders, filteredWithdrawals, storeId, shopDoc, commissionRate, completedParentOrders, user, startDate, endDate]);
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
-  const canPayback = (wallet?.balance || 0) > 0 && !hasPendingPayback;
+  const currentDueCommission = Math.max(0, rangeMetrics.commissionDue - rangeMetrics.paidCommission);
+  const canPayback = (wallet?.balance || currentDueCommission) > 0 && !hasPendingPayback;
 
   const handlePaybackSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,10 +478,11 @@ export const StoreWallet: React.FC = () => {
     }
 
     const amt = parseFloat(withdrawAmount);
-    if (!user || isNaN(amt) || amt <= 0 || amt > (wallet?.balance || 0)) {
+    const maxPayable = wallet?.balance || currentDueCommission;
+    if (!user || isNaN(amt) || amt <= 0 || amt > maxPayable) {
       await showAlert(
         'কমিশন পরিশোধের তথ্য ভুল',
-        `অনুগ্রহ করে ১ থেকে ৳${wallet?.balance || 0} এর মধ্যে বকেয়া কমিশন পরিশোধ করুন।`,
+        `অনুগ্রহ করে ১ থেকে ৳${maxPayable} এর মধ্যে বকেয়া কমিশন পরিশোধ করুন।`,
         'warning'
       );
       return;
@@ -417,18 +507,36 @@ export const StoreWallet: React.FC = () => {
   const todayMetrics = useMemo(() => {
     const todayStr = getTodayStr(); // Local YYYY-MM-DD
     let salesToday = 0;
+    const seenParentIds = new Set<string>();
 
     combinedShopOrdersList.forEach((so) => {
+      seenParentIds.add(so.parentOrderId);
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
-      const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
-      const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
-      if (orderLocalStr === todayStr) {
-        salesToday += (so.price || 0);
+      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
+      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      if (!isCanceled && isCompleted) {
+        const orderDate = parentOrder?.deliveredAt || parentOrder?.createdAt || so.createdAt;
+        const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
+        if (orderLocalStr === todayStr) {
+          salesToday += ((so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0));
+        }
+      }
+    });
+
+    const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
+    Array.from(fallbackStore.orders.values()).forEach((mo) => {
+      const matches = mo.shopId === effectiveShopId || mo.selectedShopIds?.includes(effectiveShopId) || (storeId && mo.selectedShopIds?.includes(storeId));
+      if (matches && !seenParentIds.has(mo.id) && mo.status === 'DELIVERED') {
+        const orderDate = mo.deliveredAt || mo.createdAt;
+        const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
+        if (orderLocalStr === todayStr) {
+          salesToday += (mo.productCost || 0);
+        }
       }
     });
 
     return { salesToday };
-  }, [combinedShopOrdersList, completedParentOrders]);
+  }, [combinedShopOrdersList, completedParentOrders, shopDoc, storeId, user]);
 
   const presetLabels = {
     ALL_TIME: 'All Times',
@@ -488,7 +596,7 @@ export const StoreWallet: React.FC = () => {
             ৳{todayMetrics.salesToday}
           </h2>
           <span className="text-xs text-emerald-300 font-semibold block mt-1">
-            Commission to Payback: ৳{wallet?.balance || 0}
+            Commission to Payback: ৳{wallet?.balance ?? currentDueCommission}
           </span>
         </div>
 
@@ -530,7 +638,7 @@ export const StoreWallet: React.FC = () => {
                 {activePreset === 'ALL_TIME' ? 'Total Sales' : 'Sales'}
               </span>
               <span className="text-xl font-black text-white block truncate">
-                ৳{activePreset === 'ALL_TIME' ? (wallet?.totalEarned || 0) : rangeMetrics.totalSales}
+                ৳{rangeMetrics.totalSales || wallet?.totalEarned || 0}
               </span>
             </div>
             <div className="text-right border-l border-white/10 pl-4">
@@ -545,12 +653,10 @@ export const StoreWallet: React.FC = () => {
           
           <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
             <span className="text-[10px] text-emerald-200/80 font-bold block leading-tight">
-              Total Commission
+              Total Commission ({commissionRate}%)
             </span>
             <span className="text-base font-black text-white block truncate">
-              ৳{activePreset === 'ALL_TIME' 
-                ? ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0)) 
-                : rangeMetrics.commissionDue}
+              ৳{rangeMetrics.commissionDue || ((wallet?.totalPaidCommission || 0) + (wallet?.balance || 0))}
             </span>
           </div>
 
@@ -559,7 +665,7 @@ export const StoreWallet: React.FC = () => {
               Paid Commission
             </span>
             <span className="text-base font-black text-emerald-300 block truncate">
-              ৳{activePreset === 'ALL_TIME' ? (wallet?.totalPaidCommission || 0) : rangeMetrics.paidCommission}
+              ৳{rangeMetrics.paidCommission || (wallet?.totalPaidCommission || 0)}
             </span>
           </div>
 
@@ -568,7 +674,7 @@ export const StoreWallet: React.FC = () => {
               Due Commission
             </span>
             <span className="text-base font-black text-amber-300 block truncate">
-              ৳{activePreset === 'ALL_TIME' ? (wallet?.balance || 0) : Math.max(0, rangeMetrics.commissionDue - rangeMetrics.paidCommission)}
+              ৳{currentDueCommission || wallet?.balance || 0}
             </span>
           </div>
         </div>

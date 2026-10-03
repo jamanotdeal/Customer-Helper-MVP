@@ -565,54 +565,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const syncAdminData = () => {
       const freshOrders = Array.from(fallbackStore.orders.values());
       setOrders(freshOrders);
-      // Also merge into allOrders so Mutually Discussed changes and new realtime orders are reflected immediately
-      setAllOrders((prev) => {
-        const existingIds = new Set(prev.map((item) => item.id));
-        let addedCount = 0;
-        freshOrders.forEach((o) => {
-          if (!existingIds.has(o.id)) {
-            addedCount++;
-          }
-        });
-        if (addedCount > 0) {
-          setExactTotalOrders((count) => (count !== null ? count + addedCount : null));
-        }
-        const copy = [...prev];
-        freshOrders.forEach((o) => {
-          const idx = copy.findIndex((item) => item.id === o.id);
-          if (idx > -1) {
-            copy[idx] = o;
-          } else {
-            copy.unshift(o);
-          }
-        });
-        const seen = new Set<string>();
-        return copy.filter((o) => {
-          if (seen.has(o.id)) return false;
-          seen.add(o.id);
-          return true;
-        });
-      });
-
-      // Also merge into serverOrders so table view, cancellation approvals, and helper status updates reflect immediately
-      setServerOrders((prev) => {
-        if (!prev) return null;
-        const copy = [...prev];
-        freshOrders.forEach((o) => {
-          const idx = copy.findIndex((item) => item.id === o.id);
-          if (idx > -1) {
-            copy[idx] = o;
-          } else {
-            copy.unshift(o);
-          }
-        });
-        const seen = new Set<string>();
-        return copy.filter((o) => {
-          if (seen.has(o.id)) return false;
-          seen.add(o.id);
-          return true;
-        });
-      });
+      setAllOrders(freshOrders);
+      setServerOrders((prev) => (prev ? freshOrders : null));
 
       const freshApps = Array.from(fallbackStore.helperApplications.values());
       setApplications((prev) => {
@@ -803,24 +757,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       try {
         const fetched = await fallbackStore.getAllOrders();
         setServerOrders(fetched);
-        // Merge fetched orders into allOrders so the full dataset is always available
-        setAllOrders((prev) => {
-          const copy = [...prev];
-          fetched.forEach((o) => {
-            const idx = copy.findIndex((item) => item.id === o.id);
-            if (idx > -1) {
-              copy[idx] = o;
-            } else {
-              copy.unshift(o);
-            }
-          });
-          const seen = new Set<string>();
-          return copy.filter((o) => {
-            if (seen.has(o.id)) return false;
-            seen.add(o.id);
-            return true;
-          });
-        });
+        setAllOrders(fetched);
       } catch (err) {
         console.error('Error fetching server orders:', err);
       } finally {
@@ -840,9 +777,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     if (activeTab === 'STORE_ORDERS') {
       fallbackStore.getAllShopOrders().then((fetched) => {
-        if (fetched && fetched.length > 0) {
-          setShopOrders(fetched);
-        }
+        setShopOrders(fetched);
       }).catch((err) => console.warn('Error fetching shop orders:', err));
     }
   }, [activeTab]);
@@ -971,23 +906,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Note: Initial data is loaded via fallbackStore real-time snapshot subscription (first batch)
 
   useEffect(() => {
-    setAllOrders((prev) => {
-      const copy = [...prev];
-      orders.forEach((o) => {
-        const idx = copy.findIndex((item) => item.id === o.id);
-        if (idx > -1) {
-          copy[idx] = o;
-        } else {
-          copy.unshift(o);
-        }
-      });
-      const seen = new Set<string>();
-      return copy.filter((o) => {
-        if (seen.has(o.id)) return false;
-        seen.add(o.id);
-        return true;
-      });
-    });
+    setAllOrders(orders);
   }, [orders]);
 
   // Initial mount: load overall database datasets for cumulative accurate top stats & counts
@@ -1011,16 +930,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           fallbackStore.getAllOrderFeedbacks(),
           fallbackStore.getAllCustomModals(),
         ]);
-        if (fetchedOrders.length > 0) {
-          setAllOrders(fetchedOrders);
-          setServerOrders(fetchedOrders);
-        }
-        if (fetchedUsers.length > 0) setUsers(fetchedUsers);
-        if (fetchedApps.length > 0) setApplications(fetchedApps);
-        if (fetchedWds.length > 0) setWithdrawals(fetchedWds);
-        if (fetchedShops.length > 0) setShops(fetchedShops);
-        if (fetchedFeedbacks.length > 0) setFeedbacks(fetchedFeedbacks);
-        if (fetchedModals.length > 0) setCustomModals(fetchedModals);
+        setAllOrders(fetchedOrders);
+        setServerOrders(fetchedOrders);
+        setUsers(fetchedUsers);
+        setApplications(fetchedApps);
+        setWithdrawals(fetchedWds);
+        setShops(fetchedShops);
+        setFeedbacks(fetchedFeedbacks);
+        setCustomModals(fetchedModals);
       } catch (err) {
         console.error('Error fetching overall admin data:', err);
       }
