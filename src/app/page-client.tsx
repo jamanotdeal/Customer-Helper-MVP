@@ -27,7 +27,6 @@ import { fallbackStore } from '@/lib/firebase';
 import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { useModal } from '@/components/CustomModal';
 import { getReadiness, requestStep, openSettings, STEP_COPY, type PermissionStep } from '@/lib/permissions';
-import { RotateCw } from 'lucide-react';
 
 import { Order, OrderFeedback } from '@/types';
 import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
@@ -55,82 +54,12 @@ export default function PageClient() {
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [hasPromptedBlockedUser, setHasPromptedBlockedUser] = useState(false);
 
-  // Pull-to-refresh state
-  const [pullDistance, setPullDistance] = useState(0);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const pullStartY = useRef<number | null>(null);
-  const pullStartX = useRef<number | null>(null);
-  const PULL_THRESHOLD = 90;
-
   useEffect(() => {
     if (user?.isBlocked && !hasPromptedBlockedUser) {
       setShowBlockedModal(true);
       setHasPromptedBlockedUser(true);
     }
   }, [user?.isBlocked, hasPromptedBlockedUser]);
-
-  // Pull-to-refresh touch handlers with damping and horizontal swipe filtering
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      if (window.scrollY <= 0 && !isRefreshing) {
-        pullStartY.current = e.touches[0].clientY;
-        pullStartX.current = e.touches[0].clientX;
-      }
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (pullStartY.current === null || isRefreshing) return;
-
-      const currentY = e.touches[0].clientY;
-      const currentX = e.touches[0].clientX;
-      const dy = currentY - pullStartY.current;
-      const dx = currentX - (pullStartX.current || currentX);
-
-      // Cancel pull if horizontal swipe is dominant
-      if (Math.abs(dx) > dy * 0.9 && dy < 35) {
-        pullStartY.current = null;
-        setPullDistance(0);
-        return;
-      }
-
-      // Check if user is at top of page and dragging downwards with smooth damping
-      if (window.scrollY <= 0 && dy > 15) {
-        const activeDy = dy - 15;
-        const dampedDistance = Math.min(115, Math.pow(activeDy, 0.76) * 2.1);
-        setPullDistance(dampedDistance);
-      } else if (dy <= 0) {
-        setPullDistance(0);
-      }
-    };
-
-    const handleTouchEnd = () => {
-      if (isRefreshing) return;
-
-      if (pullDistance >= PULL_THRESHOLD) {
-        setIsRefreshing(true);
-        setPullDistance(56);
-        setTimeout(() => {
-          window.location.reload();
-        }, 550);
-      } else {
-        setPullDistance(0);
-      }
-      pullStartY.current = null;
-      pullStartX.current = null;
-    };
-
-    document.addEventListener('touchstart', handleTouchStart, { passive: true });
-    document.addEventListener('touchmove', handleTouchMove, { passive: true });
-    document.addEventListener('touchend', handleTouchEnd, { passive: true });
-
-    return () => {
-      document.removeEventListener('touchstart', handleTouchStart);
-      document.removeEventListener('touchmove', handleTouchMove);
-      document.removeEventListener('touchend', handleTouchEnd);
-    };
-  }, [pullDistance, isRefreshing]);
 
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
@@ -776,63 +705,6 @@ export default function PageClient() {
 
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
-      {/* Pull-to-Refresh Indicator */}
-      {!isAdminView && (pullDistance > 0 || isRefreshing) && (
-        <div
-          className="fixed top-0 left-0 right-0 z-[99999] flex items-center justify-center pointer-events-none"
-          style={{
-            transform: `translateY(${isRefreshing ? 20 : Math.min(pullDistance * 0.65 - 8, 56)}px)`,
-            opacity: isRefreshing ? 1 : Math.min(1, Math.max(0, (pullDistance - 15) / 30)),
-            transition: isRefreshing || pullDistance === 0
-              ? 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-              : 'none',
-          }}
-        >
-          {/* Only the circular spinner — no text */}
-          <div className="relative w-9 h-9 flex items-center justify-center bg-white/95 backdrop-blur-md rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] border border-emerald-100/80">
-            <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
-              <circle
-                cx="18"
-                cy="18"
-                r="14"
-                className="stroke-slate-100"
-                strokeWidth="2.5"
-                fill="transparent"
-              />
-              <circle
-                cx="18"
-                cy="18"
-                r="14"
-                className={`transition-all duration-75 ${
-                  pullDistance >= PULL_THRESHOLD || isRefreshing ? 'stroke-emerald-600' : 'stroke-emerald-500'
-                }`}
-                strokeWidth="2.5"
-                fill="transparent"
-                strokeDasharray={2 * Math.PI * 14}
-                strokeDashoffset={
-                  isRefreshing
-                    ? 0
-                    : 2 * Math.PI * 14 * (1 - Math.min(1, pullDistance / PULL_THRESHOLD))
-                }
-                strokeLinecap="round"
-              />
-            </svg>
-            <div
-              className={`relative z-10 flex items-center justify-center text-emerald-600 ${
-                isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''
-              }`}
-              style={{
-                transform: !isRefreshing
-                  ? `rotate(${Math.min(360, (pullDistance / PULL_THRESHOLD) * 360)}deg)`
-                  : undefined,
-              }}
-            >
-              <RotateCw className="w-4 h-4" />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <AppHeader
         onOpenNotifications={() => setShowNotifications(true)}

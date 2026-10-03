@@ -50,8 +50,6 @@ body {
   user-select: none;
   /* Momentum scrolling on iOS Safari */
   -webkit-overflow-scrolling: touch;
-  /* Prevent scroll bounce at body level */
-  overscroll-behavior: none;
 }
 
 /* Re-enable text selection for input fields and content areas */
