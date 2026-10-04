@@ -265,8 +265,9 @@ export interface Shop {
   location: LocationData;
   addedByHelperId?: string;
   addedByHelperName?: string;
-  ownerUserId?: string;       // Firebase UID of the store owner
-  ownerUserEmail?: string;    // Email of the store owner
+  ownerUserId?: string;       // Firebase UID of the primary store owner
+  ownerUserEmail?: string;    // Email of the primary store owner
+  assignedUserIds?: string[]; // Firebase UIDs of all assigned store users (including primary owner)
   applicationId?: string;     // Source StoreApplication ID
   createdAt: string;
   updatedAt?: string;
@@ -417,6 +418,7 @@ export interface WithdrawalRequest {
   paymentMethod?: string;
   accountNumber?: string;
   userType?: 'helper' | 'store';
+  shopId?: string;
   createdAt: string;
   processedAt?: string;
 }

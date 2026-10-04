@@ -182,6 +182,7 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
 
     // Totals for Current Period
     let currentPeriodOrders = 0;
+    let currentPeriodOrderValue = 0;
     let currentPeriodNewCustomers = 0;
     const currentPeriodDeliveryTimes: number[] = [];
     let currentPeriodRevenue = 0;
@@ -190,6 +191,7 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
 
     // Totals for Previous Period
     let prevPeriodOrders = 0;
+    let prevPeriodOrderValue = 0;
     let prevPeriodNewCustomers = 0;
     const prevPeriodDeliveryTimes: number[] = [];
     let prevPeriodRevenue = 0;
@@ -201,16 +203,23 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
       const createdTime = getTimestamp(o.createdAt);
       const deliveredTime = o.status === 'DELIVERED' ? getTimestamp(o.deliveredAt || o.updatedAt) : 0;
       const orderDateStr = createdTime ? getLocalYYYYMMDD(new Date(createdTime)) : '';
-      const orderFee = o.deliveryFee || 0;
+      const orderFee = Number(o.deliveryFee || 0);
+      const productCost = Number(o.productCost || 0);
+      const goods = (o.items && Array.isArray(o.items) && o.items.length > 0)
+        ? o.items.reduce((sum, it) => sum + (Number(it.price || 0) * Number(it.quantity || 1)), 0)
+        : (productCost > 0 ? productCost : (Number(o.totalCost || 0) > orderFee ? Number(o.totalCost || 0) - orderFee : 0));
+      const orderTotalVal = (Number(o.totalPrice || 0) > 0) ? Number(o.totalPrice) : (goods + orderFee);
 
       // Orders created
       if (createdTime >= startMs && createdTime <= endMs) {
         currentPeriodOrders++;
+        currentPeriodOrderValue += orderTotalVal;
         if (orderDateStr && dayMetricsMap[orderDateStr]) {
           dayMetricsMap[orderDateStr].totalOrders++;
         }
       } else if (createdTime >= prevStartMs && createdTime <= prevEndMs) {
         prevPeriodOrders++;
+        prevPeriodOrderValue += orderTotalVal;
       }
 
       // Delivered order metrics (Delivery time & Revenue)
@@ -334,6 +343,13 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
       };
     };
 
+    const currentAvgOrderSize = currentPeriodOrders > 0
+      ? Math.round(currentPeriodOrderValue / currentPeriodOrders)
+      : 0;
+    const prevAvgOrderSize = prevPeriodOrders > 0
+      ? Math.round(prevPeriodOrderValue / prevPeriodOrders)
+      : 0;
+
     const currentAvgDeliveryTime = currentPeriodDeliveryTimes.length > 0
       ? Math.round(currentPeriodDeliveryTimes.reduce((a, b) => a + b, 0) / currentPeriodDeliveryTimes.length)
       : 0;
@@ -351,6 +367,11 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
           current: currentPeriodOrders,
           prev: prevPeriodOrders,
           growth: calcGrowth(currentPeriodOrders, prevPeriodOrders)
+        },
+        avgOrderSize: {
+          current: currentAvgOrderSize,
+          prev: prevAvgOrderSize,
+          growth: calcGrowth(currentAvgOrderSize, prevAvgOrderSize)
         },
         customers: {
           current: currentPeriodNewCustomers,
@@ -759,8 +780,8 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
         </div>
       </div>
 
-      {/* KPI Growth Cards Grid (Revenue replaces Working Hours) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* KPI Growth Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Card 1: Total Orders */}
         <div className="p-5 rounded-3xl border border-gray-100 bg-white shadow-soft">
           <div className="flex items-center justify-between">
@@ -790,6 +811,37 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
             </div>
           </div>
           <p className="text-[11px] font-medium text-gray-400 mt-2">vs {analytics.totals.orders.prev} previously</p>
+        </div>
+
+        {/* Card: Average Order Size */}
+        <div className="p-5 rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50/60 to-white shadow-soft">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">Avg Order Size</span>
+            <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center">
+              <DollarSign className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-baseline justify-between">
+            <span className="text-2xl font-black text-blue-950">৳{analytics.totals.avgOrderSize.current.toLocaleString('en-US')}</span>
+            <div className={`inline-flex items-center space-x-0.5 px-2 py-0.5 rounded-full text-xs font-extrabold ${
+              analytics.totals.avgOrderSize.growth.isEqual
+                ? 'bg-gray-100 text-gray-600'
+                : analytics.totals.avgOrderSize.growth.isPositive
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-rose-50 text-rose-700'
+            }`}>
+              {analytics.totals.avgOrderSize.growth.isEqual ? (
+                <Minus className="w-3 h-3" />
+              ) : analytics.totals.avgOrderSize.growth.isPositive ? (
+                <TrendingUp className="w-3 h-3" />
+              ) : (
+                <TrendingDown className="w-3 h-3" />
+              )}
+              <span>{analytics.totals.avgOrderSize.growth.pct}%</span>
+            </div>
+          </div>
+          <p className="text-[11px] font-medium text-blue-700/70 mt-2">vs ৳{analytics.totals.avgOrderSize.prev.toLocaleString('en-US')} prev</p>
         </div>
 
         {/* Card 2: New Customers */}

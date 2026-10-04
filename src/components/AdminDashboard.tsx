@@ -83,6 +83,7 @@ import { AdminStoreOrderDetailsModal } from './admin/AdminStoreOrderDetailsModal
 import { AdminShopMapView } from './admin/AdminShopMapView';
 import { AdminShopDetailsModal } from './admin/AdminShopDetailsModal';
 import { AdminStoreAppDetailsModal } from './admin/AdminStoreAppDetailsModal';
+import { AdminStoreDisbursementModal } from './admin/AdminStoreDisbursementModal';
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AdminAddressesManager } from './admin/AdminAddressesManager';
@@ -118,9 +119,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
-  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('MAP');
+  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('TABLE');
+  const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE'>('UNPAID');
+  const [shopsSortDirection, setShopsSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
   const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
+  const [disbursingShop, setDisbursingShop] = useState<Shop | null>(null);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -1994,8 +1998,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const q = usersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (item) =>
-          item.user.displayName.toLowerCase().includes(q) ||
-          item.user.uid.toLowerCase().includes(q) ||
+          (item.user.displayName && item.user.displayName.toLowerCase().includes(q)) ||
+          (item.user.uid && item.user.uid.toLowerCase().includes(q)) ||
           (item.user.email && item.user.email.toLowerCase().includes(q)) ||
           (item.user.alternativePhone && item.user.alternativePhone.includes(q))
       );
@@ -7467,7 +7471,141 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               (s.location?.address || '').toLowerCase().includes(q)
           );
         }
-        filteredShops.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        // Pre-compute metrics for sorting & display
+        const allShopOrdersList = Array.from(fallbackStore.shopOrders.values());
+        const allWithdrawalsList = Array.from(fallbackStore.withdrawals.values());
+        const allOrdersList = Array.from(fallbackStore.orders.values());
+
+        const getShopComputedMetrics = (s: Shop) => {
+          const storeUserId = s.ownerUserId || s.id;
+          const targetShopId = s.id;
+
+          let completed = 0;
+          let rejected = 0;
+          let running = 0;
+          let totalSales = 0;       // all (delivered + running) for display
+          let deliveredSales = 0;   // only delivered/handover — for unpaid balance
+
+          const seenParentIds = new Set<string>();
+          allShopOrdersList.forEach((so) => {
+            if (so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`) {
+              seenParentIds.add(so.parentOrderId);
+              const parentOrder = allOrdersList.find((o) => o.id === so.parentOrderId);
+              const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+              const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
+
+              if (isCanceled) {
+                rejected++;
+              } else if (isCompleted) {
+                completed++;
+                const price = so.price || parentOrder?.productCost || 0;
+                totalSales += price;
+                deliveredSales += price;
+              } else {
+                running++;
+                totalSales += (so.price || 0);
+              }
+            }
+          });
+
+          allOrdersList.forEach((mo) => {
+            const matches =
+              mo.shopId === targetShopId ||
+              mo.shopId === storeUserId ||
+              mo.selectedShopIds?.includes(targetShopId) ||
+              mo.selectedShopIds?.includes(storeUserId);
+            if (matches && !seenParentIds.has(mo.id)) {
+              if (mo.status === 'CANCELED') {
+                rejected++;
+              } else if (mo.status === 'DELIVERED') {
+                completed++;
+                totalSales += (mo.productCost || 0);
+                deliveredSales += (mo.productCost || 0);
+              } else {
+                running++;
+                totalSales += (mo.productCost || 0);
+              }
+            }
+          });
+
+          const commPercent = s.commissionPercent || 0;
+          const commission = Math.round(totalSales * (commPercent / 100));
+          const netSales = Math.max(0, totalSales - commission);
+          // Unpaid balance: only from delivered orders net of commission
+          const deliveredCommission = Math.round(deliveredSales * (commPercent / 100));
+          const deliveredNetSales = Math.max(0, deliveredSales - deliveredCommission);
+
+          const approvedWds = allWithdrawalsList.filter(
+            (w) =>
+              (w.helperId === storeUserId ||
+                w.helperId === targetShopId ||
+                w.helperId === `store-${storeUserId}` ||
+                (w.userType === 'store' && (w.helperName === s.name || w.helperId === s.id))) &&
+              w.status === 'APPROVED'
+          );
+          const totalDisbursed = approvedWds.reduce((sum, w) => sum + w.amount, 0);
+          const unpaidBalance = Math.max(0, deliveredNetSales - totalDisbursed);
+
+          return {
+            completed,
+            rejected,
+            running,
+            totalSales,
+            commission,
+            netSales,
+            totalDisbursed,
+            unpaidBalance,
+          };
+        };
+
+        const shopMetricsMap = new Map<string, ReturnType<typeof getShopComputedMetrics>>();
+        filteredShops.forEach((s) => {
+          shopMetricsMap.set(s.id, getShopComputedMetrics(s));
+        });
+
+        // Sort shops by selected field & direction (default: UNPAID DESC)
+        filteredShops.sort((a, b) => {
+          const ma = shopMetricsMap.get(a.id)!;
+          const mb = shopMetricsMap.get(b.id)!;
+
+          let diff = 0;
+          if (shopsSortField === 'UNPAID') {
+            diff = mb.unpaidBalance - ma.unpaidBalance;
+          } else if (shopsSortField === 'SALES') {
+            diff = mb.totalSales - ma.totalSales;
+          } else if (shopsSortField === 'COMMISSION') {
+            diff = mb.commission - ma.commission;
+          } else if (shopsSortField === 'ORDERS') {
+            diff = mb.completed - ma.completed;
+          } else if (shopsSortField === 'NAME') {
+            diff = (a.name || '').localeCompare(b.name || '');
+            return shopsSortDirection === 'ASC' ? diff : -diff;
+          } else if (shopsSortField === 'TYPE') {
+            diff = (a.type || '').localeCompare(b.type || '');
+            return shopsSortDirection === 'ASC' ? diff : -diff;
+          } else if (shopsSortField === 'DATE') {
+            diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+          } else {
+            diff = mb.unpaidBalance - ma.unpaidBalance;
+          }
+
+          if (diff === 0) {
+            diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+          }
+
+          return shopsSortDirection === 'DESC' ? diff : -diff;
+        });
+
+        const toggleShopSort = (field: typeof shopsSortField) => {
+          if (shopsSortField === field) {
+            setShopsSortDirection((prev) => (prev === 'ASC' ? 'DESC' : 'ASC'));
+          } else {
+            setShopsSortField(field);
+            setShopsSortDirection(field === 'NAME' || field === 'TYPE' ? 'ASC' : 'DESC');
+          }
+        };
+
         const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL');
         const overrideShopsCount = (serverShops === null && !hasShopsFilter && exactShopsCount !== null) ? exactShopsCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops, undefined, undefined, overrideShopsCount);
@@ -7814,75 +7952,93 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[950px]">
-                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[1050px]">
+                    <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
                       <tr>
-                        <th className="py-3.5 px-4">Store Name & Status</th>
-                        <th className="py-3.5 px-4">Store Type</th>
-                        <th className="py-3.5 px-4">Orders & Revenue Stats</th>
+                        <th
+                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
+                          onClick={() => toggleShopSort('NAME')}
+                        >
+                          <div className="flex items-center space-x-1">
+                            <span>Store Name & Status</span>
+                            {shopsSortField === 'NAME' ? (
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
+                            )}
+                          </div>
+                        </th>
+                        <th
+                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
+                          onClick={() => toggleShopSort('TYPE')}
+                        >
+                          <div className="flex items-center space-x-1">
+                            <span>Store Type</span>
+                            {shopsSortField === 'TYPE' ? (
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
+                            )}
+                          </div>
+                        </th>
+                        <th
+                          className="py-3.5 px-4 cursor-pointer hover:bg-emerald-50/80 transition-colors bg-emerald-50/30"
+                          onClick={() => toggleShopSort('UNPAID')}
+                        >
+                          <div className="flex items-center space-x-1 text-emerald-950 font-black">
+                            <DollarSign className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>Unpaid Balance (৳)</span>
+                            {shopsSortField === 'UNPAID' ? (
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3.5 h-3.5 text-emerald-700" /> : <ArrowDown className="w-3.5 h-3.5 text-emerald-700" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-emerald-300" />
+                            )}
+                          </div>
+                        </th>
+                        <th
+                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
+                          onClick={() => toggleShopSort('SALES')}
+                        >
+                          <div className="flex items-center space-x-1">
+                            <span>Orders & Sales</span>
+                            {shopsSortField === 'SALES' ? (
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
+                            )}
+                          </div>
+                        </th>
                         <th className="py-3.5 px-4">Contact & WhatsApp</th>
                         <th className="py-3.5 px-4">Location Address</th>
-                        <th className="py-3.5 px-4">Added By</th>
+                        <th
+                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
+                          onClick={() => toggleShopSort('DATE')}
+                        >
+                          <div className="flex items-center space-x-1">
+                            <span>Added Date</span>
+                            {shopsSortField === 'DATE' ? (
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
+                            )}
+                          </div>
+                        </th>
                         <th className="py-3.5 px-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-medium">
                       {paginatedItems.map((s) => {
-                        const shopOrdersList = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.shopId === s.id);
-                        const mainOrdersForThisShop = allOrders.filter((o) => o.selectedShopIds?.includes(s.id));
+                        const metrics = shopMetricsMap.get(s.id) || {
+                          completed: 0,
+                          rejected: 0,
+                          running: 0,
+                          totalSales: 0,
+                          commission: 0,
+                          netSales: 0,
+                          totalDisbursed: 0,
+                          unpaidBalance: 0,
+                        };
 
-                        let completed = 0;
-                        let rejected = 0;
-                        let running = 0;
-                        let totalSales = 0;
-
-                        if (shopOrdersList.length > 0) {
-                          const seenParentIds = new Set<string>();
-                          shopOrdersList.forEach((so) => {
-                            seenParentIds.add(so.parentOrderId);
-                            const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
-                            const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
-                            const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-                            if (isCanceled) {
-                              rejected++;
-                            } else if (isCompleted) {
-                              completed++;
-                              totalSales += (so.price || parentOrder?.productCost || 0);
-                            } else {
-                              running++;
-                              totalSales += (so.price || 0);
-                            }
-                          });
-
-                          mainOrdersForThisShop.forEach((mo) => {
-                            if (!seenParentIds.has(mo.id)) {
-                              if (mo.status === 'CANCELED') {
-                                rejected++;
-                              } else if (mo.status === 'DELIVERED') {
-                                completed++;
-                                totalSales += (mo.productCost || 0);
-                              } else {
-                                running++;
-                                totalSales += (mo.productCost || 0);
-                              }
-                            }
-                          });
-                        } else {
-                          mainOrdersForThisShop.forEach((mo) => {
-                            if (mo.status === 'CANCELED') {
-                              rejected++;
-                            } else if (mo.status === 'DELIVERED') {
-                              completed++;
-                              totalSales += (mo.productCost || 0);
-                            } else {
-                              running++;
-                              totalSales += (mo.productCost || 0);
-                            }
-                          });
-                        }
-
-                        const commission = Math.round(totalSales * ((s.commissionPercent || 0) / 100));
                         const sStatus = s.status === 'Pending' || s.status === 'PENDING'
                           ? 'Pending'
                           : s.status === 'Rejected' || s.status === 'REJECTED'
@@ -7964,21 +8120,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 {s.type}
                               </span>
                             </td>
+                            <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
+                              {metrics.unpaidBalance > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDisbursingShop(s)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-black text-xs block text-left shadow-2xs transition-all cursor-pointer group"
+                                  title="Click to disburse payout"
+                                >
+                                  <span className="block text-[13px] font-black text-emerald-800 group-hover:text-emerald-950">
+                                    ৳{metrics.unpaidBalance.toLocaleString('en-US')} Due
+                                  </span>
+                                  <span className="text-[9px] text-emerald-700/80 font-bold block">
+                                    Click to Disburse →
+                                  </span>
+                                </button>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="px-2 py-0.5 rounded-lg bg-gray-100 text-gray-600 font-extrabold text-[10px] inline-block">
+                                    ৳0 (Cleared)
+                                  </span>
+                                  {metrics.totalDisbursed > 0 && (
+                                    <span className="text-[9px] text-gray-400 font-medium block">
+                                      Paid: ৳{metrics.totalDisbursed.toLocaleString('en-US')}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </td>
                             <td className="py-4 px-4">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-black text-[10px] border border-emerald-200" title="Completed Orders">
-                                  ✓ {completed}
+                                  ✓ {metrics.completed}
                                 </span>
                                 <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-black text-[10px] border border-amber-200" title="Running Orders">
-                                  ⚡ {running}
+                                  ⚡ {metrics.running}
                                 </span>
                                 <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 font-black text-[10px] border border-rose-200" title="Rejected Orders">
-                                  ✕ {rejected}
+                                  ✕ {metrics.rejected}
                                 </span>
                               </div>
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
-                                <div>Sales: <strong className="text-emerald-700">৳{totalSales.toLocaleString()}</strong></div>
-                                <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{commission.toLocaleString()}</strong></div>
+                                <div>Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
+                                <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong></div>
                               </div>
                             </td>
                             <td className="py-4 px-4">
@@ -7994,10 +8178,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </td>
                             <td className="py-4 px-4 text-gray-500 font-medium">
-                              {s.addedByHelperName || 'Admin'}
+                              <span className="block text-gray-800 font-bold text-xs">{s.addedByHelperName || 'Admin'}</span>
+                              <span className="text-[10px] text-gray-400 block">
+                                {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '—'}
+                              </span>
                             </td>
                             <td className="py-4 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end space-x-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setDisbursingShop(s)}
+                                  className="py-1 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                                  title="Disburse Payment, View Financials & Helper Breakdown"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span className="text-[10px] font-black uppercase">Disburse</span>
+                                </button>
                                 {s.isBlocked ? (
                                   <button
                                     type="button"
@@ -9367,6 +9563,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onDeleted={() => {
             setShops(Array.from(fallbackStore.shops.values()));
             setSelectedShopDetails(null);
+          }}
+        />
+      )}
+
+      {disbursingShop && (
+        <AdminStoreDisbursementModal
+          shop={disbursingShop}
+          onClose={() => setDisbursingShop(null)}
+          onDisbursed={() => {
+            setShops(Array.from(fallbackStore.shops.values()));
+            setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
           }}
         />
       )}

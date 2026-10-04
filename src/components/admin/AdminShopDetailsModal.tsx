@@ -17,8 +17,11 @@ import {
   FileText,
   Ban,
   ShieldAlert,
+  Send,
+  DollarSign,
 } from 'lucide-react';
 import { AdminBlockModal } from './AdminBlockModal';
+import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
@@ -37,6 +40,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 }) => {
   const { showConfirm, showAlert } = useModal();
   const [showBlockModal, setShowBlockModal] = React.useState(false);
+  const [showDisburseModal, setShowDisburseModal] = React.useState(false);
   const [currentShop, setCurrentShop] = React.useState<Shop>(shop);
   const [currentStatus, setCurrentStatus] = React.useState<'Approved' | 'Pending' | 'Rejected'>(
     shop.status === 'Pending' || shop.status === 'PENDING'
@@ -300,6 +304,15 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
                 <span className="text-base font-black text-purple-300">৳{commission.toLocaleString()}</span>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowDisburseModal(true)}
+              className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-95"
+            >
+              <DollarSign className="w-4 h-4" />
+              <span>Financials, Helper Breakdown & Disburse Payment</span>
+            </button>
           </div>
 
           {/* Store Description / Products-Services */}
@@ -468,6 +481,15 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
         <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center space-x-2 shrink-0 flex-wrap gap-2">
           <button
             type="button"
+            onClick={() => setShowDisburseModal(true)}
+            className="py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Disburse Payment</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleToggleBlock}
             className={`py-3 px-3.5 rounded-2xl font-extrabold text-xs shadow-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95 ${
               currentShop.isBlocked
@@ -513,6 +535,17 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             targetType="Store"
             onConfirm={handleConfirmBlock}
             onClose={() => setShowBlockModal(false)}
+          />
+        )}
+
+        {/* Store Financials & Disbursement Modal */}
+        {showDisburseModal && (
+          <AdminStoreDisbursementModal
+            shop={currentShop}
+            onClose={() => setShowDisburseModal(false)}
+            onDisbursed={() => {
+              if (onShopUpdated) onShopUpdated();
+            }}
           />
         )}
       </div>

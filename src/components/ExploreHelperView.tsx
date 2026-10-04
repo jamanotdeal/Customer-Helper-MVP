@@ -40,6 +40,30 @@ export const ExploreHelperView: React.FC = () => {
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
 
   useEffect(() => {
+    const handleInstantNewOrder = (e: any) => {
+      const orderId = e.detail?.orderId;
+      if (!orderId || seenOrderIdsRef.current.has(orderId) || user?.isBlocked) return;
+      const order = fallbackStore.orders.get(orderId);
+      if (order && (order.status !== 'PENDING' || (order.helperId && order.helperId !== user?.uid))) return;
+      setNewOrderIds((prev) => {
+        const updated = new Set(prev);
+        updated.add(orderId);
+        return updated;
+      });
+      setIsAlarmPlaying(true);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('new-order-received', handleInstantNewOrder);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('new-order-received', handleInstantNewOrder);
+      }
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (newOrderIds.size > 0) {
       setIsAlarmPlaying(true);
     } else {
@@ -196,6 +220,9 @@ export const ExploreHelperView: React.FC = () => {
                 updated.add(id);
               }
             });
+            if (updated.size === 0) {
+              setIsAlarmPlaying(false);
+            }
             return updated;
           });
           return sorted;

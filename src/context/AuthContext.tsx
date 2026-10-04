@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { UserProfile, ActiveMode, HelperApplication, StoreApplication } from '@/types';
-import { auth, googleProvider, fallbackStore, initFcmMessaging, requestBrowserNotificationPermission, loadCustomerSavedAddresses, loadCustomerSavedPickupData } from '@/lib/firebase';
+import { auth, googleProvider, fallbackStore, initFcmMessaging, removeFcmToken, requestBrowserNotificationPermission, loadCustomerSavedAddresses, loadCustomerSavedPickupData } from '@/lib/firebase';
 import {
   signInWithPopup,
   signInWithRedirect,
@@ -744,6 +744,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    const oldUid = user?.uid;
+    if (oldUid) {
+      removeFcmToken(oldUid).catch(() => {});
+    }
     try {
       await firebaseSignOut(auth);
     } catch (e) {
@@ -755,7 +759,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setUser(null);
     fallbackStore.currentUserId = null;
-    fallbackStore.teardownListeners(); // Stop all Firestore listeners on logout
+    fallbackStore.teardownListeners(); // Stop all Firestore listeners & clean memory/caches on logout
     setActiveModeState('customer');
   };
 

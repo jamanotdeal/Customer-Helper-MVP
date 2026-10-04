@@ -86,7 +86,15 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
     setCurrentIdx((i) => Math.max(0, Math.min(i, orderIdList.length - 2)));
   };
 
-  if (!order) return null;
+  const isStillValidPending = Boolean(order && order.status === 'PENDING' && (!order.helperId || order.helperId.trim() === ''));
+
+  useEffect(() => {
+    if (order && !isStillValidPending) {
+      onDismissOne(order.id);
+    }
+  }, [order, isStillValidPending, onDismissOne]);
+
+  if (!order || !isStillValidPending) return null;
 
   const itemsSummary = order.items?.length
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')

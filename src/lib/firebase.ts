@@ -162,6 +162,23 @@ export async function saveFcmToken(userId: string, token: string): Promise<void>
 }
 
 /**
+ * Removes this device's FCM token from the user's Firestore profile on logout
+ * so notifications are not delivered to subsequent users on the same device.
+ */
+export async function removeFcmToken(userId: string): Promise<void> {
+  try {
+    await setDoc(doc(db, 'users', userId), { fcmToken: '' }, { merge: true });
+    const existing = fallbackStore.users.get(userId);
+    if (existing) {
+      const updated = { ...existing, fcmToken: undefined };
+      fallbackStore.users.set(userId, updated);
+    }
+  } catch (e: any) {
+    console.warn('[FCM] removeFcmToken note:', e?.message || e);
+  }
+}
+
+/**
  * One-time read: loads the customer's saved delivery addresses from their Firestore user profile.
  * Should be called once at login time. Result is cached to localStorage by the caller.
  */
@@ -284,7 +301,7 @@ export async function sendFcmPushToTokens(
 }
 
 // Helper to recursively strip undefined properties before saving to Firestore
-function cleanForFirestore<T>(data: T): T {
+export function cleanForFirestore<T>(data: T): T {
   if (data === undefined || data === null) return data;
   return JSON.parse(JSON.stringify(data));
 }
@@ -782,35 +799,66 @@ class FallbackStore {
   //   2. Fires browser popups only for genuinely NEW, unread, targeted notifications
   //      Fix 2: _knownNotifIds is now persisted to sessionStorage so page refreshes
   //             don't re-fire all previously seen notifications.
+  // ─── Shared notification snapshot handler ─────────────────────────────────
+  // Processes any notification snapshot (from any role-scoped query) and:
+  //   1. Stores notifications in the local map ONLY for the logged in userId
+  //      (broadcast notifications like 'all-helpers' are strictly verified against the user's role)
+  //   2. Fires browser popups & dispatches instant new-order-received events for eligible helpers
   private _handleNotificationSnapshot(snapshot: any, userId: string) {
     const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers', 'all-stores']);
-    // Fix 4: Max notifications to store per user in memory.
     const MAX_NOTIFS_PER_USER = 100;
 
-    const map = new Map<string, AppNotification[]>();
+    const currentUser = this.users.get(userId);
+    const userNotifs: AppNotification[] = [];
+
+    // Helper check helper function
+    const isTargetForThisUser = (notif: AppNotification): boolean => {
+      const isHelperBroadcast =
+        (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
+        (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
+        (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated');
+
+      let helperBroadcastEligible = isHelperBroadcast;
+      if (isHelperBroadcast && notif.type === 'new_order' && notif.orderId && currentUser) {
+        const targetOrder = this.orders.get(notif.orderId);
+        const areas = this.pricingSettings.allowedDeliveryAreas;
+        if (targetOrder && areas && areas.length > 0) {
+          helperBroadcastEligible = isHelperEligibleForOrder(
+            currentUser,
+            targetOrder,
+            areas,
+            this.pricingSettings.allowedDeliveryAreasEnabled
+          );
+        }
+      }
+
+      const isCustomerBroadcast = notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin';
+      const isStoreBroadcast = notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId));
+      const isSegmentMatch = Boolean(notif.userId?.startsWith('segment:') && currentUser && this.doesUserMatchSegment(currentUser, notif.userId.replace('segment:', '')));
+
+      return (
+        notif.userId === userId ||
+        notif.userId === 'all' ||
+        helperBroadcastEligible ||
+        isCustomerBroadcast ||
+        isStoreBroadcast ||
+        isSegmentMatch
+      );
+    };
+
     snapshot.docs.forEach((docSnap: any) => {
       const data = docSnap.data() as AppNotification;
-      const isBroadcast = BROADCAST_IDS.has(data.userId) || (data.userId && data.userId.startsWith('segment:'));
-      // Broadcast notifications are stored under the current user's uid locally
-      const storeKey = isBroadcast ? userId : data.userId;
-      const userList = map.get(storeKey) || [];
-      userList.push(data);
-      map.set(storeKey, userList);
-    });
-    map.forEach((list, key) => {
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      // Fix 4: Cap list length to avoid unbounded memory usage.
-      this.notifications.set(key, list.slice(0, MAX_NOTIFS_PER_USER));
+      if (isTargetForThisUser(data)) {
+        userNotifs.push(data);
+      }
     });
 
-    // Fire browser popup only for genuinely NEW, unread notifications targeting this device.
-    // Fix 2: Because _knownNotifIds is pre-populated from sessionStorage on refresh,
-    //        previously-seen notifications are already in the set and won't re-fire.
-    if (this.currentUserId) {
+    userNotifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    this.notifications.set(userId, userNotifs.slice(0, MAX_NOTIFS_PER_USER));
+
+    // Fire browser popup and instant dispatch only for genuinely NEW, unread notifications targeting this device.
+    if (this.currentUserId && this.currentUserId === userId) {
       const uid = this.currentUserId;
-      const currentUser = this.users.get(uid);
-      // isInitial is now only true when the set truly has zero entries
-      // (i.e. first-ever login in this browser session, not a refresh).
       const isInitial = this._knownNotifIds.size === 0;
       let newUnreadCount = 0;
       const toTrigger: AppNotification[] = [];
@@ -822,41 +870,19 @@ class FallbackStore {
         this._knownNotifIds.add(notif.id);
         knownIdsChanged = true;
 
-        // Determine if this broadcast notification targets the current user's role/type
-        const isHelperBroadcast =
-          (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
-          (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
-          (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated');
-
-        // For helper broadcast new-order notifications, apply area-based eligibility filtering
-        // on the receiver side so only eligible helpers see the popup on their own device.
-        let helperBroadcastEligible = isHelperBroadcast;
-        if (isHelperBroadcast && notif.type === 'new_order' && notif.orderId && currentUser) {
-          const targetOrder = this.orders.get(notif.orderId);
-          const areas = this.pricingSettings.allowedDeliveryAreas;
-          if (targetOrder && areas && areas.length > 0) {
-            helperBroadcastEligible = isHelperEligibleForOrder(
-              currentUser,
-              targetOrder,
-              areas,
-              this.pricingSettings.allowedDeliveryAreasEnabled
-            );
+        if (isTargetForThisUser(notif)) {
+          // Instant order dispatch for helper overlay
+          if (notif.orderId && notif.type === 'new_order' && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('new-order-received', { detail: { orderId: notif.orderId } }));
           }
-        }
 
-        const targets =
-          notif.userId === uid ||
-          notif.userId === 'all' ||
-          helperBroadcastEligible ||
-          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin') ||
-          (notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId)));
-
-        if (targets && !notif.read) {
-          if (isInitial) {
-            newUnreadCount++;
-            toTrigger.push(notif);
-          } else {
-            triggerBrowserNotification(notif);
+          if (!notif.read) {
+            if (isInitial) {
+              newUnreadCount++;
+              toTrigger.push(notif);
+            } else {
+              triggerBrowserNotification(notif);
+            }
           }
         }
       });
@@ -880,6 +906,7 @@ class FallbackStore {
       }
     }
 
+    this.saveLocalStore();
     this.notify();
   }
 
@@ -944,6 +971,14 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this.notifications.clear();
+    this._knownNotifIds.clear();
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('jamanot_known_notif_ids');
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('jamanot_notifications_store');
+    }
   }
 
   // ─── Role-scoped Firestore listener initialization ────────────────────────
@@ -1136,6 +1171,21 @@ class FallbackStore {
         )
       );
 
+      if (effectiveStoreId && effectiveStoreId !== userId) {
+        unsubs.push(
+          onSnapshot(
+            doc(db, 'wallets', effectiveStoreId),
+            (docSnap) => {
+              if (docSnap.exists()) {
+                this.wallets.set(effectiveStoreId, docSnap.data() as Wallet);
+                this.notify();
+              }
+            },
+            (err) => console.warn('[Firestore] Store shop wallet sync note:', err)
+          )
+        );
+      }
+
       // Store owner's withdrawals (realtime)
       unsubs.push(
         onSnapshot(
@@ -1153,6 +1203,25 @@ class FallbackStore {
           (err) => console.warn('[Firestore] Store withdrawals sync note:', err)
         )
       );
+
+      if (effectiveStoreId && effectiveStoreId !== userId) {
+        unsubs.push(
+          onSnapshot(
+            query(collection(db, 'withdrawals'), where('helperId', '==', effectiveStoreId), limit(50)),
+            (snapshot) => {
+              snapshot.docChanges().forEach((change) => {
+                if (change.type === 'removed') {
+                  this.withdrawals.delete(change.doc.id);
+                } else {
+                  this.withdrawals.set(change.doc.id, change.doc.data() as WithdrawalRequest);
+                }
+              });
+              this.notify();
+            },
+            (err) => console.warn('[Firestore] Store shop withdrawals sync note:', err)
+          )
+        );
+      }
 
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
@@ -1189,8 +1258,8 @@ class FallbackStore {
                   incoming.coinsDeductedAt = new Date().toISOString();
                   // Deduct coins and persist the flag on the order doc
                   this.deductCoinsForFreeDelivery(userId, coinsToDeduct, incoming.id).then(() => {
-                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => {});
-                  }).catch(() => {});
+                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => { });
+                  }).catch(() => { });
                 }
 
                 this.orders.set(change.doc.id, incoming);
@@ -1841,8 +1910,36 @@ class FallbackStore {
     let next = profile;
     let changed = false;
 
-    // ── Store applications & Shop Existence ──────────────────────────────────
+    // ── Store applications & Direct Shop Assignment & Shop Existence ────────
     try {
+      // 1. Check direct shop assignment (admin assigned shop where ownerUserId === profile.uid)
+      let assignedShop: Shop | undefined;
+      for (const s of Array.from(this.shops.values())) {
+        if (s.ownerUserId === profile.uid || (next.storeId && s.id === next.storeId)) {
+          assignedShop = s;
+          break;
+        }
+      }
+
+      if (!assignedShop) {
+        try {
+          const shopByOwnerSnap = profile.uid ? await getDocs(
+            query(collection(db, 'shops'), where('ownerUserId', '==', profile.uid), limit(1))
+          ) : null;
+          if (shopByOwnerSnap && !shopByOwnerSnap.empty) {
+            assignedShop = shopByOwnerSnap.docs[0].data() as Shop;
+            this.shops.set(assignedShop.id, assignedShop);
+          } else if (next.storeId) {
+            const shopSnap = await getDoc(doc(db, 'shops', next.storeId));
+            if (shopSnap.exists()) {
+              assignedShop = shopSnap.data() as Shop;
+              this.shops.set(assignedShop.id, assignedShop);
+            }
+          }
+        } catch (_) { }
+      }
+
+      // 2. Check store applications
       const snap = await getDocs(
         query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
       );
@@ -1855,29 +1952,28 @@ class FallbackStore {
         }
       });
 
-      const approved = apps.some((a) => a.status === 'APPROVED');
-      const shopId = next.storeId || `store-${profile.uid}`;
+      const approvedApp = apps.some((a) => a.status === 'APPROVED');
+      const hasValidStore = Boolean(assignedShop || (approvedApp && next.storeId && this.shops.has(next.storeId)));
+      const effectiveShopId = assignedShop?.id || next.storeId || `store-${profile.uid}`;
 
-      // Verify that the shop document actually exists in Firestore / memory
-      let shopExists = this.shops.has(shopId);
-      if (!shopExists) {
-        try {
-          const shopSnap = await getDoc(doc(db, 'shops', shopId));
-          shopExists = shopSnap.exists();
-        } catch (_) { }
-      }
-
-      if (approved && shopExists) {
-        if (!next.isStore || !next.isStoreApproved || next.storeId !== shopId) {
-          next = { ...next, isStore: true, isStoreApproved: true, storeId: shopId, lastActiveMode: 'store' };
+      if (hasValidStore) {
+        if (!next.isStore || !next.isStoreApproved || next.storeId !== effectiveShopId || next.role !== 'store' || next.lastActiveMode !== 'store') {
+          next = {
+            ...next,
+            isStore: true,
+            isStoreApproved: true,
+            storeId: effectiveShopId,
+            role: 'store',
+            lastActiveMode: 'store',
+          };
           changed = true;
         }
       } else if (next.isStore || next.isStoreApproved || next.storeId || next.role === 'store') {
-        // Shop was deleted or application not approved — revoke store role and reset to customer
+        // Shop was deleted or revoked and no valid assignment/application exists — reset to customer
         apps.forEach((a) => {
           if (a.status === 'APPROVED') {
             this.storeApplications.delete(a.id);
-            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => {});
+            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => { });
           }
         });
         next = {
@@ -1987,7 +2083,7 @@ class FallbackStore {
         this.helperApplications.set(helperApp.id, updatedApp);
         try {
           await setDoc(doc(db, 'helperApplications', helperApp.id), cleanForFirestore(updatedApp), { merge: true });
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -2351,12 +2447,12 @@ class FallbackStore {
       }
 
       // Update related shop orders status when main order is DELIVERED or CANCELED
-      if (updated.status === 'DELIVERED' || updated.status === 'CANCELED') {
+      if (updated.status === 'DELIVERED' || updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED') {
         const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
         const targetStatus: ShopOrderStatus = updated.status === 'DELIVERED' ? 'DELIVERED' : 'CANCELED';
         relatedShopOrders.forEach((so) => {
           if (so.status !== targetStatus) {
-            if (updated.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'PREPARING' || so.status === 'ACCEPTED' || so.status === 'PENDING') {
+            if (updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED' || so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'PREPARING' || so.status === 'ACCEPTED' || so.status === 'PENDING') {
               this.updateShopOrder(so.id, (prev) => ({
                 ...prev,
                 status: targetStatus,
@@ -2373,6 +2469,9 @@ class FallbackStore {
             }
           }
         });
+        if (updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED') {
+          this.cancelShopOrdersForOrder(updated.id).catch((e) => console.warn('[Firestore] cancelShopOrdersForOrder err:', e));
+        }
       }
     }
 
@@ -2955,6 +3054,74 @@ class FallbackStore {
     }
   }
 
+  public async cancelShopOrdersForOrder(parentOrderId: string) {
+    try {
+      const toUpdate: ShopOrder[] = [];
+
+      // Update in-memory
+      this.shopOrders.forEach((so) => {
+        if (so.parentOrderId === parentOrderId && so.status !== 'CANCELED') {
+          const updatedSo: ShopOrder = {
+            ...so,
+            status: 'CANCELED',
+            updatedAt: new Date().toISOString(),
+            statusHistory: [
+              ...(so.statusHistory || []),
+              {
+                status: 'CANCELED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: `Main order #${parentOrderId} canceled.`,
+              },
+            ],
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          toUpdate.push(updatedSo);
+        }
+      });
+
+      // Fetch from Firestore by parentOrderId to catch any shopOrders not in memory
+      const snap = await getDocs(
+        query(collection(db, 'shopOrders'), where('parentOrderId', '==', parentOrderId))
+      );
+
+      snap.forEach((docSnap) => {
+        const so = docSnap.data() as ShopOrder;
+        if (so && so.id && so.status !== 'CANCELED') {
+          const updatedSo: ShopOrder = {
+            ...so,
+            status: 'CANCELED',
+            updatedAt: new Date().toISOString(),
+            statusHistory: [
+              ...(so.statusHistory || []),
+              {
+                status: 'CANCELED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: `Main order #${parentOrderId} canceled.`,
+              },
+            ],
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          if (!toUpdate.some((u) => u.id === so.id)) {
+            toUpdate.push(updatedSo);
+          }
+        }
+      });
+
+      // Persist all updated shopOrders to Firestore
+      for (const updatedSo of toUpdate) {
+        await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+      }
+
+      if (toUpdate.length > 0) {
+        this.notify();
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] cancelShopOrdersForOrder note:', e?.message || e);
+    }
+  }
+
   public async fetchShopOrdersForOrder(parentOrderId: string, currentHelperId?: string, currentHelperName?: string): Promise<ShopOrder[]> {
     try {
       const snap = await getDocs(
@@ -3046,11 +3213,11 @@ class FallbackStore {
     const historyItem: import('@/types').ShopOrderStatusHistoryItem | undefined =
       updates.status && updates.status !== existing.status
         ? {
-            status: updates.status,
-            timestamp: new Date().toISOString(),
-            actor: adminName || 'Admin',
-            note: updates.note || `Status changed to ${updates.status} by Admin`,
-          }
+          status: updates.status,
+          timestamp: new Date().toISOString(),
+          actor: adminName || 'Admin',
+          note: updates.note || `Status changed to ${updates.status} by Admin`,
+        }
         : undefined;
 
     const updated: ShopOrder = {
@@ -3187,17 +3354,21 @@ class FallbackStore {
 
     const seenParentOrderIds = new Set<string>();
     let totalSales = 0;
-    let totalCommissionDue = 0;
+    let totalCommission = 0;
+    let totalNetSales = 0;
 
     storeShopOrders.forEach((so) => {
       seenParentOrderIds.add(so.parentOrderId);
       const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
       const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
       const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
 
       totalSales += sales;
-      if (!isCanceled) {
-        totalCommissionDue += Math.round(sales * (commissionRate / 100));
+      if (!isCanceled && isDelivered) {
+        const commission = Math.round(sales * (commissionRate / 100));
+        totalCommission += commission;
+        totalNetSales += Math.max(0, sales - commission);
       }
     });
 
@@ -3210,25 +3381,36 @@ class FallbackStore {
           const sales = mo.productCost || 0;
           totalSales += sales;
           if (mo.status === 'DELIVERED') {
-            totalCommissionDue += Math.round(sales * (commissionRate / 100));
+            const commission = Math.round(sales * (commissionRate / 100));
+            totalCommission += commission;
+            totalNetSales += Math.max(0, sales - commission);
           }
         }
       }
     });
 
-    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
-      (w) => (w.helperId === storeUserId || w.helperId === effectiveShopId) && w.status === 'APPROVED'
-    );
+    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter((w) => {
+      if (w.status !== 'APPROVED') return false;
+      if (w.helperId === storeUserId || w.helperId === effectiveShopId || w.helperId === targetStoreId) return true;
+      if (shopDoc && (w.helperId === shopDoc.id || w.helperId === shopDoc.ownerUserId || w.helperId === `store-${shopDoc.ownerUserId}`)) return true;
+      if (storeUserId && (w.helperId === `store-${storeUserId}` || (w.helperId.startsWith('store-') && w.helperId.replace('store-', '') === storeUserId))) return true;
+      if (w.userType === 'store') {
+        if (shopDoc?.name && w.helperName === shopDoc.name) return true;
+        if (effectiveShopId && (w.helperId === effectiveShopId || w.shopId === effectiveShopId)) return true;
+        if (storeUserId && (w.helperId === storeUserId || w.shopId === storeUserId)) return true;
+      }
+      return false;
+    });
 
-    const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const balance = Math.max(0, totalCommissionDue - totalPaidCommission);
+    const totalPaidPayouts = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const balance = Math.max(0, totalNetSales - totalPaidPayouts);
 
     return {
       userId: storeUserId,
       balance,
-      totalEarned: totalSales,
-      totalWithdrawn: totalPaidCommission,
-      totalPaidCommission,
+      totalEarned: totalNetSales,
+      totalWithdrawn: totalPaidPayouts,
+      totalPaidCommission: totalCommission,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -3371,6 +3553,86 @@ class FallbackStore {
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
+  }
+
+  public async recordStoreDisbursement(
+    shopId: string,
+    amount: number,
+    paymentMethod: string = 'Bank Transfer',
+    refNote: string = '',
+    targetUserId?: string
+  ): Promise<WithdrawalRequest> {
+    const shop = this.shops.get(shopId) || Array.from(this.shops.values()).find((s) => s.id === shopId);
+    const storeUserId = targetUserId || shop?.ownerUserId || (shopId.startsWith('store-') ? shopId.replace('store-', '') : shopId);
+    const storeName = shop?.name || 'Store';
+
+    const txId = `tx-store-${Date.now()}`;
+    const newTx: WalletTransaction = {
+      id: txId,
+      userId: storeUserId,
+      amount: -amount,
+      type: 'PAYBACK',
+      description: `Store payout disbursement by admin: ৳${amount} (${paymentMethod}${refNote ? ` - ${refNote}` : ''})`,
+      createdAt: new Date().toISOString(),
+    };
+
+    const userTxs = this.walletTransactions.get(storeUserId) || [];
+    userTxs.unshift(newTx);
+    this.walletTransactions.set(storeUserId, userTxs);
+
+    const reqId = `wd-store-${Date.now()}`;
+    const req: WithdrawalRequest = {
+      id: reqId,
+      helperId: storeUserId,
+      helperName: storeName,
+      amount,
+      status: 'APPROVED',
+      paymentMethod: paymentMethod || 'Bank Transfer',
+      accountNumber: refNote || 'Admin store disbursement',
+      userType: 'store',
+      shopId: shopId,
+      createdAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+    };
+    this.withdrawals.set(req.id, req);
+
+    // Also associate with effectiveShopId if different
+    if (shop?.id && shop.id !== storeUserId) {
+      const shopTxs = this.walletTransactions.get(shop.id) || [];
+      shopTxs.unshift({ ...newTx, userId: shop.id });
+      this.walletTransactions.set(shop.id, shopTxs);
+    }
+
+    const existing = this.wallets.get(storeUserId) || (shop?.id ? this.wallets.get(shop.id) : undefined);
+    const currentWithdrawn = (existing?.totalWithdrawn ?? 0) + amount;
+    const currentBalance = Math.max(0, (existing?.balance ?? 0) - amount);
+    const updatedWallet: Wallet = {
+      userId: storeUserId,
+      totalEarned: existing?.totalEarned ?? 0,
+      balance: currentBalance,
+      totalPaidCommission: existing?.totalPaidCommission ?? 0,
+      totalWithdrawn: currentWithdrawn,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(storeUserId, updatedWallet);
+    if (shop?.id && shop.id !== storeUserId) {
+      this.wallets.set(shop.id, { ...updatedWallet, userId: shop.id });
+    }
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'wallets', storeUserId), cleanForFirestore(updatedWallet), { merge: true });
+      if (shop?.id && shop.id !== storeUserId) {
+        await setDoc(doc(db, 'wallets', shop.id), cleanForFirestore({ ...updatedWallet, userId: shop.id }), { merge: true });
+      }
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+    } catch (e: any) {
+      console.warn('[Firestore] recordStoreDisbursement note:', e?.message || e);
+    }
+
+    return req;
   }
 
   public async submitWithdrawalRequest(
@@ -4236,7 +4498,7 @@ class FallbackStore {
         if (snap.exists()) {
           existing = snap.data() as Shop;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     this.shops.delete(shopId);
     this.notify();
@@ -4283,7 +4545,7 @@ class FallbackStore {
         const appSnap = await getDocs(query(collection(db, 'storeApplications'), where('userId', '==', ownerUserId)));
         appSnap.forEach((d) => {
           appIdsToDelete.push(d.id);
-          deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => {});
+          deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => { });
         });
       }
     } catch (_) { }
@@ -4295,25 +4557,25 @@ class FallbackStore {
       const storeOwner = await this.getUserForUpdate(uid);
       const updatedUser: UserProfile = storeOwner
         ? {
-            ...storeOwner,
-            isStore: false,
-            isStoreApproved: false,
-            storeId: undefined,
-            role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
-            lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
-          }
+          ...storeOwner,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+          role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
+          lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
+        }
         : {
-            uid,
-            displayName: existing?.name || 'User',
-            email: existing?.ownerUserEmail || '',
-            role: 'customer',
-            isHelper: false,
-            isStore: false,
-            isStoreApproved: false,
-            storeId: undefined,
-            lastActiveMode: 'customer',
-            createdAt: new Date().toISOString(),
-          };
+          uid,
+          displayName: existing?.name || 'User',
+          email: existing?.ownerUserEmail || '',
+          role: 'customer',
+          isHelper: false,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+          lastActiveMode: 'customer',
+          createdAt: new Date().toISOString(),
+        };
 
       this.users.set(uid, updatedUser);
       try {
@@ -4820,7 +5082,7 @@ class FallbackStore {
         orderId,
         createdAt: new Date().toISOString(),
       };
-      setDoc(doc(db, 'coinTransactions', txId), cleanForFirestore(tx)).catch(() => {});
+      setDoc(doc(db, 'coinTransactions', txId), cleanForFirestore(tx)).catch(() => { });
 
       return true;
     } catch (e) {
@@ -5313,7 +5575,7 @@ class FallbackStore {
         };
         this.orders.set(orderId, newOrd);
         orderPromises.push(
-          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => {}).catch(() => {})
+          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => { }).catch(() => { })
         );
       }
     });
@@ -5337,7 +5599,7 @@ class FallbackStore {
           };
           this.users.set(uid, updatedUser);
           orderPromises.push(
-            setDoc(doc(db, 'users', uid), cleanForFirestore(updatedUser), { merge: true }).then(() => {}).catch(() => {})
+            setDoc(doc(db, 'users', uid), cleanForFirestore(updatedUser), { merge: true }).then(() => { }).catch(() => { })
           );
         }
       }
@@ -5386,11 +5648,11 @@ class FallbackStore {
                     }));
                   }
                 }
-              } catch (_) {}
+              } catch (_) { }
             }
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     this.saveLocalStore();
@@ -5443,7 +5705,7 @@ class FallbackStore {
     if (!q) return [];
     try {
       await this._loadServerAddressesCached();
-    } catch (_) {}
+    } catch (_) { }
 
     const tokens = q.split(/[\s,]+/).filter(Boolean);
     const results = Array.from(this.serverAddresses.values())
@@ -5513,7 +5775,7 @@ class FallbackStore {
         this.serverAddresses.set(matched.id, updated);
         this.saveLocalStore();
         this.notify();
-        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => {});
+        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => { });
         return updated;
       }
       return matched;
@@ -5536,7 +5798,7 @@ class FallbackStore {
     this.serverAddresses.set(id, newAddr);
     this.saveLocalStore();
     this.notify();
-    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => {});
+    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => { });
     return newAddr;
   }
 }

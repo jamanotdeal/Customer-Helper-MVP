@@ -3,7 +3,7 @@ import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderItemPrice, 
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, Wallet, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -364,6 +364,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const [customCostItems, setCustomCostItems] = useState<SelectedItemEntry[]>([]);
   const [shopOrderItems, setShopOrderItems] = useState<SelectedItemEntry[]>([]);
+  const [customShopItemName, setCustomShopItemName] = useState('');
+  const [customShopItemPrice, setCustomShopItemPrice] = useState('');
+  const [showAddCustomShopItem, setShowAddCustomShopItem] = useState(false);
   const [viewRequestItems, setViewRequestItems] = useState<SelectedItemEntry[]>([]);
   const [storeInstructionNote, setStoreInstructionNote] = useState('');
 
@@ -549,9 +552,37 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const openPlaceShopOrder = (shop: Shop) => {
     setShopOrderItems(getInitialSelectedItemList());
+    setCustomShopItemName('');
+    setCustomShopItemPrice('');
+    setShowAddCustomShopItem(false);
     setStoreInstructionNote('');
     setOrderTextError('');
     setPlaceOrderShop(shop);
+  };
+
+  const handleAddCustomShopItem = () => {
+    if (!customShopItemName.trim()) return;
+    const newId = `custom-item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    setShopOrderItems((prev) => [
+      ...prev,
+      {
+        id: newId,
+        originalId: newId,
+        name: customShopItemName.trim(),
+        qty: '1',
+        price: customShopItemPrice.trim() || '',
+        isChecked: true,
+        isNote: false,
+      },
+    ]);
+    setCustomShopItemName('');
+    setCustomShopItemPrice('');
+    setShowAddCustomShopItem(false);
+    if (orderTextError) setOrderTextError('');
+  };
+
+  const handleRemoveShopOrderItem = (id: string) => {
+    setShopOrderItems((prev) => prev.filter((i) => i.id !== id));
   };
 
   const handleToggleCustomCostItem = (id: string) => {
@@ -624,6 +655,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
   }, [customCostItems]);
 
+  const handleShopOrderItemPriceChange = (id: string, priceStr: string) => {
+    setShopOrderItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, price: priceStr } : item))
+    );
+  };
+
+  const totalShopOrderCost = useMemo(() => {
+    return shopOrderItems
+      .filter((i) => i.isChecked)
+      .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+  }, [shopOrderItems]);
+
   const openViewRequestDetails = (so: ShopOrder) => {
     let items: SelectedItemEntry[] = [];
     if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
@@ -665,18 +708,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       const next = prev.map((item) =>
         item.id === id ? { ...item, isChecked: !item.isChecked } : item
       );
-      if (viewRequestDetails?.shopId === 'myself') {
-        const total = next
-          .filter((i) => i.isChecked)
-          .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
-        setViewRequestDetails((so) => (so ? { ...so, price: total } : null));
-      }
+      const total = next
+        .filter((i) => i.isChecked)
+        .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0), 0);
+      setViewRequestDetails((so) => (so ? { ...so, price: total } : null));
       return next;
     });
   };
 
   const handleViewRequestItemPriceChange = (id: string, priceStr: string) => {
-    if (viewRequestDetails?.shopId !== 'myself') return;
     setViewRequestItems((prev) => {
       const next = prev.map((item) =>
         item.id === id ? { ...item, price: priceStr } : item
@@ -950,11 +990,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return;
     }
 
-    const isManualStore = placeOrderShop.canReceiveOrders === false;
-    const initialPrice = isManualStore ? (placeOrderShop as any)._tempPrice : undefined;
+    const calculatedTotal = totalShopOrderCost;
+    if (calculatedTotal <= 0) {
+      setOrderTextError('পণ্যের সঠিক মূল্য/প্রাইস (৳) নির্ধারণ করা আবশ্যক।');
+      return;
+    }
 
-    if (isManualStore && (initialPrice === undefined || initialPrice === null || isNaN(initialPrice) || initialPrice < 0)) {
-      setOrderTextError('পণ্যের মূল্য/প্রাইস (৳) নির্ধারণ করা আবশ্যক।');
+    const hasInvalidPrice = checkedItems.some(
+      (i) => !i.price || isNaN(parseFloat(i.price)) || parseFloat(i.price) <= 0
+    );
+    if (hasInvalidPrice) {
+      setOrderTextError('নির্বাচিত প্রতিটি পণ্যের জন্য সঠিক মূল্য (৳) লিখুন।');
       return;
     }
 
@@ -966,10 +1012,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
       const helperNote = storeInstructionNote.trim() || undefined;
 
-      const initialStatus = isManualStore
-        ? ((placeOrderShop as any)._tempStatus || 'ACCEPTED')
-        : 'PENDING';
-
       const newShopOrder: ShopOrder = {
         id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         parentOrderId: order.id,
@@ -979,11 +1021,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         helperName: order.helperName || 'Helper',
         requestText: itemsListText,
         helperNote: helperNote,
-        status: initialStatus as any,
-        price: initialPrice,
+        status: 'PENDING',
+        price: calculatedTotal,
+        itemsWithPrice: checkedItems.map((i) => ({
+          name: i.name,
+          unit: i.qty !== undefined && i.qty !== null ? String(i.qty) : undefined,
+          price: parseFloat(i.price || '0') || undefined,
+        })),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        statusHistory: [{ status: initialStatus as any, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+        statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper', note: 'Helper sent request with product cost' }],
       };
       await fallbackStore.addShopOrder(newShopOrder);
 
@@ -3452,46 +3499,69 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             </div>
 
             <form onSubmit={handlePlaceShopOrder} className="space-y-3">
-              {placeOrderShop.canReceiveOrders === false ? (
-                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-1">
-                  <div className="flex items-center gap-1.5 font-extrabold text-xs">
-                    <span>⚠️ নোট (Note):</span>
-                  </div>
-                  <p className="text-[11px] font-semibold leading-relaxed">
-                    এই স্টোরটি এডমিন দ্বারা ম্যানুয়ালি সংযুক্ত করা হয়েছে। স্টোর সরাসরি অ্যাপ্লিকেশন থেকে অর্ডার গ্রহণ করবে না। হেলপার হিসেবে আপনি নিচে দোকান থেকে কেনার পণ্যের প্রাইস ও নোট যুক্ত করে নিজেই স্ট্যাটাস পরিবর্তন বা সংরক্ষণ করতে পারবেন।
-                  </p>
-                </div>
-              ) : null}
-
-              {/* Items List (Non-editable, tap/uncheck to exclude) */}
+              {/* Items List (tap to toggle check, enter item price) */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-gray-700 block">
                     Items to Request ({shopOrderItems.filter((i) => i.isChecked).length}/{shopOrderItems.length}) *
                   </label>
-                  <span className="text-[10px] text-gray-400 font-medium">Tap to exclude</span>
+                  <span className="text-[10px] text-gray-400 font-medium">Uncheck to remove</span>
                 </div>
-                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
                   {shopOrderItems.map((item) => (
                     <div
                       key={item.id}
-                      onClick={() => handleToggleShopOrderItem(item.id)}
-                      className={`flex items-center space-x-2.5 p-2.5 rounded-xl border text-xs cursor-pointer select-none transition-all ${
+                      className={`p-2.5 rounded-xl border text-xs transition-all ${
                         item.isChecked
                           ? 'bg-purple-50/80 border-purple-200 text-purple-950 font-bold'
-                          : 'bg-gray-50 border-gray-200 text-gray-400 line-through opacity-60'
+                          : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={item.isChecked}
-                        onChange={() => {}} // handled by parent onClick
-                        className="w-4 h-4 accent-purple-600 rounded cursor-pointer shrink-0"
-                      />
-                      <span className="flex-1 break-words">
-                        {item.name}
-                        {item.qty && Number(item.qty) > 1 ? ` ×${item.qty}` : ''}
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          onClick={() => handleToggleShopOrderItem(item.id)}
+                          className="flex items-center space-x-2 cursor-pointer select-none flex-1 min-w-0"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.isChecked}
+                            onChange={() => {}} // handled by parent onClick
+                            className="w-4 h-4 accent-purple-600 rounded cursor-pointer shrink-0"
+                          />
+                          <span className={`break-words ${item.isChecked ? '' : 'line-through'}`}>
+                            {item.name}
+                            {item.qty && Number(item.qty) > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                        </div>
+                        {item.isChecked && (
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <span className="text-gray-500 font-bold">৳</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.price || ''}
+                              onChange={(e) => {
+                                handleShopOrderItemPriceChange(item.id, e.target.value);
+                                if (orderTextError) setOrderTextError('');
+                              }}
+                              placeholder="মূল্য *"
+                              required
+                              className="w-20 p-1.5 rounded-lg border border-purple-300 bg-white text-xs font-bold text-gray-900 outline-none focus:border-purple-500 text-right"
+                            />
+                            {item.id.startsWith('custom-item-') && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveShopOrderItem(item.id)}
+                                className="p-1 rounded-md text-red-500 hover:bg-red-50"
+                                title="Remove"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                   {shopOrderItems.length === 0 && (
@@ -3500,55 +3570,46 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </p>
                   )}
                 </div>
+
+
               </div>
 
-              {/* Optional instruction note */}
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Additional Instruction / Note (Optional)</label>
-                <textarea
-                  value={storeInstructionNote}
-                  onChange={(e) => setStoreInstructionNote(e.target.value)}
-                  placeholder="যেমন: দ্রুত রেডি রাখবেন, প্যাকেট আলাদা করবেন ইত্যাদি..."
-                  className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-purple-500 text-gray-900 font-medium resize-none"
-                />
-              </div>
+              {/* Cost Calculation Summary Card */}
+              {(() => {
+                const commPct = placeOrderShop.commissionPercent;
+                const hasComm = commPct && commPct > 0 && totalShopOrderCost > 0;
+                const commAmt = hasComm ? Math.round(totalShopOrderCost * (commPct! / 100)) : 0;
+                const payable = hasComm ? Math.max(0, totalShopOrderCost - commAmt) : totalShopOrderCost;
+                return (
+                  <div className="rounded-2xl border border-purple-200 bg-gradient-to-br from-purple-50 to-emerald-50 overflow-hidden shadow-sm">
+                    {/* Card header */}
+                    <div className="px-3.5 pt-3 pb-1 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-purple-600" />
+                      <span className="text-[10px] font-black text-purple-800 uppercase tracking-widest">Calculation Summary</span>
+                    </div>
+                    {/* Rows */}
+                    <div className="px-3.5 pb-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-600">মোট পণ্যের মূল্য</span>
+                        <span className="font-mono font-black text-xs text-gray-900">৳{totalShopOrderCost.toFixed(2).replace(/\.00$/, '')}</span>
+                      </div>
+                      {hasComm && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-rose-600">কমিশন ({commPct}%)</span>
+                          <span className="font-mono font-bold text-xs text-rose-600">− ৳{commAmt}</span>
+                        </div>
+                      )}
+                    </div>
+                    {/* Payable highlight */}
+                    <div className="mx-2 mb-2.5 bg-emerald-600 rounded-xl px-3.5 py-2.5 flex items-center justify-between shadow-md">
+                      <span className="text-[10px] font-black text-emerald-100 uppercase tracking-wider">পরিশোধযোগ্য</span>
+                      <span className="font-mono font-black text-lg text-white drop-shadow">৳{payable.toFixed(2).replace(/\.00$/, '')}</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
-              {placeOrderShop.canReceiveOrders === false && (
-                <>
-                  <div>
-                    <label className="text-xs font-bold text-gray-755 block mb-1">Product Cost / Price (৳) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      placeholder="যেমন: ২৫০"
-                      required
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        (placeOrderShop as any)._tempPrice = isNaN(val) ? undefined : val;
-                        if (!isNaN(val) && val >= 0) setOrderTextError('');
-                      }}
-                      className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-bold outline-none focus:border-purple-500 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-755 block mb-1">Status (স্ট্যাটাস)</label>
-                    <select
-                      onChange={(e) => {
-                        (placeOrderShop as any)._tempStatus = e.target.value;
-                      }}
-                      className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-bold outline-none focus:border-purple-500 bg-white"
-                      defaultValue="ACCEPTED"
-                    >
-                      <option value="ACCEPTED">ACCEPTED (গৃহীত)</option>
-                      <option value="PREPARING">PREPARING (প্রস্তুত করা হচ্ছে)</option>
-                      <option value="READY">READY (রেডি)</option>
-                      <option value="HANDOVER">HANDOVER (হস্তান্তরিত)</option>
-                      <option value="DELIVERED">DELIVERED (সম্পন্ন)</option>
-                    </select>
-                  </div>
-                </>
-              )}
+
 
               {orderTextError && (
                 <p className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded-xl border border-red-100">
@@ -3560,7 +3621,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setPlaceOrderShop(null)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-105 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors"
                 >
                   বাতিল
                 </button>
@@ -3569,7 +3630,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   disabled={isSubmittingOrder || shopOrderItems.filter((i) => i.isChecked).length === 0}
                   className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:bg-gray-200 disabled:opacity-50"
                 >
-                  {isSubmittingOrder ? 'সংরক্ষণ করা হচ্ছে...' : (placeOrderShop.canReceiveOrders === false ? 'Save Request' : 'Send Request')}
+                  {isSubmittingOrder ? 'পাঠানো হচ্ছে...' : 'Send Request'}
                 </button>
               </div>
             </form>
@@ -3677,33 +3738,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           </span>
                         </div>
                         {item.isChecked && (
-                          isMyself ? (
-                            <div className="flex items-center space-x-1 shrink-0">
-                              <span className="text-gray-500 font-bold">৳</span>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                disabled={isDone}
-                                value={item.price !== undefined ? String(item.price) : ''}
-                                onChange={(e) => handleViewRequestItemPriceChange(item.id, e.target.value)}
-                                placeholder="মূল্য"
-                                className="w-20 p-1.5 rounded-lg border bg-white text-xs font-bold text-gray-900 outline-none border-amber-300 focus:border-amber-500 disabled:bg-gray-100"
-                              />
-                            </div>
-                          ) : (
-                            <div className="flex items-center shrink-0">
-                              {item.price !== undefined && item.price !== null && Number(item.price) > 0 ? (
-                                <span className="font-extrabold text-purple-950 font-mono bg-purple-100/90 border border-purple-200/80 px-2 py-1 rounded-lg text-xs">
-                                  ৳{Number(item.price).toFixed(2).replace(/\.00$/, '')}
-                                </span>
-                              ) : (
-                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 border border-amber-200/80 px-2 py-0.5 rounded-md">
-                                  স্টোর মূল্য দেবে
-                                </span>
-                              )}
-                            </div>
-                          )
+                          <div className="flex items-center space-x-1 shrink-0">
+                            <span className="text-gray-500 font-bold">৳</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              disabled={isDone}
+                              value={item.price !== undefined ? String(item.price) : ''}
+                              onChange={(e) => handleViewRequestItemPriceChange(item.id, e.target.value)}
+                              placeholder="মূল্য"
+                              className={`w-20 p-1.5 rounded-lg border bg-white text-xs font-bold text-gray-900 outline-none disabled:bg-gray-100 ${
+                                isMyself
+                                  ? 'border-amber-300 focus:border-amber-500'
+                                  : 'border-purple-300 focus:border-purple-500'
+                              }`}
+                            />
+                          </div>
                         )}
                       </div>
                     </div>
@@ -3731,65 +3782,88 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 );
               })()}
 
-              {/* Total Product Cost Summary Banner */}
-              {isMyself ? (
-                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200/80 flex items-center justify-between">
-                  <span className="text-xs font-black text-amber-900 uppercase tracking-wider">Total Product Cost:</span>
-                  <span className="font-mono font-black text-sm text-amber-950">৳{Number(displayTotal).toFixed(2).replace(/\.00$/, '')}</span>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
-                    <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
-                    <span className="font-mono font-black text-sm text-purple-950">
-                      {viewRequestDetails.price !== undefined && viewRequestDetails.price !== null && Number(viewRequestDetails.price) > 0
-                        ? `৳${Number(viewRequestDetails.price).toFixed(2).replace(/\.00$/, '')}`
-                        : '৳0 (স্টোর নির্ধারণ করবে)'}
-                    </span>
+              {/* Cost Calculation Summary */}
+              {(() => {
+                const total = totalItemsPrice > 0 ? totalItemsPrice : (viewRequestDetails.price || 0);
+                const commPct = !isMyself ? shop?.commissionPercent : undefined;
+                const hasComm = commPct && commPct > 0 && total > 0;
+                const commAmt = hasComm ? Math.round(total * (commPct! / 100)) : 0;
+                const payable = hasComm ? Math.max(0, total - commAmt) : total;
+                return (
+                  <div className={`rounded-2xl border overflow-hidden bg-gradient-to-br ${
+                    isMyself
+                      ? 'border-amber-200 from-amber-50 to-amber-50/30'
+                      : 'border-purple-200 from-purple-50 to-emerald-50'
+                  }`}>
+                    <div className="px-3 pt-2.5 pb-1.5 space-y-1">
+                      <div className="flex items-center justify-between text-xs font-bold text-gray-600">
+                        <span>Total Cost</span>
+                        <span className={`font-mono ${isMyself ? 'text-amber-900' : 'text-gray-900'}`}>
+                          ৳{Number(total).toFixed(2).replace(/\.00$/, '')}
+                        </span>
+                      </div>
+                      {hasComm && (
+                        <div className="flex items-center justify-between text-xs font-bold text-rose-600">
+                          <span>কমিশন ({commPct}%)</span>
+                          <span className="font-mono">− ৳{commAmt}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className={`mx-2 mb-2 rounded-xl px-3 py-2 flex items-center justify-between shadow-sm ${
+                      isMyself ? 'bg-amber-600' : 'bg-emerald-600'
+                    }`}>
+                      <span className="text-[10px] font-black text-white/80 uppercase tracking-wider">
+                        {isMyself ? 'Total Spent' : 'পরিশোধযোগ্য'}
+                      </span>
+                      <span className="font-mono font-black text-base text-white">৳{payable.toFixed(2).replace(/\.00$/, '')}</span>
+                    </div>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-purple-50/80 border border-purple-100 text-[11px] text-purple-900 font-medium flex items-start gap-1.5">
-                    <span className="text-purple-600 font-bold shrink-0">ℹ️</span>
-                    <span>স্টোর রিকোয়েস্টের পণ্যের মূল্য শুধুমাত্র স্টোর অথবা এডমিন নির্ধারণ করতে পারবেন (হেলপার প্রাইস পরিবর্তন করতে পারবে না)।</span>
+                );
+              })()}
+
+              {/* Contact Details */}
+              {!isMyself && shop && (
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2">
+                  <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider block">Store Contact</span>
+                  <div className="text-xs font-bold text-gray-800">
+                    {shop.contactPerson && <p className="text-gray-700">{shop.contactPerson}{shop.managerName && shop.managerName !== shop.contactPerson ? ` / ${shop.managerName}` : ''}</p>}
+                    {(shop.whatsapp || shop.managerWhatsapp) && (
+                      <p className="font-mono text-gray-900 mt-0.5">{shop.whatsapp || shop.managerWhatsapp}</p>
+                    )}
+                    {shop.location?.address && (
+                      <p className="text-gray-500 font-medium text-[11px] mt-0.5">{shop.location.address}</p>
+                    )}
                   </div>
+                  {(shop.whatsapp || shop.managerWhatsapp) && (
+                    <div className="flex items-center space-x-2">
+                      <a
+                        href={`tel:${shop.whatsapp || shop.managerWhatsapp}`}
+                        className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>Call Store</span>
+                      </a>
+                      <a
+                        href={`https://wa.me/880${(shop.whatsapp || shop.managerWhatsapp || '').replace(/^0/, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                        <span>WhatsApp</span>
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
-
-              {/* Seller details for Myself */}
-              {isMyself && (
-                <div className="space-y-3 pt-1">
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller / Shop Name</label>
-                    <input
-                      type="text"
-                      value={viewRequestDetails.sellerName || ''}
-                      disabled={isDone}
-                      onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerName: e.target.value })}
-                      placeholder="e.g. Bhai Bhai Store"
-                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Seller Phone Number</label>
-                    <input
-                      type="tel"
-                      value={viewRequestDetails.sellerPhone || ''}
-                      disabled={isDone}
-                      onChange={(e) => setViewRequestDetails({ ...viewRequestDetails, sellerPhone: e.target.value })}
-                      placeholder="01XXXXXXXXX"
-                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-955 outline-none focus:border-purple-500 bg-gray-50/50"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {contactNum && (
-                <div className="flex items-center space-x-2 pt-1">
+              {isMyself && contactNum && (
+                <div className="flex items-center space-x-2">
                   <a
                     href={`tel:${contactNum}`}
                     className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
                   >
                     <Phone className="w-3.5 h-3.5" />
-                    <span>{isMyself ? 'Call Seller' : 'Call Manager'}</span>
+                    <span>Call Seller</span>
                   </a>
                   <a
                     href={`https://wa.me/880${contactNum.replace(/^0/, '')}`}
@@ -3874,12 +3948,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         .map((i) => i.name)
                         .join(', ');
 
-                      if (isMyself) {
-                        const calculatedTotal = checkedItems.reduce(
-                          (sum, i) => sum + (parseFloat(i.price || '0') || 0),
-                          0
-                        );
+                      const calculatedTotal = checkedItems.reduce(
+                        (sum, i) => sum + (parseFloat(i.price || '0') || 0),
+                        0
+                      );
 
+                      if (isMyself) {
                         const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => ({
                           name: i.name,
                           price: parseFloat(i.price || '0') || 0,
@@ -3898,25 +3972,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           'helper'
                         );
                       } else {
-                        // Store Request: Helper cannot edit price. Preserve store/admin set prices.
-                        const existingPricesMap: Record<string, number | undefined> = {};
-                        (viewRequestDetails.itemsWithPrice || []).forEach((ip) => {
-                          existingPricesMap[ip.name.toLowerCase().trim()] = ip.price;
-                        });
-
                         const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => {
-                          const existingPrice = existingPricesMap[i.name.toLowerCase().trim()];
+                          const p = i.price !== undefined && i.price !== '' ? (parseFloat(i.price) || 0) : undefined;
                           return {
                             name: i.name,
-                            ...(existingPrice !== undefined ? { price: existingPrice } : {}),
+                            ...(p !== undefined ? { price: p } : {}),
                           };
                         });
 
-                        let newTotal = viewRequestDetails.price;
                         const hasSomePrices = updatedItemsWithPrice.some((it) => it.price !== undefined && it.price > 0);
-                        if (hasSomePrices) {
-                          newTotal = updatedItemsWithPrice.reduce((sum, it) => sum + (it.price || 0), 0);
-                        }
+                        const newTotal = hasSomePrices ? calculatedTotal : viewRequestDetails.price;
 
                         await fallbackStore.updateShopOrder(
                           viewRequestDetails.id,

@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '@/context/AuthContext';
-import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, AlertTriangle, FileEdit } from 'lucide-react';
+import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, AlertTriangle, FileEdit, ChevronDown, Search } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 import { StoreApplication, LocationData } from '@/types';
 import { AsyncButton } from './ui/AsyncButton';
@@ -59,6 +60,8 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
   const [location, setLocation] = useState<LocationData>({ address: '', lat: undefined, lng: undefined });
   const [commissionPercent, setCommissionPercent] = useState('');
   const [showMapPicker, setShowMapPicker] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -274,21 +277,20 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
               />
             </div>
 
-            {/* 2. দোকানের ধরন */}
+            {/* 2. দোকানের ধরন (Custom Selector) */}
             <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানের ধরন *</label>
-              <select
-                value={storeType}
-                onChange={(e) => setStoreType(e.target.value)}
-                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-orange-500 outline-none text-sm font-semibold bg-white"
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানের ধরন / ক্যাটাগরি *</label>
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(true)}
+                className="w-full p-3 sm:p-3.5 rounded-2xl border border-gray-200 hover:border-orange-500 focus:border-orange-500 focus:ring-2 focus:ring-orange-100 outline-none text-sm font-semibold bg-white flex items-center justify-between transition-all cursor-pointer shadow-xs group"
               >
-                {storeTypes.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-                {storeType && !storeTypes.includes(storeType) && (
-                  <option value={storeType}>{storeType}</option>
-                )}
-              </select>
+                <div className="flex items-center gap-2.5 truncate">
+                  <div className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0" />
+                  <span className="text-gray-900 font-bold truncate">{storeType || 'দোকানের ধরন সিলেক্ট করুন'}</span>
+                </div>
+                <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-orange-500 transition-colors shrink-0" />
+              </button>
             </div>
 
             {/* 3. মালিকের নাম + হোয়াটসঅ্যাপ */}
@@ -464,6 +466,102 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
             setShowMapPicker(false);
           }}
         />
+      )}
+
+      {/* Store Category / Type Selection Modal (Centered, 80vh height, scrollable matching Homepage service dropdown) */}
+      {isCategoryModalOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[99999] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200"
+          style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCategoryModalOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg md:max-w-xl h-[80vh] max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-orange-100 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0 bg-white">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-orange-100 text-orange-600">
+                  <Store className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base sm:text-lg text-gray-900">দোকানের ধরন নির্বাচন করুন</h3>
+                  <p className="text-[11px] text-gray-500 font-medium">আপনার দোকানের উপযুক্ত ক্যাটাগরি বেছে নিন</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(false)}
+                className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:bg-rose-100 hover:text-rose-700 border border-rose-200/60 active:scale-95 transition-all cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search filter if many categories */}
+            {storeTypes.length > 6 && (
+              <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={categorySearchQuery}
+                    onChange={(e) => setCategorySearchQuery(e.target.value)}
+                    placeholder="ক্যাটাগরি খুঁজুন..."
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-gray-200 focus:border-orange-500 outline-none text-xs font-semibold bg-white"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Scrollable List of Categories */}
+            <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-gray-100 p-2 sm:p-3">
+              {storeTypes
+                .filter((t) => !categorySearchQuery.trim() || t.toLowerCase().includes(categorySearchQuery.toLowerCase().trim()))
+                .map((t) => {
+                  const isSelected = storeType === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setStoreType(t);
+                        setIsCategoryModalOpen(false);
+                      }}
+                      className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${
+                        isSelected
+                          ? 'bg-orange-50 text-orange-950 font-extrabold ring-1 ring-orange-300 shadow-xs'
+                          : 'text-gray-700 font-semibold hover:bg-orange-50/50 hover:text-orange-900 active:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                        <div
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${
+                            isSelected
+                              ? 'bg-orange-600 ring-4 ring-orange-100'
+                              : 'bg-gray-300 group-hover:bg-orange-400'
+                          } transition-colors`}
+                        />
+                        <span className="leading-snug break-words text-left flex-1">{t}</span>
+                      </div>
+                      {isSelected ? (
+                        <div className="w-6 h-6 rounded-full bg-orange-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-orange-500/30 ml-1">
+                          <Check className="w-4 h-4 stroke-[3]" />
+                        </div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-orange-400 shrink-0 transition-colors ml-1" />
+                      )}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </>
   );
