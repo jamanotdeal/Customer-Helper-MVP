@@ -206,9 +206,9 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
       const orderFee = Number(o.deliveryFee || 0);
       const productCost = Number(o.productCost || 0);
       const goods = (o.items && Array.isArray(o.items) && o.items.length > 0)
-        ? o.items.reduce((sum, it) => sum + (Number(it.price || 0) * Number(it.quantity || 1)), 0)
-        : (productCost > 0 ? productCost : (Number(o.totalCost || 0) > orderFee ? Number(o.totalCost || 0) - orderFee : 0));
-      const orderTotalVal = (Number(o.totalPrice || 0) > 0) ? Number(o.totalPrice) : (goods + orderFee);
+        ? o.items.reduce((sum, it: any) => sum + (Number(it.price || 0) * Number(it.quantity || 1)), 0)
+        : (productCost > 0 ? productCost : (Number((o as any).totalCost || 0) > orderFee ? Number((o as any).totalCost || 0) - orderFee : 0));
+      const orderTotalVal = (Number((o as any).totalPrice || 0) > 0) ? Number((o as any).totalPrice) : (goods + orderFee);
 
       // Orders created
       if (createdTime >= startMs && createdTime <= endMs) {
