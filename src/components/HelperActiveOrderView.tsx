@@ -211,10 +211,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       }).setView([defaultLat, defaultLng], 14);
       pendingMapInstanceRef.current = map;
 
-      L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+      L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: '&copy; Google Maps Satellite',
+        subdomains: ['0', '1', '2', '3'],
         maxZoom: 20,
       }).addTo(map);
+
+      // Force size invalidation once container is painted
+      setTimeout(() => {
+        try { map.invalidateSize(); } catch (_) {}
+      }, 200);
 
       const boundsPoints: [number, number][] = [];
 
@@ -309,6 +315,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       } else if (boundsPoints.length === 1) {
         map.setView(boundsPoints[0], 15);
       }
+
+      setTimeout(() => {
+        try { map.invalidateSize(); } catch (_) {}
+      }, 500);
     };
 
     initMapAndRender();
@@ -2214,12 +2224,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               )}
 
-              {/* Requests to Shops */}
+              {/* Items Costs */}
               {shopOrders.length > 0 && (
                 <div className="pt-2 border-t border-gray-100">
                   <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center space-x-1">
                     <Store className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Requests to Shops & Custom Costs ({shopOrders.length})</span>
+                    <span>Items Costs ({shopOrders.length})</span>
                   </h4>
                   <div className="space-y-2">
                     {shopOrders.map((so) => {

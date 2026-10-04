@@ -158,10 +158,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
               id="nav-tab-fee-details"
               onClick={() => handleTabChange('fee_details')}
               className={tabClass(activeTab === 'fee_details')}
-              aria-label="Fee Details"
+              aria-label="Fee Calculator"
             >
               <Calculator className="w-5 h-5" />
-              <span className="text-[11px] whitespace-nowrap">Fee Details</span>
+              <span className="text-[11px] whitespace-nowrap">Fee Calculator</span>
               {activeTab === 'fee_details' && (
                 <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
               )}
@@ -202,10 +202,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
               id="nav-tab-fee-details"
               onClick={() => handleTabChange('fee_details')}
               className={tabClass(activeTab === 'fee_details')}
-              aria-label="Fee Details"
+              aria-label="Fee Calculator"
             >
               <Calculator className="w-5 h-5" />
-              <span className="text-[11px] whitespace-nowrap">Fee Details</span>
+              <span className="text-[11px] whitespace-nowrap">Fee Calculator</span>
               {activeTab === 'fee_details' && (
                 <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />
               )}
