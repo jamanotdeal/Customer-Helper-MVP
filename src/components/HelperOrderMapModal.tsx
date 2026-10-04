@@ -2,12 +2,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Map, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search } from 'lucide-react';
+import { Map, List, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search, Store, Phone, MessageSquare, ExternalLink, Percent, ArrowRight } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder, AllowedAreaPolygon } from '@/types';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { fallbackStore } from '@/lib/firebase';
-import { parseStoreTypes } from '@/lib/pricing';
+import { parseStoreTypes, calculateDistanceKm } from '@/lib/pricing';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
 
 const getShopType = (shop: Shop): string => {
@@ -56,6 +56,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   const layersRef = useRef<any[]>([]);
   const areaLayersRef = useRef<any[]>([]);
 
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [mapError, setMapError] = useState(false);
   const [currentHelperLoc, setCurrentHelperLoc] = useState<LocationData | null>(null);
   const [leafletLib, setLeafletLib] = useState<any>(null);
@@ -65,7 +66,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   const [showSearchResults, setShowSearchResults] = useState(false);
   const hasFitBoundsRef = useRef(false);
 
-  // Invalidate map size on fullscreen toggle
+  // Invalidate map size on fullscreen toggle or viewMode change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     const timer = setTimeout(() => {
@@ -74,13 +75,14 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       } catch (e) {}
     }, 150);
     return () => clearTimeout(timer);
-  }, [isFullscreen]);
+  }, [isFullscreen, viewMode]);
 
   // Reset state and ref when modal opens/closes
   useEffect(() => {
     if (isOpen) {
       hasFitBoundsRef.current = false;
       setIsFullscreen(false);
+      setViewMode('list');
       setSelectedType('ALL');
       setSearchQuery('');
       setShowSearchResults(false);
@@ -535,11 +537,48 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             : 'w-full h-[88dvh] sm:h-[90dvh] sm:max-h-[880px] sm:max-w-[850px] rounded-3xl'
         }`}
       >
-        {/* Header */}
+        {/* Header with List / Map View Switcher */}
         <div className="shrink-0 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 shadow-xs z-20">
-          <div className="flex items-center space-x-2 text-gray-900 font-extrabold text-sm min-w-0">
-            <Map className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="truncate">Order Route & Earth Map</span>
+          <div className="flex items-center space-x-3 text-gray-900 font-extrabold text-sm min-w-0">
+            <div className="flex items-center space-x-1.5">
+              <Store className="w-4 h-4 text-purple-600 shrink-0" />
+              <span className="truncate">Store Finding & Selection</span>
+            </div>
+
+            {/* View Mode Tabs */}
+            <div className="flex items-center bg-gray-100 p-0.5 rounded-xl border border-gray-200/80">
+              <button
+                type="button"
+                onClick={() => setViewMode('list')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  viewMode === 'list'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <List className="w-3.5 h-3.5" />
+                <span>List View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('map');
+                  setTimeout(() => {
+                    try {
+                      mapInstanceRef.current?.invalidateSize();
+                    } catch (e) {}
+                  }, 100);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  viewMode === 'map'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <Map className="w-3.5 h-3.5" />
+                <span>Map View</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center space-x-2 shrink-0">
@@ -548,7 +587,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               type="button"
               onClick={() => setIsFullscreen((prev) => !prev)}
               className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors cursor-pointer"
-              title={isFullscreen ? 'Exit Fullscreen' : 'Full Screen Map'}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Full Screen'}
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
@@ -567,7 +606,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
         </div>
 
         {/* Stores Filter & Search Strip */}
-        <div className="shrink-0 px-3 sm:px-4 py-2 bg-slate-50 border-b border-gray-200/80 text-xs font-bold z-30">
+        <div className="shrink-0 px-3 sm:px-4 py-2.5 bg-slate-50 border-b border-gray-200/80 text-xs font-bold z-30">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2 flex-1 min-w-0">
               {/* Store Search Input */}
@@ -584,17 +623,6 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                     onFocus={() => {
                       if (searchQuery.trim().length > 0) {
                         setShowSearchResults(true);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (displayedShops.length > 0) {
-                          handleLocateStore(displayedShops[0]);
-                          setShowSearchResults(false);
-                        }
-                      } else if (e.key === 'Escape') {
-                        setShowSearchResults(false);
                       }
                     }}
                     placeholder="দোকান খুঁজুন (Search store)..."
@@ -614,57 +642,6 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                     </button>
                   )}
                 </div>
-
-                {/* Dropdown Suggestions */}
-                {showSearchResults && searchQuery.trim().length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl z-50 p-1 divide-y divide-gray-50 animate-in fade-in-50 zoom-in-95 duration-100">
-                    {displayedShops.length === 0 ? (
-                      <div className="p-3 text-center text-xs text-gray-500 font-medium">
-                        কোনো দোকান পাওয়া যায়নি ("{searchQuery}")
-                      </div>
-                    ) : (
-                      <>
-                        <div className="px-2.5 py-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center justify-between">
-                          <span>পাওয়া গেছে ({displayedShops.length})</span>
-                          <span className="text-purple-600 font-semibold lowercase">ক্লিক করে ম্যাপে যান</span>
-                        </div>
-                        {displayedShops.slice(0, 10).map((shop) => (
-                          <div
-                            key={shop.id}
-                            className="p-2 hover:bg-purple-50/80 rounded-xl transition-colors cursor-pointer flex items-center justify-between gap-2 group"
-                            onClick={() => {
-                              handleLocateStore(shop);
-                              setShowSearchResults(false);
-                            }}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-xs text-gray-900 truncate">
-                                  {shop.name}
-                                </span>
-                                {getShopType(shop) && (
-                                  <span className="shrink-0 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">
-                                    {getShopType(shop)}
-                                  </span>
-                                )}
-                              </div>
-                              {shop.location?.address && (
-                                <p className="text-[10px] text-gray-500 truncate mt-0.5">
-                                  📍 {shop.location.address}
-                                </p>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="px-2 py-1 bg-purple-100 group-hover:bg-purple-600 text-purple-700 group-hover:text-white text-[10px] font-bold rounded-lg transition-colors">
-                                ম্যাপে যান
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* Store Type Filter */}
@@ -688,50 +665,268 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               </div>
             </div>
 
-            <div className="hidden sm:flex items-center gap-2 shrink-0">
-              <span className="text-[10px] text-gray-500 font-semibold">
-                ম্যাপের দোকানে ক্লিক করে সরাসরি অর্ডার পাঠান
+            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+              <span className="text-[11px] text-gray-500 font-bold bg-white px-2.5 py-1 rounded-lg border border-gray-200">
+                মোট দোকান: <strong className="text-purple-700">{displayedShops.length}</strong>
               </span>
             </div>
           </div>
         </div>
 
-        {/* Map Body */}
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 relative bg-slate-900">
-          {mapError ? (
-            <div className="p-8 text-center bg-amber-50 flex flex-col items-center justify-center space-y-3 h-full">
-              <Map className="w-8 h-8 text-amber-600" />
-              <h4 className="font-extrabold text-gray-900 text-sm">Could not load map</h4>
-              <p className="text-xs text-gray-600">Please check your internet or GPS settings.</p>
-            </div>
-          ) : (
-            <div className="relative w-full flex-1 h-full">
-              {/* Leaflet map container */}
-              <div ref={mapContainerRef} className="w-full h-full z-10" />
+        {/* Content Body: List View OR Map View */}
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 relative bg-gray-50">
+          {/* 1. LIST VIEW (Default) */}
+          <div
+            className={`flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 ${
+              viewMode === 'list' ? 'block' : 'hidden'
+            }`}
+          >
+            {displayedShops.length === 0 ? (
+              <div className="p-8 text-center bg-white rounded-3xl border border-gray-200 flex flex-col items-center justify-center space-y-3 my-4">
+                <Store className="w-10 h-10 text-gray-300" />
+                <h4 className="font-extrabold text-gray-900 text-sm">কোনো দোকান পাওয়া যায়নি</h4>
+                <p className="text-xs text-gray-500 max-w-xs">
+                  {searchQuery || selectedType !== 'ALL'
+                    ? 'আপনার সার্চ বা ফিল্টারের সাথে কোনো দোকান মেলেনি। অন্য কি-ওয়ার্ড দিয়ে চেষ্টা করুন।'
+                    : 'বর্তমানে সিস্টেমে কোনো সক্রিয় দোকান নিবন্ধিত নেই।'}
+                </p>
+                {(searchQuery || selectedType !== 'ALL') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSelectedType('ALL');
+                    }}
+                    className="px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-extrabold rounded-xl transition-colors"
+                  >
+                    ফিল্টার রিসেট করুন
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {displayedShops.map((shop) => {
+                  const isRequested = requestedShopIds.has(shop.id);
+                  const distanceKm = (() => {
+                    const shopLat = shop.location?.lat;
+                    const shopLng = shop.location?.lng;
+                    if (!shopLat || !shopLng) return null;
+                    if (helperLocation?.lat && helperLocation?.lng) {
+                      return calculateDistanceKm(helperLocation.lat, helperLocation.lng, shopLat, shopLng);
+                    }
+                    if (order.pickupLocation?.lat && order.pickupLocation?.lng) {
+                      return calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, shopLat, shopLng);
+                    }
+                    if (order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
+                      return calculateDistanceKm(order.deliveryLocation.lat, order.deliveryLocation.lng, shopLat, shopLng);
+                    }
+                    return null;
+                  })();
 
-              {/* Floating Map Controls */}
-              <div className="absolute top-3 right-3 z-20 flex flex-col gap-2">
+                  const gMapUrl = shop.location?.lat && shop.location?.lng
+                    ? `https://www.google.com/maps/dir/?api=1&destination=${shop.location.lat},${shop.location.lng}&travelmode=driving`
+                    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(shop.location?.address || shop.name)}`;
+
+                  const waUrl = shop.whatsapp
+                    ? `https://wa.me/${shop.whatsapp.replace(/[^0-9]/g, '').startsWith('88')
+                        ? shop.whatsapp.replace(/[^0-9]/g, '')
+                        : '88' + shop.whatsapp.replace(/[^0-9]/g, '')}`
+                    : null;
+
+                  return (
+                    <div
+                      key={shop.id}
+                      className={`bg-white rounded-2xl border p-4 shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-3 ${
+                        isRequested ? 'border-emerald-300 ring-2 ring-emerald-100 bg-emerald-50/20' : 'border-gray-200 hover:border-purple-300'
+                      }`}
+                    >
+                      {/* Top Shop Info */}
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center space-x-2.5 min-w-0">
+                            {shop.photoUrl ? (
+                              <img
+                                src={shop.photoUrl}
+                                alt={shop.name}
+                                className="w-11 h-11 rounded-xl object-cover border border-purple-100 shrink-0"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div className="w-11 h-11 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-black text-sm shrink-0 border border-purple-200">
+                                <Store className="w-5 h-5" />
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="font-black text-sm text-gray-900 leading-tight truncate">
+                                  {shop.name}
+                                </h4>
+                                {isRequested && (
+                                  <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-emerald-300">
+                                    ✓ অনুরোধ পাঠানো হয়েছে
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wide">
+                                  {getShopType(shop) || 'General Store'}
+                                </span>
+                                {shop.commissionPercent !== undefined && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-md font-extrabold">
+                                    কমিশন: {shop.commissionPercent}%
+                                  </span>
+                                )}
+                                {distanceKm !== null && (
+                                  <span className="text-[10px] bg-blue-100 text-blue-900 px-1.5 py-0.5 rounded-md font-extrabold">
+                                    📍 {distanceKm.toFixed(1)} km
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Address */}
+                        {shop.location?.address && (
+                          <div className="flex items-start gap-1.5 text-xs text-gray-600 bg-gray-50 p-2 rounded-xl border border-gray-100">
+                            <MapPin className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
+                            <span className="line-clamp-2 leading-snug">{shop.location.address}</span>
+                          </div>
+                        )}
+
+                        {/* Description / Products */}
+                        {shop.description && (
+                          <p className="text-xs text-gray-700 font-medium line-clamp-2 leading-relaxed bg-purple-50/40 p-2 rounded-xl border border-purple-100/60">
+                            <strong className="text-purple-950 font-bold">পণ্য/সেবা: </strong>
+                            {shop.description}
+                          </p>
+                        )}
+
+                        {/* Contacts */}
+                        <div className="flex items-center justify-between text-[11px] text-gray-600 pt-1">
+                          <div className="truncate">
+                            <span className="font-semibold text-gray-500">Contact: </span>
+                            <strong className="text-gray-900">{shop.contactPerson || 'N/A'}</strong>
+                          </div>
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            {shop.whatsapp && (
+                              <>
+                                <a
+                                  href={`tel:${shop.whatsapp}`}
+                                  className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 transition-colors"
+                                  title="Call Store"
+                                >
+                                  <Phone className="w-3.5 h-3.5" />
+                                </a>
+                                {waUrl && (
+                                  <a
+                                    href={waUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="p-1.5 rounded-lg bg-[#25D366]/15 hover:bg-[#25D366]/30 text-emerald-800 transition-colors"
+                                    title="WhatsApp Chat"
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                                  </a>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card Action Buttons */}
+                      <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                        {/* 1. Google Maps Redirection Button */}
+                        <a
+                          href={gMapUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center gap-1 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-extrabold transition-all active:scale-95 shrink-0"
+                          title="Open Google Maps for Direction"
+                        >
+                          <Navigation className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Map</span>
+                        </a>
+
+                        {/* 2. View in Earth Map tab button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewMode('map');
+                            setTimeout(() => {
+                              try {
+                                mapInstanceRef.current?.invalidateSize();
+                                handleLocateStore(shop);
+                              } catch (e) {}
+                            }, 120);
+                          }}
+                          className="px-2.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          title="View on Interactive Map"
+                        >
+                          ম্যাপে দেখুন
+                        </button>
+
+                        {/* 3. Send Order / Select Shop Button */}
+                        {onSelectShop && (
+                          <button
+                            type="button"
+                            onClick={() => onSelectShop(shop)}
+                            className="flex-1 py-2 px-3 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white rounded-xl text-xs font-extrabold shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <span>{isRequested ? 'পুনরায় অনুরোধ' : 'অর্ডার পাঠান'}</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 2. MAP VIEW (Leaflet Earth Map) */}
+          <div
+            className={`w-full h-full relative bg-slate-900 flex-1 min-h-0 ${
+              viewMode === 'map' ? 'flex flex-col' : 'hidden'
+            }`}
+          >
+            {mapError ? (
+              <div className="p-8 text-center bg-amber-50 flex flex-col items-center justify-center space-y-3 h-full">
+                <Map className="w-8 h-8 text-amber-600" />
+                <h4 className="font-extrabold text-gray-900 text-sm">Could not load map</h4>
+                <p className="text-xs text-gray-600">Please check your internet or GPS settings.</p>
+              </div>
+            ) : (
+              <div className="relative w-full flex-1 h-full">
+                {/* Leaflet map container */}
+                <div ref={mapContainerRef} className="w-full h-full z-10" />
+
+                {/* Floating Map Controls */}
+                <div className="absolute top-3 right-3 z-20 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsFullscreen((prev) => !prev)}
+                    className="p-2.5 bg-slate-900/90 hover:bg-slate-800 text-white rounded-2xl border border-slate-700 shadow-xl backdrop-blur-md transition-all active:scale-95 cursor-pointer"
+                    title={isFullscreen ? 'Exit Fullscreen' : 'Full Screen Map'}
+                  >
+                    {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {/* GPS Recenter button */}
                 <button
                   type="button"
-                  onClick={() => setIsFullscreen((prev) => !prev)}
-                  className="p-2.5 bg-slate-900/90 hover:bg-slate-800 text-white rounded-2xl border border-slate-700 shadow-xl backdrop-blur-md transition-all active:scale-95"
-                  title={isFullscreen ? 'Exit Fullscreen' : 'Full Screen Map'}
+                  onClick={handleRecenter}
+                  className="absolute bottom-6 right-3 z-20 p-2.5 bg-white border border-emerald-200 rounded-2xl shadow-xl text-emerald-700 hover:bg-emerald-50 active:scale-95 transition-all cursor-pointer"
+                  title="Recenter Route"
                 >
-                  {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  <Navigation className="w-5 h-5" />
                 </button>
               </div>
-
-              {/* GPS Recenter button */}
-              <button
-                type="button"
-                onClick={handleRecenter}
-                className="absolute bottom-6 right-3 z-20 p-2.5 bg-white border border-emerald-200 rounded-2xl shadow-xl text-emerald-700 hover:bg-emerald-50 active:scale-95 transition-all"
-                title="Recenter Route"
-              >
-                <Navigation className="w-5 h-5" />
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Bottom Action Footer Bar (Only for PENDING order preview) */}
@@ -758,7 +953,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                 onClick={onClose}
                 className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl border border-gray-200 text-gray-700 font-extrabold text-xs hover:bg-gray-100 transition-colors cursor-pointer"
               >
-                ম্যাপ বন্ধ করুন
+                বন্ধ করুন
               </button>
               {onAccept && (
                 <button

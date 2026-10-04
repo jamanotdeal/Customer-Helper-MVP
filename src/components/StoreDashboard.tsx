@@ -143,7 +143,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const { user, setActiveMode } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
-  const [ordersSubTab, setOrdersSubTab] = useState<'NEW' | 'RUNNING' | 'COMPLETED'>('NEW');
 
   // Permission prompts on store load (Notification, Location, Display Over)
   useEffect(() => {
@@ -216,7 +215,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Incoming Orders (Store Shop Orders) Filters & Pagination
   const [storeStatusFilter, setStoreStatusFilter] = useState<string>('ALL');
   const [storeDateFilter, setStoreDateFilter] = useState<'ALL' | 'TODAY' | 'LAST_7_DAYS' | 'THIS_MONTH'>('ALL');
-  const [storeSortOrder, setStoreSortOrder] = useState<'NEWEST' | 'OLDEST'>('NEWEST');
+  const [storeSortOrder, setStoreSortOrder] = useState<'ACTIVE_FIRST' | 'NEWEST' | 'OLDEST'>('ACTIVE_FIRST');
   const [storeVisibleCount, setStoreVisibleCount] = useState(10);
 
   // My Requests Filters & Pagination
@@ -312,7 +311,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         if (targetShopOrder.status === 'PENDING') {
           // New request for store: show custom new order modal alert!
           setLocalActiveTab('ORDERS');
-          setOrdersSubTab('NEW');
+          setStoreStatusFilter('PENDING');
           setUnviewedShopOrderIds((prev) => {
             const updated = new Set(prev);
             updated.add(targetShopOrder!.id);
@@ -323,9 +322,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           // Already accepted / running / completed: open details
           setLocalActiveTab('ORDERS');
           if (targetShopOrder.status === 'ACCEPTED') {
-            setOrdersSubTab('RUNNING');
-          } else {
-            setOrdersSubTab('COMPLETED');
+            setStoreStatusFilter('ACCEPTED');
           }
           setSelectedShopOrderId(targetShopOrder.id);
         }
@@ -570,7 +567,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (storeId) {
       fetchCompletedPage(true);
     }
-  }, [storeId, ordersSubTab]);
+  }, [storeId, localActiveTab]);
 
   useEffect(() => {
     if (user?.uid) {
@@ -769,57 +766,25 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return Array.from(map.values());
   }, [storeShopOrders, completedShopOrders]);
 
-  // Categorize shop orders based on tabs
-  const categorizedShopOrders = useMemo(() => {
-    return allAvailableShopOrders.filter((so) => {
-      const parentStatus = getParentOrderStatus(so.parentOrderId);
-
-      const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-      const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
-
-      const isFinished = isDelivered || isCanceled;
-
-      if (ordersSubTab === 'NEW') {
-        return so.status === 'PENDING' && !isFinished;
-      }
-      if (ordersSubTab === 'RUNNING') {
-        return ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isFinished;
-      }
-      if (ordersSubTab === 'COMPLETED') {
-        return isFinished;
-      }
-      return false;
-    });
-  }, [allAvailableShopOrders, ordersSubTab, completedParentOrders]);
-
-  // Calculate sub-tab counts matching exact tab list filters
-  const subTabCounts = useMemo(() => {
-    const counts = { NEW: 0, RUNNING: 0, COMPLETED: 0 };
-    allAvailableShopOrders.forEach((so) => {
-      const parentStatus = getParentOrderStatus(so.parentOrderId);
-      const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
-      const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
-
-      const isFinished = isDelivered || isCanceled;
-
-      if (isFinished) {
-        counts.COMPLETED++;
-      } else if (so.status === 'PENDING') {
-        counts.NEW++;
-      } else if (['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status)) {
-        counts.RUNNING++;
-      }
-    });
-    return counts;
-  }, [allAvailableShopOrders, completedParentOrders]);
-
-  // Apply filters: Status, Date, Sort
+  // Apply filters: Status, Date, Sort directly over all available shop orders
   const filteredShopOrders = useMemo(() => {
-    let result = [...categorizedShopOrders];
+    let result = [...allAvailableShopOrders];
 
     // Status Filter
     if (storeStatusFilter !== 'ALL') {
-      result = result.filter((so) => so.status === storeStatusFilter);
+      result = result.filter((so) => {
+        const parentStatus = getParentOrderStatus(so.parentOrderId);
+        const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+        const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+        const isActive = !isCanceled && !isDelivered;
+
+        if (storeStatusFilter === 'ACTIVE') return isActive;
+        if (storeStatusFilter === 'PENDING') return so.status === 'PENDING' && isActive;
+        if (storeStatusFilter === 'ACCEPTED') return so.status === 'ACCEPTED' && isActive;
+        if (storeStatusFilter === 'DELIVERED') return isDelivered;
+        if (storeStatusFilter === 'CANCELED') return isCanceled;
+        return so.status === storeStatusFilter;
+      });
     }
 
     // Date Filter
@@ -844,15 +809,35 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       });
     }
 
-    // Sort Order
+    // Sort Order (Default: Active & Recent orders first)
     result.sort((a, b) => {
+      const parentStatusA = getParentOrderStatus(a.parentOrderId);
+      const parentStatusB = getParentOrderStatus(b.parentOrderId);
+      const isFinishedA = a.status === 'CANCELED' || parentStatusA === 'CANCELED' || parentStatusA === 'DELIVERED' || a.status === 'DELIVERED';
+      const isFinishedB = b.status === 'CANCELED' || parentStatusB === 'CANCELED' || parentStatusB === 'DELIVERED' || b.status === 'DELIVERED';
+
       const timeA = new Date(a.createdAt).getTime();
       const timeB = new Date(b.createdAt).getTime();
-      return storeSortOrder === 'NEWEST' ? timeB - timeA : timeA - timeB;
+
+      if (storeSortOrder === 'OLDEST') {
+        return timeA - timeB;
+      }
+      if (storeSortOrder === 'NEWEST') {
+        return timeB - timeA;
+      }
+
+      // Default: ACTIVE_FIRST (Active orders first, with PENDING prioritized, then newest date)
+      if (!isFinishedA && isFinishedB) return -1;
+      if (isFinishedA && !isFinishedB) return 1;
+
+      if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
+      if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
+
+      return timeB - timeA;
     });
 
     return result;
-  }, [categorizedShopOrders, storeStatusFilter, storeDateFilter, storeSortOrder]);
+  }, [allAvailableShopOrders, storeStatusFilter, storeDateFilter, storeSortOrder, completedParentOrders]);
 
   const filteredMyRequests = useMemo(() => {
     let result = [...myRequests, ...completedRequests];
@@ -883,8 +868,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           return orderTime >= sevenDaysAgo;
         }
         if (myReqDateFilter === 'THIS_MONTH') {
-          const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-          return orderTime >= firstOfMonth;
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+          return orderTime >= startOfMonth;
         }
         return true;
       });
@@ -900,240 +885,70 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return result;
   }, [myRequests, completedRequests, myReqStatusFilter, myReqDateFilter, myReqSortOrder]);
 
-
-
-  // Pricing Alert Modal State
-  const [showPriceAlertModal, setShowPriceAlertModal] = useState(false);
-
-  // Total calculated cost from items
-  const totalCalculatedCost = useMemo(() => {
-    return itemPrices.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
-  }, [itemPrices]);
-
-  // Check if all divided items have valid pricing (> 0)
-  const isAllItemsComplete = useMemo(() => {
-    if (itemPrices.length === 0) return false;
-    return itemPrices.every(
-      (item) =>
-        item.price.trim() !== '' &&
-        !isNaN(parseFloat(item.price)) &&
-        parseFloat(item.price) > 0
+  const handleConfirmStoreOrder = async (soId: string) => {
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
+    const confirmed = await showConfirm(
+      'অর্ডার নিশ্চিতকরণ (Confirm Order)',
+      `আপনি কি এই অর্ডারটি গ্রহণ ও নিশ্চিত (Yes) করতে চান? মোট মূল্য: ৳${targetSo?.price || 0}`,
+      'হ্যাঁ (Yes)',
+      'বাতিল'
     );
-  }, [itemPrices]);
+    if (!confirmed) return;
 
-  const persistItemPrices = async (soId: string, itemsToSave: { name: string; unit: string; price: string }[]) => {
-    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
-    if (targetSo) {
-      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
-      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
-        return;
-      }
-    }
-
-    const structuredItems: ShopOrderItemPrice[] = itemsToSave.map((it) => ({
-      name: it.name,
-      unit: it.unit.trim() || undefined,
-      price: it.price.trim() !== '' && !isNaN(parseFloat(it.price)) ? parseFloat(it.price) : undefined,
-    }));
-    const calculatedSum = structuredItems.reduce((sum, it) => sum + (it.price || 0), 0);
-    const hasAnyPrice = structuredItems.some((it) => it.price !== undefined && it.price > 0);
-
-    try {
-      await fallbackStore.updateShopOrder(soId, (prev) => {
-        // Requirement: when store adds pricing of any item then automatically this order status should move into processing (PREPARING)
-        const shouldAutoMoveToPreparing = hasAnyPrice && (prev.status === 'PENDING' || prev.status === 'ACCEPTED');
-        const nextStatus = shouldAutoMoveToPreparing ? 'PREPARING' : prev.status;
-        const history = shouldAutoMoveToPreparing
-          ? [
-              ...prev.statusHistory,
-              {
-                status: 'PREPARING' as ShopOrderStatus,
-                timestamp: new Date().toISOString(),
-                actor: user?.displayName || 'Store',
-                note: 'Auto moved to processing upon adding item pricing.',
-              },
-            ]
-          : prev.statusHistory;
-
-        return {
-          ...prev,
-          status: nextStatus,
-          itemsWithPrice: structuredItems,
-          price: calculatedSum > 0 ? calculatedSum : prev.price,
-          statusHistory: history,
-        };
-      }, 'store');
-    } catch (err) {
-      console.error('Failed to auto-save item prices:', err);
-    }
-  };
-
-  const handleItemFieldChange = (index: number, field: 'name' | 'unit' | 'price', val: string) => {
-    const next = [...itemPrices];
-    if (next[index]) {
-      next[index] = { ...next[index], [field]: val };
-    }
-    setItemPrices(next);
-
-    if (!currentShopOrder) return;
-    const soId = currentShopOrder.id;
-
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current);
-    }
-
-    setAutoSaveStatus('saving');
-    autoSaveTimeoutRef.current = setTimeout(async () => {
-      await persistItemPrices(soId, next);
-      setAutoSaveStatus('saved');
-      setTimeout(() => {
-        setAutoSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev));
-      }, 2000);
-    }, 600);
-  };
-
-  const handleSaveItemPrices = async (soId: string) => {
-    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
-    if (targetSo) {
-      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
-      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
-        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর দাম পরিবর্তন করা যাবে না।', 'warning');
-        return;
-      }
-    }
-
-    if (isStoreBlocked) {
-      setShowBlockedModal(true);
-      return;
-    }
-
-    setUpdatingCost(true);
-    try {
-      await persistItemPrices(soId, itemPrices);
-      showAlert('সফল', 'আইটেমগুলোর মূল্য সফলভাবে সংরক্ষণ করা হয়েছে।', 'success');
-    } finally {
-      setUpdatingCost(false);
-    }
-  };
-
-  const handleSaveNote = async (soId: string) => {
-    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
-    if (targetSo) {
-      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
-      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
-        showAlert('অর্ডার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে সম্পন্ন/ডেলিভার্ড হয়েছে, আর নোট পরিবর্তন করা যাবে না।', 'warning');
-        return;
-      }
-    }
-
-    setUpdatingNote(true);
-    try {
-      await fallbackStore.updateShopOrder(soId, (prev) => ({
-        ...prev,
-        note: noteInput.trim() || undefined,
-      }), 'store');
-      showAlert('সফল', 'ব্যক্তিগত নোট সফলভাবে সংরক্ষণ করা হয়েছে।', 'success');
-    } finally {
-      setUpdatingNote(false);
-    }
-  };
-
-  // Handle operations
-  const handleUpdateStatus = async (soId: string, newStatus: ShopOrderStatus, actorNote?: string) => {
-    if (isStoreBlocked) {
-      setShowBlockedModal(true);
-      return;
-    }
-
-    if (newStatus === 'DELIVERED') {
-      showAlert('সতর্কতা', 'দোকানদার সরাসরি ডেলিভার্ড স্ট্যাটাস সেট করতে পারবেন না। মূল অর্ডারটি সম্পন্ন হলে এটি স্বয়ংক্রিয়ভাবে Delivered হবে।', 'warning');
-      return;
-    }
-
-    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId);
-    if (targetSo) {
-      const parentStatus = getParentOrderStatus(targetSo.parentOrderId);
-      if (parentStatus === 'DELIVERED' || targetSo.status === 'HANDOVER' || targetSo.status === 'CANCELED') {
-        if (newStatus !== 'CANCELED') {
-          showAlert('অর্ডার হ্যান্ডওভার সম্পন্ন', 'অর্ডারটি ইতিমধ্যে হেল্পারকে হ্যান্ডওভার বা সম্পন্ন করা হয়েছে। মূল অর্ডার ডেলিভারি হওয়া পর্যন্ত স্ট্যাটাস হ্যান্ডওভার থাকবে।', 'warning');
-          return;
-        }
-      }
-    }
-
-    // Requirement: To pass the Processing (PREPARING) status (e.g. to READY or HANDOVER), store MUST add pricing for all items!
-    if (['READY', 'HANDOVER'].includes(newStatus)) {
-      if (!isAllItemsComplete) {
-        showAlert(
-          'সকল আইটেমের মূল্য আবশ্যক',
-          'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
-          'warning'
-        );
-        return;
-      }
-    }
-
-    if (newStatus === 'HANDOVER') {
-      const effectivePrice = totalCalculatedCost > 0 ? totalCalculatedCost : targetSo?.price;
-      if (!effectivePrice || effectivePrice <= 0) {
-        setShowPriceAlertModal(true);
-        return;
-      }
-    }
-
-    const structuredItems: ShopOrderItemPrice[] = itemPrices.map((it) => ({
-      name: it.name,
-      unit: it.unit.trim() || undefined,
-      price: it.price.trim() !== '' && !isNaN(parseFloat(it.price)) ? parseFloat(it.price) : undefined,
-    }));
-    const calculatedSum = structuredItems.reduce((sum, it) => sum + (it.price || 0), 0);
-    const currentNote = noteInput.trim() || undefined;
-
+    fallbackStore.markShopOrderViewed(soId);
     await fallbackStore.updateShopOrder(soId, (prev) => ({
       ...prev,
-      status: newStatus,
-      itemsWithPrice: structuredItems.length > 0 ? structuredItems : prev.itemsWithPrice,
-      price: calculatedSum > 0 ? calculatedSum : prev.price,
-      note: actorNote !== undefined ? actorNote : (currentNote || prev.note),
+      status: 'ACCEPTED',
       statusHistory: [
         ...prev.statusHistory,
         {
-          status: newStatus,
+          status: 'ACCEPTED',
           timestamp: new Date().toISOString(),
           actor: user?.displayName || 'Store',
-          note: actorNote,
+          note: 'Store confirmed the order.',
         },
       ],
-    }), 'store');
-
-    // A cancellation moves the shopOrder into the Finished bucket; the Firestore
-    // subscription filters CANCELED out of the live cache, so refresh the Finished list.
-    if (newStatus === 'CANCELED') {
-      fetchCompletedPage(true);
-    }
-  };
-
-  const handleUpdateCostAndNote = async (soId: string) => {
-    await handleSaveItemPrices(soId);
-    if (noteInput.trim()) {
-      await handleSaveNote(soId);
-    }
-  };
+    }), 'store');  };
 
   const handleCancelOrderClick = (soId: string) => {
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
     setCancelTargetId(soId);
     setStoreCancelReason('');
     setStoreCancelError('');
     setShowStoreCancelModal(true);
   };
 
-  const handleConfirmStoreCancel = () => {
+  const handleConfirmStoreCancel = async () => {
     if (!storeCancelReason.trim()) {
       setStoreCancelError('বাতিল করার কারণ অনুগ্রহ করে উল্লেখ করুন।');
       return;
     }
     if (cancelTargetId) {
-      handleUpdateStatus(cancelTargetId, 'CANCELED', storeCancelReason.trim());
+      fallbackStore.markShopOrderViewed(cancelTargetId);
+      await fallbackStore.updateShopOrder(cancelTargetId, (prev) => ({
+        ...prev,
+        status: 'CANCELED',
+        note: storeCancelReason.trim(),
+        statusHistory: [
+          ...prev.statusHistory,
+          {
+            status: 'CANCELED',
+            timestamp: new Date().toISOString(),
+            actor: user?.displayName || 'Store',
+            note: storeCancelReason.trim(),
+          },
+        ],
+      }), 'store');
+      // A cancellation moves the shopOrder into the Finished bucket; the Firestore
+      // subscription filters CANCELED out of the live cache, so refresh the Finished list.
+      fetchCompletedPage(true);
     }
     setShowStoreCancelModal(false);
     setSelectedShopOrderId(null);
@@ -1170,488 +985,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               setShowRequestComposer(false);
             }}
           />
-        </div>
-      );
-    }
-
-    if (currentShopOrder) {
-      const parentStatus = getParentOrderStatus(currentShopOrder.parentOrderId);
-      const isCanceled = currentShopOrder.status === 'CANCELED' || parentStatus === 'CANCELED';
-      const isDelivered = parentStatus === 'DELIVERED' || currentShopOrder.status === 'DELIVERED';
-
-      const shopOrderSteps: { status: ShopOrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
-        { status: 'ACCEPTED', label: 'Accepted', icon: Check, desc: 'Store accepted the request' },
-        { status: 'PREPARING', label: 'Processing', icon: Package, desc: 'Store is preparing the items' },
-        { status: 'READY', label: 'Ready', icon: CheckCircle, desc: 'Items are ready for pickup' },
-        { status: 'HANDOVER', label: 'Handed Over', icon: ArrowRight, desc: 'Handed over to helper' },
-        { status: 'DELIVERED', label: 'Delivered', icon: CheckCircle2, desc: 'Order delivered to customer' },
-      ];
-
-      const effectiveStatus: ShopOrderStatus = isCanceled ? 'CANCELED' : isDelivered ? 'DELIVERED' : currentShopOrder.status;
-
-      const getShopOrderStepState = (stepStatus: ShopOrderStatus) => {
-        if (isCanceled) return 'CANCELED';
-        const orderIndex = shopOrderSteps.findIndex((s) => s.status === effectiveStatus);
-        const stepIndex = shopOrderSteps.findIndex((s) => s.status === stepStatus);
-        if (stepIndex < orderIndex) return 'COMPLETED';
-        if (stepIndex === orderIndex) return 'CURRENT';
-        return 'UPCOMING';
-      };
-
-      return (
-        <div className="w-full bg-gray-50 min-h-screen pb-24 animate-in fade-in duration-200">
-          {/* Sticky Top Bar */}
-          <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-xs">
-            <button
-              onClick={() => setSelectedShopOrderId(null)}
-              className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-            >
-              <ArrowLeft className="w-5 h-5" />
-              <span className="text-xs font-bold">Back</span>
-            </button>
-            <span className="font-extrabold text-sm text-gray-800 text-center">
-              Order id: #{currentShopOrder.parentOrderId.slice(-6).toUpperCase()}
-            </span>
-            <div className="w-8" />
-          </div>
-
-          <div className="max-w-md mx-auto p-4 space-y-5">
-            {/* TOP LIVE TIMER BLOCK */}
-            <div className="bg-gradient-to-br from-red-50 via-rose-50/60 to-red-50 border border-red-200/80 shadow-xs rounded-2xl py-3 px-4 flex items-center justify-center space-x-2.5 transition-all text-center">
-              <Clock className="w-5 h-5 text-red-600 animate-pulse shrink-0" />
-              <OrderTimer createdAt={currentShopOrder.createdAt} className="text-red-700 text-base sm:text-lg font-black tracking-wide" hideIcon />
-            </div>
-
-            {currentShopOrder.status === 'PENDING' ? (
-              <>
-                {/* Order Items Card (Read-only before accepting) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-                      {formatServiceName(getParentOrder(currentShopOrder.parentOrderId)?.service) || 'অর্ডার আইটেমসমূহ (Order Items)'}
-                    </h3>
-                    <span className="text-[10px] font-extrabold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                      অপেক্ষমাণ (Pending)
-                    </span>
-                  </div>
-
-                  {itemPrices.length > 0 ? (
-                    <div className="space-y-2">
-                      {itemPrices.map((item, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between bg-gray-50/90 p-3 rounded-2xl border border-gray-200/70"
-                        >
-                          <div className="flex items-center space-x-2.5 min-w-0">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                            <span className="font-bold text-xs sm:text-sm text-gray-900 break-words">
-                              {item.name}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                      {extractShopOrderNoteAndItems(currentShopOrder).itemsText || currentShopOrder.requestText}
-                    </div>
-                  )}
-                </div>
-
-                {/* Helper's Special Instruction / Note Card (if present) */}
-                {(() => {
-                  const { helperNote } = extractShopOrderNoteAndItems(currentShopOrder);
-                  if (!helperNote) return null;
-                  return (
-                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-3xl p-4 shadow-soft space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <MessageSquare className="w-4 h-4 text-amber-700 shrink-0" />
-                        <h4 className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider">
-                          হেলপারের বিশেষ নোট (Helper's Note)
-                        </h4>
-                      </div>
-                      <div className="bg-white/85 p-3 rounded-2xl border border-amber-200/60">
-                        <p className="text-xs sm:text-sm font-bold text-amber-950 leading-relaxed whitespace-pre-wrap">
-                          {helperNote}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Helper Contact Details */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
-                      {currentShopOrder.helperName.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">Helper Contact Details</p>
-                      <h4 className="font-black text-base text-gray-900 leading-tight">{currentShopOrder.helperName}</h4>
-                      {getParentOrderHelperPhone(currentShopOrder.parentOrderId) && (
-                        <p className="text-xs text-gray-500 font-bold mt-0.5">{getParentOrderHelperPhone(currentShopOrder.parentOrderId)}</p>
-                      )}
-                    </div>
-                  </div>
-                  {getParentOrderHelperPhone(currentShopOrder.parentOrderId) && (
-                    <div className="flex space-x-2 pt-2">
-                      <a
-                        href={`tel:${getParentOrderHelperPhone(currentShopOrder.parentOrderId)}`}
-                        className="flex-1 py-2.5 px-3 rounded-2xl bg-gray-100 text-gray-900 font-extrabold text-xs flex items-center justify-center space-x-1.5 hover:bg-gray-200 active:scale-95 transition-all border border-gray-200"
-                      >
-                        <Phone className="w-4 h-4 text-gray-600" />
-                        <span>Call</span>
-                      </a>
-                      <a
-                        href={`https://wa.me/880${getParentOrderHelperPhone(currentShopOrder.parentOrderId)!.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 py-2.5 px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-md"
-                      >
-                        <MessageSquare className="w-4 h-4 text-white" />
-                        <span>WhatsApp</span>
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                {/* 3 Buttons Side by Side (Left: দেখতেছি [30%], Middle: Accept [flex-1], Right: Cancel [30%]) */}
-                <div className="flex space-x-1.5 pt-2">
-                  <button
-                    onClick={() => {
-                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
-                      setSelectedShopOrderId(null);
-                    }}
-                    className="w-[30%] py-3.5 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all active:scale-95 text-center shrink-0"
-                  >
-                    দেখতেছি
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const confirmed = await showConfirm(
-                        'অর্ডার গ্রহণ করুন',
-                        'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর পণ্যের মূল্য যোগ করতে পারবেন।',
-                        'হ্যাঁ, Accept করুন',
-                        'বাতিল'
-                      );
-                      if (!confirmed) return;
-                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
-                      handleUpdateStatus(currentShopOrder.id, 'ACCEPTED');
-                    }}
-                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-extrabold shadow-md transition-all active:scale-95 text-center"
-                  >
-                    Accept Request
-                  </button>
-                  <button
-                    onClick={() => {
-                      fallbackStore.markShopOrderViewed(currentShopOrder.id);
-                      handleCancelOrderClick(currentShopOrder.id);
-                    }}
-                    className="w-[30%] py-3.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-2xl text-xs font-extrabold border border-red-100 transition-all active:scale-95 text-center shrink-0"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Shop Order Status Progress Tracker */}
-                {!isCanceled && (
-                  <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft space-y-4">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">Order Progress</h3>
-
-                    <div className="relative flex items-center justify-between w-full px-2 pt-2 pb-4">
-                      {/* Background Line */}
-                      <div className="absolute left-6 right-6 top-6 h-0.5 bg-gray-100 -translate-y-1/2 z-0" />
-
-                      {/* Active Progress Line */}
-                      <div
-                        className="absolute left-6 top-6 h-0.5 bg-emerald-500 -translate-y-1/2 z-0 transition-all duration-300"
-                        style={{ width: `calc(${(shopOrderSteps.findIndex((s) => s.status === currentShopOrder.status) / (shopOrderSteps.length - 1)) * 100}% - 8px)` }}
-                      />
-
-                      {shopOrderSteps.map((step) => {
-                        const state = getShopOrderStepState(step.status);
-                        const StepIcon = step.icon;
-                        const isHandover = currentShopOrder.status === 'HANDOVER';
-                        const canChangeStatus = !isHandover && !isCanceled && !isDelivered && step.status !== 'DELIVERED';
-
-                        return (
-                          <div
-                            key={step.status}
-                            onClick={() => {
-                              if (canChangeStatus) {
-                                if (step.status === 'HANDOVER' || step.status === 'READY') {
-                                  if (!isAllItemsComplete) {
-                                    showAlert(
-                                      'সকল আইটেমের মূল্য আবশ্যক',
-                                      'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
-                                      'warning'
-                                    );
-                                    return;
-                                  }
-                                }
-                                handleUpdateStatus(currentShopOrder.id, step.status);
-                              }
-                            }}
-                            className={`flex flex-col items-center relative z-10 flex-1 ${canChangeStatus ? 'cursor-pointer group' : ''}`}
-                          >
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${state === 'COMPLETED'
-                              ? 'bg-emerald-600 text-white shadow-sm'
-                              : state === 'CURRENT'
-                                ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                                : 'bg-gray-100 text-gray-400 border border-gray-200'
-                              } ${canChangeStatus ? 'group-hover:scale-110 transition-transform' : ''}`}>
-                              {state === 'COMPLETED' ? (
-                                <Check className="w-3.5 h-3.5" />
-                              ) : (
-                                <StepIcon className={`w-3.5 h-3.5 ${state === 'CURRENT' ? 'animate-bounce text-white' : 'text-gray-400'}`} />
-                              )}
-                            </div>
-                            <span className={`text-[10px] font-extrabold mt-2 text-center leading-tight ${state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-850' : 'text-gray-300'
-                              }`}>
-                              {step.label}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Bottom action inside progress tracker */}
-                    {!isDelivered && (
-                      <div className="pt-3 border-t border-gray-100">
-                        {currentShopOrder.status === 'ACCEPTED' ? (
-                          <button
-                            onClick={() => handleUpdateStatus(currentShopOrder.id, 'PREPARING')}
-                            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
-                          >
-                            অর্ডার রেডি করছেন...
-                          </button>
-                        ) : currentShopOrder.status === 'PREPARING' ? (
-                          <button
-                            onClick={() => {
-                              if (!isAllItemsComplete) {
-                                showAlert(
-                                  'সকল আইটেমের মূল্য আবশ্যক',
-                                  'প্রসেসিং সম্পন্ন করতে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
-                                  'warning'
-                                );
-                                return;
-                              }
-                              handleUpdateStatus(currentShopOrder.id, 'READY');
-                            }}
-                            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
-                          >
-                            রেডি হয়ে গেছে
-                          </button>
-                        ) : currentShopOrder.status === 'READY' ? (
-                          <button
-                            onClick={() => {
-                              if (!isAllItemsComplete) {
-                                showAlert(
-                                  'সকল আইটেমের মূল্য আবশ্যক',
-                                  'হস্তান্তর করার পূর্বে প্রতিটি আইটেমের জন্য মূল্য (৳) উল্লেখ করা আবশ্যক।',
-                                  'warning'
-                                );
-                                return;
-                              }
-                              handleUpdateStatus(currentShopOrder.id, 'HANDOVER');
-                            }}
-                            className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl text-xs font-bold shadow-md transition-all active:scale-95 text-center"
-                          >
-                            হেল্পারকে দিয়ে দিয়েছি
-                          </button>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Requirement 1 & 2: Order Items Card with Pricing (Unit input removed) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-                      {formatServiceName(getParentOrder(currentShopOrder.parentOrderId)?.service) || 'আইটেম ও মূল্য তালিকা (Items & Pricing)'}
-                    </h3>
-                    {isDelivered && (
-                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
-                        Completed Order Pricing
-                      </span>
-                    )}
-                  </div>
-
-                  {itemPrices.length > 0 ? (
-                    <div className="space-y-2.5">
-                      {itemPrices.map((item, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between gap-3 bg-gray-50/90 p-3 rounded-2xl border border-gray-200/80 hover:border-gray-300 transition-all"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <span className="font-bold text-xs sm:text-sm text-gray-900 break-words">
-                              {item.name}
-                            </span>
-                          </div>
-                          <div className="relative w-24 sm:w-28 shrink-0">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold pointer-events-none">
-                              ৳
-                            </span>
-                            <input
-                              type="number"
-                              placeholder="মূল্য *"
-                              value={item.price}
-                              disabled={isCanceled || isDelivered}
-                              onChange={(e) => handleItemFieldChange(idx, 'price', e.target.value)}
-                              onBlur={() => currentShopOrder && persistItemPrices(currentShopOrder.id, itemPrices)}
-                              className="w-full pl-6 pr-2.5 py-1.5 bg-white border border-gray-200 rounded-xl text-xs sm:text-sm font-black outline-none focus:border-emerald-500 disabled:opacity-70 text-right text-gray-900 placeholder:text-gray-400 shadow-2xs"
-                            />
-                          </div>
-                        </div>
-                      ))}
-
-                      {/* Total Cost Sum Row */}
-                      <div className="flex items-center justify-between p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
-                            মোট পণ্য মূল্য (Total Cost):
-                          </span>
-                          {autoSaveStatus === 'saving' && (
-                            <span className="text-[11px] font-bold text-amber-600 animate-pulse flex items-center gap-1">
-                              <Loader2 className="w-3 h-3 animate-spin" /> সংরক্ষণ হচ্ছে...
-                            </span>
-                          )}
-                          {autoSaveStatus === 'saved' && (
-                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
-                              <Check className="w-3 h-3" /> সংরক্ষিত
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-sm font-black text-emerald-900 font-mono">
-                          ৳{totalCalculatedCost}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm text-gray-800 leading-relaxed font-semibold whitespace-pre-wrap">
-                      {extractShopOrderNoteAndItems(currentShopOrder).itemsText || currentShopOrder.requestText}
-                    </div>
-                  )}
-                </div>
-
-                {/* Helper's Special Instruction / Note Card (if present) */}
-                {(() => {
-                  const { helperNote } = extractShopOrderNoteAndItems(currentShopOrder);
-                  if (!helperNote) return null;
-                  return (
-                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-3xl p-4 shadow-soft space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <MessageSquare className="w-4 h-4 text-amber-700 shrink-0" />
-                        <h4 className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider">
-                          হেলপারের বিশেষ নোট (Helper's Note)
-                        </h4>
-                      </div>
-                      <div className="bg-white/85 p-3 rounded-2xl border border-amber-200/60">
-                        <p className="text-xs sm:text-sm font-bold text-amber-950 leading-relaxed whitespace-pre-wrap">
-                          {helperNote}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Helper Contact Details (right after Request Details block) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
-                      {currentShopOrder.helperName.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">Helper Contact Details</p>
-                      <h4 className="font-black text-base text-gray-900 leading-tight">{currentShopOrder.helperName}</h4>
-                      {getParentOrderHelperPhone(currentShopOrder.parentOrderId) && (
-                        <p className="text-xs text-gray-500 font-bold mt-0.5">{getParentOrderHelperPhone(currentShopOrder.parentOrderId)}</p>
-                      )}
-                    </div>
-                  </div>
-                  {getParentOrderHelperPhone(currentShopOrder.parentOrderId) && (
-                    <div className="flex space-x-2 pt-2">
-                      <a
-                        href={`tel:${getParentOrderHelperPhone(currentShopOrder.parentOrderId)}`}
-                        className="flex-1 py-2.5 px-3 rounded-2xl bg-gray-100 text-gray-900 font-extrabold text-xs flex items-center justify-center space-x-1.5 hover:bg-gray-200 active:scale-95 transition-all border border-gray-200"
-                      >
-                        <Phone className="w-4 h-4 text-gray-600" />
-                        <span>Call</span>
-                      </a>
-                      <a
-                        href={`https://wa.me/880${getParentOrderHelperPhone(currentShopOrder.parentOrderId)!.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 py-2.5 px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-md"
-                      >
-                        <MessageSquare className="w-4 h-4 text-white" />
-                        <span>WhatsApp</span>
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                {/* Requirement 4: Store Private Note Card (Right after Helper Contact Details) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center space-x-1">
-                      <span>🔒 Store Private Note (দোকানের ব্যক্তিগত নোট)</span>
-                    </label>
-                    <span className="text-[9px] font-bold text-gray-400">হেলপার দেখতে পাবে না</span>
-                  </div>
-                  <textarea
-                    placeholder="দোকানের নিজস্ব হিসাব বা সুবিধার্থে গোপনীয় নোট লিখে রাখুন..."
-                    value={noteInput}
-                    disabled={isCanceled || isDelivered}
-                    onChange={(e) => setNoteInput(e.target.value)}
-                    rows={3}
-                    className="w-full px-3 py-2 bg-purple-50/40 border border-purple-200/80 rounded-xl text-xs outline-none focus:border-purple-500 font-semibold resize-none text-purple-950 disabled:opacity-70"
-                  />
-                  {!isCanceled && !isDelivered && (
-                    <button
-                      onClick={() => handleSaveNote(currentShopOrder.id)}
-                      disabled={updatingNote}
-                      className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs flex items-center justify-center gap-1"
-                    >
-                      <span>{updatingNote ? 'Saving Note...' : 'নোট সংরক্ষণ করুন (Save Note)'}</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Bottom Actions based on status (Status history removed, cancel / delivered here) */}
-                <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
-                  {isDelivered ? (
-                    <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-2xl text-center">
-                      <p className="text-xs font-bold text-emerald-800">
-                        🎉 This order has been successfully delivered by the helper!
-                      </p>
-                    </div>
-                  ) : isCanceled ? (
-                    <div className="p-3.5 bg-red-50 border border-red-100 rounded-2xl text-center">
-                      <p className="text-xs font-bold text-red-800">
-                        ❌ This order has been canceled.
-                      </p>
-                      {currentShopOrder.note && (
-                        <p className="text-[11px] text-red-700 mt-1 font-semibold">Reason: {currentShopOrder.note}</p>
-                      )}
-                    </div>
-                  ) : (
-                    /* Cancel button */
-                    <button
-                      onClick={() => handleCancelOrderClick(currentShopOrder.id)}
-                      className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-2xl text-xs font-bold border border-red-100 transition-all text-center block active:scale-95"
-                    >
-                      Cancel Order
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
         </div>
       );
     }
@@ -1715,9 +1048,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             const parentStatus = getParentOrderStatus(so.parentOrderId);
             const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
             const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
-            const isHandover = so.status === 'HANDOVER';
-            const isFinished = isDelivered || isCanceled || isHandover;
-            return ['ACCEPTED', 'PREPARING', 'READY'].includes(so.status) && !isFinished;
+            const isFinished = isDelivered || isCanceled;
+            return so.status === 'ACCEPTED' && !isFinished;
           }).length;
           if (runningCount === 0) return null;
           return (
@@ -1732,12 +1064,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     {runningCount} order{runningCount > 1 ? 's' : ''} currently running!
                   </h4>
                   <p className="text-[10px] text-amber-700 font-medium">
-                    দ্রুত প্রস্তুত করুন এবং হেল্পারকে হ্যান্ডওভার করুন।
+                    অর্ডারটি প্রস্তুত রাখুন, হেলপার ডেলিভারি সম্পন্ন করলে ওয়ালেটে যোগ হবে।
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => { setLocalActiveTab('ORDERS'); setOrdersSubTab('RUNNING'); setStoreStatusFilter('ALL'); }}
+                onClick={() => { setLocalActiveTab('ORDERS'); setStoreStatusFilter('ACCEPTED'); }}
                 className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-extrabold shadow-sm transition-all active:scale-95 shrink-0 ml-2"
               >
                 দেখুন
@@ -1748,236 +1080,271 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
         {/* ─── INCOMING ORDERS TAB ───────────────────────────────────────────────────── */}
         {localActiveTab === 'ORDERS' && (
-          <div className="space-y-4">
-            {/* Sub-tabs: New, Running, Completed */}
-            <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200">
-              {(['NEW', 'RUNNING', 'COMPLETED'] as const).map((tab) => {
-                const count = subTabCounts[tab];
-
-                const isRunningWithCount = tab === 'RUNNING' && count > 0;
-                let tabStyle = '';
-                if (isRunningWithCount) {
-                  tabStyle = ordersSubTab === 'RUNNING'
-                    ? 'bg-yellow-400 text-yellow-950 font-black shadow-sm ring-2 ring-yellow-300'
-                    : 'bg-yellow-100 text-yellow-800 font-bold border border-yellow-250 animate-pulse';
-                } else {
-                  tabStyle = ordersSubTab === tab
-                    ? 'bg-white text-emerald-700 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700';
-                }
-
-                return (
-                  <button
-                    key={tab}
-                    onClick={() => {
-                      setOrdersSubTab(tab);
-                      setStoreStatusFilter('ALL');
-                    }}
-                    className={`flex-1 py-2 px-1 rounded-lg text-[11px] font-bold transition-all ${tabStyle}`}
-                  >
-                    <span>
-                      {tab === 'NEW' ? 'New' : tab === 'RUNNING' ? 'Running' : 'Finished'}
-                      {count > 0 && ` (${count})`}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Filters Bar */}
-            <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex flex-wrap gap-2 items-center justify-between text-xs">
-              <div className="flex flex-wrap gap-1.5">
-                {/* Date Filter */}
-                <div className="flex items-center space-x-1 bg-gray-50 px-2.5 py-1.5 rounded-xl border border-gray-200">
-                  <Calendar className="w-3 h-3 text-emerald-600" />
-                  <select
-                    value={storeDateFilter}
-                    onChange={(e) => setStoreDateFilter(e.target.value as any)}
-                    className="bg-transparent font-bold text-gray-700 outline-none text-[11px]"
-                  >
-                    <option value="ALL">All Time</option>
-                    <option value="TODAY">Today</option>
-                    <option value="LAST_7_DAYS">Last 7 Days</option>
-                    <option value="THIS_MONTH">This Month</option>
-                  </select>
-                </div>
-
-                {/* Status Filter (contextual) */}
-                {ordersSubTab === 'RUNNING' && (
-                  <div className="flex items-center space-x-1 bg-gray-50 px-2.5 py-1.5 rounded-xl border border-gray-200">
-                    <Filter className="w-3 h-3 text-emerald-600" />
-                    <select
-                      value={storeStatusFilter}
-                      onChange={(e) => setStoreStatusFilter(e.target.value)}
-                      className="bg-transparent font-bold text-gray-700 outline-none text-[11px]"
-                    >
-                      <option value="ALL">All Running</option>
-                      <option value="ACCEPTED">Accepted</option>
-                      <option value="PREPARING">Processing</option>
-                      <option value="READY">Ready</option>
-                      <option value="HANDOVER">Handover</option>
-                    </select>
-                  </div>
-                )}
+          <div className="space-y-3">
+            {/* Filters Bar (Guaranteed Single Line) */}
+            <div className="bg-white p-2 rounded-2xl border border-gray-100 shadow-sm grid grid-cols-3 gap-1.5 text-xs">
+              {/* Status Filter */}
+              <div className="flex items-center space-x-1 bg-gray-50 px-2 py-1.5 rounded-xl border border-gray-200/80 min-w-0">
+                <Filter className="w-3 h-3 text-emerald-600 shrink-0" />
+                <select
+                  value={storeStatusFilter}
+                  onChange={(e) => setStoreStatusFilter(e.target.value)}
+                  className="bg-transparent font-bold text-gray-700 outline-none text-[11px] w-full truncate cursor-pointer"
+                >
+                  <option value="ALL">All Status</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="ACCEPTED">Confirmed</option>
+                  <option value="DELIVERED">Delivered</option>
+                  <option value="CANCELED">Canceled</option>
+                </select>
               </div>
 
-              {/* Sort Toggle */}
-              <button
-                onClick={() => setStoreSortOrder(prev => prev === 'NEWEST' ? 'OLDEST' : 'NEWEST')}
-                className="flex items-center space-x-1 bg-gray-50 px-2.5 py-1.5 rounded-xl border border-gray-200 font-bold text-gray-700"
-              >
-                <ArrowUpDown className="w-3 h-3 text-emerald-600" />
-                <span>{storeSortOrder === 'NEWEST' ? 'Newest' : 'Oldest'}</span>
-              </button>
+              {/* Date Filter */}
+              <div className="flex items-center space-x-1 bg-gray-50 px-2 py-1.5 rounded-xl border border-gray-200/80 min-w-0">
+                <Calendar className="w-3 h-3 text-emerald-600 shrink-0" />
+                <select
+                  value={storeDateFilter}
+                  onChange={(e) => setStoreDateFilter(e.target.value as any)}
+                  className="bg-transparent font-bold text-gray-700 outline-none text-[11px] w-full truncate cursor-pointer"
+                >
+                  <option value="ALL">All Time</option>
+                  <option value="TODAY">Today</option>
+                  <option value="LAST_7_DAYS">Last 7 Days</option>
+                  <option value="THIS_MONTH">This Month</option>
+                </select>
+              </div>
+
+              {/* Sort Dropdown */}
+              <div className="flex items-center space-x-1 bg-gray-50 px-2 py-1.5 rounded-xl border border-gray-200/80 min-w-0">
+                <ArrowUpDown className="w-3 h-3 text-emerald-600 shrink-0" />
+                <select
+                  value={storeSortOrder}
+                  onChange={(e) => setStoreSortOrder(e.target.value as any)}
+                  className="bg-transparent font-bold text-gray-700 outline-none text-[11px] w-full truncate cursor-pointer"
+                >
+                  <option value="ACTIVE_FIRST">Active First</option>
+                  <option value="NEWEST">Newest</option>
+                  <option value="OLDEST">Oldest</option>
+                </select>
+              </div>
             </div>
 
             {/* List display */}
             <div className="space-y-3">
               {filteredShopOrders.length === 0 ? (
-                <div className="py-14 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
-                  <Package className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-                  <h4 className="font-bold text-gray-900 text-sm mb-1">কোনো অর্ডার নেই</h4>
-                  <p className="text-xs text-gray-500 font-semibold">বর্তমানে কোনো অর্ডার পাওয়া যায়নি।</p>
+                <div className="py-12 bg-white rounded-2xl border border-gray-100 text-center p-5 shadow-soft">
+                  <Package className="w-9 h-9 text-gray-300 mx-auto mb-2" />
+                  <h4 className="font-bold text-gray-900 text-xs mb-0.5">No orders found</h4>
+                  <p className="text-[11px] text-gray-500 font-medium">No incoming orders match your filter criteria.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {(ordersSubTab === 'COMPLETED' ? filteredShopOrders : filteredShopOrders.slice(0, storeVisibleCount)).map((so) => {
+                  {filteredShopOrders.slice(0, storeVisibleCount).map((so) => {
                     const parentStatus = getParentOrderStatus(so.parentOrderId);
-                    const parentOrder = getParentOrder(so.parentOrderId);
-                    const rawServiceName = parentOrder?.service || parentOrder?.title;
-                    const serviceName = formatServiceName(rawServiceName);
                     const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
                     const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+                    const isActive = !isCanceled && !isDelivered;
+                    const { itemsText, helperNote } = extractShopOrderNoteAndItems(so);
+                    const parsedItems = parseShopOrderItems(so);
+                    const helperPhone = getParentOrderHelperPhone(so.parentOrderId);
+
+                    // Card color coding: Active (soft greenish), Finished (gray), Canceled (red)
+                    let cardContainerStyle = 'bg-emerald-50/40 border-emerald-200/90 shadow-xs';
+                    if (isDelivered) {
+                      cardContainerStyle = 'bg-gray-50/70 border-gray-200 shadow-xs';
+                    } else if (isCanceled) {
+                      cardContainerStyle = 'bg-rose-50/50 border-rose-200 shadow-xs';
+                    }
 
                     return (
                       <div
                         key={so.id}
-                        onClick={() => {
-                          fallbackStore.markShopOrderViewed(so.id);
-                          setSelectedShopOrderId(so.id);
-                        }}
-                        className="bg-white rounded-3xl border border-gray-100 p-4 shadow-sm space-y-3 hover:shadow-md transition-all cursor-pointer"
+                        className={`rounded-2xl border p-3.5 sm:p-4 space-y-3 transition-all ${cardContainerStyle}`}
                       >
-                        {/* Header: ID | Requested Time | Timer | Status */}
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                            <h4 className="font-mono text-emerald-800 font-black text-sm">
+                        {/* Header: ID | Time | Timer | Status Badge */}
+                        <div className="flex items-center justify-between gap-2 border-b border-black/5 pb-2.5">
+                          <div className="flex items-center space-x-2 flex-wrap text-xs">
+                            <span className="font-mono text-emerald-900 font-extrabold">
                               #{so.parentOrderId.slice(-6).toUpperCase()}
-                            </h4>
-                            <span className="text-xs font-semibold text-gray-400">|</span>
-                            <span className="text-xs font-bold text-gray-600">
+                            </span>
+                            <span className="text-gray-300 font-bold">•</span>
+                            <span className="text-[11px] font-semibold text-gray-500">
                               {formatOrderDateTime(so.createdAt)}
                             </span>
-                            <span className="text-xs font-semibold text-gray-400">|</span>
-                            <OrderTimer createdAt={so.createdAt} className="text-red-600 text-xs font-black" hideIcon />
+                            {isActive && (
+                              <>
+                                <span className="text-gray-300 font-bold">•</span>
+                                <OrderTimer createdAt={so.createdAt} className="text-rose-600 text-[11px] font-black" hideIcon />
+                              </>
+                            )}
                           </div>
-                          <div className="text-right">
+                          <div className="shrink-0">
                             {isCanceled ? (
-                              <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-red-100 text-red-800 border border-red-200">
+                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
                                 Canceled
                               </span>
                             ) : isDelivered ? (
-                              <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                Finished
+                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700 border border-gray-300">
+                                Delivered
+                              </span>
+                            ) : so.status === 'ACCEPTED' ? (
+                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                Confirmed
                               </span>
                             ) : (
-                              <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
-                                {so.status}
+                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
+                                Pending Action
                               </span>
                             )}
                           </div>
                         </div>
 
-                        {/* Service/Order Type Title and Truncated Details */}
-                        <div className="space-y-0.5 min-w-0">
-                          <h5 className="font-extrabold text-sm text-gray-900 truncate">
-                            {serviceName || 'Store Order'}
-                          </h5>
-                          <p className="text-xs text-gray-600 font-medium truncate">
-                            {so.itemsWithPrice && so.itemsWithPrice.length > 0
-                              ? so.itemsWithPrice.filter((i) => !isNoteItem(i.name)).map((i) => `${i.name}${i.price !== undefined ? ` (৳${i.price})` : ''}`).join(', ')
-                              : extractShopOrderNoteAndItems(so).itemsText || so.requestText}
-                          </p>
-                        </div>
+                        {/* Minimalist Items Box */}
+                        <div className="bg-white/90 rounded-xl p-2.5 border border-black/5 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-extrabold text-gray-500 pb-1 border-b border-gray-100">
+                            <span>ITEMS</span>
+                            {(() => {
+                              const shopForCard = fallbackStore.shops.get(so.shopId);
+                              const commPct = shopForCard?.commissionPercent;
+                              const total = so.price || 0;
+                              if (commPct && commPct > 0 && total > 0) {
+                                const commAmt = Math.round(total * (commPct / 100));
+                                const payable = Math.max(0, total - commAmt);
+                                return (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-gray-400 line-through font-semibold">৳{total}</span>
+                                    <span className="text-emerald-700 font-black">৳{payable}</span>
+                                    <span className="text-[9px] text-emerald-600 font-bold bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5">-{commPct}%</span>
+                                  </div>
+                                );
+                              }
+                              return <span className="text-emerald-700 font-bold">Total: ৳{total}</span>;
+                            })()}
+                          </div>
 
-                        {/* Actions: 3 In-Line Buttons (দেখতেছি: 30%, Accept: middle flex-1, Cancel: 30%) */}
-                        <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-gray-100 mt-1">
-                          {so.status === 'PENDING' && !isCanceled && !isDelivered ? (
-                            <div className="flex gap-1.5 w-full">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  fallbackStore.markShopOrderViewed(so.id);
-                                  setSelectedShopOrderId(so.id);
-                                }}
-                                className="w-[30%] py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-extrabold transition-all shadow-sm shrink-0 text-center"
-                              >
-                                দেখতেছি
-                              </button>
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  const confirmed = await showConfirm(
-                                    'অর্ডার গ্রহণ করুন',
-                                    'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
-                                    'হ্যাঁ, Accept করুন',
-                                    'বাতিল'
-                                  );
-                                  if (!confirmed) return;
-                                  fallbackStore.markShopOrderViewed(so.id);
-                                  handleUpdateStatus(so.id, 'ACCEPTED');
-                                }}
-                                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all shadow-sm text-center"
-                              >
-                                Accept
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  fallbackStore.markShopOrderViewed(so.id);
-                                  handleCancelOrderClick(so.id);
-                                }}
-                                className="w-[30%] py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-extrabold transition-all border border-red-100 shrink-0 text-center"
-                              >
-                                Cancel
-                              </button>
+                          {parsedItems.length > 0 ? (
+                            <div className="space-y-1">
+                              {parsedItems.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-xs py-0.5">
+                                  <div className="flex items-center space-x-1.5 min-w-0 pr-2">
+                                    <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
+                                    <span className="font-bold text-gray-800 break-words">{item.name}</span>
+                                    {item.unit && <span className="text-[10px] text-gray-400 font-medium">({item.unit})</span>}
+                                  </div>
+                                  {item.price && (
+                                    <span className="font-extrabold font-mono text-gray-900 text-xs shrink-0">
+                                      ৳{item.price}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           ) : (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedShopOrderId(so.id);
-                              }}
-                              className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1"
-                            >
-                              <span>View Details</span>
-                              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
-                            </button>
+                            <p className="text-xs text-gray-800 font-medium whitespace-pre-wrap py-0.5">
+                              {itemsText || so.requestText}
+                            </p>
                           )}
                         </div>
+
+                        {/* Helper's Note (if any) */}
+                        {helperNote && (
+                          <div className="p-2 rounded-xl bg-amber-50/90 border border-amber-200/80 text-xs text-amber-950 font-medium flex items-start gap-1.5">
+                            <MessageSquare className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                            <p className="leading-snug break-words">
+                              <span className="font-extrabold text-amber-900">Note: </span>
+                              {helperNote}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Helper Contact Bar */}
+                        <div className="flex items-center justify-between bg-white/70 px-3 py-2 rounded-xl border border-black/5 gap-2">
+                          <div className="flex items-center space-x-2 min-w-0">
+                            <div className="w-6 h-6 rounded-lg bg-emerald-700 text-white flex items-center justify-center font-extrabold text-[10px] shrink-0">
+                              {so.helperName ? so.helperName.charAt(0).toUpperCase() : 'H'}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-gray-900 truncate">{so.helperName || 'Helper'}</p>
+                            </div>
+                          </div>
+                          {helperPhone && (
+                            <div className="flex items-center space-x-1.5 shrink-0">
+                              <a
+                                href={`tel:${helperPhone}`}
+                                className="py-1 px-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-[11px] flex items-center space-x-1 transition-all"
+                              >
+                                <Phone className="w-3 h-3 text-gray-600" />
+                                <span>Call</span>
+                              </a>
+                              <a
+                                href={`https://wa.me/880${helperPhone.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="py-1 px-2.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold text-[11px] flex items-center space-x-1 transition-all shadow-xs"
+                              >
+                                <MessageSquare className="w-3 h-3 text-white" />
+                                <span>WhatsApp</span>
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Action Buttons */}
+                        {so.status === 'PENDING' && !isCanceled && !isDelivered ? (
+                          <div className="flex space-x-2 pt-1">
+                            <button
+                              onClick={() => handleConfirmStoreOrder(so.id)}
+                              className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-sm transition-all active:scale-95 text-center flex items-center justify-center space-x-1.5"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Accept (হ্যাঁ)</span>
+                            </button>
+                            <button
+                              onClick={() => handleCancelOrderClick(so.id)}
+                              className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all active:scale-95 text-center flex items-center justify-center space-x-1.5"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>Decline (না)</span>
+                            </button>
+                          </div>
+                        ) : so.status === 'ACCEPTED' && !isCanceled && !isDelivered ? (
+                          <div className="flex items-center justify-between px-3 py-2 bg-emerald-100/50 rounded-xl border border-emerald-200/80">
+                            <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-900">
+                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Order Confirmed</span>
+                            </div>
+                            <button
+                              onClick={() => handleCancelOrderClick(so.id)}
+                              className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline"
+                            >
+                              Cancel Order
+                            </button>
+                          </div>
+                        ) : isCanceled && so.note ? (
+                          <div className="py-1.5 px-3 bg-rose-100/70 rounded-xl border border-rose-200 text-center">
+                            <p className="text-[11px] font-bold text-rose-800">
+                              Cancel Note: {so.note}
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
 
-                  {ordersSubTab === 'COMPLETED' ? (
-                    completedHasMore && (
-                      <button
-                        onClick={() => fetchCompletedPage(false)}
-                        disabled={completedLoading}
-                        className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-2 disabled:opacity-50"
-                      >
-                        {completedLoading ? 'Loading...' : 'Load More'}
-                      </button>
-                    )
-                  ) : (
-                    filteredShopOrders.length > storeVisibleCount && (
-                      <button
-                        onClick={() => setStoreVisibleCount(prev => prev + PAGE_SIZE)}
-                        className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs rounded-2xl transition-all text-center mt-2"
-                      >
-                        Load More
-                      </button>
-                    )
+                  {(filteredShopOrders.length > storeVisibleCount || completedHasMore) && (
+                    <button
+                      onClick={async () => {
+                        if (completedHasMore) {
+                          await fetchCompletedPage(false);
+                        }
+                        setStoreVisibleCount((prev) => prev + PAGE_SIZE);
+                      }}
+                      disabled={completedLoading}
+                      className="w-full py-3 bg-white hover:bg-gray-50 border border-gray-200 text-gray-800 font-extrabold text-xs rounded-2xl transition-all text-center mt-2 shadow-xs disabled:opacity-50"
+                    >
+                      {completedLoading ? 'লোড হচ্ছে...' : 'আরও দেখুন (Load More)'}
+                    </button>
                   )}
                 </div>
               )}
@@ -2151,46 +1518,27 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         </div>
       )}
 
-      {/* ── Custom Pricing Required Theme Modal ── */}
-      {showPriceAlertModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-amber-100 animate-in zoom-in-95 duration-200 overflow-hidden">
-            <div className="p-6 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shadow-inner">
-                <AlertTriangle className="w-7 h-7 animate-bounce" />
-              </div>
-              <div className="space-y-1.5">
-                <h3 className="text-base font-black text-gray-900">পণ্যের দাম আবশ্যক</h3>
-                <p className="text-xs text-gray-600 font-semibold leading-relaxed">
-                  দোকানের পণ্যের দাম (Product Price) যোগ করা ছাড়া Handed Over (হস্তান্তর) স্ট্যাটাসে যাওয়া যাবে না। অনুগ্রহ করে আগে দামটি ইনপুট দিন।
-                </p>
-              </div>
-              <button
-                onClick={() => setShowPriceAlertModal(false)}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black shadow-md shadow-emerald-600/20 active:scale-95 transition-all"
-              >
-                ঠিক আছে, বুঝতে পেরেছি
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Store New Order Alert Fullscreen Overlay with Carousel ── */}
       {isAlarmPlaying && unviewedShopOrderIds.size > 0 && (
         <StoreNewOrderAlertOverlay
           unviewedShopOrderIds={unviewedShopOrderIds}
           onAccept={async (soId) => {
-            const confirmed = await showConfirm(
-              'অর্ডার গ্রহণ করুন',
-              'আপনি কি এই অর্ডারটি গ্রহণ করতে চান? গ্রহণ করার পর অর্ডারটির কাজ শুরু হবে।',
-              'হ্যাঁ, Accept করুন',
-              'বাতিল'
-            );
-            if (!confirmed) return;
-
-            await handleUpdateStatus(soId, 'ACCEPTED');
             fallbackStore.markShopOrderViewed(soId);
+            await fallbackStore.updateShopOrder(soId, (prev) => ({
+              ...prev,
+              status: 'ACCEPTED',
+              statusHistory: [
+                ...prev.statusHistory,
+                {
+                  status: 'ACCEPTED',
+                  timestamp: new Date().toISOString(),
+                  actor: user?.displayName || 'Store',
+                  note: 'Store confirmed the order.',
+                },
+              ],
+            }), 'store');
+
             setUnviewedShopOrderIds((prev) => {
               const updated = new Set(prev);
               updated.delete(soId);
@@ -2206,18 +1554,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               updated.delete(soId);
               return updated;
             });
-            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
-          }}
-          onViewOne={(soId) => {
-            fallbackStore.markShopOrderViewed(soId);
-            setUnviewedShopOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(soId);
-              return updated;
-            });
-            setLocalActiveTab('ORDERS');
-            setOrdersSubTab('NEW');
-            setSelectedShopOrderId(soId);
             if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
           }}
           onDismissAll={() => {
@@ -2241,7 +1577,6 @@ interface StoreNewOrderAlertOverlayProps {
   unviewedShopOrderIds: Set<string>;
   onAccept: (soId: string) => Promise<void>;
   onCancel: (soId: string) => void;
-  onViewOne: (soId: string) => void;
   onDismissAll: () => void;
 }
 
@@ -2249,9 +1584,9 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
   unviewedShopOrderIds,
   onAccept,
   onCancel,
-  onViewOne,
   onDismissAll,
 }) => {
+  const { showConfirm } = useModal();
   const shopOrderIdList = Array.from(unviewedShopOrderIds);
   const [currentIdx, setCurrentIdx] = useState(shopOrderIdList.length - 1);
   const [processing, setProcessing] = useState(false);
@@ -2266,14 +1601,27 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
 
   const handleAcceptClick = async () => {
     if (!shopOrder || processing) return;
+    const confirmed = await showConfirm(
+      'অর্ডার নিশ্চিতকরণ (Confirm Order)',
+      `আপনি কি এই অর্ডারটি গ্রহণ ও নিশ্চিত (Yes) করতে চান? মোট মূল্য: ৳${shopOrder.price || 0}`,
+      'হ্যাঁ (Yes)',
+      'বাতিল'
+    );
+    if (!confirmed) return;
     setProcessing(true);
     await onAccept(shopOrder.id);
     setProcessing(false);
   };
 
+  const handleCancelClick = () => {
+    if (!shopOrder || processing) return;
+    onCancel(shopOrder.id);
+  };
+
   if (!shopOrder) return null;
 
   const helperPhone = parentOrder?.helperPhone || parentOrder?.customerPhone || '';
+  const parsedItems = parseShopOrderItems(shopOrder);
 
   return (
     <div
@@ -2339,12 +1687,56 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
               const { itemsText, helperNote } = extractShopOrderNoteAndItems(shopOrder);
               return (
                 <div className="space-y-2">
-                  <div className="bg-red-50/60 border border-red-100 rounded-2xl p-3.5">
-                    <p className="text-[10px] text-red-800 font-bold uppercase tracking-wide mb-1">অর্ডার / প্রোডাক্ট বিবরণ</p>
-                    <p className="text-sm text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
-                      {itemsText || shopOrder.requestText}
-                    </p>
+                  <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5 space-y-2">
+                    <p className="text-[10px] text-gray-500 font-extrabold uppercase tracking-wide">অর্ডার আইটেম ও মূল্য</p>
+                    {parsedItems.length > 0 ? (
+                      <div className="divide-y divide-gray-100">
+                        {parsedItems.map((it, idx) => (
+                          <div key={idx} className="py-1.5 flex items-center justify-between text-xs">
+                            <span className="font-extrabold text-gray-800">{it.name}</span>
+                            {it.price ? (
+                              <span className="font-mono font-bold text-emerald-700">৳{it.price}</span>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
+                        {itemsText || shopOrder.requestText}
+                      </p>
+                    )}
+
+                    {/* Total Cost & Commission Summary */}
+                    {(() => {
+                      const shopForDetail = fallbackStore.shops.get(shopOrder.shopId);
+                      const commPct = shopForDetail?.commissionPercent;
+                      const total = shopOrder.price || 0;
+                      const hasComm = commPct && commPct > 0 && total > 0;
+                      const commAmt = hasComm ? Math.round(total * (commPct! / 100)) : 0;
+                      const payable = hasComm ? Math.max(0, total - commAmt) : total;
+                      return (
+                        <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-gray-50 to-emerald-50 overflow-hidden">
+                          <div className="px-3 pt-2.5 pb-1.5 space-y-1">
+                            <div className="flex items-center justify-between text-xs font-bold text-gray-600">
+                              <span>মোট পণ্যের মূল্য (Total Cost)</span>
+                              <span className="font-mono text-gray-900">৳{total}</span>
+                            </div>
+                            {hasComm && (
+                              <div className="flex items-center justify-between text-xs font-bold text-rose-600">
+                                <span>কমিশন ({commPct}%)</span>
+                                <span className="font-mono">− ৳{commAmt}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="mx-2 mb-2 bg-emerald-600 rounded-xl px-3 py-2 flex items-center justify-between shadow-sm">
+                            <span className="text-[10px] font-black text-emerald-100 uppercase tracking-wider">পরিশোধযোগ্য</span>
+                            <span className="font-mono font-black text-base text-white">৳{payable}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
+
                   {helperNote && (
                     <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-3">
                       <p className="text-[10px] text-amber-800 font-bold uppercase tracking-wide mb-0.5">হেলপারের বিশেষ নোট (Helper's Note)</p>
@@ -2360,16 +1752,21 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
             {/* Helper Info with Phone Number */}
             <div className="flex items-center space-x-3 bg-gray-50 p-3 rounded-2xl border border-gray-100">
               <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-base shadow-sm shrink-0">
-                {shopOrder.helperName.charAt(0).toUpperCase()}
+                {shopOrder.helperName ? shopOrder.helperName.charAt(0).toUpperCase() : 'H'}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] text-emerald-700 font-extrabold uppercase tracking-wide">Helper Details</p>
                 <p className="text-xs font-black text-gray-900 truncate">{shopOrder.helperName}</p>
                 {helperPhone && (
-                  <p className="text-xs font-bold text-gray-600 flex items-center space-x-1 mt-0.5">
-                    <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
-                    <span>{helperPhone}</span>
-                  </p>
+                  <div className="flex items-center space-x-2 mt-1">
+                    <a
+                      href={`tel:${helperPhone}`}
+                      className="text-xs font-bold text-emerald-700 flex items-center space-x-1 hover:underline"
+                    >
+                      <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                      <span>{helperPhone}</span>
+                    </a>
+                  </div>
                 )}
               </div>
             </div>
@@ -2418,27 +1815,24 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
             </div>
           )}
 
-          {/* Action buttons (3 In-Line Buttons: দেখতেছি [30%], Accept [flex-1], Cancel [30%]) */}
+          {/* Action buttons (Two Buttons: Yes & No with confirmation) */}
           <div className="px-5 pb-5 pt-2">
-            <div className="flex space-x-1.5 w-full">
-              <button
-                onClick={() => onViewOne(shopOrder.id)}
-                className="w-[30%] py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl font-extrabold text-xs shadow-md transition-all active:scale-95 text-center shrink-0"
-              >
-                দেখতেছি
-              </button>
+            <div className="flex space-x-2 w-full">
               <button
                 onClick={handleAcceptClick}
                 disabled={processing}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 text-center"
+                className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs shadow-lg shadow-emerald-600/20 transition-all active:scale-[0.98] disabled:opacity-60 text-center flex items-center justify-center space-x-1.5"
               >
-                {processing ? 'Accpet...' : '✅ Accept'}
+                <Check className="w-4 h-4" />
+                <span>{processing ? 'Processing...' : 'Yes (হ্যাঁ)'}</span>
               </button>
               <button
-                onClick={() => onCancel(shopOrder.id)}
-                className="w-[30%] py-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-2xl font-extrabold text-xs transition-all active:scale-95 shrink-0 text-center"
+                onClick={handleCancelClick}
+                disabled={processing}
+                className="flex-1 py-3.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-2xl font-extrabold text-xs transition-all active:scale-[0.98] text-center flex items-center justify-center space-x-1.5"
               >
-                Cancel
+                <X className="w-4 h-4" />
+                <span>No (না)</span>
               </button>
             </div>
           </div>
@@ -2459,7 +1853,7 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
       <p className="mt-4 text-white/70 text-[11px] font-medium text-center relative z-10">
         {shopOrderIdList.length > 1
           ? `${shopOrderIdList.length}টি দোকান অর্ডার আপনার অনুমোদনের অপেক্ষায়`
-          : 'কাস্টমার/হেলপারের রিকুয়েস্ট চেক করুন'}
+          : 'কাস্টমার/হেলপারের রিকুয়েস্ট চেক করে নিশ্চিত করুন'}
       </p>
     </div>
   );

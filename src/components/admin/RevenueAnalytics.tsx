@@ -662,7 +662,127 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
         </div>
       </div>
 
-      {/* Order & Goods Values Cards Row */}
+      {/* ── Average Order Size & Product Basket Size Hero Card ── */}
+      <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-purple-800 rounded-3xl p-6 text-white shadow-xl border border-white/10">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/15 pb-5">
+          <div className="flex items-center space-x-3">
+            <div className="bg-white/20 backdrop-blur-md rounded-2xl p-3 shadow-inner">
+              <ShoppingBag className="w-7 h-7 text-white" />
+            </div>
+            <div>
+              <span className="text-[11px] font-black uppercase tracking-widest text-blue-200 block">
+                Order Value & Basket Size Overview
+              </span>
+              <h3 className="text-xl font-black text-white">Average Order & Product Size</h3>
+              <p className="text-xs text-blue-200/80 font-medium">
+                Based on {analyticsData.totalOrdersCount} total orders ({analyticsData.completedCount} delivered) in selected period
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 bg-white/10 backdrop-blur-md px-3.5 py-1.5 rounded-2xl border border-white/15 text-xs font-bold text-blue-100">
+            <span>Delivered: <strong className="text-white">{analyticsData.completedCount}</strong></span>
+            <span className="opacity-40">•</span>
+            <span>Canceled: <strong className="text-rose-200">{analyticsData.canceledCount}</strong></span>
+          </div>
+        </div>
+
+        {/* Dual Primary Metrics: Products Only vs Total Order Spend */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+          {/* Card A: Average Products Cost (Basket Size) */}
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/15">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider text-blue-200">
+                Avg. Products Paid (Basket Size)
+              </span>
+              <span className="text-[10px] font-extrabold uppercase bg-emerald-400/20 text-emerald-200 px-2 py-0.5 rounded-full">
+                Products Only
+              </span>
+            </div>
+            <div className="text-4xl font-black text-white mt-2">
+              ৳{analyticsData.totalOrdersCount > 0
+                ? Math.round(analyticsData.totalGoodsValueAllOrders / analyticsData.totalOrdersCount).toLocaleString('en-US')
+                : '—'}
+            </div>
+            <p className="text-xs text-blue-200 font-semibold mt-1">
+              Average spent on products/goods per order
+            </p>
+            <div className="mt-3 pt-3 border-t border-white/15 flex items-center justify-between text-xs">
+              <span className="text-blue-200 font-medium">Avg. for Delivered:</span>
+              <span className="font-extrabold text-white">
+                ৳{analyticsData.completedCount > 0
+                  ? Math.round(analyticsData.successfulGoodsValue / analyticsData.completedCount).toLocaleString('en-US')
+                  : '—'}
+              </span>
+            </div>
+          </div>
+
+          {/* Card B: Average Total Order Size (Products + Delivery Fee) */}
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/15">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider text-purple-200">
+                Avg. Total Order Spend
+              </span>
+              <span className="text-[10px] font-extrabold uppercase bg-purple-400/20 text-purple-200 px-2 py-0.5 rounded-full">
+                Goods + Delivery
+              </span>
+            </div>
+            <div className="text-4xl font-black text-white mt-2">
+              ৳{analyticsData.totalOrdersCount > 0
+                ? Math.round(analyticsData.totalOrderValueAllOrders / analyticsData.totalOrdersCount).toLocaleString('en-US')
+                : '—'}
+            </div>
+            <p className="text-xs text-purple-200 font-semibold mt-1">
+              Total customer payment per order (incl. fee)
+            </p>
+            <div className="mt-3 pt-3 border-t border-white/15 flex items-center justify-between text-xs">
+              <span className="text-purple-200 font-medium">Avg. for Delivered:</span>
+              <span className="font-extrabold text-white">
+                ৳{analyticsData.completedCount > 0
+                  ? Math.round(analyticsData.successfulOrderValue / analyticsData.completedCount).toLocaleString('en-US')
+                  : '—'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Supporting Stats */}
+        <div className="mt-5 pt-4 border-t border-white/15 grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div>
+            <span className="text-[10px] text-blue-200 font-bold uppercase block">Avg Delivery Fee</span>
+            <span className="text-lg font-black text-white">
+              ৳{analyticsData.totalOrdersCount > 0
+                ? Math.round(analyticsData.totalDeliveryFeesAllOrders / analyticsData.totalOrdersCount).toLocaleString('en-US')
+                : '—'}
+            </span>
+            <span className="text-[10px] text-blue-300 font-medium block">per order</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-blue-200 font-bold uppercase block">Total Products Value</span>
+            <span className="text-lg font-black text-white">
+              ৳{analyticsData.totalGoodsValueAllOrders.toLocaleString('en-US')}
+            </span>
+            <span className="text-[10px] text-blue-300 font-medium block">all orders in period</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-blue-200 font-bold uppercase block">Delivery Success Rate</span>
+            <span className="text-lg font-black text-white">
+              {analyticsData.totalOrdersCount > 0
+                ? Math.round((analyticsData.completedCount / analyticsData.totalOrdersCount) * 100)
+                : 0}%
+            </span>
+            <span className="text-[10px] text-blue-300 font-medium block">{analyticsData.completedCount}/{analyticsData.totalOrdersCount} orders</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-blue-200 font-bold uppercase block">Total Order Gross</span>
+            <span className="text-lg font-black text-white">
+              ৳{analyticsData.totalOrderValueAllOrders.toLocaleString('en-US')}
+            </span>
+            <span className="text-[10px] text-blue-300 font-medium block">goods + delivery fees</span>
+          </div>
+        </div>
+      </div>
+
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Total Orders Overview */}
         <div className="p-5 rounded-3xl bg-white border border-gray-100 shadow-soft flex flex-col justify-between">

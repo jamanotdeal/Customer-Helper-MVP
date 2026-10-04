@@ -164,6 +164,23 @@ export async function saveFcmToken(userId: string, token: string): Promise<void>
 }
 
 /**
+ * Removes this device's FCM token from the user's Firestore profile on logout
+ * so notifications are not delivered to subsequent users on the same device.
+ */
+export async function removeFcmToken(userId: string): Promise<void> {
+  try {
+    await setDoc(doc(db, 'users', userId), { fcmToken: '' }, { merge: true });
+    const existing = fallbackStore.users.get(userId);
+    if (existing) {
+      const updated = { ...existing, fcmToken: undefined };
+      fallbackStore.users.set(userId, updated);
+    }
+  } catch (e: any) {
+    console.warn('[FCM] removeFcmToken note:', e?.message || e);
+  }
+}
+
+/**
  * One-time read: loads the customer's saved delivery addresses from their Firestore user profile.
  * Should be called once at login time. Result is cached to localStorage by the caller.
  */
@@ -339,7 +356,7 @@ function coalescedNotifId(kind: string, key: string, at: number = Date.now()): s
 }
 
 // Helper to recursively strip undefined properties before saving to Firestore
-function cleanForFirestore<T>(data: T): T {
+export function cleanForFirestore<T>(data: T): T {
   if (data === undefined || data === null) return data;
   return JSON.parse(JSON.stringify(data));
 }
@@ -1021,13 +1038,6 @@ class FallbackStore {
     }
   }
 
-  // ─── Shared notification snapshot handler ─────────────────────────────────
-  // Processes any notification snapshot (from any role-scoped query) and:
-  //   1. Stores notifications in the local map keyed by the current userId
-  //      (broadcast notifications like 'all-helpers' are keyed under the actual uid)
-  //   2. Fires browser popups only for genuinely NEW, unread, targeted notifications
-  //      Fix 2: _knownNotifIds is now persisted to sessionStorage so page refreshes
-  //             don't re-fire all previously seen notifications.
   /**
    * Subscribes to this device's slice of the `notifications` collection.
    *
@@ -1128,15 +1138,55 @@ class FallbackStore {
     return this.doesUserMatchSegment(profile, target.slice('segment:'.length));
   }
 
+  // ─── Shared notification snapshot handler ─────────────────────────────────
+  // Processes any notification snapshot (from any role-scoped query) and:
+  //   1. Stores notifications in the local map ONLY for the logged in userId
+  //      (broadcast notifications like 'all-helpers' are strictly verified against the user's role)
+  //   2. Fires browser popups & dispatches instant new-order-received events for eligible helpers
   private _handleNotificationSnapshot(snapshot: any, userId: string) {
-    const BROADCAST_IDS = new Set(['all', 'all-helpers', 'all-customers', 'all-commuter-helpers', 'all-dedicated-helpers', 'all-stores']);
-    // Fix 4: Max notifications to store per user in memory.
     const MAX_NOTIFS_PER_USER = 100;
 
     // Hydrate this user's seen/read sets before anything reads them.
     this._ensureNotifState(userId);
 
-    const map = new Map<string, AppNotification[]>();
+    const currentUser = this.users.get(userId);
+    const userNotifs: AppNotification[] = [];
+
+    // Helper check helper function
+    const isTargetForThisUser = (notif: AppNotification): boolean => {
+      const isHelperBroadcast =
+        (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
+        (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
+        (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated');
+
+      let helperBroadcastEligible = isHelperBroadcast;
+      if (isHelperBroadcast && notif.type === 'new_order' && notif.orderId && currentUser) {
+        const targetOrder = this.orders.get(notif.orderId);
+        const areas = this.pricingSettings.allowedDeliveryAreas;
+        if (targetOrder && areas && areas.length > 0) {
+          helperBroadcastEligible = isHelperEligibleForOrder(
+            currentUser,
+            targetOrder,
+            areas,
+            this.pricingSettings.allowedDeliveryAreasEnabled
+          );
+        }
+      }
+
+      const isCustomerBroadcast = notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin';
+      const isStoreBroadcast = notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId));
+      const isSegmentMatch = Boolean(notif.userId && this._isSegmentNotifForUser(notif.userId, userId));
+
+      return (
+        notif.userId === userId ||
+        notif.userId === 'all' ||
+        helperBroadcastEligible ||
+        isCustomerBroadcast ||
+        isStoreBroadcast ||
+        isSegmentMatch
+      );
+    };
+
     snapshot.docs.forEach((docSnap: any) => {
       const raw = docSnap.data() as AppNotification;
       // Overlay the device-local read state. Broadcast documents are shared by
@@ -1145,30 +1195,17 @@ class FallbackStore {
       // already opened them.
       const data: AppNotification =
         !raw.read && this._readNotifIds.has(raw.id) ? { ...raw, read: true } : raw;
-      const isSegment = !!data.userId && data.userId.startsWith('segment:');
-      if (isSegment && !this._isSegmentNotifForUser(data.userId, userId)) return;
-      const isBroadcast = BROADCAST_IDS.has(data.userId) || isSegment;
-      // Broadcast notifications are stored under the current user's uid locally
-      const storeKey = isBroadcast ? userId : data.userId;
-      const userList = map.get(storeKey) || [];
-      userList.push(data);
-      map.set(storeKey, userList);
-    });
-    map.forEach((list, key) => {
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      // Fix 4: Cap list length to avoid unbounded memory usage.
-      this.notifications.set(key, list.slice(0, MAX_NOTIFS_PER_USER));
+      if (isTargetForThisUser(data)) {
+        userNotifs.push(data);
+      }
     });
 
-    // Fire a popup only for genuinely NEW, unread notifications targeting this
-    // device. _knownNotifIds comes from localStorage, so everything announced on
-    // an earlier run — earlier page load, earlier launch of the Android app — is
-    // already in the set and stays quiet.
-    if (this.currentUserId) {
+    userNotifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    this.notifications.set(userId, userNotifs.slice(0, MAX_NOTIFS_PER_USER));
+
+    // Fire browser popup and instant dispatch only for genuinely NEW, unread notifications targeting this device.
+    if (this.currentUserId && this.currentUserId === userId) {
       const uid = this.currentUserId;
-      const currentUser = this.users.get(uid);
-      // True only when this user has never had a notification announced on this
-      // device (first login here), not on every refresh or app restart.
       const isInitial = this._knownNotifIds.size === 0;
 
       // The first snapshot is the existing window, delivered because the
@@ -1194,42 +1231,19 @@ class FallbackStore {
         // re-announce it, even if the shared broadcast doc still says unread.
         if (this._readNotifIds.has(notif.id)) return;
 
-        // Determine if this broadcast notification targets the current user's role/type
-        const isHelperBroadcast =
-          (notif.userId === 'all-helpers' && currentUser?.isHelper) ||
-          (notif.userId === 'all-commuter-helpers' && currentUser?.isHelper && currentUser?.helperType !== 'dedicated') ||
-          (notif.userId === 'all-dedicated-helpers' && currentUser?.isHelper && currentUser?.helperType === 'dedicated');
-
-        // For helper broadcast new-order notifications, apply area-based eligibility filtering
-        // on the receiver side so only eligible helpers see the popup on their own device.
-        let helperBroadcastEligible = isHelperBroadcast;
-        if (isHelperBroadcast && notif.type === 'new_order' && notif.orderId && currentUser) {
-          const targetOrder = this.orders.get(notif.orderId);
-          const areas = this.pricingSettings.allowedDeliveryAreas;
-          if (targetOrder && areas && areas.length > 0) {
-            helperBroadcastEligible = isHelperEligibleForOrder(
-              currentUser,
-              targetOrder,
-              areas,
-              this.pricingSettings.allowedDeliveryAreasEnabled
-            );
+        if (isTargetForThisUser(notif)) {
+          // Instant order dispatch for helper overlay
+          if (notif.orderId && notif.type === 'new_order' && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('new-order-received', { detail: { orderId: notif.orderId } }));
           }
-        }
 
-        const targets =
-          notif.userId === uid ||
-          notif.userId === 'all' ||
-          helperBroadcastEligible ||
-          (notif.userId === 'all-customers' && currentUser && !currentUser.isHelper && currentUser.role !== 'admin') ||
-          (notif.userId === 'all-stores' && currentUser && (currentUser.isStoreApproved || currentUser.role === 'store' || Boolean(currentUser.storeId))) ||
-          (!!notif.userId && this._isSegmentNotifForUser(notif.userId, uid));
-
-        if (targets && !notif.read) {
-          if (isFirstSnapshot) {
-            newUnreadCount++;
-            toTrigger.push(notif);
-          } else {
-            triggerBrowserNotification(notif);
+          if (!notif.read) {
+            if (isFirstSnapshot) {
+              newUnreadCount++;
+              toTrigger.push(notif);
+            } else {
+              triggerBrowserNotification(notif);
+            }
           }
         }
       });
@@ -1259,6 +1273,7 @@ class FallbackStore {
       }
     }
 
+    this.saveLocalStore();
     this.notify();
   }
 
@@ -1323,6 +1338,14 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this.notifications.clear();
+    this._knownNotifIds.clear();
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('jamanot_known_notif_ids');
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('jamanot_notifications_store');
+    }
   }
 
   // ─── Role-scoped Firestore listener initialization ────────────────────────
@@ -1563,6 +1586,21 @@ class FallbackStore {
         )
       );
 
+      if (effectiveStoreId && effectiveStoreId !== userId) {
+        unsubs.push(
+          onSnapshot(
+            doc(db, 'wallets', effectiveStoreId),
+            (docSnap) => {
+              if (docSnap.exists()) {
+                this.wallets.set(effectiveStoreId, docSnap.data() as Wallet);
+                this.notify();
+              }
+            },
+            (err) => console.warn('[Firestore] Store shop wallet sync note:', err)
+          )
+        );
+      }
+
       // Store owner's withdrawals (realtime)
       unsubs.push(
         onSnapshot(
@@ -1580,6 +1618,25 @@ class FallbackStore {
           (err) => console.warn('[Firestore] Store withdrawals sync note:', err)
         )
       );
+
+      if (effectiveStoreId && effectiveStoreId !== userId) {
+        unsubs.push(
+          onSnapshot(
+            query(collection(db, 'withdrawals'), where('helperId', '==', effectiveStoreId), limit(50)),
+            (snapshot) => {
+              snapshot.docChanges().forEach((change) => {
+                if (change.type === 'removed') {
+                  this.withdrawals.delete(change.doc.id);
+                } else {
+                  this.withdrawals.set(change.doc.id, change.doc.data() as WithdrawalRequest);
+                }
+              });
+              this.notify();
+            },
+            (err) => console.warn('[Firestore] Store shop withdrawals sync note:', err)
+          )
+        );
+      }
 
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
@@ -1616,8 +1673,8 @@ class FallbackStore {
                   incoming.coinsDeductedAt = new Date().toISOString();
                   // Deduct coins and persist the flag on the order doc
                   this.deductCoinsForFreeDelivery(userId, coinsToDeduct, incoming.id).then(() => {
-                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => {});
-                  }).catch(() => {});
+                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => { });
+                  }).catch(() => { });
                 }
 
                 this.orders.set(change.doc.id, incoming);
@@ -1916,13 +1973,14 @@ class FallbackStore {
         onSnapshot(
           query(collection(db, 'orderFeedbacks'), orderBy('createdAt', 'desc'), limit(200)),
           (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === 'removed') {
-                this.orderFeedbacks.delete(change.doc.id);
-              } else {
-                this.orderFeedbacks.set(change.doc.id, change.doc.data() as OrderFeedback);
-              }
+            const currentIds = new Set(snapshot.docs.map((d) => d.id));
+            for (const key of Array.from(this.orderFeedbacks.keys())) {
+              if (!currentIds.has(key)) this.orderFeedbacks.delete(key);
+            }
+            snapshot.docs.forEach((docSnap) => {
+              this.orderFeedbacks.set(docSnap.id, docSnap.data() as OrderFeedback);
             });
+            this.saveLocalStore();
             this.notify();
           },
           (err) => console.warn('[Firestore] Admin orderFeedbacks sync note:', err)
@@ -1934,15 +1992,17 @@ class FallbackStore {
         onSnapshot(
           query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(300)),
           (snapshot) => {
+            const currentAdminNotifs = new Map<string, AppNotification>();
             snapshot.docs.forEach((docSnap) => {
               const n = docSnap.data() as AppNotification;
               if (n.isAdminPush || n.createdByAdmin || n.id?.startsWith('admin-notif-') || n.id?.startsWith('notif-disp-')) {
-                this.adminNotificationsHistory.set(n.id, n);
+                currentAdminNotifs.set(n.id || docSnap.id, n);
               }
             });
+            this.adminNotificationsHistory = currentAdminNotifs;
             this._handleNotificationSnapshot(snapshot, userId);
-            this.notify();
             this.saveLocalStore();
+            this.notify();
           },
           (err) => console.warn('[Firestore] Admin notifications sync note:', err)
         )
@@ -1973,6 +2033,7 @@ class FallbackStore {
   private async _adminInitialFetch() {
     try {
       await Promise.all([
+        this.getAllOrders(),
         this._fetchAdminUsers(),
         this._fetchAdminWithdrawals(),
         this._fetchAdminHelperApplications(),
@@ -1988,6 +2049,7 @@ class FallbackStore {
         this._fetchAdminScheduledNotifications(),
         this._fetchServerAddresses(),
       ]);
+      this.saveLocalStore();
       this.notify();
     } catch (err) {
       console.warn('[Firestore] Admin initial fetch error:', err);
@@ -1999,7 +2061,7 @@ class FallbackStore {
   // Pass a specific collection name to refresh only that subset, or omit
   // to refresh all non-realtime admin collections.
   public async refreshAdminData(
-    subset?: 'users' | 'withdrawals' | 'helperApplications' | 'storeApplications' |
+    subset?: 'orders' | 'users' | 'withdrawals' | 'helperApplications' | 'storeApplications' |
       'orderFeedbacks' | 'feeSuggestions' | 'customModals' | 'rewardPrizes' |
       'shops' | 'shopOrders' | 'wallets' | 'walletTransactions' | 'scheduledNotifications' | 'serverAddresses' | 'all'
   ): Promise<void> {
@@ -2010,6 +2072,7 @@ class FallbackStore {
         return;
       }
       switch (target) {
+        case 'orders': await this.getAllOrders(); break;
         case 'users': await this._fetchAdminUsers(); break;
         case 'withdrawals': await this._fetchAdminWithdrawals(); break;
         case 'helperApplications': await this._fetchAdminHelperApplications(); break;
@@ -2025,6 +2088,7 @@ class FallbackStore {
         case 'scheduledNotifications': await this._fetchAdminScheduledNotifications(); break;
         case 'serverAddresses': await this._fetchServerAddresses(); break;
       }
+      this.saveLocalStore();
       this.notify();
     } catch (err) {
       console.warn('[Firestore] refreshAdminData error:', err);
@@ -2032,38 +2096,87 @@ class FallbackStore {
   }
 
   private async _fetchAdminUsers() {
-    const snap = await getDocs(query(collection(db, 'users'), limit(150)));
-    snap.docs.forEach((d) => { const u = d.data() as UserProfile; this.users.set(u.uid, u); });
+    const snap = await getDocs(query(collection(db, 'users'), limit(500)));
+    const map = new Map<string, UserProfile>();
+    snap.docs.forEach((d) => {
+      const u = d.data() as UserProfile;
+      const uid = u.uid || d.id;
+      map.set(uid, { ...u, uid });
+    });
+    this.users = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminWithdrawals() {
-    const snap = await getDocs(query(collection(db, 'withdrawals'), limit(100)));
-    snap.docs.forEach((d) => { const w = d.data() as WithdrawalRequest; this.withdrawals.set(w.id, w); });
+    const snap = await getDocs(query(collection(db, 'withdrawals'), limit(300)));
+    const map = new Map<string, WithdrawalRequest>();
+    snap.docs.forEach((d) => {
+      const w = d.data() as WithdrawalRequest;
+      const id = w.id || d.id;
+      map.set(id, { ...w, id });
+    });
+    this.withdrawals = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminHelperApplications() {
-    const snap = await getDocs(query(collection(db, 'helperApplications'), limit(100)));
-    snap.docs.forEach((d) => { const a = d.data() as HelperApplication; this.helperApplications.set(a.id, a); });
+    const snap = await getDocs(query(collection(db, 'helperApplications'), limit(300)));
+    const map = new Map<string, HelperApplication>();
+    snap.docs.forEach((d) => {
+      const a = d.data() as HelperApplication;
+      const id = a.id || d.id;
+      map.set(id, { ...a, id });
+    });
+    this.helperApplications = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminStoreApplications() {
-    const snap = await getDocs(query(collection(db, 'storeApplications'), limit(100)));
-    snap.docs.forEach((d) => { const a = d.data() as StoreApplication; this.storeApplications.set(a.id, a); });
+    const snap = await getDocs(query(collection(db, 'storeApplications'), limit(300)));
+    const map = new Map<string, StoreApplication>();
+    snap.docs.forEach((d) => {
+      const a = d.data() as StoreApplication;
+      const id = a.id || d.id;
+      map.set(id, { ...a, id });
+    });
+    this.storeApplications = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminOrderFeedbacks() {
-    const snap = await getDocs(query(collection(db, 'orderFeedbacks'), limit(100)));
-    snap.docs.forEach((d) => { const f = d.data() as OrderFeedback; this.orderFeedbacks.set(f.id, f); });
+    const snap = await getDocs(query(collection(db, 'orderFeedbacks'), limit(300)));
+    const map = new Map<string, OrderFeedback>();
+    snap.docs.forEach((d) => {
+      const f = d.data() as OrderFeedback;
+      const id = f.id || d.id;
+      map.set(id, { ...f, id });
+    });
+    this.orderFeedbacks = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminFeeSuggestions() {
-    const snap = await getDocs(query(collection(db, 'feeSuggestions'), limit(100)));
-    snap.docs.forEach((d) => { this.feeSuggestions.set(d.id, d.data() as FeeSuggestion); });
+    const snap = await getDocs(query(collection(db, 'feeSuggestions'), limit(300)));
+    const map = new Map<string, FeeSuggestion>();
+    snap.docs.forEach((d) => {
+      const s = d.data() as FeeSuggestion;
+      const id = s.id || d.id;
+      map.set(id, { ...s, id });
+    });
+    this.feeSuggestions = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminCustomModals() {
-    const snap = await getDocs(query(collection(db, 'customModals'), limit(50)));
-    snap.docs.forEach((d) => { const c = d.data() as AdminCustomModalConfig; this.customModals.set(c.id, c); });
+    const snap = await getDocs(query(collection(db, 'customModals'), limit(100)));
+    const map = new Map<string, AdminCustomModalConfig>();
+    snap.docs.forEach((d) => {
+      const c = d.data() as AdminCustomModalConfig;
+      const id = c.id || d.id;
+      map.set(id, { ...c, id });
+    });
+    this.customModals = map;
+    this.saveLocalStore();
   }
 
   public async fetchRewardPrizes(): Promise<RewardPrize[]> {
@@ -2092,22 +2205,43 @@ class FallbackStore {
   }
 
   private async _fetchAdminShops() {
-    const snap = await getDocs(query(collection(db, 'shops'), limit(100)));
-    snap.docs.forEach((d) => { const s = d.data() as Shop; this.shops.set(d.id, s); });
+    const snap = await getDocs(query(collection(db, 'shops'), limit(300)));
+    const map = new Map<string, Shop>();
+    snap.docs.forEach((d) => {
+      const s = d.data() as Shop;
+      const id = s.id || d.id;
+      map.set(id, { ...s, id });
+    });
+    this.shops = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminShopOrders() {
-    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(150)));
-    snap.docs.forEach((d) => { this.shopOrders.set(d.id, d.data() as ShopOrder); });
+    const snap = await getDocs(query(collection(db, 'shopOrders'), limit(500)));
+    const map = new Map<string, ShopOrder>();
+    snap.docs.forEach((d) => {
+      const so = d.data() as ShopOrder;
+      const id = so.id || d.id;
+      map.set(id, { ...so, id });
+    });
+    this.shopOrders = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminWallets() {
-    const snap = await getDocs(query(collection(db, 'wallets'), limit(100)));
-    snap.docs.forEach((d) => { const w = d.data() as Wallet; this.wallets.set(w.userId, w); });
+    const snap = await getDocs(query(collection(db, 'wallets'), limit(300)));
+    const map = new Map<string, Wallet>();
+    snap.docs.forEach((d) => {
+      const w = d.data() as Wallet;
+      const userId = w.userId || d.id;
+      map.set(userId, { ...w, userId });
+    });
+    this.wallets = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminWalletTransactions() {
-    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(150)));
+    const snap = await getDocs(query(collection(db, 'walletTransactions'), limit(500)));
     const map = new Map<string, WalletTransaction[]>();
     snap.docs.forEach((d) => {
       const tx = d.data() as WalletTransaction;
@@ -2115,10 +2249,11 @@ class FallbackStore {
       list.push(tx);
       map.set(tx.userId, list);
     });
-    map.forEach((list, key) => {
+    map.forEach((list) => {
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      this.walletTransactions.set(key, list);
     });
+    this.walletTransactions = map;
+    this.saveLocalStore();
   }
 
   private async _fetchAdminScheduledNotifications() {
@@ -2215,8 +2350,36 @@ class FallbackStore {
     let next = profile;
     let changed = false;
 
-    // ── Store applications & Shop Existence ──────────────────────────────────
+    // ── Store applications & Direct Shop Assignment & Shop Existence ────────
     try {
+      // 1. Check direct shop assignment (admin assigned shop where ownerUserId === profile.uid)
+      let assignedShop: Shop | undefined;
+      for (const s of Array.from(this.shops.values())) {
+        if (s.ownerUserId === profile.uid || (next.storeId && s.id === next.storeId)) {
+          assignedShop = s;
+          break;
+        }
+      }
+
+      if (!assignedShop) {
+        try {
+          const shopByOwnerSnap = profile.uid ? await getDocs(
+            query(collection(db, 'shops'), where('ownerUserId', '==', profile.uid), limit(1))
+          ) : null;
+          if (shopByOwnerSnap && !shopByOwnerSnap.empty) {
+            assignedShop = shopByOwnerSnap.docs[0].data() as Shop;
+            this.shops.set(assignedShop.id, assignedShop);
+          } else if (next.storeId) {
+            const shopSnap = await getDoc(doc(db, 'shops', next.storeId));
+            if (shopSnap.exists()) {
+              assignedShop = shopSnap.data() as Shop;
+              this.shops.set(assignedShop.id, assignedShop);
+            }
+          }
+        } catch (_) { }
+      }
+
+      // 2. Check store applications
       const snap = await getDocs(
         query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
       );
@@ -2229,29 +2392,28 @@ class FallbackStore {
         }
       });
 
-      const approved = apps.some((a) => a.status === 'APPROVED');
-      const shopId = next.storeId || `store-${profile.uid}`;
+      const approvedApp = apps.some((a) => a.status === 'APPROVED');
+      const hasValidStore = Boolean(assignedShop || (approvedApp && next.storeId && this.shops.has(next.storeId)));
+      const effectiveShopId = assignedShop?.id || next.storeId || `store-${profile.uid}`;
 
-      // Verify that the shop document actually exists in Firestore / memory
-      let shopExists = this.shops.has(shopId);
-      if (!shopExists) {
-        try {
-          const shopSnap = await getDoc(doc(db, 'shops', shopId));
-          shopExists = shopSnap.exists();
-        } catch (_) { }
-      }
-
-      if (approved && shopExists) {
-        if (!next.isStore || !next.isStoreApproved || next.storeId !== shopId) {
-          next = { ...next, isStore: true, isStoreApproved: true, storeId: shopId, lastActiveMode: 'store' };
+      if (hasValidStore) {
+        if (!next.isStore || !next.isStoreApproved || next.storeId !== effectiveShopId || next.role !== 'store' || next.lastActiveMode !== 'store') {
+          next = {
+            ...next,
+            isStore: true,
+            isStoreApproved: true,
+            storeId: effectiveShopId,
+            role: 'store',
+            lastActiveMode: 'store',
+          };
           changed = true;
         }
       } else if (next.isStore || next.isStoreApproved || next.storeId || next.role === 'store') {
-        // Shop was deleted or application not approved — revoke store role and reset to customer
+        // Shop was deleted or revoked and no valid assignment/application exists — reset to customer
         apps.forEach((a) => {
           if (a.status === 'APPROVED') {
             this.storeApplications.delete(a.id);
-            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => {});
+            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => { });
           }
         });
         next = {
@@ -2443,7 +2605,7 @@ class FallbackStore {
         this.helperApplications.set(helperApp.id, updatedApp);
         try {
           await setDoc(doc(db, 'helperApplications', helperApp.id), cleanForFirestore(updatedApp), { merge: true });
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -2537,6 +2699,9 @@ class FallbackStore {
 
   public async deleteUser(uid: string) {
     this.users.delete(uid);
+    this.wallets.delete(uid);
+    this.walletTransactions.delete(uid);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'users', uid));
@@ -2672,6 +2837,7 @@ class FallbackStore {
 
   public async deleteOrder(orderId: string) {
     this.orders.delete(orderId);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'orders', orderId));
@@ -2803,12 +2969,12 @@ class FallbackStore {
       }
 
       // Update related shop orders status when main order is DELIVERED or CANCELED
-      if (updated.status === 'DELIVERED' || updated.status === 'CANCELED') {
+      if (updated.status === 'DELIVERED' || updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED') {
         const relatedShopOrders = this.getShopOrdersForOrder(updated.id);
         const targetStatus: ShopOrderStatus = updated.status === 'DELIVERED' ? 'DELIVERED' : 'CANCELED';
         relatedShopOrders.forEach((so) => {
           if (so.status !== targetStatus) {
-            if (updated.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'PREPARING' || so.status === 'ACCEPTED' || so.status === 'PENDING') {
+            if (updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED' || so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'PREPARING' || so.status === 'ACCEPTED' || so.status === 'PENDING') {
               this.updateShopOrder(so.id, (prev) => ({
                 ...prev,
                 status: targetStatus,
@@ -2825,6 +2991,9 @@ class FallbackStore {
             }
           }
         });
+        if (updated.status === 'CANCELED' || (updated.status as string) === 'CANCELLED') {
+          this.cancelShopOrdersForOrder(updated.id).catch((e) => console.warn('[Firestore] cancelShopOrdersForOrder err:', e));
+        }
       }
     }
 
@@ -3352,6 +3521,7 @@ class FallbackStore {
   public async deleteShopOrder(shopOrderId: string): Promise<void> {
     const existing = this.shopOrders.get(shopOrderId);
     this.shopOrders.delete(shopOrderId);
+    this.saveLocalStore();
     this.notify();
 
     if (existing) {
@@ -3436,6 +3606,74 @@ class FallbackStore {
     }
   }
 
+  public async cancelShopOrdersForOrder(parentOrderId: string) {
+    try {
+      const toUpdate: ShopOrder[] = [];
+
+      // Update in-memory
+      this.shopOrders.forEach((so) => {
+        if (so.parentOrderId === parentOrderId && so.status !== 'CANCELED') {
+          const updatedSo: ShopOrder = {
+            ...so,
+            status: 'CANCELED',
+            updatedAt: new Date().toISOString(),
+            statusHistory: [
+              ...(so.statusHistory || []),
+              {
+                status: 'CANCELED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: `Main order #${parentOrderId} canceled.`,
+              },
+            ],
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          toUpdate.push(updatedSo);
+        }
+      });
+
+      // Fetch from Firestore by parentOrderId to catch any shopOrders not in memory
+      const snap = await getDocs(
+        query(collection(db, 'shopOrders'), where('parentOrderId', '==', parentOrderId))
+      );
+
+      snap.forEach((docSnap) => {
+        const so = docSnap.data() as ShopOrder;
+        if (so && so.id && so.status !== 'CANCELED') {
+          const updatedSo: ShopOrder = {
+            ...so,
+            status: 'CANCELED',
+            updatedAt: new Date().toISOString(),
+            statusHistory: [
+              ...(so.statusHistory || []),
+              {
+                status: 'CANCELED',
+                timestamp: new Date().toISOString(),
+                actor: 'System',
+                note: `Main order #${parentOrderId} canceled.`,
+              },
+            ],
+          };
+          this.shopOrders.set(so.id, updatedSo);
+          if (!toUpdate.some((u) => u.id === so.id)) {
+            toUpdate.push(updatedSo);
+          }
+        }
+      });
+
+      // Persist all updated shopOrders to Firestore
+      for (const updatedSo of toUpdate) {
+        await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+      }
+
+      if (toUpdate.length > 0) {
+        this.notify();
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] cancelShopOrdersForOrder note:', e?.message || e);
+    }
+  }
+
   public async fetchShopOrdersForOrder(parentOrderId: string, currentHelperId?: string, currentHelperName?: string): Promise<ShopOrder[]> {
     try {
       const snap = await getDocs(
@@ -3478,28 +3716,36 @@ class FallbackStore {
   public async getAllShopOrders(): Promise<ShopOrder[]> {
     try {
       const snap = await getDocs(query(collection(db, 'shopOrders'), orderBy('createdAt', 'desc'), limit(1000)));
+      const map = new Map<string, ShopOrder>();
       snap.docs.forEach((d) => {
         const so = d.data() as ShopOrder;
         if (so && so.id) {
-          this.shopOrders.set(d.id, so);
+          map.set(d.id, so);
         }
       });
+      this.shopOrders = map;
+      this.saveLocalStore();
       this.notify();
+      return Array.from(map.values());
     } catch (e: any) {
       try {
         const snap2 = await getDocs(query(collection(db, 'shopOrders'), limit(1000)));
+        const map2 = new Map<string, ShopOrder>();
         snap2.docs.forEach((d) => {
           const so = d.data() as ShopOrder;
           if (so && so.id) {
-            this.shopOrders.set(d.id, so);
+            map2.set(d.id, so);
           }
         });
+        this.shopOrders = map2;
+        this.saveLocalStore();
         this.notify();
+        return Array.from(map2.values());
       } catch (err) {
         console.warn('[Firestore] getAllShopOrders fallback note:', err);
+        return Array.from(this.shopOrders.values());
       }
     }
-    return Array.from(this.shopOrders.values());
   }
 
   public async deleteShopOrdersBulk(shopOrderIds: string[]): Promise<void> {
@@ -3519,11 +3765,11 @@ class FallbackStore {
     const historyItem: import('@/types').ShopOrderStatusHistoryItem | undefined =
       updates.status && updates.status !== existing.status
         ? {
-            status: updates.status,
-            timestamp: new Date().toISOString(),
-            actor: adminName || 'Admin',
-            note: updates.note || `Status changed to ${updates.status} by Admin`,
-          }
+          status: updates.status,
+          timestamp: new Date().toISOString(),
+          actor: adminName || 'Admin',
+          note: updates.note || `Status changed to ${updates.status} by Admin`,
+        }
         : undefined;
 
     const updated: ShopOrder = {
@@ -3621,37 +3867,102 @@ class FallbackStore {
     };
   }
 
-  public getStoreWallet(storeUserId: string, storeId: string, cachedParentOrders?: Record<string, Order>): Wallet {
-    const shopDoc = this.shops.get(storeId);
-    const commissionRate = shopDoc?.commissionPercent ?? 0;
-
-    // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
-    const storeShopOrders = Array.from(this.shopOrders.values()).filter((so) => {
-      if (so.shopId !== storeId) return false;
-      if (so.status === 'CANCELED') return true;
-      if (so.status === 'HANDOVER') return true;
-      const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
-      return parentOrder?.status === 'DELIVERED';
-    });
-
-    // Sum price set for items ordered from this store (completed + cancelled)
-    const totalSales = storeShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0);
-    const nonCanceledShopOrders = storeShopOrders.filter((so) => so.status !== 'CANCELED');
-    const totalCommissionDue = Math.round(nonCanceledShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0) * (commissionRate / 100));
-
-    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
-      (w) => w.helperId === storeUserId && w.status === 'APPROVED'
+  public getStoreWallet(
+    storeUserId: string,
+    storeId?: string,
+    cachedParentOrders?: Record<string, Order>,
+    extraShopOrders?: ShopOrder[]
+  ): Wallet {
+    const targetStoreId = storeId || `store-${storeUserId}`;
+    const shopDoc = this.shops.get(targetStoreId) || Array.from(this.shops.values()).find(
+      (s) => s.id === targetStoreId || s.ownerUserId === storeUserId || s.id === `store-${storeUserId}`
     );
 
-    const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const balance = Math.max(0, totalCommissionDue - totalPaidCommission);
+    let commissionRate = Number(shopDoc?.commissionPercent);
+    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined) {
+      const app = Array.from(this.storeApplications.values()).find(
+        (a) => a.userId === storeUserId || a.id === shopDoc?.applicationId
+      );
+      commissionRate = Number(app?.commissionPercent) || 0;
+    }
+
+    // Combine shop orders from memory and any extra passed (e.g. from pagination)
+    const allShopOrdersMap = new Map<string, ShopOrder>();
+    Array.from(this.shopOrders.values()).forEach((so) => allShopOrdersMap.set(so.id, so));
+    if (extraShopOrders) {
+      extraShopOrders.forEach((so) => allShopOrdersMap.set(so.id, so));
+    }
+
+    const effectiveShopId = shopDoc?.id || targetStoreId;
+
+    // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
+    const storeShopOrders = Array.from(allShopOrdersMap.values()).filter((so) => {
+      const matchesShop = so.shopId === effectiveShopId || so.shopId === targetStoreId || so.shopId === `store-${storeUserId}`;
+      if (!matchesShop) return false;
+      if (so.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'DELIVERED') return true;
+      const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
+      return parentOrder?.status === 'DELIVERED' || parentOrder?.status === 'CANCELED';
+    });
+
+    const seenParentOrderIds = new Set<string>();
+    let totalSales = 0;
+    let totalCommission = 0;
+    let totalNetSales = 0;
+
+    storeShopOrders.forEach((so) => {
+      seenParentOrderIds.add(so.parentOrderId);
+      const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
+      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
+      const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
+
+      totalSales += sales;
+      if (!isCanceled && isDelivered) {
+        const commission = Math.round(sales * (commissionRate / 100));
+        totalCommission += commission;
+        totalNetSales += Math.max(0, sales - commission);
+      }
+    });
+
+    // Also include main orders with selectedShopIds that might not have a separate shopOrder subdocument
+    const allMainOrders = Array.from(this.orders.values());
+    allMainOrders.forEach((mo) => {
+      const matchesShop = mo.shopId === effectiveShopId || mo.shopId === targetStoreId || mo.selectedShopIds?.includes(effectiveShopId) || mo.selectedShopIds?.includes(targetStoreId);
+      if (matchesShop && !seenParentOrderIds.has(mo.id)) {
+        if (mo.status === 'DELIVERED' || mo.status === 'CANCELED') {
+          const sales = mo.productCost || 0;
+          totalSales += sales;
+          if (mo.status === 'DELIVERED') {
+            const commission = Math.round(sales * (commissionRate / 100));
+            totalCommission += commission;
+            totalNetSales += Math.max(0, sales - commission);
+          }
+        }
+      }
+    });
+
+    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter((w) => {
+      if (w.status !== 'APPROVED') return false;
+      if (w.helperId === storeUserId || w.helperId === effectiveShopId || w.helperId === targetStoreId) return true;
+      if (shopDoc && (w.helperId === shopDoc.id || w.helperId === shopDoc.ownerUserId || w.helperId === `store-${shopDoc.ownerUserId}`)) return true;
+      if (storeUserId && (w.helperId === `store-${storeUserId}` || (w.helperId.startsWith('store-') && w.helperId.replace('store-', '') === storeUserId))) return true;
+      if (w.userType === 'store') {
+        if (shopDoc?.name && w.helperName === shopDoc.name) return true;
+        if (effectiveShopId && (w.helperId === effectiveShopId || w.shopId === effectiveShopId)) return true;
+        if (storeUserId && (w.helperId === storeUserId || w.shopId === storeUserId)) return true;
+      }
+      return false;
+    });
+
+    const totalPaidPayouts = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const balance = Math.max(0, totalNetSales - totalPaidPayouts);
 
     return {
       userId: storeUserId,
       balance,
-      totalEarned: totalSales,
-      totalWithdrawn: totalPaidCommission,
-      totalPaidCommission,
+      totalEarned: totalNetSales,
+      totalWithdrawn: totalPaidPayouts,
+      totalPaidCommission: totalCommission,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -3794,6 +4105,86 @@ class FallbackStore {
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
+  }
+
+  public async recordStoreDisbursement(
+    shopId: string,
+    amount: number,
+    paymentMethod: string = 'Bank Transfer',
+    refNote: string = '',
+    targetUserId?: string
+  ): Promise<WithdrawalRequest> {
+    const shop = this.shops.get(shopId) || Array.from(this.shops.values()).find((s) => s.id === shopId);
+    const storeUserId = targetUserId || shop?.ownerUserId || (shopId.startsWith('store-') ? shopId.replace('store-', '') : shopId);
+    const storeName = shop?.name || 'Store';
+
+    const txId = `tx-store-${Date.now()}`;
+    const newTx: WalletTransaction = {
+      id: txId,
+      userId: storeUserId,
+      amount: -amount,
+      type: 'PAYBACK',
+      description: `Store payout disbursement by admin: ৳${amount} (${paymentMethod}${refNote ? ` - ${refNote}` : ''})`,
+      createdAt: new Date().toISOString(),
+    };
+
+    const userTxs = this.walletTransactions.get(storeUserId) || [];
+    userTxs.unshift(newTx);
+    this.walletTransactions.set(storeUserId, userTxs);
+
+    const reqId = `wd-store-${Date.now()}`;
+    const req: WithdrawalRequest = {
+      id: reqId,
+      helperId: storeUserId,
+      helperName: storeName,
+      amount,
+      status: 'APPROVED',
+      paymentMethod: paymentMethod || 'Bank Transfer',
+      accountNumber: refNote || 'Admin store disbursement',
+      userType: 'store',
+      shopId: shopId,
+      createdAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+    };
+    this.withdrawals.set(req.id, req);
+
+    // Also associate with effectiveShopId if different
+    if (shop?.id && shop.id !== storeUserId) {
+      const shopTxs = this.walletTransactions.get(shop.id) || [];
+      shopTxs.unshift({ ...newTx, userId: shop.id });
+      this.walletTransactions.set(shop.id, shopTxs);
+    }
+
+    const existing = this.wallets.get(storeUserId) || (shop?.id ? this.wallets.get(shop.id) : undefined);
+    const currentWithdrawn = (existing?.totalWithdrawn ?? 0) + amount;
+    const currentBalance = Math.max(0, (existing?.balance ?? 0) - amount);
+    const updatedWallet: Wallet = {
+      userId: storeUserId,
+      totalEarned: existing?.totalEarned ?? 0,
+      balance: currentBalance,
+      totalPaidCommission: existing?.totalPaidCommission ?? 0,
+      totalWithdrawn: currentWithdrawn,
+      updatedAt: new Date().toISOString(),
+    };
+    this.wallets.set(storeUserId, updatedWallet);
+    if (shop?.id && shop.id !== storeUserId) {
+      this.wallets.set(shop.id, { ...updatedWallet, userId: shop.id });
+    }
+
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'wallets', storeUserId), cleanForFirestore(updatedWallet), { merge: true });
+      if (shop?.id && shop.id !== storeUserId) {
+        await setDoc(doc(db, 'wallets', shop.id), cleanForFirestore({ ...updatedWallet, userId: shop.id }), { merge: true });
+      }
+      await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
+      await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+    } catch (e: any) {
+      console.warn('[Firestore] recordStoreDisbursement note:', e?.message || e);
+    }
+
+    return req;
   }
 
   public async submitWithdrawalRequest(
@@ -4602,6 +4993,7 @@ class FallbackStore {
       }
     }
     this.helperApplications.delete(appId);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'helperApplications', appId));
@@ -4702,7 +5094,7 @@ class FallbackStore {
         if (snap.exists()) {
           existing = snap.data() as Shop;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     this.shops.delete(shopId);
     this.notify();
@@ -4749,7 +5141,7 @@ class FallbackStore {
         const appSnap = await getDocs(query(collection(db, 'storeApplications'), where('userId', '==', ownerUserId)));
         appSnap.forEach((d) => {
           appIdsToDelete.push(d.id);
-          deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => {});
+          deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => { });
         });
       }
     } catch (_) { }
@@ -4761,25 +5153,25 @@ class FallbackStore {
       const storeOwner = await this.getUserForUpdate(uid);
       const updatedUser: UserProfile = storeOwner
         ? {
-            ...storeOwner,
-            isStore: false,
-            isStoreApproved: false,
-            storeId: undefined,
-            role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
-            lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
-          }
+          ...storeOwner,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+          role: storeOwner.role === 'store' ? 'customer' : storeOwner.role,
+          lastActiveMode: storeOwner.lastActiveMode === 'store' ? 'customer' : storeOwner.lastActiveMode,
+        }
         : {
-            uid,
-            displayName: existing?.name || 'User',
-            email: existing?.ownerUserEmail || '',
-            role: 'customer',
-            isHelper: false,
-            isStore: false,
-            isStoreApproved: false,
-            storeId: undefined,
-            lastActiveMode: 'customer',
-            createdAt: new Date().toISOString(),
-          };
+          uid,
+          displayName: existing?.name || 'User',
+          email: existing?.ownerUserEmail || '',
+          role: 'customer',
+          isHelper: false,
+          isStore: false,
+          isStoreApproved: false,
+          storeId: undefined,
+          lastActiveMode: 'customer',
+          createdAt: new Date().toISOString(),
+        };
 
       this.users.set(uid, updatedUser);
       try {
@@ -5286,7 +5678,7 @@ class FallbackStore {
         orderId,
         createdAt: new Date().toISOString(),
       };
-      setDoc(doc(db, 'coinTransactions', txId), cleanForFirestore(tx)).catch(() => {});
+      setDoc(doc(db, 'coinTransactions', txId), cleanForFirestore(tx)).catch(() => { });
 
       return true;
     } catch (e) {
@@ -5471,6 +5863,7 @@ class FallbackStore {
       }
     }
     this.storeApplications.delete(appId);
+    this.saveLocalStore();
     this.notify();
     try {
       await deleteDoc(doc(db, 'storeApplications', appId));
@@ -5490,6 +5883,7 @@ class FallbackStore {
       isStoreApproved: false,
     };
     this.users.set(userId, updatedUser);
+    this.saveLocalStore();
     this.notify();
     try { await this.saveUser(updatedUser); } catch (_) { }
   }
@@ -5498,13 +5892,17 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'orders'));
       const list: Order[] = [];
+      const map = new Map<string, Order>();
       snap.forEach((docSnap) => {
-        const o = docSnap.data() as Order;
+        const o = this.resolveOrderLocations(docSnap.data() as Order);
         if (o && o.id) {
-          this.orders.set(o.id, o);
+          map.set(o.id, o);
           list.push(o);
         }
       });
+      this.orders = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllOrders error:', e);
@@ -5516,13 +5914,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'users'));
       const list: UserProfile[] = [];
+      const map = new Map<string, UserProfile>();
       snap.forEach((docSnap) => {
         const u = docSnap.data() as UserProfile;
-        if (u && u.uid) {
-          this.users.set(u.uid, u);
-          list.push(u);
+        const uid = u.uid || docSnap.id;
+        if (uid) {
+          const userObj = { ...u, uid };
+          map.set(uid, userObj);
+          list.push(userObj);
         }
       });
+      this.users = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllUsers error:', e);
@@ -5534,13 +5938,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'shops'));
       const list: Shop[] = [];
+      const map = new Map<string, Shop>();
       snap.forEach((docSnap) => {
         const s = docSnap.data() as Shop;
-        if (s && s.id) {
-          this.shops.set(s.id, s);
-          list.push(s);
+        const id = s.id || docSnap.id;
+        if (id) {
+          const shopObj = { ...s, id };
+          map.set(id, shopObj);
+          list.push(shopObj);
         }
       });
+      this.shops = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllShops error:', e);
@@ -5552,13 +5962,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'helperApplications'));
       const list: HelperApplication[] = [];
+      const map = new Map<string, HelperApplication>();
       snap.forEach((docSnap) => {
         const app = docSnap.data() as HelperApplication;
-        if (app && app.id) {
-          this.helperApplications.set(app.id, app);
-          list.push(app);
+        const id = app.id || docSnap.id;
+        if (id) {
+          const appObj = { ...app, id };
+          map.set(id, appObj);
+          list.push(appObj);
         }
       });
+      this.helperApplications = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllHelperApplications error:', e);
@@ -5570,13 +5986,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'withdrawals'));
       const list: WithdrawalRequest[] = [];
+      const map = new Map<string, WithdrawalRequest>();
       snap.forEach((docSnap) => {
         const w = docSnap.data() as WithdrawalRequest;
-        if (w && w.id) {
-          this.withdrawals.set(w.id, w);
-          list.push(w);
+        const id = w.id || docSnap.id;
+        if (id) {
+          const wdObj = { ...w, id };
+          map.set(id, wdObj);
+          list.push(wdObj);
         }
       });
+      this.withdrawals = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllWithdrawals error:', e);
@@ -5588,13 +6010,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'orderFeedbacks'));
       const list: OrderFeedback[] = [];
+      const map = new Map<string, OrderFeedback>();
       snap.forEach((docSnap) => {
         const f = docSnap.data() as OrderFeedback;
-        if (f && f.id) {
-          this.orderFeedbacks.set(f.id, f);
-          list.push(f);
+        const id = f.id || docSnap.id;
+        if (id) {
+          const fbObj = { ...f, id };
+          map.set(id, fbObj);
+          list.push(fbObj);
         }
       });
+      this.orderFeedbacks = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllOrderFeedbacks error:', e);
@@ -5606,13 +6034,19 @@ class FallbackStore {
     try {
       const snap = await getDocs(collection(db, 'customModals'));
       const list: AdminCustomModalConfig[] = [];
+      const map = new Map<string, AdminCustomModalConfig>();
       snap.forEach((docSnap) => {
         const c = docSnap.data() as AdminCustomModalConfig;
-        if (c && c.id) {
-          this.customModals.set(c.id, c);
-          list.push(c);
+        const id = c.id || docSnap.id;
+        if (id) {
+          const modalObj = { ...c, id };
+          map.set(id, modalObj);
+          list.push(modalObj);
         }
       });
+      this.customModals = map;
+      this.saveLocalStore();
+      this.notify();
       return list;
     } catch (e) {
       console.warn('[Firestore] getAllCustomModals error:', e);
@@ -5737,7 +6171,7 @@ class FallbackStore {
         };
         this.orders.set(orderId, newOrd);
         orderPromises.push(
-          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => {}).catch(() => {})
+          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => { }).catch(() => { })
         );
       }
     });
@@ -5761,7 +6195,7 @@ class FallbackStore {
           };
           this.users.set(uid, updatedUser);
           orderPromises.push(
-            setDoc(doc(db, 'users', uid), cleanForFirestore(updatedUser), { merge: true }).then(() => {}).catch(() => {})
+            setDoc(doc(db, 'users', uid), cleanForFirestore(updatedUser), { merge: true }).then(() => { }).catch(() => { })
           );
         }
       }
@@ -5810,11 +6244,11 @@ class FallbackStore {
                     }));
                   }
                 }
-              } catch (_) {}
+              } catch (_) { }
             }
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     this.saveLocalStore();
@@ -5841,22 +6275,25 @@ class FallbackStore {
   public async getAllServerAddresses(): Promise<ServerAddress[]> {
     try {
       const snap = await getDocs(collection(db, 'server_addresses'));
+      const map = new Map<string, ServerAddress>();
       snap.forEach((docSnap) => {
         const addr = docSnap.data() as ServerAddress;
         if (addr) {
           const id = addr.id || docSnap.id;
-          this.serverAddresses.set(id, { ...addr, id });
+          map.set(id, { ...addr, id });
         }
       });
+      this.serverAddresses = map;
       this.orders.forEach((ord, id) => {
         this.orders.set(id, this.resolveOrderLocations(ord));
       });
       this.saveLocalStore();
       this.notify();
+      return Array.from(map.values());
     } catch (e) {
       console.warn('[Firestore] getAllServerAddresses error:', e);
+      return Array.from(this.serverAddresses.values());
     }
-    return Array.from(this.serverAddresses.values());
   }
 
   public async searchServerAddresses(query: string, maxResults = 4): Promise<ServerAddress[]> {
@@ -5864,7 +6301,7 @@ class FallbackStore {
     if (!q) return [];
     try {
       await this._loadServerAddressesCached();
-    } catch (_) {}
+    } catch (_) { }
 
     const tokens = q.split(/[\s,]+/).filter(Boolean);
     const results = Array.from(this.serverAddresses.values())
@@ -5934,7 +6371,7 @@ class FallbackStore {
         this.serverAddresses.set(matched.id, updated);
         this.saveLocalStore();
         this.notify();
-        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => {});
+        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => { });
         return updated;
       }
       return matched;
@@ -5957,7 +6394,7 @@ class FallbackStore {
     this.serverAddresses.set(id, newAddr);
     this.saveLocalStore();
     this.notify();
-    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => {});
+    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => { });
     return newAddr;
   }
 }

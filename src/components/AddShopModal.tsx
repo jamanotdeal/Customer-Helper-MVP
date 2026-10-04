@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Shop, LocationData } from '@/types';
+import { createPortal } from 'react-dom';
+import { Shop, LocationData, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { parseStoreTypes } from '@/lib/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { MapPickerModal } from './MapPickerModal';
 import {
-  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle,
+  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle, ChevronDown, User as UserIcon,
 } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
@@ -31,6 +32,19 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
   // ── Form fields (mirror of StoreApplicationModal) ──────────────────────────
   const [storeName, setStoreName] = useState(shopToEdit?.name || '');
   const [storeType, setStoreType] = useState(shopToEdit?.type || storeTypes[0] || '');
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+
+  // Multi-user assignment: all assigned user IDs (first = primary owner)
+  const [assignedUserIds, setAssignedUserIds] = useState<string[]>(() => {
+    if (shopToEdit?.assignedUserIds && shopToEdit.assignedUserIds.length > 0) {
+      return shopToEdit.assignedUserIds;
+    }
+    if (shopToEdit?.ownerUserId) return [shopToEdit.ownerUserId];
+    return [];
+  });
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+
   const [ownerName, setOwnerName] = useState(shopToEdit?.contactPerson || '');
   const [ownerWhatsapp, setOwnerWhatsapp] = useState(shopToEdit?.whatsapp || '');
   const [managerName, setManagerName] = useState(shopToEdit?.managerName || '');
@@ -46,6 +60,18 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
     shopToEdit?.location || { address: '', lat: 23.8103, lng: 90.4125 }
   );
   const [photoUrl, setPhotoUrl] = useState(shopToEdit?.photoUrl || '');
+
+  // Eligible users: not admin, not helper, not assigned to a DIFFERENT shop
+  const allUsersList = Array.from(fallbackStore.users.values());
+  const eligibleUsers = allUsersList.filter((u) => {
+    if (u.isAdmin || u.role === 'admin' || (u.email && u.email.endsWith('@admin.com'))) return false;
+    if (u.isHelper || u.role === 'helper') return false;
+    // Allow users already in this shop's assignedUserIds
+    if (assignedUserIds.includes(u.uid)) return true;
+    if (u.storeId && u.storeId !== shopToEdit?.id) return false;
+    if (u.isStoreApproved && u.storeId !== shopToEdit?.id) return false;
+    return true;
+  });
 
   // ── Inline map state ───────────────────────────────────────────────────────
   const inlineMapRef = useRef<HTMLDivElement>(null);
@@ -238,6 +264,11 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
     try {
       setSubmitting(true);
       setError('');
+
+      // Primary owner = first in assignedUserIds
+      const primaryOwner = assignedUserIds.length > 0 ? fallbackStore.users.get(assignedUserIds[0]) : undefined;
+      const prevAssignedIds: string[] = shopToEdit?.assignedUserIds ?? (shopToEdit?.ownerUserId ? [shopToEdit.ownerUserId] : []);
+
       const shopData: Shop = {
         id: shopToEdit?.id || `shop-${Date.now()}`,
         name: storeName.trim(),
@@ -250,8 +281,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         location,
         addedByHelperId: shopToEdit?.addedByHelperId || user?.uid,
         addedByHelperName: shopToEdit?.addedByHelperName || user?.displayName,
-        ownerUserId: shopToEdit?.ownerUserId,
-        ownerUserEmail: shopToEdit?.ownerUserEmail,
+        ownerUserId: primaryOwner ? primaryOwner.uid : undefined,
+        ownerUserEmail: primaryOwner ? (primaryOwner.email || primaryOwner.alternativePhone || '') : undefined,
+        assignedUserIds: assignedUserIds.length > 0 ? [...assignedUserIds] : undefined,
         applicationId: shopToEdit?.applicationId,
         createdAt: shopToEdit?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -261,6 +293,41 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
       };
 
       await fallbackStore.saveShop(shopData);
+
+      // Grant store role to all newly assigned users
+      for (const uid of assignedUserIds) {
+        const assignedUser = fallbackStore.users.get(uid);
+        if (assignedUser) {
+          const updatedUser: UserProfile = {
+            ...assignedUser,
+            isStore: true,
+            isStoreApproved: true,
+            storeId: shopData.id,
+            role: 'store',
+            lastActiveMode: 'store',
+          };
+          await fallbackStore.saveUser(updatedUser);
+        }
+      }
+
+      // Revert users who were previously assigned but no longer in the list
+      for (const prevUid of prevAssignedIds) {
+        if (!assignedUserIds.includes(prevUid)) {
+          const prevUser = fallbackStore.users.get(prevUid);
+          if (prevUser && prevUser.storeId === shopData.id) {
+            const resetUser: UserProfile = {
+              ...prevUser,
+              isStore: false,
+              isStoreApproved: false,
+              storeId: undefined,
+              role: prevUser.role === 'store' ? 'customer' : prevUser.role,
+              lastActiveMode: prevUser.lastActiveMode === 'store' ? 'customer' : prevUser.lastActiveMode,
+            };
+            await fallbackStore.saveUser(resetUser);
+          }
+        }
+      }
+
       if (onSaved) onSaved();
       onClose();
     } catch {
@@ -318,22 +385,137 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               />
             </div>
 
-            {/* 2. দোকানের ধরন */}
+            {/* 2. দোকানের ধরন (Custom Selector) */}
             <div>
               <label className="text-xs font-bold text-gray-700 block mb-1.5">দোকানের ধরন *</label>
-              <select
-                value={storeType}
-                onChange={(e) => setStoreType(e.target.value)}
-                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-semibold bg-white"
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(true)}
+                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-semibold bg-white flex items-center justify-between text-left"
               >
-                {storeTypes.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-                {storeType && !storeTypes.includes(storeType) && (
-                  <option value={storeType}>{storeType}</option>
-                )}
-              </select>
+                <span className={storeType ? "text-gray-800" : "text-gray-400"}>{storeType || "দোকানের ধরন বেছে নিন"}</span>
+                <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+              </button>
             </div>
+
+            {/* 2.1 অ্যাসাইনকৃত স্টোর ইউজার অ্যাকাউন্ট (Admin Shop Assignment) */}
+            <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                  <UserIcon className="w-3.5 h-3.5 text-purple-700" />
+                  <span>স্টোর ইউজার অ্যাকাউন্ট অ্যাসাইন করুন</span>
+                </label>
+                <span className="text-[10px] font-bold text-purple-600 bg-purple-100 px-2 py-0.5 rounded-full">
+                  {assignedUserIds.length} Assigned
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-800 leading-tight">
+                নির্বাচিত ইউজাররা লগইন করলে সরাসরি এই দোকানের স্টোর মোড দেখতে পাবেন। একাধিক ইউজার একসাথে কাজ করতে পারবেন।
+              </p>
+
+              {/* Assigned users chips */}
+              {assignedUserIds.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  {assignedUserIds.map((uid, idx) => {
+                    const assignedUser = allUsersList.find((u) => u.uid === uid);
+                    if (!assignedUser) return null;
+                    const initials = (assignedUser.displayName || 'U').split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
+                    return (
+                      <div key={uid} className="flex items-center gap-2.5 p-2.5 bg-white rounded-xl border border-purple-200 shadow-xs">
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white font-black text-xs shrink-0">
+                          {initials}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-extrabold text-gray-900 truncate">{assignedUser.displayName}</p>
+                          <p className="text-[10px] text-gray-500 font-mono truncate">
+                            {assignedUser.email || assignedUser.alternativePhone || assignedUser.uid.slice(0, 10)}
+                          </p>
+                        </div>
+                        {idx === 0 && (
+                          <span className="text-[9px] font-black text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded-full border border-indigo-200 uppercase shrink-0">Primary</span>
+                        )}
+                        <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full border border-emerald-200 uppercase shrink-0">Assigned</span>
+                        <button
+                          type="button"
+                          onClick={() => setAssignedUserIds((prev) => prev.filter((id) => id !== uid))}
+                          className="p-1 rounded-lg text-rose-500 hover:bg-rose-100 transition-colors shrink-0"
+                          title="Remove assignment"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Search input */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-purple-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={userSearchQuery}
+                  onChange={(e) => setUserSearchQuery(e.target.value)}
+                  placeholder={assignedUserIds.length > 0 ? 'আরো ইউজার যোগ করুন...' : 'ইউজার নাম বা ইমেইল খুঁজুন...'}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-purple-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-100 outline-none text-xs font-semibold bg-white text-gray-800 placeholder-purple-300"
+                />
+              </div>
+
+              {/* Filtered user list */}
+              {userSearchQuery.trim() && (() => {
+                const q = userSearchQuery.toLowerCase().trim();
+                const filtered = eligibleUsers.filter((u) =>
+                  !assignedUserIds.includes(u.uid) && (
+                    u.displayName?.toLowerCase().includes(q) ||
+                    u.email?.toLowerCase().includes(q) ||
+                    u.alternativePhone?.includes(q) ||
+                    u.uid.toLowerCase().includes(q)
+                  )
+                ).slice(0, 6);
+                return (
+                  <div className="border border-purple-200 rounded-xl overflow-hidden bg-white shadow-md max-h-48 overflow-y-auto">
+                    {filtered.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-gray-400 font-medium">কোনো ইউজার পাওয়া যায়নি</div>
+                    ) : (
+                      filtered.map((u) => {
+                        const initials = (u.displayName || 'U').split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
+                        return (
+                          <button
+                            key={u.uid}
+                            type="button"
+                            onClick={() => {
+                              setAssignedUserIds((prev) => [...prev, u.uid]);
+                              setUserSearchQuery('');
+                              if (!ownerName.trim()) setOwnerName(u.displayName);
+                              if (!ownerWhatsapp.trim() && u.alternativePhone) setOwnerWhatsapp(u.alternativePhone);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-all border-b border-gray-50 last:border-0 hover:bg-purple-50/50"
+                          >
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-black text-[10px] shrink-0 bg-gradient-to-br from-gray-400 to-gray-500">
+                              {initials}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-extrabold truncate text-gray-800">{u.displayName}</p>
+                              <p className="text-[10px] text-gray-400 font-mono truncate">
+                                {u.email || u.alternativePhone || u.uid.slice(0, 12)}
+                              </p>
+                            </div>
+                            <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200 shrink-0">+ Add</span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                );
+              })()}
+
+              {assignedUserIds.length === 0 && !userSearchQuery.trim() && (
+                <p className="text-center text-[11px] text-purple-400 font-medium py-1">
+                  কোনো ইউজার অ্যাসাইন করা হয়নি (Unassigned)
+                </p>
+              )}
+            </div>
+
 
             {/* 3. মালিকের তথ্য */}
             <div className="space-y-2 pt-2 border-t border-gray-100">
@@ -608,6 +790,102 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
             setShowMapPicker(false);
           }}
         />
+      )}
+
+      {/* Store Category Selection Modal (Matching Homepage service type dropdown) */}
+      {isCategoryModalOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[99999] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200"
+          style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCategoryModalOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg md:max-w-xl h-[80vh] max-h-[80vh] bg-white rounded-3xl shadow-2xl border border-purple-100 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0 bg-white">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                  <Store className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base sm:text-lg text-gray-900">দোকানের ধরন নির্বাচন করুন</h3>
+                  <p className="text-[11px] text-gray-500 font-medium">দোকানের উপযুক্ত ক্যাটাগরি বেছে নিন</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(false)}
+                className="p-2 rounded-xl bg-rose-50 text-rose-500 hover:bg-rose-100 hover:text-rose-700 border border-rose-200/60 active:scale-95 transition-all cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search filter if many categories */}
+            {storeTypes.length > 6 && (
+              <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={categorySearchQuery}
+                    onChange={(e) => setCategorySearchQuery(e.target.value)}
+                    placeholder="ক্যাটাগরি খুঁজুন..."
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold bg-white"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Scrollable List of Categories */}
+            <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-gray-100 p-2 sm:p-3">
+              {storeTypes
+                .filter((t) => !categorySearchQuery.trim() || t.toLowerCase().includes(categorySearchQuery.toLowerCase().trim()))
+                .map((t) => {
+                  const isSelected = storeType === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setStoreType(t);
+                        setIsCategoryModalOpen(false);
+                      }}
+                      className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${
+                        isSelected
+                          ? 'bg-purple-50 text-purple-950 font-extrabold ring-1 ring-purple-300 shadow-xs'
+                          : 'text-gray-700 font-semibold hover:bg-purple-50/50 hover:text-purple-900 active:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                        <div
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${
+                            isSelected
+                              ? 'bg-purple-600 ring-4 ring-purple-100'
+                              : 'bg-gray-300 group-hover:bg-purple-400'
+                          } transition-colors`}
+                        />
+                        <span className="leading-snug break-words text-left flex-1">{t}</span>
+                      </div>
+                      {isSelected ? (
+                        <div className="w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center text-white shrink-0 shadow-xs ring-2 ring-purple-500/30 ml-1">
+                          <Check className="w-4 h-4 stroke-[3]" />
+                        </div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-purple-400 shrink-0 transition-colors ml-1" />
+                      )}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </>
   );

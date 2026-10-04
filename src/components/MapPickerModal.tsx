@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { MapPin, X, Navigation, Check, Search, AlertTriangle } from 'lucide-react';
+import { MapPin, X, Navigation, Check, Search, AlertTriangle, Maximize2, Minimize2 } from 'lucide-react';
 
 import { useModal } from '@/components/CustomModal';
 import { getMapGuideShowCount, incrementMapGuideShowCount } from '@/lib/storage';
@@ -47,6 +47,7 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
   const markerRef = useRef<any>(null);
   const detailInputRef = useRef<HTMLInputElement>(null);
 
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [lat, setLat] = useState<number | undefined>(initialLocation?.lat);
   const [lng, setLng] = useState<number | undefined>(initialLocation?.lng);
   const [hasSelected, setHasSelected] = useState<boolean>(
@@ -63,6 +64,17 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
   // Guide overlay state
   const [showGuide, setShowGuide] = useState<boolean>(false);
+
+  // Invalidate map size on fullscreen toggle
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        mapInstanceRef.current.invalidateSize();
+      } catch (e) {}
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [isFullscreen]);
 
   // Helper to place/update pin marker and option to zoom
   const setLocationAndPin = (targetLat: number, targetLng: number, zoomLevel?: number) => {
@@ -489,8 +501,9 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[99999] flex items-center justify-center p-3 sm:p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+      className={`fixed inset-0 z-[99999] flex items-center justify-center transition-all ${
+        isFullscreen ? 'p-0 bg-black' : 'p-2 sm:p-4 bg-black/65 backdrop-blur-sm'
+      }`}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onClose();
@@ -498,26 +511,40 @@ export const MapPickerModal: React.FC<MapPickerModalProps> = ({
       }}
     >
       <div
-        className="relative w-full h-[85dvh] sm:h-[90dvh] sm:max-h-[850px] sm:max-w-[760px] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+        className={`relative flex flex-col bg-white shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${
+          isFullscreen
+            ? 'w-screen h-screen max-w-none max-h-none rounded-none'
+            : 'w-full h-[85dvh] sm:h-[90dvh] sm:max-h-[850px] sm:max-w-[760px] rounded-3xl'
+        }`}
       >
-        {/* ── Sticky Top Bar with prominent close button ── */}
+        {/* ── Sticky Top Bar with prominent close & fullscreen button ── */}
         <div
           className="shrink-0 flex items-center justify-between px-4 py-3.5 bg-white border-b border-gray-100 shadow-sm"
           style={{ position: 'relative', zIndex: 10000 }}
         >
-          <div className="flex items-center gap-2 text-gray-900 font-extrabold text-sm">
+          <div className="flex items-center gap-2 text-gray-900 font-extrabold text-sm min-w-0">
             <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{title}</span>
+            <span className="truncate">{title}</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            id="map-picker-close-btn"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 active:scale-95 text-red-600 text-xs font-bold transition-all border border-red-200"
-          >
-            <X className="w-3.5 h-3.5" />
-            <span>Close</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsFullscreen((prev) => !prev)}
+              className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors cursor-pointer"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Full Screen Map'}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              id="map-picker-close-btn"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 active:scale-95 text-red-600 text-xs font-bold transition-all border border-red-200 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Close</span>
+            </button>
+          </div>
         </div>
 
         {/* ── Content Body (No scroll, map fills area) ── */}

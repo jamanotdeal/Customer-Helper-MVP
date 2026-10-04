@@ -61,6 +61,27 @@ export default function PageClient() {
     }
   }, [user?.isBlocked, hasPromptedBlockedUser]);
 
+  // Auto-mark all notifications as read when a customer visits or refreshes the page.
+  // This clears the red badge on the bell without requiring the user to open the drawer.
+  // Only applies in customer mode (not helper / store / admin).
+  useEffect(() => {
+    if (!user) return;
+    const isCustomerMode =
+      !user.isAdmin &&
+      user.role !== 'admin' &&
+      !user.isHelper &&
+      user.role !== 'helper' &&
+      !user.isStore &&
+      !user.isStoreApproved &&
+      !user.storeId &&
+      user.role !== 'store' &&
+      (activeMode === 'customer' || !activeMode);
+    if (isCustomerMode) {
+      // Fire-and-forget: silently mark as read in background
+      fallbackStore.markNotificationsRead(user.uid).catch(() => {/* ignore */});
+    }
+  }, [user?.uid, activeMode]);
+
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
 

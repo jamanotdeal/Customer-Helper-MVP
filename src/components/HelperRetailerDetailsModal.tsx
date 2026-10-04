@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Shop } from '@/types';
-import { X, MapPin, Phone, User, Store, CheckCircle2, MessageSquare, Percent, Info } from 'lucide-react';
+import { X, MapPin, Phone, User, Store, CheckCircle2, MessageSquare, Percent, Info, Navigation } from 'lucide-react';
 
 interface HelperRetailerDetailsModalProps {
   shop: Shop | null;
@@ -33,6 +33,11 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
         ? shop.whatsapp.replace(/[^0-9]/g, '')
         : '88' + shop.whatsapp.replace(/[^0-9]/g, '')}`
     : null;
+
+  const googleMapsUrl =
+    shop.location?.lat && shop.location?.lng
+      ? `https://www.google.com/maps/dir/?api=1&destination=${shop.location.lat},${shop.location.lng}&travelmode=driving`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(shop.location?.address || shop.name)}`;
 
   return (
     <div
@@ -78,14 +83,27 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
             </div>
           )}
 
-          {/* Close button */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute top-3 right-3 p-2.5 rounded-full bg-rose-600/80 hover:bg-rose-700 text-white transition-all backdrop-blur-sm shadow-md"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {/* Top Actions: Map & Close buttons */}
+          <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+            <a
+              href={googleMapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-600/90 hover:bg-emerald-700 text-white text-xs font-black shadow-lg backdrop-blur-sm transition-all active:scale-95 border border-emerald-400/50"
+              title="Google Maps Direction"
+            >
+              <Navigation className="w-3.5 h-3.5" />
+              <span>Map</span>
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2.5 rounded-full bg-rose-600/80 hover:bg-rose-700 text-white transition-all backdrop-blur-sm shadow-md cursor-pointer"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
 
           {/* Selected badge */}
           {isSelected && (
