@@ -766,13 +766,10 @@ export default function PageClient() {
           onClose={() => {
             if (typeof localStorage !== 'undefined') {
               localStorage.setItem(`coin_reward_seen_${coinRewardOrder.id}`, 'true');
+              localStorage.setItem(`feedback_dismissed_${coinRewardOrder.id}`, 'true');
             }
-            const finishedOrder = coinRewardOrder;
             setCoinRewardOrder(null);
-            // Check if feedback is needed
-            if (!finishedOrder.feedback) {
-              setFeedbackOrder(finishedOrder);
-            }
+            setFeedbackOrder(null);
           }}
           onContinueToFeedback={() => {
             if (typeof localStorage !== 'undefined') {

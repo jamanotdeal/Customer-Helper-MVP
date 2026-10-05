@@ -473,7 +473,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   // Open edit modal pre-filled with current order data
   const openEditModal = () => {
     if (!canEdit) return;
-    if (order.status === 'ARRIVED' || order.status === 'DELIVERED' || order.status === 'CANCELED') return;
+    if (order.status === 'ON_THE_WAY' || order.status === 'ARRIVED' || order.status === 'DELIVERED' || (order.status as string) === 'CANCELED') return;
     const resolvedOrder = fallbackStore.resolveOrderLocations(order);
     setEditService(resolvedOrder.service || resolvedOrder.title || '');
     // The description is stored in items[0].name (single-item format used by the order form)
@@ -605,6 +605,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const canEdit = Boolean(
     user &&
     (isOwnerCustomer || isAdminUser) &&
+    order.status !== 'ON_THE_WAY' &&
     order.status !== 'ARRIVED' &&
     order.status !== 'DELIVERED' &&
     (order.status as string) !== 'CANCELED'

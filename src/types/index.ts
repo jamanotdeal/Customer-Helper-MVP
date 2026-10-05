@@ -17,6 +17,8 @@ export interface OrderItem {
   id: string;
   name: string;
   qty: string;
+  price?: number;
+  quantity?: number;
   purchased?: boolean;
 }
 
