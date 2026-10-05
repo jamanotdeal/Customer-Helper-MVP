@@ -171,6 +171,32 @@ public final class OrderMatcher {
         return null;
     }
 
+    /**
+     * Whether an order can still be taken: PENDING, no helper on it, and no
+     * approved cancellation. Mirrors the {@code isStillValidPending} check the
+     * alert popup in NewOrderAlertOverlay.tsx applies, so the alarm and the popup
+     * always agree on when an order has gone.
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean isOrderOpen(Map<String, Object> order) {
+        if (order == null) return false;
+        if (!"PENDING".equals(order.get("status"))) return false;
+        Object helperId = order.get("helperId");
+        if (helperId instanceof String && !((String) helperId).trim().isEmpty()) return false;
+        Object cancel = order.get("cancellationRequest");
+        if (cancel instanceof Map && "APPROVED".equals(((Map<String, Object>) cancel).get("status"))) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Whether a store still has to answer this shop order (pending and not yet opened). */
+    public static boolean isShopOrderAwaitingStore(Map<String, Object> shopOrder) {
+        if (shopOrder == null) return false;
+        return "PENDING".equals(shopOrder.get("status"))
+                && !Boolean.TRUE.equals(shopOrder.get("viewedByStore"));
+    }
+
     /** Formats a distance the way the alert screen should read it. */
     public static String formatDistance(Double km) {
         if (km == null) return "";

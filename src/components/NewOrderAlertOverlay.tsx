@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { isOrderOpen } from '@/lib/orderStatus';
+import { isAppVisible } from '@/lib/appVisibility';
 import {
   Bell,
   X,
@@ -22,7 +24,8 @@ import {
 import { isOrderFromStore } from '@/utils/orderUtils';
 
 export interface NewOrderAlertOverlayProps {
-  newOrderIds: Set<string>;
+  /** Alerts to show, oldest first. An id whose order hasn't loaded yet shows a loading card. */
+  orderIds: string[];
   onAccept: (orderId: string) => Promise<void>;
   onView: (orderId: string) => void;
   onDismissOne: (orderId: string) => void;
@@ -31,17 +34,36 @@ export interface NewOrderAlertOverlayProps {
 }
 
 export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
-  newOrderIds,
+  orderIds: orderIdList,
   onAccept,
   onView,
   onDismissOne,
   onDismissAll,
   autoDismissSeconds = 20, // Guarantee at least 10s (default 20s)
 }) => {
-  const orderIdList = Array.from(newOrderIds);
   const [currentIdx, setCurrentIdx] = useState(orderIdList.length - 1); // latest first
   const [accepting, setAccepting] = useState(false);
   const [countdown, setCountdown] = useState(autoDismissSeconds);
+
+  // Callbacks through refs: parents pass fresh closures on every render, and
+  // the countdown below used to restart with each one — so while orders kept
+  // streaming in, the popup never timed out at all.
+  const onDismissAllRef = useRef(onDismissAll);
+  onDismissAllRef.current = onDismissAll;
+  const onDismissOneRef = useRef(onDismissOne);
+  onDismissOneRef.current = onDismissOne;
+
+  // A newly arrived order goes to the front and restarts the countdown, so the
+  // newest request is always the one on screen and always gets the full time.
+  const prevCountRef = useRef(orderIdList.length);
+  const [countdownEpoch, setCountdownEpoch] = useState(0);
+  useEffect(() => {
+    if (orderIdList.length > prevCountRef.current) {
+      setCurrentIdx(orderIdList.length - 1);
+      setCountdownEpoch((n) => n + 1);
+    }
+    prevCountRef.current = orderIdList.length;
+  }, [orderIdList.length]);
 
   // Countdown timer: keeps modal visible for at least 10s (default 20s) unless interacted with
   useEffect(() => {
@@ -50,11 +72,11 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
       // Paused while the app is minimised: dismissing here stops the order
       // alarm, and it has to keep ringing until the helper has actually seen
       // this popup.
-      if (typeof document !== 'undefined' && document.hidden) return;
+      if (!isAppVisible()) return;
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          onDismissAll();
+          onDismissAllRef.current();
           return 0;
         }
         return prev - 1;
@@ -62,7 +84,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [autoDismissSeconds, onDismissAll]);
+  }, [autoDismissSeconds, countdownEpoch]);
 
   // Keep currentIdx in bounds when orders change or get dismissed
   const safeIdx = Math.min(currentIdx, Math.max(0, orderIdList.length - 1));
@@ -75,8 +97,11 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   const handleAcceptClick = async () => {
     if (!order || accepting) return;
     setAccepting(true);
-    await onAccept(order.id);
-    setAccepting(false);
+    try {
+      await onAccept(order.id);
+    } finally {
+      setAccepting(false);
+    }
   };
 
   const handleViewClick = () => {
@@ -85,20 +110,53 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   };
 
   const handleDismissThis = () => {
-    if (!order) return;
-    onDismissOne(order.id);
+    if (!orderId) return;
+    onDismissOne(orderId);
     setCurrentIdx((i) => Math.max(0, Math.min(i, orderIdList.length - 2)));
   };
 
-  const isStillValidPending = Boolean(order && order.status === 'PENDING' && (!order.helperId || order.helperId.trim() === ''));
+  const isStillValidPending = isOrderOpen(order);
 
+  // Belt and braces: the alert controller already drops an order the moment
+  // it is taken, but a card must never offer Accept on one that is gone.
   useEffect(() => {
-    if (order && !isStillValidPending) {
-      onDismissOne(order.id);
-    }
-  }, [order, isStillValidPending, onDismissOne]);
+    if (order && !isStillValidPending) onDismissOneRef.current(order.id);
+  }, [order, isStillValidPending]);
 
-  if (!order || !isStillValidPending) return null;
+  if (!orderId) return null;
+  if (order && !isStillValidPending) return null;
+
+  // The alert can arrive a moment before the order itself (a notification
+  // racing the order stream). Show the popup now, in step with the sound,
+  // rather than ringing over an empty screen.
+  if (!order) {
+    return (
+      <div
+        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+        className="z-[9999] bg-red-950/85 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300"
+      >
+        <div className="w-full max-w-sm flex items-center justify-between mb-3 relative z-10">
+          <div className="flex items-center space-x-2">
+            <div className="w-8 h-8 bg-red-500/30 rounded-full flex items-center justify-center animate-bounce">
+              <Bell className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-white font-black text-sm block">🚨 নতুন অর্ডার এসেছে!</span>
+          </div>
+          <button
+            onClick={onDismissAll}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-bold transition-all shadow-sm active:scale-95"
+          >
+            <VolumeX className="w-3.5 h-3.5" />
+            <span>মিউট</span>
+          </button>
+        </div>
+        <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border-2 border-red-400 p-8 flex flex-col items-center space-y-3 relative z-10">
+          <div className="w-10 h-10 border-4 border-red-500 border-t-transparent rounded-full animate-spin" />
+          <p className="font-extrabold text-gray-800 text-sm">অর্ডারের বিবরণ লোড হচ্ছে…</p>
+        </div>
+      </div>
+    );
+  }
 
   const itemsSummary = order.items?.length
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')

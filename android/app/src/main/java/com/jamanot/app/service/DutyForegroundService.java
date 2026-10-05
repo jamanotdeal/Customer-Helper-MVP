@@ -24,17 +24,14 @@ import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.MetadataChanges;
 import com.google.firebase.firestore.Query;
-import com.jamanot.app.MainActivity;
-import com.jamanot.app.core.AlertSound;
-import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
+import com.jamanot.app.core.OrderAlertDispatcher;
 import com.jamanot.app.core.OrderMatcher;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.receiver.RestartServiceReceiver;
 
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Keeps a Helper or Store reachable while the app is backgrounded or killed.
@@ -136,22 +133,32 @@ public class DutyForegroundService extends Service {
 
     /** @return false if the OS refused the foreground start. */
     private boolean goForeground() {
+        if ("helper".equals(Prefs.role(this)) && hasLocationPermission()
+                && startForegroundAs(ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)) {
+            return true;
+        }
+        // A location-type service may only start while the app is in use, so a
+        // restart from the background — FCM resurrecting the process after an
+        // OEM kill, the watchdog, boot — is refused for it on Android 14+.
+        // Falling back to dataSync keeps the order listener alive; the helper's
+        // last known position still drives the radius check.
+        if (startForegroundAs(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)) return true;
+
+        NotificationHelper.postResumeDutyPrompt(this);
+        return false;
+    }
+
+    private boolean startForegroundAs(int type) {
         try {
-            int type;
-            if ("helper".equals(Prefs.role(this)) && hasLocationPermission()) {
-                type = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
-            } else {
-                type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-            }
             ServiceCompat.startForeground(
                     this, NotificationHelper.ID_DUTY,
                     NotificationHelper.buildDutyNotification(this), type);
             return true;
         } catch (Exception e) {
             // Android 12+ throws ForegroundServiceStartNotAllowedException when
-            // started from the background; Android 14+ throws on a type mismatch.
-            Log.w(TAG, "startForeground refused: " + e);
-            NotificationHelper.postResumeDutyPrompt(this);
+            // started from the background; Android 14+ throws on a type mismatch
+            // or a missing while-in-use permission.
+            Log.w(TAG, "startForeground(type=" + type + ") refused: " + e);
             return false;
         }
     }
@@ -291,7 +298,8 @@ public class DutyForegroundService extends Service {
             String orderId = doc.getString("orderId");
 
             if ("new_order".equals(type)) {
-                handleNewOrder(id, title, body, orderId);
+                // Shared with FCM and the WebView — see OrderAlertDispatcher.
+                OrderAlertDispatcher.handleNewOrder(this, id, title, body, orderId);
             } else {
                 NotificationHelper.postGeneral(this, id, title, body, orderId);
             }
@@ -326,98 +334,6 @@ public class DutyForegroundService extends Service {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    /**
-     * A new order needs the geofence applied before it becomes an alert. The
-     * radius check lives here rather than on the write side because the
-     * notification document carries no coordinates — only the order does.
-     */
-    private void handleNewOrder(String notifId, String title, String body, String orderId) {
-        // The dispatch radius is a helper concept. A store being told a helper
-        // just ordered from them, or a customer being told about their own
-        // order, must never be filtered by distance — and a store account that
-        // was once a helper still carries stale coordinates in Prefs, which
-        // would otherwise silently drop its alerts.
-        if (orderId == null || !"helper".equals(Prefs.role(this))) {
-            dispatchAlert(notifId, title, body, orderId, null);
-            return;
-        }
-
-        db.collection("orders").document(orderId).get()
-                .addOnSuccessListener(orderDoc -> {
-                    Double distance = null;
-                    if (orderDoc != null && orderDoc.exists()) {
-                        Map<String, Object> data = orderDoc.getData();
-                        Double pLat = OrderMatcher.nestedNumber(data, "pickupLocation", "lat");
-                        Double pLng = OrderMatcher.nestedNumber(data, "pickupLocation", "lng");
-                        Double dLat = OrderMatcher.nestedNumber(data, "deliveryLocation", "lat");
-                        Double dLng = OrderMatcher.nestedNumber(data, "deliveryLocation", "lng");
-
-                        double hLat = Prefs.lat(this);
-                        double hLng = Prefs.lng(this);
-                        float radius = Prefs.radiusKm(this);
-
-                        if (!OrderMatcher.withinRadius(hLat, hLng, pLat, pLng, dLat, dLng, radius)) {
-                            Log.i(TAG, "Order " + orderId + " outside " + radius + "km — skipping.");
-                            return;
-                        }
-                        distance = OrderMatcher.minDistanceKm(hLat, hLng, pLat, pLng, dLat, dLng);
-                    }
-                    dispatchAlert(notifId, title, body, orderId, distance);
-                })
-                .addOnFailureListener(e -> {
-                    // Can't verify the radius — alert anyway. A spurious alert is
-                    // recoverable; a missed order is lost income.
-                    Log.w(TAG, "Order fetch failed, alerting anyway: " + e.getMessage());
-                    dispatchAlert(notifId, title, body, orderId, null);
-                });
-    }
-
-    /**
-     * The escalation ladder. Each rung degrades cleanly into the one below it,
-     * which is both the reliability story and the Play-review story.
-     */
-    private void dispatchAlert(String notifId, String title, String body, String orderId, Double distanceKm) {
-        // 1. App already open and visible — let the in-app UI own the alert
-        //    rather than posting a tray notification on top of it, but play the
-        //    tone from here regardless.
-        //
-        //    The tone must not be left to the WebView: its AudioContext is gated
-        //    by the autoplay policy until the user has touched the app, and the
-        //    commonest way to be in the foreground at all is that AutoOpen just
-        //    raised the activity without anyone touching anything. That is how
-        //    alerts went silent after the first one or two — the first arrived
-        //    while backgrounded (notification, audible), it auto-opened the app,
-        //    and every alert after it took this branch and made no sound at all.
-        if (MainActivity.isAppInForeground()) {
-            AlertSound.playOrderTone(this);
-            com.jamanot.app.plugin.JamanotNativePlugin.emitOrderAlert(orderId);
-            return;
-        }
-
-        String detail = body;
-        if (distanceKm != null) {
-            String d = OrderMatcher.formatDistance(distanceKm);
-            detail = (body == null || body.isEmpty()) ? d : body + " · " + d;
-        }
-
-        // 2. Baseline everyone gets: heads-up notification, no special permission.
-        NotificationHelper.postOrderAlert(this, notifId, title, detail, orderId);
-
-        // A helper's order keeps ringing until they open the app and close the
-        // alert popup (JS stops it). Delayed one gap so it follows, rather than
-        // overlaps, the notification's own sound.
-        if ("helper".equals(Prefs.role(this))) {
-            AlertSound.startOrderAlarm(this, 2_000L);
-        }
-
-        // 3. Escalation: bring the app itself to the front on this order, so the
-        //    user lands on the alert modal rather than a native screen with a
-        //    "View" button to tap. Requires "Display over other apps", the
-        //    documented exemption to the Android 10+ background-activity-start
-        //    ban; without it this is a no-op and rung 2 stands.
-        AutoOpen.launch(this, orderId);
     }
 
     // ── Location ────────────────────────────────────────────────────────────

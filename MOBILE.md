@@ -37,13 +37,43 @@ Customer submits an order (any device)
 
 AutoOpen (core/AutoOpen.java), when overlay is granted:
   wake the screen → MainActivity + orderId → PendingAlerts/plugin event
-    → handleSelectOrder() → the order's alert modal, already open
+    → the new-order popup, already open
 ```
 
 Both wake paths share `AutoOpen`, deliberately. They used to differ — only the
 foreground service escalated — which meant the case the feature exists for (an
 OEM battery manager killed the process, so FCM is the *only* code that runs)
 never opened the app at all.
+
+### New-order alerts: one pipeline, popup and alarm in lock-step
+
+Every path that can notice a new order — the duty listener, FCM, and the
+WebView's own listener (`handleNewOrderNotification`) — goes through
+`core/OrderAlertDispatcher`. They share the `Prefs.markSeen` de-dup set, so only
+the first acts, and it acts the same way whichever it is:
+
+```
+OrderAlertDispatcher
+  ├→ fetch the order: drop it if already taken, radius check (helper),
+  │  pending shop orders (store)
+  ├→ ActiveOrderAlerts.raise(orderId)      → alarm rings + native watch on the order
+  ├→ orderAlert event to JS, WITH the order → popup opens in the same instant
+  └→ background only: heads-up notification, then (on duty, overlay granted)
+       ├→ OrderOverlay card over whatever app is open: Accept / View / ✕
+       └→ phone locked or asleep: AutoOpen wakes it and opens the app over
+          the keyguard (an overlay can't draw above the lock screen)
+
+ActiveOrderAlerts watch sees the order go (accepted elsewhere, cancelled,
+store answered)
+  └→ alarm stops, notification withdrawn, orderAlertCleared → popup closes
+```
+
+On the JS side the helper popup is `HelperOrderAlerts`, mounted at the app root
+so it appears on every screen, and the alarm follows its list exactly
+(`setOrderAlarm` → `syncNativeOrderAlarm`). On returning to the foreground JS
+reconnects Firestore and adopts any alert Java holds
+(`getActiveNativeOrderAlerts`), so nothing rings without a popup. Accepting is
+a Firestore transaction (`claimOrderForHelper`), so two helpers can't both win.
 
 ---
 
@@ -96,6 +126,10 @@ never opened the app at all.
 | `service/LocationTracker.java` | Fused location at a battery-sane cadence. |
 | `service/JamanotMessagingService.java` | FCM receiver — secondary wake path. |
 | `core/AutoOpen.java` | Brings the app to the front on an order, gated on the overlay permission. |
+| `core/OrderAlertDispatcher.java` | The single new-order path for the duty listener, FCM and the WebView: verify, alarm, popup payload, notification, auto-open. |
+| `core/ActiveOrderAlerts.java` | Outstanding alerts. Owns the alarm and watches each order natively, so it stops the moment the order is taken elsewhere. |
+| `core/OrderOverlay.java` | The Uber-style new-order card drawn over other apps ("Display over other apps"). Accept opens the app straight into the claim; ✕ declines. Lives exactly as long as its alert. |
+| `core/OrderPayload.java` | Serialises the alerted order for JS, so the popup doesn't wait on the WebView's Firestore connection. |
 | `receiver/BootReceiver.java` | Restores duty after reboot **and after an app update**. |
 | `receiver/RestartServiceReceiver.java` | Restart alarm + the "Go off duty" action. |
 | `work/DutyWatchdogWorker.java` | 15-minute WorkManager check against OEM kills. |

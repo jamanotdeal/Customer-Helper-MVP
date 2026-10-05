@@ -269,6 +269,11 @@ async function claimAndAnnounce(db, orderId, delayMins) {
       orderId,
       read: false,
       createdAt: routedAt,
+      // For a dedicated rider this *is* the new order: typed as one so it gets
+      // the radius filter below and, on the phone, the alarm and the popup —
+      // untyped, it arrived as a plain status notification.
+      type: 'new_order',
+      targetRole: 'helper',
     });
 
     tx.set(

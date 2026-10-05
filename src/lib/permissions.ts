@@ -165,8 +165,8 @@ export const STEP_COPY: Record<PermissionStep, { title: string; message: string;
     action: 'সেটিংসে যান',
   },
   overlay: {
-    title: 'অ্যাপ নিজে থেকে খুলতে দিন',
-    message: 'নতুন অর্ডার এলে অ্যাপটি নিজে থেকে খুলবে — এজন্য "Display over other apps" অনুমতি প্রয়োজন। এটি না দিলেও নোটিফিকেশন আসবে।',
+    title: 'অন্য অ্যাপের উপর অর্ডার পপআপ দেখান',
+    message: 'নতুন অর্ডার এলে অন্য যেকোনো অ্যাপ চালু থাকলেও স্ক্রিনের উপর অর্ডারের পপআপ আসবে, সেখান থেকেই Accept করতে পারবেন — এজন্য "Display over other apps" অনুমতি প্রয়োজন। এটি না দিলেও নোটিফিকেশন আসবে।',
     action: 'অনুমতি দিন',
   },
   autostart: {

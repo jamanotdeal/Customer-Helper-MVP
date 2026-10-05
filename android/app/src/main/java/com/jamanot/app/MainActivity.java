@@ -17,7 +17,9 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.getcapacitor.BridgeActivity;
 import com.jamanot.app.auth.GoogleAuthPlugin;
+import com.jamanot.app.core.ActiveOrderAlerts;
 import com.jamanot.app.core.NotificationHelper;
+import com.jamanot.app.core.OrderOverlay;
 import com.jamanot.app.core.PendingAlerts;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.plugin.JamanotNativePlugin;
@@ -186,17 +188,23 @@ public class MainActivity extends BridgeActivity {
      *   warm start - the plugin event reaches a live JS listener immediately;
      *   cold start - React has not mounted yet, so the id is parked in
      *                PendingAlerts for consumePendingOrderAlert() to drain.
-     * Both funnel into handleSelectOrder() in page-client.tsx, which already
-     * does all the role and tab switching.
+     * Both funnel into the orderAlert handler in page-client.tsx: an order
+     * that is still open becomes the new-order popup, anything else is opened
+     * through handleSelectOrder().
      */
     private void handleAlertIntent(@Nullable Intent intent) {
         if (intent == null) return;
         String orderId = intent.getStringExtra(NotificationHelper.EXTRA_ORDER_ID);
         if (orderId == null || orderId.isEmpty()) return;
 
+        // What the user chose on the over-other-apps card, if anything ("accept").
+        String action = intent.getStringExtra(OrderOverlay.EXTRA_ALERT_ACTION);
         intent.removeExtra(NotificationHelper.EXTRA_ORDER_ID);
-        PendingAlerts.set(orderId);
-        JamanotNativePlugin.emitOrderAlert(orderId);
+        intent.removeExtra(OrderOverlay.EXTRA_ALERT_ACTION);
+        PendingAlerts.set(orderId, action);
+        // With the order itself when an alert is outstanding for it, so the
+        // popup does not wait on the WebView's Firestore connection.
+        JamanotNativePlugin.emitOrderAlert(orderId, ActiveOrderAlerts.payload(orderId), action);
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -205,6 +213,9 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         activityResumed = true;
+        // The app is on screen: its own popup takes over from the card drawn
+        // over other apps (outstanding alerts are adopted by JS on resume).
+        OrderOverlay.hideAll(this);
     }
 
     @Override

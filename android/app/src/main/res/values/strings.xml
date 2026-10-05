@@ -26,4 +26,17 @@
     <string name="alert_new_order">নতুন অর্ডার এসেছে</string>
     <string name="alert_view">দেখুন</string>
     <string name="alert_dismiss">বন্ধ করুন</string>
+
+    <!-- New order card drawn over other apps (OrderOverlay) -->
+    <string name="overlay_title">🚨 নতুন অর্ডার এসেছে!</string>
+    <string name="overlay_accept">✅ Accept করুন</string>
+    <string name="overlay_view">বিস্তারিত দেখুন</string>
+    <string name="overlay_open">অর্ডার দেখুন</string>
+    <string name="overlay_free_delivery">🎁 Free Delivery</string>
+    <string name="overlay_fee">Fee ৳%1$s</string>
+    <string name="overlay_pickup">পিকআপ: %1$s</string>
+    <string name="overlay_delivery">ডেলিভারি: %1$s</string>
+    <string name="overlay_price">মূল্য: ৳%1$s</string>
+    <string name="overlay_from_helper">হেলপার: %1$s</string>
+    <string name="overlay_taken">অর্ডারটি আর উপলব্ধ নেই</string>
 </resources>

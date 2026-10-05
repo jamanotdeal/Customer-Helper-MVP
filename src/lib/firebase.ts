@@ -10,6 +10,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -24,6 +25,9 @@ import {
   writeBatch,
   increment,
   deleteField,
+  runTransaction,
+  disableNetwork,
+  enableNetwork,
 } from 'firebase/firestore';
 import {
   getMessaging,
@@ -57,6 +61,7 @@ import {
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isAppVisible, subscribeAppVisibility } from './appVisibility';
 import { isHelperEligibleForOrder } from './geofenceUtils';
+import { isOrderOpen } from './orderStatus';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -385,6 +390,25 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
   // no-op inside the app. Route through the JamanotNative plugin instead, which
   // posts a real Android notification on a channel that has sound + vibration.
   if (isNativeRuntime()) {
+    // A new order goes through the same Java dispatcher as the duty listener
+    // and FCM. Posting it as a plain notification here — the old behaviour —
+    // made the phone chime but started no alarm and raised no popup, and
+    // because the paths share one de-dup set, it also stopped Java from doing
+    // either when this listener happened to see the order first.
+    if (notif.type === 'new_order' && notif.orderId) {
+      import('./native')
+        .then((m) =>
+          m.handleNativeNewOrderNotification({
+            notifId: notif.id,
+            orderId: notif.orderId as string,
+            title: notif.title,
+            body: notif.body || '',
+          })
+        )
+        .catch((e) => console.warn('[triggerBrowserNotification] native new-order note:', e));
+      return;
+    }
+
     // Order traffic goes on the heads-up channel (CH_ORDER: IMPORTANCE_HIGH,
     // custom sound, vibration pattern, lights). Everything else on CH_GENERAL.
     const important = notif.type === 'new_order' || !!notif.orderId;
@@ -508,6 +532,14 @@ const NOTIFY_COALESCE_MS = 50;
 /** Debounce on serialising the whole cache to localStorage. */
 const SAVE_DEBOUNCE_MS = 5000;
 
+/**
+ * How long the app must have been in the background before coming back forces
+ * a Firestore reconnect. Short trips (a permission dialog, the notification
+ * shade) keep their connection; anything longer is where Android has usually
+ * throttled the WebView's socket — see reconnectAfterBackground.
+ */
+const RECONNECT_AFTER_HIDDEN_MS = 10_000;
+
 class FallbackStore {
   private listeners: Set<Listener> = new Set();
 
@@ -586,6 +618,16 @@ class FallbackStore {
   // A coalesced notify() pass is already queued — see notify().
   private _notifyScheduled = false;
 
+  // True once the helper's pending-orders listener has delivered a snapshot
+  // from the server, so its contents are the real current state rather than the
+  // localStorage cache. HelperOrderAlerts takes its "already known" baseline
+  // here — see isPendingOrdersPrimed().
+  private _pendingOrdersPrimed = false;
+
+  // When the app last left the foreground — see reconnectAfterBackground().
+  private _hiddenSince: number | null = null;
+  private _reconnecting = false;
+
   // ─── Role-Scoped Listener Management ─────────────────────────────────────
   // Stores active unsubscribe callbacks; torn down on role/user switch.
   private _unsubListeners: (() => void)[] = [];
@@ -644,14 +686,44 @@ class FallbackStore {
 
     subscribeAppVisibility((visible) => {
       if (!visible) {
+        this._hiddenSince = Date.now();
         this.flushLocalStoreSave();
-      } else if (this._saveDeferredWhileHidden) {
+        return;
+      }
+      if (this._saveDeferredWhileHidden) {
         this._saveDeferredWhileHidden = false;
         this.scheduleLocalStoreSave();
       }
+      const hiddenFor = this._hiddenSince === null ? 0 : Date.now() - this._hiddenSince;
+      this._hiddenSince = null;
+      if (hiddenFor >= RECONNECT_AFTER_HIDDEN_MS) this.reconnectAfterBackground();
     });
 
     window.addEventListener('pagehide', () => this.flushLocalStoreSave());
+  }
+
+  /**
+   * Forces the Firestore connection to be re-established, which makes every
+   * listener re-sync with the server straight away.
+   *
+   * While the app is in the background Android throttles the WebView and cuts
+   * its sockets, but the SDK does not notice that its stream is dead until a
+   * long timeout. Coming back, every onSnapshot listener stayed silent for that
+   * whole time — the "the order alert only shows after I refresh" report, since
+   * pull-to-refresh re-attaches the listeners and so happened to work around
+   * it. Cycling the network on resume does the same, without throwing the
+   * listeners (or the user's place in the app) away. Writes made meanwhile are
+   * queued by the SDK and flushed on reconnect.
+   */
+  public reconnectAfterBackground() {
+    if (this._reconnecting) return;
+    this._reconnecting = true;
+    disableNetwork(db)
+      .then(() => enableNetwork(db))
+      .catch((e) => console.warn('[Firestore] reconnect note:', e?.message || e))
+      .finally(() => {
+        this._reconnecting = false;
+      });
   }
 
   // ─── localStorage helpers for the known / read notification sets ──────────
@@ -831,16 +903,10 @@ class FallbackStore {
       // must still agree on the id. dedicatedNotifId() in functions/index.js
       // builds the identical string.
       const notifId = `notif-${new Date(order.createdAt).getTime()}-ded-${order.id}`;
-      await this.addNotification({
-        id: notifId,
-        userId: 'all-dedicated-helpers',
-        title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
-        body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
-        orderId: order.id,
-        read: false,
-        createdAt: routedAt,
-      });
 
+      // Flag first, announcement second (the server does both in one
+      // transaction). A rider's device reacts to the announcement by reading
+      // the order, and must find it already routed to them.
       try {
         await setDoc(
           doc(db, 'orders', order.id),
@@ -850,6 +916,19 @@ class FallbackStore {
       } catch (e: any) {
         console.warn('[Firestore] dedicated routing note (kept locally):', e?.message || e);
       }
+
+      await this.addNotification({
+        id: notifId,
+        userId: 'all-dedicated-helpers',
+        title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
+        body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
+        orderId: order.id,
+        read: false,
+        createdAt: routedAt,
+        // A new order as far as a dedicated rider is concerned — alarm and popup.
+        type: 'new_order',
+        targetRole: 'helper',
+      });
     }
 
     if (due.length > 0) {
@@ -1338,6 +1417,7 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this._pendingOrdersPrimed = false;
     this.notifications.clear();
     this._knownNotifIds.clear();
     if (typeof sessionStorage !== 'undefined') {
@@ -1785,8 +1865,14 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                // If doc was removed from Firestore, delete it
-                this.orders.delete(change.doc.id);
+                // "Removed" from this query only means it left the newest-150
+                // window. Pending orders and this helper's own orders are each
+                // owned by a stream below, which removes them itself once they
+                // are truly gone — deleting them here dropped live requests.
+                const cached = this.orders.get(change.doc.id);
+                if (cached?.status !== 'PENDING' && cached?.helperId !== userId) {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
@@ -1805,15 +1891,27 @@ class FallbackStore {
             where('status', '==', 'PENDING'),
             limit(100)
           ),
+          // Metadata changes too, so the cache → server transition after an
+          // offline start is delivered and primes the alert baseline below.
+          { includeMetadataChanges: true },
           (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
+            const changes = snapshot.docChanges();
+            changes.forEach((change) => {
               if (change.type === 'removed') {
-                this.orders.delete(change.doc.id);
+                // It stopped being PENDING (accepted, cancelled) or was
+                // deleted. If another stream already delivered its new state,
+                // keep that — it is newer than what this query last saw.
+                const cached = this.orders.get(change.doc.id);
+                if (!cached || cached.status === 'PENDING') {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
-            this.notify();
+            const wasPrimed = this._pendingOrdersPrimed;
+            if (!snapshot.metadata.fromCache) this._pendingOrdersPrimed = true;
+            if (changes.length > 0 || wasPrimed !== this._pendingOrdersPrimed) this.notify();
           },
           (err) => console.warn('[Firestore] Helper pending orders sync note:', err)
         )
@@ -2784,6 +2882,112 @@ class FallbackStore {
     return undefined;
   }
 
+  /** Whether the helper's pending-orders stream has reported the server's state yet. */
+  public isPendingOrdersPrimed(): boolean {
+    return this._pendingOrdersPrimed;
+  }
+
+  /**
+   * Takes in an order delivered with a native alert (see OrderPayload.java),
+   * so its popup can render before this device's own listener has caught up.
+   * A copy the listener already delivered is kept unless the payload is newer.
+   */
+  public ingestOrder(order: Order) {
+    if (!order?.id) return;
+    const existing = this.orders.get(order.id);
+    if (existing && (existing.updatedAt || '') > (order.updatedAt || '')) return;
+    this.orders.set(order.id, this.resolveOrderLocations(order));
+    this.notify();
+  }
+
+  /** As ingestOrder, for the shop orders delivered with a store's native alert. */
+  public ingestShopOrders(shopOrders: ShopOrder[]) {
+    let changed = false;
+    shopOrders.forEach((so) => {
+      if (!so?.id) return;
+      const existing = this.shopOrders.get(so.id);
+      if (existing && (existing.updatedAt || '') > (so.updatedAt || '')) return;
+      this.shopOrders.set(so.id, so);
+      changed = true;
+    });
+    if (changed) this.notify();
+  }
+
+  /**
+   * Accepts a pending order for a helper — atomically.
+   *
+   * The old accept read the order from this device's cache and wrote the whole
+   * document back, so two helpers tapping Accept within the same second both
+   * "won": each saw PENDING locally, each wrote itself in, and the last write
+   * silently replaced the first helper, who was left holding an order that was
+   * no longer theirs. The transaction re-reads the server copy and only claims
+   * it if it is still open; Firestore retries it if anyone writes in between.
+   *
+   * The usual side effects (customer notification, shop-order reassignment)
+   * then run through updateOrder with the pre-claim document as the baseline,
+   * so they fire even if our own listener has already delivered the claim.
+   */
+  public async claimOrderForHelper(
+    orderId: string,
+    helper: Pick<UserProfile, 'uid' | 'displayName' | 'alternativePhone'>,
+    note: string
+  ): Promise<'accepted' | 'taken'> {
+    const ref = doc(db, 'orders', orderId);
+    const now = new Date().toISOString();
+    const historyEntry = {
+      id: `sh-${Date.now()}`,
+      status: 'ACCEPTED' as const,
+      timestamp: now,
+      actor: `Helper (${helper.displayName})`,
+      note,
+    };
+    const claim = (o: Order): Order => ({
+      ...o,
+      status: 'ACCEPTED',
+      helperId: helper.uid,
+      helperName: helper.displayName,
+      helperPhone: helper.alternativePhone,
+      acceptedAt: now,
+      statusHistory: [...(o.statusHistory || []), historyEntry],
+    });
+
+    const before = await runTransaction(db, async (tx): Promise<Order | null> => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return null;
+      const current = snap.data() as Order;
+      if (!isOrderOpen(current)) return null;
+      tx.set(ref, cleanForFirestore({ ...claim(current), updatedAt: now }), { merge: true });
+      return this.resolveOrderLocations(current);
+    });
+
+    if (!before) {
+      // Make the cache agree with the server at once, so every list and popup
+      // on this device drops it without waiting for the listener.
+      this.getOrderFromServer(orderId).catch(() => {});
+      return 'taken';
+    }
+
+    await this.updateOrder(orderId, claim, { baseline: before });
+    return 'accepted';
+  }
+
+  /**
+   * Re-reads one order from the server into the cache (missing → removed).
+   * Rejects when the server can't be reached, so callers can tell "gone" from
+   * "couldn't check".
+   */
+  public async getOrderFromServer(orderId: string): Promise<Order | undefined> {
+    const snap = await getDocFromServer(doc(db, 'orders', orderId));
+    if (!snap.exists()) {
+      if (this.orders.delete(orderId)) this.notify();
+      return undefined;
+    }
+    const order = this.resolveOrderLocations(snap.data() as Order);
+    this.orders.set(orderId, order);
+    this.notify();
+    return order;
+  }
+
   public async addOrder(order: Order) {
     const customer = this.users.get(order.customerId);
     if (customer?.isBlocked) {
@@ -2846,8 +3050,14 @@ class FallbackStore {
     }
   }
 
-  public async updateOrder(orderId: string, updater: (order: Order) => Order) {
-    let existing = this.orders.get(orderId);
+  /**
+   * @param opts.baseline the order as it was before this change, when the
+   *   change has already been written elsewhere (claimOrderForHelper) and the
+   *   cache may already reflect it — otherwise the status-change side effects
+   *   would compare the new state against itself and never fire.
+   */
+  public async updateOrder(orderId: string, updater: (order: Order) => Order, opts?: { baseline?: Order }) {
+    let existing = opts?.baseline ?? this.orders.get(orderId);
     if (!existing) {
       existing = await this.getOrder(orderId);
     }

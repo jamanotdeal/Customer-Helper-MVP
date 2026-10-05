@@ -13,6 +13,8 @@
  *      must not need to change.
  */
 
+import type { Order, ShopOrder } from '@/types';
+
 // ---------------------------------------------------------------------------
 // Runtime detection
 // ---------------------------------------------------------------------------
@@ -428,14 +430,33 @@ export async function showNativeLocalNotification(
 }
 
 // ---------------------------------------------------------------------------
-// New-order alerts (Java -> JS deep link)
+// New-order alerts (Java <-> JS)
 // ---------------------------------------------------------------------------
 
 /**
- * Fires when the user taps a new-order notification or the full-screen alert
- * while the WebView is already alive. Returns an unsubscribe function.
+ * What Java sends with an alert. `order` (helper) or `shopOrders` (store) is
+ * the document Java already fetched, so the popup can open without waiting on
+ * the WebView's own Firestore connection — see OrderPayload.java.
  */
-export function onOrderAlert(callback: (payload: { orderId: string }) => void): () => void {
+export interface NativeOrderAlert {
+  orderId: string;
+  order?: Order;
+  shopOrders?: ShopOrder[];
+  /** The helper tapped Accept on the card drawn over other apps (OrderOverlay.java). */
+  action?: 'accept';
+}
+
+function toOrderAlert(data: any): NativeOrderAlert | null {
+  if (!data?.orderId) return null;
+  return {
+    orderId: String(data.orderId),
+    order: data.order && typeof data.order === 'object' ? (data.order as Order) : undefined,
+    shopOrders: Array.isArray(data.shopOrders) ? (data.shopOrders as ShopOrder[]) : undefined,
+    action: data.action === 'accept' ? 'accept' : undefined,
+  };
+}
+
+function addNativeListener(event: string, handler: (data: any) => void): () => void {
   if (!isNativeApp()) return () => {};
   let handle: any = null;
   let cancelled = false;
@@ -443,9 +464,7 @@ export function onOrderAlert(callback: (payload: { orderId: string }) => void): 
   jn()
     .then((box) => {
       if (!box || cancelled) return;
-      return box.p.addListener('orderAlert', (data: any) => {
-        if (data?.orderId) callback({ orderId: String(data.orderId) });
-      });
+      return box.p.addListener(event, handler);
     })
     .then((h) => {
       if (cancelled) h?.remove?.();
@@ -459,46 +478,107 @@ export function onOrderAlert(callback: (payload: { orderId: string }) => void): 
   };
 }
 
-// Whether an alert popup currently owns the native alarm. Java can start the
-// alarm by itself for an order that arrived while the app was in the
-// background; if the app then opens without that popup ever showing (order
-// already taken, helper not in helper mode), nothing would stop it — see
-// stopOrphanedOrderAlarm.
-let orderAlarmOwnedByPopup = false;
-
 /**
- * Starts the repeating new-order tone in Java. Native only: unlike Web Audio it
- * keeps ringing while the app is minimised, and it needs no user gesture.
+ * A new order Java has alerted on (foreground or background), or a tapped
+ * notification while the WebView is alive. Returns an unsubscribe function.
  */
-export async function startNativeOrderAlarm(): Promise<void> {
-  orderAlarmOwnedByPopup = true;
-  const p = (await jn())?.p;
-  if (p) await p.startOrderAlarm().catch(() => {});
-}
-
-export async function stopNativeOrderAlarm(): Promise<void> {
-  orderAlarmOwnedByPopup = false;
-  const p = (await jn())?.p;
-  if (p) await p.stopOrderAlarm().catch(() => {});
-}
-
-/** Silences an alarm Java started that no popup has since claimed. */
-export async function stopOrphanedOrderAlarm(): Promise<void> {
-  if (orderAlarmOwnedByPopup) return;
-  const p = (await jn())?.p;
-  if (p) await p.stopOrderAlarm().catch(() => {});
+export function onOrderAlert(callback: (alert: NativeOrderAlert) => void): () => void {
+  return addNativeListener('orderAlert', (data) => {
+    const alert = toOrderAlert(data);
+    if (alert) callback(alert);
+  });
 }
 
 /**
- * Drains an orderId delivered by a cold-start intent — the case where Java
+ * Java's own watch on an alerted order saw it go — accepted by another helper,
+ * cancelled, or answered by the store. Close its popup.
+ */
+export function onOrderAlertCleared(callback: (orderId: string) => void): () => void {
+  return addNativeListener('orderAlertCleared', (data) => {
+    if (data?.orderId) callback(String(data.orderId));
+  });
+}
+
+// The alert ids last reported to Java. Calls are chained so a burst of changes
+// reaches Java in order — an out-of-order stop would silence a live alert.
+let syncedAlarmIds = new Set<string>();
+let alarmCalls: Promise<unknown> = Promise.resolve();
+
+function queueAlarmCall(fn: (p: any) => Promise<unknown>) {
+  alarmCalls = alarmCalls
+    .then(async () => {
+      const p = (await jn())?.p;
+      if (p) await fn(p);
+    })
+    .catch(() => {});
+}
+
+/**
+ * Declares the alerts currently on screen. Java rings while any is
+ * outstanding and watches each order natively, so it stops by itself the
+ * moment an order is taken elsewhere — even if this WebView never hears of it.
+ *
+ * Only changes are sent, so mounting with an empty list silences nothing: on a
+ * cold start the popup mounts empty while Java may already be ringing for an
+ * order, which JS adopts afterwards (see getActiveNativeOrderAlerts).
+ */
+export function syncNativeOrderAlarm(orderIds: string[]): void {
+  if (!isNativeApp()) return;
+  const next = new Set(orderIds);
+  const added = orderIds.filter((id) => !syncedAlarmIds.has(id));
+  const removed = Array.from(syncedAlarmIds).filter((id) => !next.has(id));
+  syncedAlarmIds = next;
+
+  // Per id, never "stop everything": Java may hold an alert this screen
+  // hasn't adopted yet (it is about to be), and that one must keep ringing.
+  removed.forEach((orderId) => queueAlarmCall((p) => p.dismissOrderAlarm({ orderId })));
+  if (added.length > 0) queueAlarmCall((p) => p.startOrderAlarm({ orderIds: added }));
+}
+
+/** Ends one native alert that no popup is going to show (order already gone). */
+export function dismissNativeOrderAlarm(orderId: string): void {
+  if (!isNativeApp()) return;
+  syncedAlarmIds.delete(orderId);
+  queueAlarmCall((p) => p.dismissOrderAlarm({ orderId }));
+}
+
+/** Alerts Java holds right now — adopted when the app comes to the foreground. */
+export async function getActiveNativeOrderAlerts(): Promise<NativeOrderAlert[]> {
+  const p = (await jn())?.p;
+  if (!p) return [];
+  try {
+    const res = await p.getActiveOrderAlarms();
+    return (Array.isArray(res?.alerts) ? res.alerts : [])
+      .map(toOrderAlert)
+      .filter((a: NativeOrderAlert | null): a is NativeOrderAlert => a !== null);
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Hands a new-order notification the WebView saw first to Java's dispatcher,
+ * so it is alerted exactly as if the duty listener had seen it.
+ */
+export async function handleNativeNewOrderNotification(n: {
+  notifId: string;
+  orderId: string;
+  title: string;
+  body: string;
+}): Promise<void> {
+  const p = (await jn())?.p;
+  if (p) await p.handleNewOrderNotification(n).catch(() => {});
+}
+
+/**
+ * Drains an alert delivered by a cold-start intent — the case where Java
  * launched the app long before React mounted, so no event listener existed yet.
  */
-export async function consumePendingOrderAlert(): Promise<string | null> {
+export async function consumePendingOrderAlert(): Promise<NativeOrderAlert | null> {
   const p = (await jn())?.p;
   if (!p) return null;
   try {
-    const res = await p.getPendingIntentPayload();
-    return res?.orderId || null;
+    return toOrderAlert(await p.getPendingIntentPayload());
   } catch (_) {
     return null;
   }
@@ -575,25 +655,7 @@ export async function setPullToRefreshEnabled(enabled: boolean): Promise<void> {
 
 /** Subscribe to the native pull gesture. Returns an unsubscribe function. */
 export function onPullToRefresh(callback: () => void): () => void {
-  if (!isNativeApp()) return () => {};
-  let handle: any = null;
-  let cancelled = false;
-
-  jn()
-    .then((box) => {
-      if (!box || cancelled) return;
-      return box.p.addListener('pullToRefresh', () => callback());
-    })
-    .then((h) => {
-      if (cancelled) h?.remove?.();
-      else handle = h;
-    })
-    .catch(() => {});
-
-  return () => {
-    cancelled = true;
-    handle?.remove?.();
-  };
+  return addNativeListener('pullToRefresh', () => callback());
 }
 
 /** Tell Java the refresh finished so it can retract the spinner. */

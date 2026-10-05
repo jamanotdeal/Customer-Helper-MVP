@@ -51,6 +51,8 @@ public final class NotificationHelper {
     public static final int ID_DUTY = 1001;
     public static final int ID_RESUME = 1002;
     private static final int ID_ORDER_BASE = 2000;
+    /** Paired with an {@code order:<id>} tag, so each order has exactly one slot. */
+    private static final int ID_ORDER_ALERT = 3000;
 
     public static final String EXTRA_ORDER_ID = "orderId";
 
@@ -198,7 +200,27 @@ public final class NotificationHelper {
                 .setVibrate(new long[]{0})
                 .setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_LIGHTS);
 
-        safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, b.build());
+        if (orderId != null && !orderId.isEmpty()) {
+            // Filed under the order, not the notification document: one order
+            // is one tray entry however many paths announced it, and it can be
+            // withdrawn by order id the moment the order is taken elsewhere.
+            safeNotify(c, orderTag(orderId), ID_ORDER_ALERT, b.build());
+        } else {
+            safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, b.build());
+        }
+    }
+
+    /** Withdraws a new-order notification — the order was taken, cancelled or answered. */
+    public static void cancelOrderAlert(Context c, String orderId) {
+        if (orderId == null || orderId.isEmpty()) return;
+        try {
+            NotificationManagerCompat.from(c).cancel(orderTag(orderId), ID_ORDER_ALERT);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String orderTag(String orderId) {
+        return "order:" + orderId;
     }
 
     /**
@@ -261,8 +283,12 @@ public final class NotificationHelper {
      * throws rather than no-ops when it is.
      */
     private static void safeNotify(Context c, int id, Notification n) {
+        safeNotify(c, null, id, n);
+    }
+
+    private static void safeNotify(Context c, String tag, int id, Notification n) {
         try {
-            NotificationManagerCompat.from(c).notify(id, n);
+            NotificationManagerCompat.from(c).notify(tag, id, n);
         } catch (SecurityException ignored) {
             // Permission revoked — nothing to do but stay quiet.
         }

@@ -15,7 +15,8 @@ import {
 import { ShopOrder, ShopOrderStatus, ShopOrderItemPrice } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
-import { isNativeApp } from '@/lib/native';
+import { isNativeApp, onOrderAlertCleared } from '@/lib/native';
+import { setOrderAlarm } from '@/lib/orderAlarm';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
 
@@ -277,16 +278,47 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // Track viewed shop order IDs in local state and sync with fallbackStore
   const [unviewedShopOrderIds, setUnviewedShopOrderIds] = useState<Set<string>>(new Set());
-  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+  // Shop orders whose alert the store muted (or that Java saw answered). Kept
+  // per order: a mute used to flip one global switch that the next snapshot
+  // flipped straight back, and a new order arriving after a mute stayed silent.
+  const [mutedShopOrderIds, setMutedShopOrderIds] = useState<Set<string>>(new Set());
 
-  // Audio Context & Sound/Vibration alarm loop for Store
+  // The alerts on screen: waiting for this store and not muted.
+  const alertShopOrderIds = useMemo(
+    () => (isStoreBlocked ? [] : Array.from(unviewedShopOrderIds).filter((id) => !mutedShopOrderIds.has(id))),
+    [unviewedShopOrderIds, mutedShopOrderIds, isStoreBlocked]
+  );
+
+  const muteShopOrders = (ids: Iterable<string>) => {
+    setMutedShopOrderIds((prev) => {
+      const next = new Set(prev);
+      for (const id of Array.from(ids)) next.add(id);
+      return next;
+    });
+  };
+
+  // The alarm follows the popup exactly. Keyed by parent order id, which is
+  // what the native alert carries — Java watches those shop orders itself and
+  // stops ringing the moment they are answered, even with the app minimised.
+  const alertParentKey = alertShopOrderIds
+    .map((id) => fallbackStore.shopOrders.get(id)?.parentOrderId || id)
+    .filter((id, i, all) => all.indexOf(id) === i)
+    .join(',');
   useEffect(() => {
-    if (unviewedShopOrderIds.size > 0 && !isStoreBlocked) {
-      setIsAlarmPlaying(true);
-    } else {
-      setIsAlarmPlaying(false);
-    }
-  }, [unviewedShopOrderIds, isStoreBlocked]);
+    setOrderAlarm(alertParentKey ? alertParentKey.split(',') : []);
+  }, [alertParentKey]);
+  useEffect(() => () => setOrderAlarm([]), []);
+
+  // Java's own watch saw these shop orders answered — close their popup even if
+  // this WebView's listener hasn't caught up yet.
+  useEffect(() => {
+    return onOrderAlertCleared((parentOrderId) => {
+      const ids = Array.from(fallbackStore.shopOrders.values())
+        .filter((so) => so.parentOrderId === parentOrderId)
+        .map((so) => so.id);
+      if (ids.length > 0) muteShopOrders(ids);
+    });
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -317,7 +349,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             updated.add(targetShopOrder!.id);
             return updated;
           });
-          setIsAlarmPlaying(true);
+          setMutedShopOrderIds((prev) => {
+            if (!prev.has(targetShopOrder!.id)) return prev;
+            const next = new Set(prev);
+            next.delete(targetShopOrder!.id);
+            return next;
+          });
         } else {
           // Already accepted / running / completed: open details
           setLocalActiveTab('ORDERS');
@@ -340,82 +377,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
   }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
-  useEffect(() => {
-    if (!isAlarmPlaying) return;
-
-    let active = true;
-    let audioCtx: AudioContext | null = null;
-    let intervalId: any = null;
-
-    const startAlarm = () => {
-      try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContextClass) {
-          audioCtx = new AudioContextClass();
-        }
-      } catch (e) {
-        console.warn('AudioContext init failed:', e);
-      }
-
-      const triggerAlert = () => {
-        if (!active) return;
-
-        // Vibrate: heavy pulse pattern for store
-        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          navigator.vibrate([500, 250, 500, 250, 500]);
-        }
-
-        // Sound: store high double chime tone
-        if (audioCtx) {
-          try {
-            if (audioCtx.state === 'suspended') {
-              audioCtx.resume();
-            }
-            const osc1 = audioCtx.createOscillator();
-            const osc2 = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc1.type = 'sine';
-            osc1.frequency.setValueAtTime(1046.5, audioCtx.currentTime); // C6
-            osc2.type = 'triangle';
-            osc2.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
-
-            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.9);
-
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc1.start();
-            osc2.start();
-            osc1.stop(audioCtx.currentTime + 0.9);
-            osc2.stop(audioCtx.currentTime + 0.9);
-          } catch (e) {
-            console.warn('Oscillator failed:', e);
-          }
-        }
-      };
-
-      triggerAlert();
-      intervalId = setInterval(triggerAlert, 1500);
-    };
-
-    startAlarm();
-
-    const timeoutId = setTimeout(() => {
-      setIsAlarmPlaying(false);
-    }, 60000);
-
-    return () => {
-      active = false;
-      if (intervalId) clearInterval(intervalId);
-      if (timeoutId) clearTimeout(timeoutId);
-      if (audioCtx) {
-        audioCtx.close().catch(() => { });
-      }
-    };
-  }, [isAlarmPlaying]);
 
   // Real-time Firestore listener for all shop orders for this store
   useEffect(() => {
@@ -954,19 +915,25 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     setSelectedShopOrderId(null);
   };
 
-  // Wallet routing intercept (Moved here after all Hooks to satisfy rules of hooks)
-  if (parentActiveTab === 'wallet') {
-    return <StoreWallet />;
-  }
-
-  if (selectedOrderId) {
-    return (
-      <OrderDetailsView
-        orderId={selectedOrderId}
-        onBack={() => setSelectedOrderId(null)}
-      />
-    );
-  }
+  // Wallet and order details replace the dashboard body only. The new-order
+  // popup and its modals are rendered below on every screen — they used to be
+  // skipped by an early return here, so a store on its wallet (or reading an
+  // order) heard the alarm with no popup to answer it.
+  const renderBody = () => {
+    // Wallet routing intercept
+    if (parentActiveTab === 'wallet') {
+      return <StoreWallet />;
+    }
+    if (selectedOrderId) {
+      return (
+        <OrderDetailsView
+          orderId={selectedOrderId}
+          onBack={() => setSelectedOrderId(null)}
+        />
+      );
+    }
+    return renderMainContent();
+  };
 
   const renderMainContent = () => {
     if (showRequestComposer) {
@@ -1454,7 +1421,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   return (
     <>
-      {renderMainContent()}
+      {renderBody()}
 
       {/* ── Store Cancel/Rejection Custom Confirmation Modal ── */}
       {showStoreCancelModal && (
@@ -1520,9 +1487,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
 
       {/* ── Store New Order Alert Fullscreen Overlay with Carousel ── */}
-      {isAlarmPlaying && unviewedShopOrderIds.size > 0 && (
+      {alertShopOrderIds.length > 0 && (
         <StoreNewOrderAlertOverlay
-          unviewedShopOrderIds={unviewedShopOrderIds}
+          shopOrderIds={alertShopOrderIds}
           onAccept={async (soId) => {
             fallbackStore.markShopOrderViewed(soId);
             await fallbackStore.updateShopOrder(soId, (prev) => ({
@@ -1544,7 +1511,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               updated.delete(soId);
               return updated;
             });
-            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
           }}
           onCancel={(soId) => {
             handleCancelOrderClick(soId);
@@ -1554,11 +1520,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               updated.delete(soId);
               return updated;
             });
-            if (unviewedShopOrderIds.size <= 1) setIsAlarmPlaying(false);
           }}
-          onDismissAll={() => {
-            setIsAlarmPlaying(false);
-          }}
+          onDismissAll={() => muteShopOrders(alertShopOrderIds)}
         />
       )}
 
@@ -1574,22 +1537,29 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 };
 
 interface StoreNewOrderAlertOverlayProps {
-  unviewedShopOrderIds: Set<string>;
+  /** Alerts to show, oldest first. */
+  shopOrderIds: string[];
   onAccept: (soId: string) => Promise<void>;
   onCancel: (soId: string) => void;
   onDismissAll: () => void;
 }
 
 const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
-  unviewedShopOrderIds,
+  shopOrderIds: shopOrderIdList,
   onAccept,
   onCancel,
   onDismissAll,
 }) => {
   const { showConfirm } = useModal();
-  const shopOrderIdList = Array.from(unviewedShopOrderIds);
   const [currentIdx, setCurrentIdx] = useState(shopOrderIdList.length - 1);
   const [processing, setProcessing] = useState(false);
+
+  // A newly arrived order goes to the front, so the newest is always on screen.
+  const prevCountRef = useRef(shopOrderIdList.length);
+  useEffect(() => {
+    if (shopOrderIdList.length > prevCountRef.current) setCurrentIdx(shopOrderIdList.length - 1);
+    prevCountRef.current = shopOrderIdList.length;
+  }, [shopOrderIdList.length]);
 
   const safeIdx = Math.min(currentIdx, shopOrderIdList.length - 1);
   const soId = shopOrderIdList[safeIdx];

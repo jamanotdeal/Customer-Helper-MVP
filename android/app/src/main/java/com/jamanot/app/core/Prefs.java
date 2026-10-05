@@ -65,6 +65,14 @@ public final class Prefs {
 
     public static String storeId(Context c) { return sp(c).getString(K_STORE_ID, null); }
 
+    /** The shop id store orders are filed under — same fallback as initListenersForRole. */
+    public static String effectiveStoreId(Context c) {
+        String id = storeId(c);
+        if (id != null && !id.isEmpty()) return id;
+        String uid = uid(c);
+        return uid == null ? null : "store-" + uid;
+    }
+
     public static String activeMode(Context c) { return sp(c).getString(K_ACTIVE_MODE, "customer"); }
 
     /**

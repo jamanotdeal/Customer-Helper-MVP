@@ -15,6 +15,7 @@ import androidx.activity.result.ActivityResult;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -25,9 +26,10 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.jamanot.app.MainActivity;
+import com.jamanot.app.core.ActiveOrderAlerts;
 import com.jamanot.app.core.NotificationHelper;
+import com.jamanot.app.core.OrderAlertDispatcher;
 import com.jamanot.app.core.PendingAlerts;
-import com.jamanot.app.core.AlertSound;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.service.DutyForegroundService;
 import com.jamanot.app.work.DutyWatchdogWorker;
@@ -69,11 +71,45 @@ public class JamanotNativePlugin extends Plugin {
 
     // ── Events out to JS ────────────────────────────────────────────────────
 
-    public static void emitOrderAlert(String orderId) {
-        if (instance == null) return;
+    /**
+     * A new order to put on screen, or a tapped notification to open.
+     *
+     * @param payloadJson the order (or a store's shop orders) as JSON — see
+     *                    OrderPayload. Lets the popup render without waiting on
+     *                    the WebView's own Firestore connection.
+     */
+    public static void emitOrderAlert(String orderId, String payloadJson) {
+        emitOrderAlert(orderId, payloadJson, null);
+    }
+
+    /** @param action what the user picked on the over-other-apps card ("accept"), or null. */
+    public static void emitOrderAlert(String orderId, String payloadJson, String action) {
+        if (instance == null || orderId == null) return;
+        JSObject data = alertData(orderId, payloadJson);
+        if (action != null) data.put("action", action);
+        instance.notifyListeners("orderAlert", data);
+    }
+
+    /** The order behind an alert is no longer available — close its popup. */
+    public static void emitOrderAlertCleared(String orderId) {
+        if (instance == null || orderId == null) return;
         JSObject data = new JSObject();
         data.put("orderId", orderId);
-        instance.notifyListeners("orderAlert", data);
+        instance.notifyListeners("orderAlertCleared", data);
+    }
+
+    private static JSObject alertData(String orderId, String payloadJson) {
+        JSObject data = null;
+        if (payloadJson != null) {
+            try {
+                data = new JSObject(payloadJson);
+            } catch (Exception ignored) {
+                // A malformed payload only costs the popup a fetch.
+            }
+        }
+        if (data == null) data = new JSObject();
+        data.put("orderId", orderId);
+        return data;
     }
 
     public static void emitPullToRefresh() {
@@ -410,7 +446,7 @@ public class JamanotNativePlugin extends Plugin {
         DutyForegroundService.stop(c);
         DutyWatchdogWorker.cancel(c);
         // Off duty (mode switch, logout): nothing left to answer, so stop ringing.
-        AlertSound.stopOrderAlarm(c);
+        ActiveOrderAlerts.resolveAll(c, true);
         call.resolve();
     }
 
@@ -440,28 +476,87 @@ public class JamanotNativePlugin extends Plugin {
     // ── Order alerts ────────────────────────────────────────────────────────
 
     /**
-     * Repeating new-order tone. JS drives it while the alert popup is up, and
-     * Java starts it on its own for an order that arrives in the background;
-     * either way JS stops it once the popup is closed. See AlertSound.
+     * Registers the alerts JS has on screen, which starts the alarm and the
+     * native watch on each order (see ActiveOrderAlerts). Keys Java raised
+     * itself are unaffected; a key the user already dealt with stays silent.
      */
     @PluginMethod
     public void startOrderAlarm(PluginCall call) {
-        AlertSound.startOrderAlarm(getContext(), 0L);
+        Context c = getContext();
+        JSArray ids = call.getArray("orderIds");
+        if (ids != null) {
+            for (int i = 0; i < ids.length(); i++) {
+                String id = ids.optString(i, null);
+                if (id != null && !id.isEmpty()) ActiveOrderAlerts.raise(c, id, null, 0L);
+            }
+        }
         call.resolve();
     }
 
+    /** One alert answered on screen (accepted, viewed, dismissed). */
+    @PluginMethod
+    public void dismissOrderAlarm(PluginCall call) {
+        String id = call.getString("orderId");
+        if (id != null) ActiveOrderAlerts.resolve(getContext(), id, false);
+        call.resolve();
+    }
+
+    /** Every alert answered at once — the popup was muted or closed. */
     @PluginMethod
     public void stopOrderAlarm(PluginCall call) {
-        AlertSound.stopOrderAlarm(getContext());
+        ActiveOrderAlerts.resolveAll(getContext(), false);
         call.resolve();
+    }
+
+    /**
+     * Alerts outstanding right now, with their payloads. JS adopts these when it
+     * comes to the foreground, so an alert raised while the WebView wasn't
+     * listening still gets its popup.
+     */
+    @PluginMethod
+    public void getActiveOrderAlarms(PluginCall call) {
+        JSArray list = new JSArray();
+        for (ActiveOrderAlerts.Snapshot s : ActiveOrderAlerts.snapshot()) {
+            list.put(alertData(s.orderId, s.payload));
+        }
+        JSObject r = new JSObject();
+        r.put("alerts", list);
+        call.resolve(r);
     }
 
     /** Drains an orderId that arrived before the WebView was alive. */
     @PluginMethod
     public void getPendingIntentPayload(PluginCall call) {
-        JSObject r = new JSObject();
-        r.put("orderId", PendingAlerts.consume());
+        String[] pending = PendingAlerts.consume();
+        JSObject r;
+        if (pending == null) {
+            r = new JSObject();
+            r.put("orderId", null);
+        } else {
+            r = alertData(pending[0], ActiveOrderAlerts.payload(pending[0]));
+            if (pending[1] != null) r.put("action", pending[1]);
+        }
         call.resolve(r);
+    }
+
+    /**
+     * A new-order notification the WebView saw before Java did. Handled by the
+     * same dispatcher as the duty listener and FCM — never as a plain tray
+     * notification, which made a sound but started no alarm and raised no
+     * popup. The shared de-dup set means whichever path is first does the work.
+     */
+    @PluginMethod
+    public void handleNewOrderNotification(PluginCall call) {
+        Context c = getContext();
+        String notifId = call.getString("notifId");
+        String orderId = call.getString("orderId");
+        if (notifId != null && !notifId.isEmpty() && !Prefs.markSeen(c, notifId)) {
+            call.resolve();
+            return;
+        }
+        OrderAlertDispatcher.handleNewOrder(c, notifId,
+                call.getString("title", ""), call.getString("body", ""), orderId);
+        call.resolve();
     }
 
     @PluginMethod

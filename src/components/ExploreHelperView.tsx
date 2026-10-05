@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
+import { useAuth } from '@/context/AuthContext';
 import { Order, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { getOrderMinDistanceKm, calculateDistanceKm } from '@/lib/pricing';
@@ -10,7 +10,7 @@ import { useSecondTick } from '@/hooks/useSecondTick';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { useModal } from './CustomModal';
-import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
+import { acceptOrderAsHelper } from '@/lib/helperOrders';
 import { Compass, Map as MapIcon, Layers, Clock, MapPin, Bike, Navigation, RefreshCw, AlertTriangle } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
@@ -38,125 +38,8 @@ export const ExploreHelperView: React.FC = () => {
 
   const activeOrderLimit = fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5;
 
-  // Track new unaccepted orders for alert overlay
-  const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
-  const [seenOrderIds, setSeenOrderIds] = useState<Set<string>>(new Set());
-  const seenOrderIdsRef = useRef<Set<string>>(new Set());
-
-  // Alarm state for sound/vibration loop
-  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
-
-  useEffect(() => {
-    const handleInstantNewOrder = (e: any) => {
-      const orderId = e.detail?.orderId;
-      if (!orderId || seenOrderIdsRef.current.has(orderId) || user?.isBlocked) return;
-      const order = fallbackStore.orders.get(orderId);
-      if (order && (order.status !== 'PENDING' || (order.helperId && order.helperId !== user?.uid))) return;
-      setNewOrderIds((prev) => {
-        const updated = new Set(prev);
-        updated.add(orderId);
-        return updated;
-      });
-      setIsAlarmPlaying(true);
-    };
-
-    if (typeof window !== 'undefined') {
-      window.addEventListener('new-order-received', handleInstantNewOrder);
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('new-order-received', handleInstantNewOrder);
-      }
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (newOrderIds.size > 0) {
-      setIsAlarmPlaying(true);
-    } else {
-      setIsAlarmPlaying(false);
-    }
-  }, [newOrderIds]);
-
-  // Audio Context and Vibration looping
-  useEffect(() => {
-    if (!isAlarmPlaying) return;
-
-    let active = true;
-    let audioCtx: AudioContext | null = null;
-    let intervalId: any = null;
-
-    const startAlarm = () => {
-      try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContextClass) {
-          audioCtx = new AudioContextClass();
-        }
-      } catch (e) {
-        console.warn('AudioContext init failed:', e);
-      }
-
-      const triggerAlert = () => {
-        if (!active) return;
-
-        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          navigator.vibrate([500, 250, 500, 250, 500]);
-        }
-
-        if (audioCtx) {
-          try {
-            if (audioCtx.state === 'suspended') {
-              audioCtx.resume();
-            }
-            const osc1 = audioCtx.createOscillator();
-            const osc2 = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc1.type = 'sawtooth';
-            osc1.frequency.setValueAtTime(880, audioCtx.currentTime);
-            osc2.type = 'sine';
-            osc2.frequency.setValueAtTime(440, audioCtx.currentTime);
-
-            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
-
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc1.start();
-            osc2.start();
-            osc1.stop(audioCtx.currentTime + 0.8);
-            osc2.stop(audioCtx.currentTime + 0.8);
-          } catch (e) {
-            console.warn('Oscillator failed:', e);
-          }
-        }
-      };
-
-      triggerAlert();
-      intervalId = setInterval(triggerAlert, 1500);
-    };
-
-    startAlarm();
-
-    const timeoutId = setTimeout(() => {
-      setIsAlarmPlaying(false);
-    }, 60000);
-
-    return () => {
-      active = false;
-      if (intervalId) clearInterval(intervalId);
-      if (timeoutId) clearTimeout(timeoutId);
-      if (audioCtx) {
-        audioCtx.close().catch(() => {});
-      }
-    };
-  }, [isAlarmPlaying]);
-
-  useEffect(() => {
-    seenOrderIdsRef.current = seenOrderIds;
-  }, [seenOrderIds]);
+  // New-order alerts are raised by HelperOrderAlerts at the app root, so they
+  // reach the helper on this screen too without a copy of their own here.
 
   // Sync unaccepted orders (PENDING status, no helperId)
   useEffect(() => {
@@ -200,32 +83,7 @@ export const ExploreHelperView: React.FC = () => {
           return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
         });
 
-        setUnacceptedOrders((prev) => {
-          const prevIds = new Set(prev.map((o) => o.id));
-          const freshNewIds = sorted
-            .filter((o) => !prevIds.has(o.id))
-            .map((o) => o.id);
-
-          setNewOrderIds((prevNew) => {
-            const updated = new Set<string>();
-            prevNew.forEach((id) => {
-              const fresh = fallbackStore.orders.get(id);
-              if (fresh && fresh.status === 'PENDING' && !fresh.helperId && !seenOrderIdsRef.current.has(id)) {
-                updated.add(id);
-              }
-            });
-            freshNewIds.forEach((id) => {
-              if (!seenOrderIdsRef.current.has(id)) {
-                updated.add(id);
-              }
-            });
-            if (updated.size === 0) {
-              setIsAlarmPlaying(false);
-            }
-            return updated;
-          });
-          return sorted;
-        });
+        setUnacceptedOrders(sorted);
         setActiveOrdersCount(activeCount);
       }
     };
@@ -236,81 +94,32 @@ export const ExploreHelperView: React.FC = () => {
   }, [user]);
 
   const handleAcceptOrder = async (orderId: string) => {
-    if (!isUserAuthenticated(user)) {
-      openAuthModal();
-      return;
-    }
-    
-    // Check at first if the order is already accepted / no longer pending
-    const freshOrder = fallbackStore.orders.get(orderId);
-    const isAlreadyAccepted = !freshOrder || freshOrder.status !== 'PENDING' || Boolean(freshOrder.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(freshOrder.status) || freshOrder.cancellationRequest?.status === 'APPROVED';
+    const outcome = await acceptOrderAsHelper(
+      orderId,
+      user,
+      {
+        showAlert,
+        showConfirm,
+        openAuthModal,
+        onBlocked: () =>
+          showAlert(
+            'অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)',
+            'আপনার হেলপার অ্যাকাউন্টটি স্থগিত করা হয়েছে। নতুন অর্ডার গ্রহণ বা সেবা দেওয়া সাময়িকভাবে বন্ধ আছে।',
+            'error'
+          ),
+      },
+      'Accepted request via Explore'
+    );
 
-    if (isAlreadyAccepted) {
+    if (outcome === 'taken') {
       // Immediately hide this request from explore list/map
       setUnacceptedOrders((prev) => prev.filter((o) => o.id !== orderId));
       if (selectedOrderId === orderId) {
         setSelectedOrderId(null);
       }
-      await showAlert(
-        'অর্ডারটি ইতিমধ্যে গৃহীত বা আর উপলব্ধ নেই',
-        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন অথবা আর উপলব্ধ নেই।',
-        'warning'
-      );
       return;
     }
-
-    if (activeOrdersCount >= activeOrderLimit) {
-      await showAlert(
-        'অর্ডার সীমা পূর্ণ',
-        `আপনি সর্বোচ্চ ${activeOrderLimit}টি অ্যাক্টিভ অর্ডার সম্পন্ন করার পর নতুন অর্ডার নিতে পারবেন।`,
-        'warning'
-      );
-      return;
-    }
-
-    const confirmed = await showConfirm(
-      'রিকুয়েস্ট গ্রহণ করুন',
-      'আপনি কি এই রিকুয়েস্টটি গ্রহণ করতে চান? গ্রহণ করার পর আপনি অর্ডারটি ডেলিভারি করতে বাধ্য থাকবেন।',
-      'হ্যাঁ, Accept করুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-
-    // Double-check right before updating to handle any confirmation delay
-    const doubleCheck = fallbackStore.orders.get(orderId);
-    const isDoubleCheckAccepted = !doubleCheck || doubleCheck.status !== 'PENDING' || Boolean(doubleCheck.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(doubleCheck.status) || doubleCheck.cancellationRequest?.status === 'APPROVED';
-
-    if (isDoubleCheckAccepted) {
-      setUnacceptedOrders((prev) => prev.filter((o) => o.id !== orderId));
-      if (selectedOrderId === orderId) {
-        setSelectedOrderId(null);
-      }
-      await showAlert(
-        'অর্ডারটি ইতিমধ্যে গৃহীত বা আর উপলব্ধ নেই',
-        'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন অথবা আর উপলব্ধ নেই।',
-        'warning'
-      );
-      return;
-    }
-
-    await fallbackStore.updateOrder(orderId, (o) => ({
-      ...o,
-      status: 'ACCEPTED',
-      helperId: user.uid,
-      helperName: user.displayName,
-      helperPhone: user.alternativePhone,
-      acceptedAt: new Date().toISOString(),
-      statusHistory: [
-        ...o.statusHistory,
-        {
-          id: `sh-${Date.now()}`,
-          status: 'ACCEPTED',
-          timestamp: new Date().toISOString(),
-          actor: `Helper (${user.displayName})`,
-          note: 'Accepted request via Explore',
-        },
-      ],
-    }));
+    if (outcome !== 'accepted') return;
 
     setSelectedOrderId(orderId);
   };
@@ -733,63 +542,6 @@ export const ExploreHelperView: React.FC = () => {
         </div>
       )}
 
-      {/* New Order Alert Overlay */}
-      {isAlarmPlaying && newOrderIds.size > 0 && (
-        <NewOrderAlertOverlay
-          newOrderIds={newOrderIds}
-          autoDismissSeconds={20}
-          onAccept={async (orderId) => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            await handleAcceptOrder(orderId);
-          }}
-          onView={(orderId) => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            setSelectedOrderId(orderId);
-          }}
-          onDismissOne={(orderId) => {
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            if (newOrderIds.size <= 1) setIsAlarmPlaying(false);
-          }}
-          onDismissAll={() => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              newOrderIds.forEach((id) => updated.add(id));
-              return updated;
-            });
-            setNewOrderIds(new Set());
-          }}
-        />
-      )}
     </div>
   );
 };

@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import com.jamanot.app.core.ActiveOrderAlerts;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.service.DutyForegroundService;
@@ -36,6 +37,8 @@ public class RestartServiceReceiver extends BroadcastReceiver {
             DutyForegroundService.stop(context);
             DutyWatchdogWorker.cancel(context);
             NotificationHelper.cancel(context, NotificationHelper.ID_DUTY);
+            // Off duty: nothing left to answer, so nothing may keep ringing.
+            ActiveOrderAlerts.resolveAll(context, true);
             return;
         }
 

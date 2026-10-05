@@ -66,7 +66,10 @@ public final class AlertSound {
     // is closed or minimised — so the alarm stopped after the notification's own
     // one-shot sound unless AutoOpen managed to raise the app, which needs the
     // optional overlay permission and is further restricted on Android 15. The
-    // loop therefore runs here, and JS stops it when the popup is closed.
+    // loop therefore runs here. It is driven by ActiveOrderAlerts, which starts
+    // it when an alert is raised and stops it once no alert is outstanding —
+    // whether the user answered the popup or the order went to someone else.
+    // Nothing else should call start/stop directly.
 
     /** Gap between tones: the asset is ~1.2 s, so this reads as a steady "ting ting". */
     private static final long ALARM_REPEAT_MS = 2_000L;
@@ -83,8 +86,8 @@ public final class AlertSound {
 
     /**
      * Starts the repeating new-order tone, or extends it if one is already
-     * ringing. Stopped by {@link #stopOrderAlarm} (JS, once the popup is closed)
-     * or by {@link #ALARM_MAX_MS}.
+     * ringing. Stopped by {@link #stopOrderAlarm} (ActiveOrderAlerts, once no
+     * alert is outstanding) or by {@link #ALARM_MAX_MS}.
      *
      * @param initialDelayMs delay before the first tone — pass the repeat gap when
      *                       a notification has just played its own sound, so the
@@ -103,12 +106,15 @@ public final class AlertSound {
             alarmTick = new Runnable() {
                 @Override
                 public void run() {
+                    boolean capped;
                     synchronized (LOCK) {
                         if (!alarming || alarmTick != this) return;
-                        if (System.currentTimeMillis() - alarmStartedAt >= ALARM_MAX_MS) {
-                            stopAlarmLocked(app);
-                            return;
-                        }
+                        capped = System.currentTimeMillis() - alarmStartedAt >= ALARM_MAX_MS;
+                        if (capped) stopAlarmLocked(app);
+                    }
+                    if (capped) {
+                        ActiveOrderAlerts.onAlarmCapped(app);
+                        return;
                     }
                     playOrderTone(app);
                     HANDLER.postDelayed(this, ALARM_REPEAT_MS);

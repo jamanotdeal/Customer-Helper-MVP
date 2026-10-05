@@ -1,13 +1,12 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
+import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
-import { isNativeApp, startNativeOrderAlarm, stopNativeOrderAlarm } from '@/lib/native';
-import { isHelperEligibleForOrder } from '@/lib/geofenceUtils';
+import { isNativeApp } from '@/lib/native';
+import { acceptOrderAsHelper, isOrderAvailableToHelper } from '@/lib/helperOrders';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -15,7 +14,6 @@ import { useModal } from './CustomModal';
 import { DedicatedHelperMapView } from './DedicatedHelperMapView';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { AddShopModal } from './AddShopModal';
-import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
 import { BlockedUserModal } from './BlockedUserModal';
 import { Bike, CheckCircle2, Clock, Layers, Bell, Zap, ChevronDown, ChevronLeft, ChevronRight, MapPin, ShoppingBag, Package, FileText, Phone, X, XCircle, Calendar, Map, ShieldCheck, Award, Store, RotateCcw, Filter, AlertTriangle, AlertCircle, Ban, ShieldAlert } from 'lucide-react';
 
@@ -74,21 +72,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             return;
           }
 
+          // A still-open order reaches here from the popup's "View" button —
+          // the popup itself is raised by HelperOrderAlerts, on any screen.
           if (order.status === 'PENDING') {
             setActiveTab('NEW');
-            // When a new request arrives / auto opens app, show the custom new order modal alert
-            if (!user?.isBlocked) {
-              setNewOrderIds((prev) => {
-                const updated = new Set(prev);
-                updated.add(order!.id);
-                return updated;
-              });
-              setIsAlarmPlaying(true);
-            }
-            if (onClearInitialOrder) {
-              onClearInitialOrder();
-            }
-            return;
           } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
             setActiveTab('ACTIVE');
           } else if (order.status === 'DELIVERED') {
@@ -273,242 +260,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [seenOrderIds, setSeenOrderIds] = useState<Set<string>>(new Set());
   const seenOrderIdsRef = useRef<Set<string>>(new Set());
 
-  // Alarm state for sound/vibration loop
-  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
-
-  // Pre-warmed AudioContext — created once on first user gesture so it is
-  // never in a 'suspended' state when the alarm needs to fire.
-  const audioCtxRef = useRef<AudioContext | null>(null);
-
-  // Pre-warm AudioContext on the very first user interaction so subsequent
-  // alarm plays are never blocked by the browser autoplay policy.
-  useEffect(() => {
-    const warm = () => {
-      if (audioCtxRef.current) return; // already created
-      try {
-        const AC = window.AudioContext || (window as any).webkitAudioContext;
-        if (AC) {
-          audioCtxRef.current = new AC();
-          // Play a silent node to unlock the context
-          const buf = audioCtxRef.current.createBuffer(1, 1, 22050);
-          const src = audioCtxRef.current.createBufferSource();
-          src.buffer = buf;
-          src.connect(audioCtxRef.current.destination);
-          src.start(0);
-        }
-      } catch (_) { }
-      // Remove listeners after first interaction
-      window.removeEventListener('touchstart', warm);
-      window.removeEventListener('touchend', warm);
-      window.removeEventListener('click', warm);
-      window.removeEventListener('keydown', warm);
-    };
-    // In the native app the WebView is started with
-    // setMediaPlaybackRequiresUserGesture(false), so the context can be built
-    // right away — which matters because an auto-opened alert reaches this
-    // screen with nobody having touched the phone yet, and waiting for a
-    // gesture meant the alarm stayed silent exactly when it was needed.
-    if (isNativeApp()) warm();
-
-    window.addEventListener('touchstart', warm, { once: true, passive: true });
-    window.addEventListener('touchend', warm, { once: true, passive: true });
-    window.addEventListener('click', warm, { once: true });
-    window.addEventListener('keydown', warm, { once: true });
-    return () => {
-      window.removeEventListener('touchstart', warm);
-      window.removeEventListener('touchend', warm);
-      window.removeEventListener('click', warm);
-      window.removeEventListener('keydown', warm);
-    };
-  }, []);
-
-  // Bumped whenever the pending set *grows*. The alarm effect keys off it so a
-  // second order arriving while the first is still alarming re-fires the tone
-  // instead of being absorbed into the run already in progress.
-  const [alarmEpoch, setAlarmEpoch] = useState(0);
-  const prevNewOrderCount = useRef(0);
-
-  useEffect(() => {
-    const handleInstantNewOrder = (e: any) => {
-      const orderId = e.detail?.orderId;
-      if (!orderId || seenOrderIdsRef.current.has(orderId) || user?.isBlocked) return;
-      const order = fallbackStore.orders.get(orderId);
-      if (order && (order.status !== 'PENDING' || (order.helperId && order.helperId !== user?.uid))) return;
-      setNewOrderIds((prev) => {
-        const updated = new Set(prev);
-        updated.add(orderId);
-        return updated;
-      });
-      setIsAlarmPlaying(true);
-    };
-
-    if (typeof window !== 'undefined') {
-      window.addEventListener('new-order-received', handleInstantNewOrder);
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('new-order-received', handleInstantNewOrder);
-      }
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (newOrderIds.size > 0) {
-      if (newOrderIds.size > prevNewOrderCount.current) {
-        setAlarmEpoch((n) => n + 1);
-      }
-      setIsAlarmPlaying(true);
-    } else {
-      setIsAlarmPlaying(false);
-    }
-    prevNewOrderCount.current = newOrderIds.size;
-  }, [newOrderIds]);
-
-  // ── Helper: fire one beep via the pre-warmed AudioContext ──────────────────
-  const playBeep = useRef<() => void>(() => { });
-  useEffect(() => {
-    playBeep.current = () => {
-      // Vibrate
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([500, 250, 500, 250, 500]);
-      }
-      // The native app rings from Java instead (see the native alarm effect
-      // below) — playing here as well would double every tone.
-      if (isNativeApp()) return;
-      // AudioContext tone
-      const ctx = audioCtxRef.current;
-      if (!ctx) return;
-      try {
-        if (ctx.state === 'suspended') ctx.resume();
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc1.type = 'sawtooth';
-        osc1.frequency.setValueAtTime(880, ctx.currentTime);
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(440, ctx.currentTime);
-        gain.gain.setValueAtTime(0.4, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.8);
-        osc1.connect(gain);
-        osc2.connect(gain);
-        gain.connect(ctx.destination);
-        osc1.start(); osc2.start();
-        osc1.stop(ctx.currentTime + 0.8);
-        osc2.stop(ctx.currentTime + 0.8);
-      } catch (e) {
-        console.warn('Oscillator failed:', e);
-      }
-    };
-  });
-
-  // ── Helper: ask the Service Worker to show an OS notification (plays sound
-  //    even when the app is minimised / screen locked on Android PWA) ──────────
-  const sendSwAlarmNotification = useRef<(orderCount: number) => void>(() => { });
-  useEffect(() => {
-    sendSwAlarmNotification.current = (orderCount: number) => {
-      if (!('serviceWorker' in navigator)) return;
-      navigator.serviceWorker.ready.then((reg) => {
-        reg.showNotification('🚨 নতুন অর্ডার এসেছে!', {
-          body: orderCount > 1
-            ? `${orderCount}টি নতুন রিকুয়েস্ট অপেক্ষা করছে।`
-            : 'একটি নতুন ডেলিভারি রিকুয়েস্ট আসছে।',
-          icon: '/Jamanot-Logo.png',
-          badge: '/Jamanot-Logo.png',
-          tag: 'new-order-alarm',
-          renotify: true,
-          // silent: false lets the OS play its own alert sound
-          vibrate: [500, 250, 500, 250, 500, 250, 500],
-          data: { url: '/' },
-          actions: [{ action: 'open', title: 'অর্ডার দেখুন' }],
-        } as any).catch(() => { });
-      }).catch(() => { });
-    };
-  });
-
-  // ── Main alarm loop (foreground) ───────────────────────────────────────────
-  useEffect(() => {
-    if (!isAlarmPlaying) return;
-
-    let active = true;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    // If the page is hidden right now, fire an SW notification immediately so
-    // the OS plays its sound. We also do this every time the alarm re-triggers.
-    const maybeSendSwNotification = () => {
-      if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        sendSwAlarmNotification.current(newOrderIds.size);
-      }
-    };
-
-    // Initial fire
-    playBeep.current();
-    maybeSendSwNotification();
-
-    // Repeat every 1.5 s while in foreground; SW notification every ~5 s
-    let swTickCount = 0;
-    intervalId = setInterval(() => {
-      if (!active) return;
-      if (!document.hidden) {
-        playBeep.current();
-      } else {
-        // Still hidden — re-send SW notification every ~5 ticks (~7.5 s)
-        swTickCount++;
-        if (swTickCount % 5 === 0) {
-          maybeSendSwNotification();
-        }
-      }
-    }, 1500);
-
-    // Auto stop after 90 seconds of the helper actually having the app open.
-    // Time spent minimised doesn't count: the alarm must still be ringing when
-    // they come back to it.
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const armAutoStop = () => {
-      if (timeoutId) return;
-      timeoutId = setTimeout(() => setIsAlarmPlaying(false), 90000);
-    };
-    const disarmAutoStop = () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      timeoutId = null;
-    };
-    if (!document.hidden) armAutoStop();
-
-    // When the user brings the tab back to foreground, immediately play the
-    // tone so they hear it even if they missed the notification sound.
-    const onVisible = () => {
-      if (!active) return;
-      if (!document.hidden) {
-        playBeep.current();
-        armAutoStop();
-      } else {
-        disarmAutoStop();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-
-    return () => {
-      active = false;
-      if (intervalId) clearInterval(intervalId);
-      disarmAutoStop();
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [isAlarmPlaying, alarmEpoch]);
-
-  // ── Native alarm (Android app) ─────────────────────────────────────────────
-  // Java owns the repeating tone in the app, because the WebView falls silent
-  // as soon as the app is minimised. An order that arrives in the background has
-  // already started it from Java; this keeps it going while the popup is up and
-  // stops it the moment the popup is closed — which is the only thing that
-  // should silence it.
-  useEffect(() => {
-    if (!isNativeApp() || !isAlarmPlaying) return;
-    startNativeOrderAlarm();
-    return () => {
-      stopNativeOrderAlarm();
-    };
-    // alarmEpoch: a further order re-arms it, even if the native safety cap had
-    // already silenced the first run.
-  }, [isAlarmPlaying, alarmEpoch]);
+  // The new-order popup and its alarm are owned by HelperOrderAlerts at the app
+  // root, so they appear on every screen. newOrderIds here only drives this
+  // list's "new" badges and highlights.
 
   // Track which ACTIVE orders the helper has viewed (clicked on the card)
   const [viewedActiveOrderIds, setViewedActiveOrderIds] = useState<Set<string>>(new Set());
@@ -527,60 +281,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       if (user) {
         const all = Array.from(fallbackStore.orders.values());
 
-        const isDedicatedHelper = user.helperType === 'dedicated';
-        const receiverRule = fallbackStore.pricingSettings.orderReceiverRule || 'commuter_first';
-        const radiusKm = fallbackStore.pricingSettings.helperRadiusKm || 3.5;
-
-        // Available (New tab): status PENDING, no helper assigned, matching helper type rule & within location radius
-        const avail = all.filter((o) => {
-          if (o.status !== 'PENDING' || o.helperId) return false;
-          if (o.cancellationRequest?.status === 'APPROVED') return false;
-
-          const allowedTypes = fallbackStore.pricingSettings.allowedHelperTypes || 'both';
-          if (allowedTypes === 'dedicated_only' && !isDedicatedHelper) return false;
-          if (allowedTypes === 'commuters_only' && isDedicatedHelper) return false;
-
-          // 1. Commuter vs Dedicated Receiver Rule Filter
-          if (receiverRule === 'commuter_first') {
-            if (isDedicatedHelper) {
-              // Dedicated rider ONLY sees order once routedToDedicated === true
-              if (!o.routedToDedicated) return false;
-            } else {
-              // Commuter helper sees order ONLY while !o.routedToDedicated. Once routed, it vanishes from commuter!
-              if (o.routedToDedicated) return false;
-            }
-          } else if (receiverRule === 'dedicated_first') {
-            if (isDedicatedHelper) {
-              if (o.routedToDedicated) return false;
-            } else {
-              if (!o.routedToDedicated) return false;
-            }
-          }
-
-          // 2. Dynamic Location-Based Radius Filter (within admin configured km radius of pickup/delivery)
-          if (!isHelperWithinOrderRadius(user.helperLocation, o, radiusKm)) {
-            return false;
-          }
-
-          // 3. Sub-Area Geofence Assignment Eligibility Filter (Only see orders from helper's assigned sub-areas or if allowed)
-          if (
-            fallbackStore.pricingSettings.allowedDeliveryAreas &&
-            fallbackStore.pricingSettings.allowedDeliveryAreas.length > 0
-          ) {
-            if (
-              !isHelperEligibleForOrder(
-                user,
-                o,
-                fallbackStore.pricingSettings.allowedDeliveryAreas,
-                fallbackStore.pricingSettings.allowedDeliveryAreasEnabled
-              )
-            ) {
-              return false;
-            }
-          }
-
-          return true;
-        });
+        // Available (New tab): open, and passing the helper-type, receiver-rule,
+        // radius and geofence rules — the same test the new-order popup uses.
+        const avail = all.filter((o) => isOrderAvailableToHelper(o, user));
         // Active: assigned to current helper and non-delivered/non-canceled
         const act = all.filter(
           (o) =>
@@ -623,9 +326,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 updated.add(id);
               }
             });
-            if (updated.size === 0) {
-              setIsAlarmPlaying(false);
-            }
             return updated;
           });
           return avail;
@@ -658,29 +358,15 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   }, [user]);
 
   const handleAcceptOrder = async (orderId: string) => {
-    if (!isUserAuthenticated(user)) {
-      openAuthModal();
-      return;
-    }
-    if (user.isBlocked) {
-      setShowBlockedModal(true);
-      return;
-    }
-    if (activeOrders.length >= activeOrderLimit) {
-      await showAlert(
-        'অর্ডার সীমা পূর্ণ',
-        `আপনি সর্বোচ্চ ${activeOrderLimit}টি অ্যাক্টিভ অর্ডার সম্পন্ন করার পর নতুন অর্ডার নিতে পারবেন।`,
-        'warning'
-      );
-      return;
-    }
+    const outcome = await acceptOrderAsHelper(orderId, user, {
+      showAlert,
+      showConfirm,
+      openAuthModal,
+      onBlocked: () => setShowBlockedModal(true),
+    });
 
-    // Check at first if the order is already accepted / no longer pending
-    const freshOrder = fallbackStore.orders.get(orderId);
-    const isAlreadyAccepted = !freshOrder || freshOrder.status !== 'PENDING' || Boolean(freshOrder.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(freshOrder.status) || freshOrder.cancellationRequest?.status === 'APPROVED';
-
-    if (isAlreadyAccepted) {
-      // Hide/remove from available orders and notifications immediately
+    if (outcome === 'taken') {
+      // Hide/remove from available orders immediately
       setAvailableOrders((prev) => prev.filter((o) => o.id !== orderId));
       setNewOrderIds((prev) => {
         const next = new Set(prev);
@@ -690,65 +376,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       if (selectedOrderId === orderId) {
         setSelectedOrderId(null);
       }
-      await showAlert(
-        'দুঃখিত!',
-        'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
-        'error'
-      );
-      return;
+    } else if (outcome === 'accepted') {
+      // Auto open active order view
+      setSelectedOrderId(orderId);
     }
-
-    const confirmed = await showConfirm(
-      'রিকুয়েস্ট গ্রহণ করুন',
-      'আপনি কি এই রিকুয়েস্টটি গ্রহণ করতে চান? গ্রহণ করার পর আপনি অর্ডারটি ডেলিভারি করতে বাধ্য থাকবেন।',
-      'হ্যাঁ, Accept করুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-
-    // Double-check right before updating to handle any confirmation delay
-    const doubleCheck = fallbackStore.orders.get(orderId);
-    const isDoubleCheckAccepted = !doubleCheck || doubleCheck.status !== 'PENDING' || Boolean(doubleCheck.helperId) || ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED'].includes(doubleCheck.status) || doubleCheck.cancellationRequest?.status === 'APPROVED';
-
-    if (isDoubleCheckAccepted) {
-      setAvailableOrders((prev) => prev.filter((o) => o.id !== orderId));
-      setNewOrderIds((prev) => {
-        const next = new Set(prev);
-        next.delete(orderId);
-        return next;
-      });
-      if (selectedOrderId === orderId) {
-        setSelectedOrderId(null);
-      }
-      await showAlert(
-        'দুঃখিত!',
-        'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।',
-        'error'
-      );
-      return;
-    }
-
-    await fallbackStore.updateOrder(orderId, (o) => ({
-      ...o,
-      status: 'ACCEPTED',
-      helperId: user.uid,
-      helperName: user.displayName,
-      helperPhone: user.alternativePhone,
-      acceptedAt: new Date().toISOString(),
-      statusHistory: [
-        ...o.statusHistory,
-        {
-          id: `sh-${Date.now()}`,
-          status: 'ACCEPTED',
-          timestamp: new Date().toISOString(),
-          actor: `Helper (${user.displayName})`,
-          note: 'Accepted request',
-        },
-      ],
-    }));
-
-    // Auto open active order view
-    setSelectedOrderId(orderId);
   };
 
   const handleViewOrderDetails = (orderId: string) => {
@@ -1570,63 +1201,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         </div>
       )}
 
-      {/* Premium New Order Alert Overlay */}
-      {isAlarmPlaying && newOrderIds.size > 0 && (
-        <NewOrderAlertOverlay
-          newOrderIds={newOrderIds}
-          autoDismissSeconds={20}
-          onAccept={async (orderId) => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            await handleAcceptOrder(orderId);
-          }}
-          onView={(orderId) => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            handleViewOrderDetails(orderId);
-          }}
-          onDismissOne={(orderId) => {
-            setNewOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.delete(orderId);
-              return updated;
-            });
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              updated.add(orderId);
-              return updated;
-            });
-            if (newOrderIds.size <= 1) setIsAlarmPlaying(false);
-          }}
-          onDismissAll={() => {
-            setIsAlarmPlaying(false);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              newOrderIds.forEach((id) => updated.add(id));
-              return updated;
-            });
-            setNewOrderIds(new Set());
-          }}
-        />
-      )}
       {/* Blocked User Custom Modal */}
       {showBlockedModal && (
         <BlockedUserModal

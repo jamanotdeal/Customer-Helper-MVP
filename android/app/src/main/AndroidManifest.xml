@@ -119,10 +119,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- ─── Auto-open ───────────────────────────────────────────────────────── -->
-    <!-- Documented exemption to the Android 10+ background-activity-start ban.
-         User-granted, opt-in, and the app degrades to a heads-up notification
-         without it. We never draw a TYPE_APPLICATION_OVERLAY window. -->
+    <!-- ─── New-order card over other apps / auto-open ─────────────────────── -->
+    <!-- Draws the incoming-order card (core/OrderOverlay) over whatever app a
+         helper or store is using, and is the documented exemption to the
+         Android 10+ background-activity-start ban for opening the app on a
+         locked phone. User-granted and opt-in; without it the app degrades to
+         a heads-up notification plus the repeating alarm. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Deliberately NOT requested, each a Play policy-restricted permission the

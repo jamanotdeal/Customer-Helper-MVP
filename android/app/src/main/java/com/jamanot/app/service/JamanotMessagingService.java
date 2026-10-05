@@ -4,19 +4,19 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
-import com.jamanot.app.MainActivity;
-import com.jamanot.app.core.AlertSound;
-import com.jamanot.app.core.AutoOpen;
 import com.jamanot.app.core.NotificationHelper;
+import com.jamanot.app.core.OrderAlertDispatcher;
 import com.jamanot.app.core.OrderMatcher;
 import com.jamanot.app.core.Prefs;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The <b>secondary</b> wake path.
@@ -38,6 +38,9 @@ import java.util.Map;
 public class JamanotMessagingService extends FirebaseMessagingService {
 
     private static final String TAG = "JamanotFCM";
+
+    /** FCM allows ~20 s per message; the order fetch is normally well under one. */
+    private static final long DISPATCH_TIMEOUT_S = 8L;
 
     @Override
     public void onNewToken(@NonNull String token) {
@@ -83,36 +86,7 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         // De-duplicate against the Firestore listener: whichever arrives first wins.
         if (notifId != null && !Prefs.markSeen(this, notifId)) return;
 
-        if (MainActivity.isAppInForeground()) {
-            // Sound comes from here, not from the WebView: its AudioContext is
-            // blocked until the user has touched the app, so an auto-opened
-            // alert had no way to make a noise. See AlertSound.
-            if ("new_order".equals(type)) AlertSound.playOrderTone(this);
-            com.jamanot.app.plugin.JamanotNativePlugin.emitOrderAlert(orderId);
-            return;
-        }
-
         if ("new_order".equals(type)) {
-            NotificationHelper.postOrderAlert(this, notifId, title, body, orderId);
-
-            // Same repeating alarm as the duty path — see AlertSound.startOrderAlarm.
-            if ("helper".equals(Prefs.role(this))) {
-                AlertSound.startOrderAlarm(this, 2_000L);
-            }
-
-            // Bring the app up on the order itself. This is the whole point of
-            // the FCM path: when an OEM battery manager has killed the process,
-            // DutyForegroundService's listener is gone and this is the only code
-            // that runs, so the escalation has to live here too — it used to
-            // exist only in that service, which meant the killed-process case
-            // (the one users actually hit) never auto-opened at all.
-            //
-            // Gated on duty because the two paths see different audiences: the
-            // service only ran while on duty, whereas the server fans new_order
-            // out to every helper in radius. Without this an off-duty helper
-            // would have the app thrown in their face.
-            if (Prefs.onDuty(this)) AutoOpen.launch(this, orderId);
-
             // Resurrection: if the user is on duty but our process was killed,
             // this push is the opportunity to bring the service back.
             if (Prefs.onDuty(this) && Prefs.isDutyRole(this) && !DutyForegroundService.isRunning()) {
@@ -122,8 +96,24 @@ public class JamanotMessagingService extends FirebaseMessagingService {
                     Log.w(TAG, "Service resurrect refused: " + e.getMessage());
                 }
             }
-        } else {
-            NotificationHelper.postGeneral(this, notifId, title, body, orderId);
+
+            // Same path as the duty listener — alarm, popup payload, tray
+            // notification and auto-open all live there. This matters most
+            // here: when an OEM battery manager has killed the process, this is
+            // the only code that runs. Waited on (we're on an FCM worker
+            // thread) so the process isn't reclaimed mid-fetch.
+            try {
+                Tasks.await(OrderAlertDispatcher.handleNewOrder(this, notifId, title, body, orderId),
+                        DISPATCH_TIMEOUT_S, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                Log.w(TAG, "new_order dispatch still pending: " + e.getMessage());
+            }
+            return;
         }
+
+        // A status update is a tray entry, as on the duty path. It used to be
+        // sent to the WebView as an orderAlert while the app was open, which
+        // yanked the user onto that order mid-task.
+        NotificationHelper.postGeneral(this, notifId, title, body, orderId);
     }
 }

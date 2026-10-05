@@ -18,13 +18,18 @@ import {
   hideNativeSplash,
   onOrderAlert,
   consumePendingOrderAlert,
-  stopOrphanedOrderAlarm,
+  getActiveNativeOrderAlerts,
+  dismissNativeOrderAlarm,
+  type NativeOrderAlert,
   onPullToRefresh,
   finishRefresh,
   setPullToRefreshEnabled,
 } from '@/lib/native';
 import { fallbackStore } from '@/lib/firebase';
-import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
+import { subscribeAppVisibility } from '@/lib/appVisibility';
+import { helperOrderAlerts } from '@/lib/orderAlerts';
+import { isOrderOpen, isShopOrderAwaitingStore } from '@/lib/orderStatus';
+import { acceptOrderAsHelper } from '@/lib/helperOrders';
 import { useModal } from '@/components/CustomModal';
 import { getReadiness, requestStep, openSettings, STEP_COPY, type PermissionStep } from '@/lib/permissions';
 
@@ -36,6 +41,7 @@ import { getCoinsForService } from '@/lib/pricing';
 import { CustomModalInjector } from '@/components/CustomModalInjector';
 
 import { HelperCenterPage } from '@/components/HelperCenterPage';
+import { HelperOrderAlerts } from '@/components/HelperOrderAlerts';
 import { FeeDetailsPage } from '@/components/FeeDetailsPage';
 import { StoreDashboard } from '@/components/StoreDashboard';
 import { PwaSmartPrompt } from '@/components/PwaSmartPrompt';
@@ -43,8 +49,8 @@ import { InAppBrowserModal } from '@/components/InAppBrowserModal';
 import { BlockedUserModal } from '@/components/BlockedUserModal';
 
 export default function PageClient() {
-  const { user, loading, activeMode, setActiveMode } = useAuth();
-  const { showAlert, showPermissionModal } = useModal();
+  const { user, loading, activeMode, setActiveMode, openAuthModal } = useAuth();
+  const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
@@ -53,6 +59,21 @@ export default function PageClient() {
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [hasPromptedBlockedUser, setHasPromptedBlockedUser] = useState(false);
+
+  const isAdminView = Boolean(
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
+  );
+
+  const isStoreUser = Boolean(
+    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))
+  );
+
+  const isHelperUser = Boolean(
+    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
+  );
+
+  // Helpers get the new-order popup (HelperOrderAlerts) on every screen.
+  const showsHelperAlerts = Boolean(user && isHelperUser && !isStoreUser && !isAdminView);
 
   useEffect(() => {
     if (user?.isBlocked && !hasPromptedBlockedUser) {
@@ -105,6 +126,13 @@ export default function PageClient() {
         );
         return;
       }
+
+      // An order a helper can still take opens as the new-order popup, from
+      // any screen, rather than as a page.
+      if (showsHelperAlerts && !isCustomer && !user.isBlocked && isOrderOpen(order)) {
+        helperOrderAlerts.raise(orderId, { force: true });
+        return;
+      }
     }
 
     setInitialSelectedOrderId(orderId);
@@ -133,6 +161,82 @@ export default function PageClient() {
         setActiveMode('helper');
       }
     }
+  };
+
+  /** Opens an order in the helper dashboard — the popup's View, or after Accept. */
+  const openHelperOrder = (orderId: string) => {
+    setInitialSelectedOrderId(orderId);
+    setActiveTab('helper_tasks');
+    if (activeMode !== 'helper') setActiveMode('helper');
+  };
+
+  /**
+   * Where a native order alert lands. Java sends the order (or a store's shop
+   * orders) with it, so it is cached first and the popup renders at once.
+   *
+   * @param opts.adopt the alert was already outstanding in Java when the app
+   *   came forward (see getActiveNativeOrderAlerts). Show it if it can still
+   *   be answered, otherwise silence it — never navigate on its behalf.
+   */
+  const routeNativeOrderAlert = async (alert: NativeOrderAlert, opts: { adopt?: boolean } = {}) => {
+    const { orderId } = alert;
+    if (alert.order) fallbackStore.ingestOrder(alert.order);
+    if (alert.shopOrders) fallbackStore.ingestShopOrders(alert.shopOrders);
+    if (!user) return;
+
+    if (showsHelperAlerts && alert.action === 'accept') {
+      // Accept was tapped on the card over other apps: claim it now, without
+      // a second confirmation, and land on the order. The transaction decides
+      // whether it is still available — it may have gone while the app booted.
+      helperOrderAlerts.remove(orderId);
+      if (!fallbackStore.orders.has(orderId)) await fallbackStore.getOrder(orderId);
+      const outcome = await acceptOrderAsHelper(
+        orderId,
+        user,
+        { showAlert, showConfirm, openAuthModal, onBlocked: () => setShowBlockedModal(true) },
+        'Accepted from order alert',
+        { skipConfirm: true }
+      );
+      if (outcome === 'accepted') openHelperOrder(orderId);
+      return;
+    }
+
+    if (showsHelperAlerts) {
+      const order = fallbackStore.orders.get(orderId) || (await fallbackStore.getOrder(orderId));
+      if (!order) {
+        // Couldn't load it. An alert Java is ringing for still gets its popup
+        // (a loading card, which HelperOrderAlerts fills in or retires once the
+        // server answers); a plain tap falls through to the normal navigation.
+        if (opts.adopt) helperOrderAlerts.raise(orderId, { force: true });
+        else handleSelectOrder(orderId);
+        return;
+      }
+      if (isOrderOpen(order) && order.customerId !== user.uid && !user.isBlocked) {
+        helperOrderAlerts.raise(orderId, { force: true });
+        return;
+      }
+      // Nothing left to answer — make sure nothing keeps ringing for it.
+      dismissNativeOrderAlarm(orderId);
+      if (!opts.adopt) handleSelectOrder(orderId);
+      return;
+    }
+
+    if (isStoreUser) {
+      const mine = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.parentOrderId === orderId);
+      if (mine.some(isShopOrderAwaitingStore)) {
+        // StoreDashboard raises its popup for a pending shop order — directly,
+        // without handleSelectOrder's fetch of the parent order in between.
+        setInitialSelectedOrderId(orderId);
+        return;
+      }
+      if (opts.adopt) {
+        // Answered already: silence it. Unknown here: leave it to Java's watch.
+        if (mine.length > 0) dismissNativeOrderAlarm(orderId);
+        return;
+      }
+    }
+
+    if (!opts.adopt) handleSelectOrder(orderId);
   };
 
 
@@ -430,50 +534,55 @@ export default function PageClient() {
   };
 
   // ─── Native order alerts ──────────────────────────────────────────────────
-  // Two delivery routes, covering a real cold-start race: Java can launch the
-  // app from a killed state well before React mounts, so there is no listener
-  // to receive the event. The warm path gets the plugin event; the cold path
-  // drains the id Java parked for us. Both land in handleSelectOrder, which
-  // already does all the role and tab switching.
+  // Subscribed once, through a ref. It used to re-subscribe on every user, mode
+  // and tab change, and Capacitor drops an event that arrives while no
+  // listener is attached — an alert landing in one of those gaps was lost.
+  const routeNativeOrderAlertRef = useRef(routeNativeOrderAlert);
+  routeNativeOrderAlertRef.current = routeNativeOrderAlert;
+  const alertsReadyRef = useRef(false);
+  alertsReadyRef.current = !loading && Boolean(user);
+
   useEffect(() => {
     if (!isNativeApp()) return;
-
-    const unsubscribe = onOrderAlert(({ orderId }) => {
-      if (orderId) handleSelectOrder(orderId);
+    return onOrderAlert((alert) => {
+      // Before sign-in has resolved there is nowhere to show it; Java parked a
+      // copy (PendingAlerts) and keeps outstanding alerts, and both are picked
+      // up by the catch-up below once the user is known.
+      if (!alertsReadyRef.current) return;
+      // Delivered live, so the copy Java parked for a cold start is spent —
+      // left in place it would re-open this order on a later catch-up.
+      consumePendingOrderAlert().catch(() => {});
+      routeNativeOrderAlertRef.current(alert).catch(() => {});
     });
+  }, []);
+
+  // Two catch-up routes once the user is known, because events can arrive
+  // before anything is listening:
+  //  - cold start: Java launched the app before React mounted and parked the
+  //    alert in PendingAlerts;
+  //  - every return to the foreground: Java may be alerting on orders this
+  //    WebView never heard about (it was asleep). Adopting them is what keeps
+  //    the popup and the sound together — each one either gets its popup or is
+  //    silenced, so nothing rings over an empty screen.
+  useEffect(() => {
+    if (!isNativeApp() || loading || !user?.uid) return;
+    const adopt = () => {
+      getActiveNativeOrderAlerts()
+        .then((alerts) =>
+          alerts.forEach((a) => routeNativeOrderAlertRef.current(a, { adopt: true }).catch(() => {}))
+        )
+        .catch(() => {});
+    };
 
     consumePendingOrderAlert()
-      .then((orderId) => { if (orderId) handleSelectOrder(orderId); })
-      .catch(() => {});
+      .then((alert) => (alert ? routeNativeOrderAlertRef.current(alert) : undefined))
+      .catch(() => {})
+      .finally(adopt);
 
-    return unsubscribe;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeMode, activeTab]);
-
-  // ─── Orphaned order alarm ─────────────────────────────────────────────────
-  // Java starts the repeating order tone on its own when an order arrives in the
-  // background, and the helper's alert popup stops it once closed. If the app
-  // is opened and no popup takes it over — the order was already taken, or the
-  // user isn't in helper mode — nothing else would ever stop it. The grace
-  // period covers a cold start, where the popup only appears once auth and the
-  // order listeners have caught up.
-  useEffect(() => {
-    if (!isNativeApp() || loading) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const check = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { stopOrphanedOrderAlarm(); }, 8000);
-    };
-    const unsubscribe = subscribeAppVisibility((visible) => {
-      if (visible) check();
-      else if (timer) clearTimeout(timer);
+    return subscribeAppVisibility((visible) => {
+      if (visible) adopt();
     });
-    if (isAppVisible()) check();
-    return () => {
-      if (timer) clearTimeout(timer);
-      unsubscribe();
-    };
-  }, [loading]);
+  }, [loading, user?.uid, showsHelperAlerts, isStoreUser]);
 
   // ─── Native pull-to-refresh ───────────────────────────────────────────────
   // Prefer a soft refresh: re-attach the Firestore listeners rather than
@@ -538,18 +647,6 @@ export default function PageClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, activeMode, activeTab]);
-
-  const isAdminView = Boolean(
-    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
-  );
-
-  const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))
-  );
-
-  const isHelperUser = Boolean(
-    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
-  );
 
   // Auto-switch away from store mode if user lost store access
   useEffect(() => {
@@ -750,6 +847,9 @@ export default function PageClient() {
           }}
         />
       )}
+
+      {/* Helper new-order popup — rendered here so it appears on every screen */}
+      {showsHelperAlerts && <HelperOrderAlerts onOpenOrder={openHelperOrder} />}
 
       {/* Notification Drawer Overlay */}
       {showNotifications && (
