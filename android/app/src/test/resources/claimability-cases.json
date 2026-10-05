@@ -1,0 +1,29 @@
+{
+  "$comment": "Golden vectors for 'is this order still up for grabs'. Run against src/lib/orderEligibility.ts (npm run test:claimability) and android OrderAlarmWatcherParityTest. The native alarm can only be stopped by Java when Java and the WebView agree on this rule; if they drift, a helper keeps hearing a taken order, or loses the tone on a live one.",
+  "cases": [
+    { "name": "fresh pending order with no helper is claimable", "kind": "order", "doc": { "status": "PENDING" }, "expected": true },
+    { "name": "pending but already taken by a helper", "kind": "order", "doc": { "status": "PENDING", "helperId": "helper-2" }, "expected": false },
+    { "name": "pending with an empty helperId is still unclaimed", "kind": "order", "doc": { "status": "PENDING", "helperId": "" }, "expected": true },
+    { "name": "pending with a whitespace helperId is still unclaimed", "kind": "order", "doc": { "status": "PENDING", "helperId": "   " }, "expected": true },
+    { "name": "accepted order is not claimable", "kind": "order", "doc": { "status": "ACCEPTED" }, "expected": false },
+    { "name": "on-the-way order is not claimable", "kind": "order", "doc": { "status": "ON_THE_WAY" }, "expected": false },
+    { "name": "delivered order is not claimable", "kind": "order", "doc": { "status": "DELIVERED" }, "expected": false },
+    { "name": "cancelled order is not claimable", "kind": "order", "doc": { "status": "CANCELED" }, "expected": false },
+    { "name": "CANCELLED spelling is not claimable", "kind": "order", "doc": { "status": "CANCELLED" }, "expected": false },
+    { "name": "completed order is not claimable", "kind": "order", "doc": { "status": "COMPLETED" }, "expected": false },
+    { "name": "approved cancellation request removes it", "kind": "order", "doc": { "status": "PENDING", "cancellationRequest": { "status": "APPROVED" } }, "expected": false },
+    { "name": "an ACCEPTED cancellation state is not a status this app writes, so it does not remove the order", "kind": "order", "doc": { "status": "PENDING", "cancellationRequest": { "status": "ACCEPTED" } }, "expected": true },
+    { "name": "requested cancellation does not remove it", "kind": "order", "doc": { "status": "PENDING", "cancellationRequest": { "status": "REQUESTED" } }, "expected": true },
+    { "name": "rejected cancellation does not remove it", "kind": "order", "doc": { "status": "PENDING", "cancellationRequest": { "status": "REJECTED" } }, "expected": true },
+    { "name": "unknown status is not claimable", "kind": "order", "doc": { "status": "SOMETHING_NEW" }, "expected": false },
+    { "name": "missing status is not claimable", "kind": "order", "doc": {}, "expected": false },
+
+    { "name": "shop order pending is claimable", "kind": "shopOrder", "doc": { "status": "PENDING" }, "expected": true },
+    { "name": "shop order has no helperId of its own", "kind": "shopOrder", "doc": { "status": "PENDING", "helperId": "helper-2" }, "expected": true },
+    { "name": "shop order accepted by the store is not claimable", "kind": "shopOrder", "doc": { "status": "ACCEPTED" }, "expected": false },
+    { "name": "shop order cancelled by the store is not claimable", "kind": "shopOrder", "doc": { "status": "CANCELED" }, "expected": false },
+    { "name": "shop order delivered is not claimable", "kind": "shopOrder", "doc": { "status": "DELIVERED" }, "expected": false },
+    { "name": "shop order is decided by its own status alone", "kind": "shopOrder", "doc": { "status": "PENDING", "cancellationRequest": { "status": "APPROVED" } }, "expected": true },
+    { "name": "shop order with an unknown status is not claimable", "kind": "shopOrder", "doc": { "status": "WHAT_IS_THIS" }, "expected": false }
+  ]
+}
