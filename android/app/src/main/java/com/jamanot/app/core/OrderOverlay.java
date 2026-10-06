@@ -68,6 +68,8 @@ public final class OrderOverlay {
     private static final LinkedHashMap<String, Card> CARDS = new LinkedHashMap<>();
     private static View view;
     private static String shownKey;
+    /** The app is on screen — cards are kept, but not drawn. See {@link #suspend}. */
+    private static boolean suspended;
 
     private static final class Card {
         final String title;
@@ -143,13 +145,39 @@ public final class OrderOverlay {
         });
     }
 
-    /** Takes every card down — the app came forward, or the alerts ended. */
+    /** Takes every card down for good — the alerts ended. */
     public static void hideAll(Context c) {
         if (c == null) return;
         Context app = c.getApplicationContext();
         MAIN.post(() -> {
             CARDS.clear();
             detach(app);
+        });
+    }
+
+    /**
+     * The app is on screen and its own popup has taken over: take the window
+     * down but keep the cards. They used to be discarded here, so an app that
+     * was auto-opened and then went away again — the screen timing out, pocket
+     * mode, the user pressing Home — left the order with nothing on screen at
+     * all while it was still waiting for an answer.
+     */
+    public static void suspend(Context c) {
+        if (c == null) return;
+        Context app = c.getApplicationContext();
+        MAIN.post(() -> {
+            suspended = true;
+            detach(app);
+        });
+    }
+
+    /** The app left the screen: bring back the cards still waiting for an answer. */
+    public static void restore(Context c) {
+        if (c == null) return;
+        Context app = c.getApplicationContext();
+        MAIN.post(() -> {
+            suspended = false;
+            if (canShow(app)) render(app);
         });
     }
 
@@ -160,6 +188,7 @@ public final class OrderOverlay {
             detach(app);
             return;
         }
+        if (suspended) return;
         String key = null;
         for (String k : CARDS.keySet()) key = k;
         Card card = CARDS.get(key);

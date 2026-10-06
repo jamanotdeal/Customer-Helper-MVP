@@ -188,7 +188,7 @@ export default function PageClient() {
       // Accept was tapped on the card over other apps: claim it now, without
       // a second confirmation, and land on the order. The transaction decides
       // whether it is still available — it may have gone while the app booted.
-      helperOrderAlerts.remove(orderId);
+      helperOrderAlerts.remove(orderId, 'accepted from the card');
       if (!fallbackStore.orders.has(orderId)) await fallbackStore.getOrder(orderId);
       const outcome = await acceptOrderAsHelper(
         orderId,

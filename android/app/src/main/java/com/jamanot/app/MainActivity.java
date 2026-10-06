@@ -24,6 +24,8 @@ import com.jamanot.app.core.PendingAlerts;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.plugin.JamanotNativePlugin;
 
+import java.lang.ref.WeakReference;
+
 public class MainActivity extends BridgeActivity {
 
     /** Hard ceiling on the pull-to-refresh spinner if JS never answers. */
@@ -45,6 +47,9 @@ public class MainActivity extends BridgeActivity {
 
     /** Tracked so the duty service can skip alerting while the UI is visible. */
     private static volatile boolean activityResumed = false;
+
+    /** For {@link #onOrderAlertsEnded}, which runs wherever the last alert ends. */
+    private static WeakReference<MainActivity> current;
 
     public static boolean isAppInForeground() {
         return activityResumed;
@@ -93,6 +98,10 @@ public class MainActivity extends BridgeActivity {
         if (intent == null || !intent.getBooleanExtra(EXTRA_FROM_ALERT, false)) return;
         intent.removeExtra(EXTRA_FROM_ALERT);
         showingOverLockScreen = true;
+
+        // A phone on a table must not time out from under the popup while it is
+        // still asking for an answer. Dropped once the alerts end.
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -213,9 +222,11 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         activityResumed = true;
+        current = new WeakReference<>(this);
         // The app is on screen: its own popup takes over from the card drawn
         // over other apps (outstanding alerts are adopted by JS on resume).
-        OrderOverlay.hideAll(this);
+        // Suspended, not discarded — see onStop.
+        OrderOverlay.suspend(this);
     }
 
     @Override
@@ -225,14 +236,56 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Undo the keyguard takeover once the alert has been seen and the activity
-     * is hidden again. Without this the flags persist for the life of the
-     * activity, so every later lock would put the app — customer names, phone
-     * numbers, addresses — on top of the lock screen for anyone holding it.
+     * Leaving the screen with an order still unanswered must not leave the
+     * helper with nothing: an auto-opened app is often hidden again within
+     * seconds — the screen times out, Transsion's pocket mode blanks it when
+     * the proximity sensor reads covered, or the user presses Home — and the
+     * card used to be gone by then and the keyguard takeover undone, so the
+     * order was still ringing (or frozen) with no popup anywhere.
+     *
+     * <p>So while alerts are outstanding the card comes back over other apps
+     * and the activity stays above the keyguard, so pressing power shows the
+     * popup again. Only once no alert is left is the takeover undone — without
+     * that the flags would persist for the life of the activity, and every
+     * later lock would put the app (customer names, phone numbers, addresses)
+     * on top of the lock screen for anyone holding it.
      */
     @Override
     public void onStop() {
         super.onStop();
+        if (ActiveOrderAlerts.size() > 0) {
+            OrderOverlay.restore(this);
+            // Stay above the keyguard, but only an alert launch may wake the
+            // screen — not every later return to the top.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                try {
+                    setTurnScreenOn(false);
+                } catch (Exception ignored) {
+                }
+            }
+        } else {
+            OrderOverlay.hideAll(this);
+            releaseAlertWindow();
+        }
+    }
+
+    /**
+     * The last outstanding alert ended (answered here, taken elsewhere, muted).
+     * Any thread. While the activity is on screen the takeover is left alone —
+     * pulling the app from under a helper who just accepted would be worse —
+     * and onStop undoes it instead.
+     */
+    public static void onOrderAlertsEnded() {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            MainActivity a = current != null ? current.get() : null;
+            if (a == null || a.isFinishing()) return;
+            a.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            if (!activityResumed) a.releaseAlertWindow();
+        });
+    }
+
+    private void releaseAlertWindow() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (!showingOverLockScreen) return;
         showingOverLockScreen = false;
 
@@ -254,6 +307,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        if (current != null && current.get() == this) current = null;
         super.onDestroy();
     }
 }

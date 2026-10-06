@@ -44,13 +44,21 @@ export function isOrderRoutedToHelperType(o: Order, user: UserProfile): boolean 
   if (allowedTypes === 'commuters_only' && isDedicatedHelper) return false;
 
   // Under commuter_first a dedicated rider sees an order only once it has
-  // been routed to them, and a commuter only until then; dedicated_first is
-  // the mirror image.
+  // been routed to them, and a commuter only until then.
+  //
+  // Under dedicated_first dedicated riders are the ones announced to, and
+  // nothing ever takes an order away from them, so routedToDedicated must not
+  // hide it. It used to (as the "mirror image" of commuter_first), but the
+  // push function stamps routedToDedicated on every order the moment its
+  // all-dedicated-helpers announcement goes out (suppressDuplicateDedicated in
+  // functions/index.js) — so every new order was withdrawn from the very
+  // riders it was announced to: the alarm rang, the popup opened and closed a
+  // second later, and the order never showed in their New list.
   const receiverRule = settings.orderReceiverRule || 'commuter_first';
   if (receiverRule === 'commuter_first') {
     if (isDedicatedHelper ? !o.routedToDedicated : o.routedToDedicated) return false;
   } else if (receiverRule === 'dedicated_first') {
-    if (isDedicatedHelper ? o.routedToDedicated : !o.routedToDedicated) return false;
+    if (!isDedicatedHelper && !o.routedToDedicated) return false;
   }
   return true;
 }

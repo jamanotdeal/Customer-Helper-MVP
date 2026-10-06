@@ -74,8 +74,14 @@ public final class AlertSound {
     /** Gap between tones: the asset is ~1.2 s, so this reads as a steady "ting ting". */
     private static final long ALARM_REPEAT_MS = 2_000L;
 
-    /** Safety cap so an ignored alert can't ring (and hold the CPU) indefinitely. */
-    private static final long ALARM_MAX_MS = 3 * 60_000L;
+    /**
+     * Safety cap so an ignored alert can't ring (and hold the CPU) indefinitely.
+     * An alert rings until the helper answers it, so this is the same lifetime
+     * an alert has anyway (ActiveOrderAlerts.MAX_AGE_MS), not a ring duration —
+     * at three minutes, an order that came in while the phone was in another
+     * room had gone quiet before anyone got to it.
+     */
+    private static final long ALARM_MAX_MS = 30 * 60_000L;
 
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
 

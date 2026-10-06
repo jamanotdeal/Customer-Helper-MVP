@@ -65,7 +65,7 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
       fallbackStore
         .getOrderFromServer(orderId)
         .then((order) => {
-          if (!order && !disposed) helperOrderAlerts.remove(orderId);
+          if (!order && !disposed) helperOrderAlerts.remove(orderId, 'not on server');
         })
         .catch(() => {
           // Offline or a stale connection: say nothing about the order yet,
@@ -90,16 +90,17 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
         if (order) {
           seenLoaded.add(id);
           // Taken, cancelled, or routed away from this helper's type.
-          if (!isOrderOpen(order) || !isOrderRoutedToHelperType(order, u)) helperOrderAlerts.remove(id);
+          if (!isOrderOpen(order)) helperOrderAlerts.remove(id, `not open (${order.status})`);
+          else if (!isOrderRoutedToHelperType(order, u)) helperOrderAlerts.remove(id, 'not routed to this helper type');
         } else if (seenLoaded.has(id)) {
-          helperOrderAlerts.remove(id);
+          helperOrderAlerts.remove(id, 'left the cache');
         } else {
           fetchAlerted(id);
         }
       }
 
       if (u.isBlocked) {
-        helperOrderAlerts.clear();
+        helperOrderAlerts.clear('helper is blocked');
         return;
       }
 
@@ -140,7 +141,7 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
 
     evaluate();
     const unsubscribeStore = fallbackStore.subscribe(evaluate);
-    const unsubscribeCleared = onOrderAlertCleared((orderId) => helperOrderAlerts.remove(orderId));
+    const unsubscribeCleared = onOrderAlertCleared((orderId) => helperOrderAlerts.remove(orderId, 'cleared by native'));
     window.addEventListener('new-order-received', onNewOrderHint);
 
     return () => {
@@ -150,7 +151,7 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
       window.removeEventListener('new-order-received', onNewOrderHint);
       retryTimers.forEach(clearTimeout);
       // Leaving helper mode (or signing out): nothing here is answerable now.
-      helperOrderAlerts.clear();
+      helperOrderAlerts.clear('left helper mode');
     };
   }, [uid]);
 
@@ -161,7 +162,7 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
   useEffect(() => () => setOrderAlarm([]), []);
 
   const handleAccept = async (orderId: string) => {
-    helperOrderAlerts.remove(orderId);
+    helperOrderAlerts.remove(orderId, 'accepted');
     const outcome = await acceptOrderAsHelper(orderId, userRef.current, {
       showAlert,
       showConfirm,
@@ -176,14 +177,13 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
       {alertIds.length > 0 && (
         <NewOrderAlertOverlay
           orderIds={alertIds}
-          autoDismissSeconds={20}
           onAccept={handleAccept}
           onView={(orderId) => {
-            helperOrderAlerts.remove(orderId);
+            helperOrderAlerts.remove(orderId, 'viewed');
             onOpenOrder(orderId);
           }}
-          onDismissOne={(orderId) => helperOrderAlerts.remove(orderId)}
-          onDismissAll={() => helperOrderAlerts.clear()}
+          onDismissOne={(orderId) => helperOrderAlerts.remove(orderId, 'dismissed')}
+          onDismissAll={() => helperOrderAlerts.clear('muted')}
         />
       )}
       {showBlockedModal && (

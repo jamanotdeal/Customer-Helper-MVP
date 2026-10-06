@@ -9,6 +9,7 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.MetadataChanges;
+import com.jamanot.app.MainActivity;
 import com.jamanot.app.plugin.JamanotNativePlugin;
 
 import java.util.ArrayList;
@@ -149,7 +150,10 @@ public final class ActiveOrderAlerts {
 
         NotificationHelper.cancelOrderAlert(app, key);
         OrderOverlay.remove(app, key, gone);
-        if (empty) AlertSound.stopOrderAlarm(app);
+        if (empty) {
+            AlertSound.stopOrderAlarm(app);
+            MainActivity.onOrderAlertsEnded();
+        }
         if (notifyJs) JamanotNativePlugin.emitOrderAlertCleared(key);
         if (e != null) Log.i(TAG, "resolved " + key + " (notifyJs=" + notifyJs + ", gone=" + gone + ")");
     }
@@ -176,6 +180,7 @@ public final class ActiveOrderAlerts {
         }
         OrderOverlay.hideAll(app);
         AlertSound.stopOrderAlarm(app);
+        MainActivity.onOrderAlertsEnded();
     }
 
     @Nullable

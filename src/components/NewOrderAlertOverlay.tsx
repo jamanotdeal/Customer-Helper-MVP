@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fallbackStore } from '@/lib/firebase';
 import { isOrderOpen } from '@/lib/orderStatus';
-import { isAppVisible } from '@/lib/appVisibility';
 import {
   Bell,
   X,
@@ -17,7 +16,6 @@ import {
   Eye,
   CheckCircle2,
   VolumeX,
-  Clock,
   Zap,
   Store,
 } from 'lucide-react';
@@ -30,7 +28,6 @@ export interface NewOrderAlertOverlayProps {
   onView: (orderId: string) => void;
   onDismissOne: (orderId: string) => void;
   onDismissAll: () => void;
-  autoDismissSeconds?: number;
 }
 
 export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
@@ -39,52 +36,27 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   onView,
   onDismissOne,
   onDismissAll,
-  autoDismissSeconds = 20, // Guarantee at least 10s (default 20s)
 }) => {
   const [currentIdx, setCurrentIdx] = useState(orderIdList.length - 1); // latest first
   const [accepting, setAccepting] = useState(false);
-  const [countdown, setCountdown] = useState(autoDismissSeconds);
 
-  // Callbacks through refs: parents pass fresh closures on every render, and
-  // the countdown below used to restart with each one — so while orders kept
-  // streaming in, the popup never timed out at all.
-  const onDismissAllRef = useRef(onDismissAll);
-  onDismissAllRef.current = onDismissAll;
+  // Through a ref: parents pass a fresh closure on every render.
   const onDismissOneRef = useRef(onDismissOne);
   onDismissOneRef.current = onDismissOne;
 
-  // A newly arrived order goes to the front and restarts the countdown, so the
-  // newest request is always the one on screen and always gets the full time.
+  // A newly arrived order goes to the front, so the newest request is always
+  // the one on screen.
+  //
+  // There is deliberately no auto-dismiss. The popup used to time out after
+  // 20s of the app being "visible", and an auto-opened app over the lock
+  // screen counts as visible: an order that arrived while the phone sat on a
+  // table was gone — popup and alarm — before anyone picked it up. It now
+  // stays until the helper answers it, or the order is taken or cancelled.
   const prevCountRef = useRef(orderIdList.length);
-  const [countdownEpoch, setCountdownEpoch] = useState(0);
   useEffect(() => {
-    if (orderIdList.length > prevCountRef.current) {
-      setCurrentIdx(orderIdList.length - 1);
-      setCountdownEpoch((n) => n + 1);
-    }
+    if (orderIdList.length > prevCountRef.current) setCurrentIdx(orderIdList.length - 1);
     prevCountRef.current = orderIdList.length;
   }, [orderIdList.length]);
-
-  // Countdown timer: keeps modal visible for at least 10s (default 20s) unless interacted with
-  useEffect(() => {
-    setCountdown(autoDismissSeconds);
-    const interval = setInterval(() => {
-      // Paused while the app is minimised: dismissing here stops the order
-      // alarm, and it has to keep ringing until the helper has actually seen
-      // this popup.
-      if (!isAppVisible()) return;
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          onDismissAllRef.current();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [autoDismissSeconds, countdownEpoch]);
 
   // Keep currentIdx in bounds when orders change or get dismissed
   const safeIdx = Math.min(currentIdx, Math.max(0, orderIdList.length - 1));
@@ -162,8 +134,6 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
     : null;
 
-  const progressPercent = Math.max(0, Math.min(100, (countdown / autoDismissSeconds) * 100));
-
   return (
     <div
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -174,7 +144,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-red-500/20 animate-ping" />
       </div>
 
-      {/* Header Row: Title, Countdown Timer, Mute Button */}
+      {/* Header Row: Title, Mute Button */}
       <div className="w-full max-w-sm flex items-center justify-between mb-3 relative z-10">
         <div className="flex items-center space-x-2">
           <div className="w-8 h-8 bg-red-500/30 rounded-full flex items-center justify-center animate-bounce">
@@ -186,12 +156,6 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
-          {/* Timer pill */}
-          <div className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/30 text-amber-200 border border-amber-400/40 text-[11px] font-black">
-            <Clock className="w-3 h-3 text-amber-300 animate-spin" style={{ animationDuration: '4s' }} />
-            <span>{countdown}s</span>
-          </div>
-
           {/* Mute button */}
           <button
             onClick={onDismissAll}
@@ -219,13 +183,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
 
         {/* Card */}
         <div className="w-full bg-white rounded-3xl shadow-2xl border-2 border-red-400 relative overflow-hidden animate-in zoom-in-95 duration-300">
-          {/* Animated top progress countdown bar */}
-          <div className="h-1.5 w-full bg-gray-100 overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500 transition-all duration-1000 ease-linear"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
+          <div className="h-1.5 w-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500" />
 
           {/* Counter badge if multiple orders */}
           {orderIdList.length > 1 && (
@@ -449,7 +407,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
       <p className="mt-4 text-white/70 text-[11px] font-medium text-center relative z-10">
         {orderIdList.length > 1
           ? `${orderIdList.length}টি নতুন রিকোয়েস্ট আছে — স্লাইড বা মিউট করতে পারেন`
-          : 'মিউট বা সময় শেষ হলে রিকোয়েস্টটি লিস্টে থাকবে'}
+          : 'মিউট করলে রিকোয়েস্টটি লিস্টে থাকবে'}
       </p>
     </div>
   );

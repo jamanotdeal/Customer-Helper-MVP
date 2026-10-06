@@ -44,17 +44,22 @@ class OrderAlertQueue {
     return true;
   }
 
-  /** Answered, or the order is gone. */
-  remove(orderId: string) {
+  /**
+   * Answered, or the order is gone.
+   * @param reason logged, so a popup that vanished can be traced to its cause.
+   */
+  remove(orderId: string, reason: string) {
     this.dismissed.add(orderId);
     if (!this.ids.includes(orderId)) return;
+    console.info(`[orderAlerts] remove ${orderId}: ${reason}`);
     this.ids = this.ids.filter((id) => id !== orderId);
     this.emit();
   }
 
-  /** Muted, timed out, or the helper left helper mode. */
-  clear() {
+  /** Muted, or the helper left helper mode. */
+  clear(reason: string) {
     if (this.ids.length === 0) return;
+    console.info(`[orderAlerts] clear ${this.ids.join(',')}: ${reason}`);
     this.ids.forEach((id) => this.dismissed.add(id));
     this.ids = [];
     this.emit();

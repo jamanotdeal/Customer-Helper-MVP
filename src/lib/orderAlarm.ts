@@ -20,8 +20,12 @@ import { isAppVisible, subscribeAppVisibility } from './appVisibility';
 const BEEP_INTERVAL_MS = 1500;
 /** While hidden, re-post the OS notification every this many ticks (~7.5 s). */
 const HIDDEN_NOTIFY_EVERY_TICKS = 5;
-/** Ring for at most this long with the app actually open; a new order re-arms it. */
-const MAX_RING_VISIBLE_MS = 90_000;
+/**
+ * Ring for at most this long with the app actually open; a new order re-arms
+ * it. An alert rings until it is answered — this is only a backstop for one
+ * nobody answers, matching the native alarm (AlertSound.ALARM_MAX_MS).
+ */
+const MAX_RING_VISIBLE_MS = 30 * 60_000;
 
 let currentIds: string[] = [];
 let loop: ReturnType<typeof setInterval> | null = null;
