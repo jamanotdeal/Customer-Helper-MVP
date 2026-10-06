@@ -17,6 +17,7 @@ const assert = require('node:assert');
 const {
   withinRadius,
   resolveRecipients,
+  addStoreAccounts,
   applyGeofence,
   buildData,
   dedicatedNotifId,
@@ -205,6 +206,56 @@ console.log('recipient resolution');
   await testAsync('a missing order alerts everyone rather than nobody', async () => {
     const notif = { type: 'new_order', userId: 'all-helpers', orderId: 'gone' };
     assert.strictEqual((await applyGeofence(geoDb, everyone, notif)).length, 3);
+  });
+
+  console.log('store accounts');
+
+  // A shop run by its owner and by a second account linked through storeId.
+  const storeUsers = {
+    owner: { fcmToken: 't-owner', storeId: 'store-owner' },
+    staff: { fcmToken: 't-staff', storeId: 'store-owner' },
+    'staff-nodevice': { storeId: 'store-owner' },
+    other: { fcmToken: 't-other', storeId: 'store-elsewhere' },
+  };
+  const storeDb = {
+    ...mockDb({ users: storeUsers }),
+    collection(name) {
+      return {
+        where(field, op, value) {
+          return {
+            async get() {
+              const rows = name === 'users' ? storeUsers : {};
+              const docs = Object.entries(rows)
+                .filter(([, u]) => (op === 'in' ? value.includes(u[field]) : u[field] === value))
+                .map(([id, u]) => ({ id, data: () => u }));
+              return { docs };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  await testAsync('a store notification also reaches accounts linked to the shop', async () => {
+    const notif = { type: 'new_order', userId: 'owner', targetRole: 'store', orderId: 'o1' };
+    const owner = await resolveRecipients(storeDb, 'owner');
+    assert.deepStrictEqual(uids(await addStoreAccounts(storeDb, owner, notif)), ['owner', 'staff']);
+  });
+
+  await testAsync('accounts linked to the shop are added even when the owner has no device', async () => {
+    const notif = { type: 'new_order', userId: 'owner', targetRole: 'store', orderId: 'o1' };
+    assert.deepStrictEqual(uids(await addStoreAccounts(storeDb, [], notif)), ['owner', 'staff']);
+  });
+
+  await testAsync('non-store notifications are left alone', async () => {
+    const notif = { type: 'new_order', userId: 'owner', targetRole: 'helper', orderId: 'o1' };
+    const owner = await resolveRecipients(storeDb, 'owner');
+    assert.deepStrictEqual(uids(await addStoreAccounts(storeDb, owner, notif)), ['owner']);
+  });
+
+  await testAsync('broadcasts are left alone', async () => {
+    const notif = { type: 'new_order', userId: 'all-stores', targetRole: 'store' };
+    assert.deepStrictEqual(await addStoreAccounts(storeDb, [], notif), []);
   });
 
   console.log('payload');

@@ -2,6 +2,8 @@ package com.jamanot.app.core;
 
 import android.content.Context;
 
+import androidx.annotation.Nullable;
+
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +44,12 @@ public final class OrderMatcher {
         if (uid == null) uid = "__none__";
 
         if ("store".equals(Prefs.role(c))) {
-            // Mirrors the store branch of initListenersForRole (firebase.ts:856)
+            // Mirrors the store branch of initListenersForRole (firebase.ts:856),
+            // plus the shop owner — see storeOwnerUid.
+            String owner = storeOwnerUid(c);
+            if (owner != null && !owner.equals(uid)) {
+                return Arrays.asList(uid, owner, "all", "all-stores");
+            }
             return Arrays.asList(uid, "all", "all-stores");
         }
 
@@ -74,6 +81,7 @@ public final class OrderMatcher {
         String uid = Prefs.uid(c);
         if (notifUserId.equals(uid)) return true;
         if ("all".equals(notifUserId)) return true;
+        if ("store".equals(Prefs.role(c)) && notifUserId.equals(storeOwnerUid(c))) return true;
 
         boolean isHelper = Prefs.isHelper(c);
         boolean isDedicated = "dedicated".equals(Prefs.helperType(c));
@@ -93,6 +101,22 @@ public final class OrderMatcher {
             default:
                 return false;
         }
+    }
+
+    /**
+     * The account a store's notifications are addressed to. The app writes them
+     * to the shop's owner (resolveShopOwnerId in firebase.ts), but a shop is
+     * also run from any account whose storeId points at it — and those never
+     * matched, so a new shop order rang only on the owner's phone. Store shops
+     * are keyed {@code store-<ownerUid>}, the same convention
+     * resolveShopOwnerId falls back on.
+     */
+    @Nullable
+    static String storeOwnerUid(Context c) {
+        String storeId = Prefs.storeId(c);
+        if (storeId == null || !storeId.startsWith("store-")) return null;
+        String owner = storeId.substring("store-".length());
+        return owner.isEmpty() ? null : owner;
     }
 
     // ── Geofence ────────────────────────────────────────────────────────────

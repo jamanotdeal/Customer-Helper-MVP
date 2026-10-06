@@ -155,6 +155,50 @@ async function resolveRecipients(db, target) {
   }
 }
 
+/**
+ * A store notification is addressed to the shop's owner (resolveShopOwnerId in
+ * firebase.ts), but a shop can be run from other accounts too: any user whose
+ * `storeId` is that shop gets its dashboard. Those accounts were never pushed,
+ * so with the app in the background — on Transsion phones, frozen — a new shop
+ * order reached nobody but the owner. Adds them, alongside the owner.
+ *
+ * Only for direct-uid notifications marked targetRole 'store'; everything else
+ * passes through untouched.
+ */
+async function addStoreAccounts(db, recipients, notif) {
+  const owner = notif && notif.userId;
+  if (!owner || notif.targetRole !== 'store' || owner.startsWith('all') || owner.startsWith('segment:')) {
+    return recipients;
+  }
+
+  const shopIds = new Set([`store-${owner}`]);
+  try {
+    const owned = await db.collection('shops').where('ownerUserId', '==', owner).get();
+    owned.docs.forEach((d) => shopIds.add(d.id));
+  } catch (e) {
+    logger.warn('owned shops unreadable, using the store-<uid> id only', { owner, error: e.message });
+  }
+
+  let linked;
+  try {
+    // `in` takes up to 30 values; an owner with more shops than that is not a thing.
+    linked = await db.collection('users').where('storeId', 'in', [...shopIds].slice(0, 30)).get();
+  } catch (e) {
+    logger.warn('store accounts unreadable, pushing the owner only', { owner, error: e.message });
+    return recipients;
+  }
+
+  const seen = new Set(recipients.map((r) => r.uid));
+  const out = [...recipients];
+  linked.docs.forEach((d) => {
+    const profile = d.data() || {};
+    if (seen.has(d.id) || !profile.fcmToken || !shopIds.has(profile.storeId)) return;
+    seen.add(d.id);
+    out.push({ uid: d.id, token: profile.fcmToken, profile });
+  });
+  return out;
+}
+
 /** Drops helpers outside the dispatch radius for a new-order broadcast. */
 async function applyGeofence(db, recipients, notif) {
   if (notif.type !== 'new_order') return recipients;
@@ -468,6 +512,7 @@ exports.pushOnNotificationCreate = onDocumentCreated(
     if (await suppressDuplicateDedicated(db, notifId, notif)) return;
 
     let recipients = await resolveRecipients(db, notif.userId);
+    recipients = await addStoreAccounts(db, recipients, notif);
     recipients = await applyGeofence(db, recipients, notif);
     if (recipients.length === 0) {
       logger.info('no reachable devices', { notifId, target: notif.userId });
@@ -540,6 +585,7 @@ exports.pushOnNotificationCreate = onDocumentCreated(
 exports._internals = {
   withinRadius,
   resolveRecipients,
+  addStoreAccounts,
   applyGeofence,
   buildData,
   dedicatedNotifId,

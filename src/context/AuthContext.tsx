@@ -529,6 +529,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!user || !isNativeApp()) return;
     if (activeMode !== 'customer' || user.isAdmin) return;
+    // A store account is never a customer to Java, even for the moment before
+    // the effect below moves it into store mode.
+    if (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId)) return;
 
     let lastState: boolean | null = null;
     const sync = () => {
@@ -553,6 +556,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       saveActiveMode(nextMode);
       fallbackStore.initListenersForRole(nextMode, user.uid, user.helperType);
     }
+  }, [user, activeMode]);
+
+  // The mirror image: an account that turns out to be a store after sign-in.
+  // applyProfile locks stores into store mode, but only if the profile it gets
+  // already says so — and at startup that is often the cached copy, without
+  // the storeId the user document brings a moment later. The UI followed the
+  // late storeId (it reads the profile), but the mode stayed 'customer', so
+  // Java was told this was a customer: off duty, no duty service, and a store
+  // order arrived as a plain tray notification — no alarm, no popup, no
+  // auto-open.
+  useEffect(() => {
+    if (!user || user.isAdmin || user.role === 'admin' || isUserAdminEmail(user.email)) return;
+    const isStore = Boolean(user.isStoreApproved || user.role === 'store' || Boolean(user.storeId));
+    if (!isStore || activeMode === 'store') return;
+    setActiveModeState('store');
+    saveActiveMode('store');
+    fallbackStore.initListenersForRole('store', user.uid, user.helperType, user.storeId);
+    pushNativeState(user, 'store').catch(() => {});
   }, [user, activeMode]);
 
   const enableCommuterHelperWithLocation = async (): Promise<boolean> => {
