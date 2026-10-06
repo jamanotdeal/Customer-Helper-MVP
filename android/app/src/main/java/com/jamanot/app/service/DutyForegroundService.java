@@ -270,7 +270,13 @@ public class DutyForegroundService extends Service {
                 Log.d(TAG, "skip " + id + ": not targeted (userId=" + notifUserId + ")");
                 continue;
             }
-            if (Boolean.TRUE.equals(read)) {
+            // A new order ignores the document's read flag. Broadcasts are one
+            // document shared by every helper, and older app builds wrote
+            // read:true onto them when *their* user opened the drawer — which
+            // silently cancelled the alert, alarm and auto-open on every other
+            // phone. Repeats are already prevented per device (markSeen below),
+            // and the dispatcher drops an order that is no longer open.
+            if (Boolean.TRUE.equals(read) && !"new_order".equals(type)) {
                 Log.d(TAG, "skip " + id + ": already read");
                 continue;
             }

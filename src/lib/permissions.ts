@@ -47,7 +47,7 @@ export interface ReadinessReport {
 }
 
 /** Vendors whose battery managers kill foreground services by default. */
-const AGGRESSIVE_OEMS = ['xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'vivo', 'huawei', 'honor'];
+const AGGRESSIVE_OEMS = ['xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'vivo', 'huawei', 'honor', 'infinix', 'tecno', 'itel'];
 
 export async function getReadiness(): Promise<ReadinessReport> {
   if (!isNativeApp()) {

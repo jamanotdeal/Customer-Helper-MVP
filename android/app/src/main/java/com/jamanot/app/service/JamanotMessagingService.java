@@ -83,9 +83,6 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         // someone the Firestore path would have filtered out.
         if (targetUserId != null && !OrderMatcher.targets(this, targetUserId)) return;
 
-        // De-duplicate against the Firestore listener: whichever arrives first wins.
-        if (notifId != null && !Prefs.markSeen(this, notifId)) return;
-
         if ("new_order".equals(type)) {
             // Resurrection: if the user is on duty but our process was killed,
             // this push is the opportunity to bring the service back.
@@ -99,17 +96,22 @@ public class JamanotMessagingService extends FirebaseMessagingService {
 
             // Same path as the duty listener — alarm, popup payload, tray
             // notification and auto-open all live there. This matters most
-            // here: when an OEM battery manager has killed the process, this is
-            // the only code that runs. Waited on (we're on an FCM worker
-            // thread) so the process isn't reclaimed mid-fetch.
+            // here: when an OEM battery manager has killed or frozen the
+            // process, this is the only code that runs. Waited on (we're on an
+            // FCM worker thread) so the process isn't frozen or reclaimed
+            // before the app has been opened — including when the listener got
+            // there first (see onNewOrderPush).
             try {
-                Tasks.await(OrderAlertDispatcher.handleNewOrder(this, notifId, title, body, orderId),
+                Tasks.await(OrderAlertDispatcher.onNewOrderPush(this, notifId, title, body, orderId),
                         DISPATCH_TIMEOUT_S, TimeUnit.SECONDS);
             } catch (Exception e) {
                 Log.w(TAG, "new_order dispatch still pending: " + e.getMessage());
             }
             return;
         }
+
+        // De-duplicate against the Firestore listener: whichever arrives first wins.
+        if (notifId != null && !Prefs.markSeen(this, notifId)) return;
 
         // A status update is a tray entry, as on the duty path. It used to be
         // sent to the WebView as an orderAlert while the app was open, which

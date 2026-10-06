@@ -310,10 +310,11 @@ public class JamanotNativePlugin extends Plugin {
     }
 
     /**
-     * Xiaomi, Oppo, Vivo and Huawei each kill background services unless the app
-     * is on an "autostart" allowlist buried in their own settings app. These
-     * component names are undocumented and change between ROM versions, hence
-     * the try/catch chain down to plain app settings.
+     * Xiaomi, Oppo, Vivo, Huawei and Transsion (Infinix/Tecno/itel) each kill
+     * background services unless the app is on an "autostart" allowlist buried
+     * in their own settings app. These component names are undocumented and
+     * change between ROM versions, hence the try/catch chain down to plain app
+     * settings.
      */
     @PluginMethod
     public void openOemAutostartSettings(PluginCall call) {
@@ -344,6 +345,14 @@ public class JamanotNativePlugin extends Plugin {
                 candidates = new String[][]{
                         {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
                         {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"}};
+                break;
+            case "infinix":
+            case "tecno":
+            case "itel":
+                // Transsion's Phone Master. Without auto-start, a push cannot
+                // bring back a process the system has killed.
+                candidates = new String[][]{
+                        {"com.transsion.phonemaster", "com.cyin.himgr.autostart.AutoStartActivity"}};
                 break;
             case "samsung":
                 candidates = new String[][]{
@@ -395,6 +404,8 @@ public class JamanotNativePlugin extends Plugin {
         if (call.getData().has("uid") && s.uid == null) {
             Prefs.clearUser(getContext());
             DutyForegroundService.stop(getContext());
+            // Signed out: nothing on this phone is theirs to answer any more.
+            ActiveOrderAlerts.resolveAll(getContext(), true);
         } else {
             Prefs.apply(getContext(), s);
         }
@@ -445,8 +456,12 @@ public class JamanotNativePlugin extends Plugin {
         Prefs.setOnDuty(c, false);
         DutyForegroundService.stop(c);
         DutyWatchdogWorker.cancel(c);
-        // Off duty (mode switch, logout): nothing left to answer, so stop ringing.
-        ActiveOrderAlerts.resolveAll(c, true);
+        // Outstanding alerts are deliberately left alone. Startup can stop and
+        // restart duty within a second (a cached profile briefly says
+        // "customer" before the real one loads), and clearing alerts here wiped
+        // out the very order popup an auto-open had just delivered. Alerts are
+        // ended by logout (setUserState), the "Go off duty" action, or the
+        // popup itself — a helper leaving helper mode closes theirs from JS.
         call.resolve();
     }
 
