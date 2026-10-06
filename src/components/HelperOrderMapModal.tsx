@@ -50,7 +50,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
   const layersRef = useRef<any[]>([]);
   const areaLayersRef = useRef<any[]>([]);
 
-  const [viewMode, setViewMode] = useState<'map' | 'list'>('map');
+  // Opens on the list: picking a store is what helpers come here for.
+  const [viewMode, setViewMode] = useState<'map' | 'list'>('list');
   const [mapError, setMapError] = useState(false);
   const [currentHelperLoc, setCurrentHelperLoc] = useState<LocationData | null>(null);
   const [leafletLib, setLeafletLib] = useState<any>(null);
@@ -82,7 +83,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
     if (isOpen) {
       hasFitBoundsRef.current = false;
       setIsFullscreen(false);
-      setViewMode('map');
+      setViewMode('list');
       setSelectedType('ALL');
       setSearchQuery('');
       setShowSearchResults(false);
@@ -581,49 +582,50 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             : 'w-full h-[88dvh] sm:h-[90dvh] sm:max-h-[880px] sm:max-w-[850px] rounded-3xl'
         }`}
       >
-        {/* Header with List / Map View Switcher */}
-        <div className="shrink-0 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 shadow-xs z-20">
-          <div className="flex items-center space-x-3 text-gray-900 font-extrabold text-sm min-w-0">
-            <div className="flex items-center space-x-1.5">
-              <Store className="w-4 h-4 text-purple-600 shrink-0" />
-              <span className="truncate">Road & Stores</span>
-            </div>
-
-            {/* View Mode Tabs */}
-            <div className="flex items-center bg-gray-100 p-0.5 rounded-xl border border-gray-200/80">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewMode('map');
-                  setTimeout(() => {
-                    try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
-                  }, 60);
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  viewMode === 'map'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                <Map className="w-3.5 h-3.5" />
-                <span>Map View</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('list')}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  viewMode === 'list'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                <List className="w-3.5 h-3.5" />
-                <span>List View ({displayedShops.length})</span>
-              </button>
-            </div>
+        {/* Header with List / Map View Switcher. On a phone the title, tabs and
+            buttons don't fit one row — the tab labels wrapped and the
+            fullscreen button landed on top of them — so below `sm` the tabs
+            take a full-width second row; from `sm` up it is one row as before. */}
+        <div className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5 px-4 py-3 bg-white border-b border-gray-100 shadow-xs z-20">
+          <div className="order-1 flex items-center space-x-1.5 text-gray-900 font-extrabold text-sm min-w-0">
+            <Store className="w-4 h-4 text-purple-600 shrink-0" />
+            <span className="truncate">Road & Stores</span>
           </div>
 
-          <div className="flex items-center space-x-2 shrink-0">
+          {/* View Mode Tabs */}
+          <div className="order-3 sm:order-2 w-full sm:w-auto sm:mr-auto grid grid-cols-2 sm:flex sm:items-center bg-gray-100 p-0.5 rounded-xl border border-gray-200/80">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('map');
+                setTimeout(() => {
+                  try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
+                }, 60);
+              }}
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                viewMode === 'map'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Map className="w-3.5 h-3.5" />
+              <span>Map View</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                viewMode === 'list'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <List className="w-3.5 h-3.5" />
+              <span>List View ({displayedShops.length})</span>
+            </button>
+          </div>
+
+          <div className="order-2 sm:order-3 flex items-center space-x-2 shrink-0">
             {/* Fullscreen Toggle Button */}
             <button
               type="button"
@@ -638,7 +640,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all border border-red-200 cursor-pointer"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold whitespace-nowrap transition-all border border-red-200 cursor-pointer"
               title="Close"
             >
               <X className="w-4 h-4" />
@@ -818,146 +820,133 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                         : '88' + shop.whatsapp.replace(/[^0-9]/g, '')}`
                     : null;
 
+                  // "GROCERY — মুদিখানা" reads as a label, not a shout: keep the
+                  // Bangla half when there is one.
+                  const typeLabel = (() => {
+                    const t = getShopType(shop) || 'General Store';
+                    const parts = t.split(' — ');
+                    return parts.length > 1 && parts[1].trim() ? parts[1].trim() : t;
+                  })();
+                  const meta = [typeLabel, distanceKm !== null ? `${distanceKm.toFixed(1)} km` : null]
+                    .filter(Boolean)
+                    .join(' · ');
+                  const iconBtn =
+                    'w-9 h-9 shrink-0 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 flex items-center justify-center transition-colors active:scale-95 cursor-pointer';
+
                   return (
                     <div
                       key={shop.id}
-                      className={`bg-white rounded-2xl border p-4 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between gap-3 ${
-                        isRequested
-                          ? 'border-emerald-300 ring-2 ring-emerald-100/70 bg-gradient-to-br from-emerald-50/20 via-white to-emerald-50/10'
-                          : 'border-gray-200/90 hover:border-purple-300'
+                      className={`bg-white rounded-2xl border p-4 flex flex-col gap-3 transition-colors ${
+                        isRequested ? 'border-emerald-300' : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      {/* Top Shop Info */}
-                      <div className="space-y-2.5">
-                        <div className="flex items-start justify-between gap-2.5">
-                          <div className="flex items-center space-x-2.5 min-w-0">
-                            {shop.photoUrl ? (
-                              <img
-                                src={shop.photoUrl}
-                                alt={shop.name}
-                                className="w-10 h-10 rounded-xl object-cover border border-purple-100 shrink-0 shadow-2xs"
-                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                              />
-                            ) : (
-                              <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-black text-sm shrink-0 border border-purple-200 shadow-2xs">
-                                <Store className="w-5 h-5" />
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <h4 className="font-extrabold text-xs sm:text-sm text-gray-900 leading-snug truncate">
-                                  {shop.name}
-                                </h4>
-                                {isRequested && (
-                                  <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-0.5">
-                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-700" />
-                                    <span>অনুরোধ পাঠানো হয়েছে</span>
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1 mt-1 flex-wrap">
-                                <span className="text-[9px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-md font-extrabold uppercase tracking-wide border border-purple-200">
-                                  {getShopType(shop) || 'General Store'}
-                                </span>
-                                {shop.commissionPercent !== undefined && (
-                                  <span className="text-[9px] bg-amber-50 text-amber-900 px-1.5 py-0.5 rounded-md font-bold border border-amber-200">
-                                    কমিশন: {shop.commissionPercent}%
-                                  </span>
-                                )}
-                                {distanceKm !== null && (
-                                  <span className="text-[9px] bg-blue-50 text-blue-900 px-1.5 py-0.5 rounded-md font-bold border border-blue-200">
-                                    📍 {distanceKm.toFixed(1)} km
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Address */}
-                        {shop.location?.address && (
-                          <div className="flex items-start gap-1.5 text-xs text-gray-600 bg-gray-50/80 p-2 rounded-xl border border-gray-100">
-                            <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
-                            <span className="line-clamp-2 leading-relaxed text-[11px]">{shop.location.address}</span>
+                      {/* Name, type and distance */}
+                      <div className="flex items-start gap-3">
+                        {shop.photoUrl ? (
+                          <img
+                            src={shop.photoUrl}
+                            alt={shop.name}
+                            className="w-11 h-11 rounded-xl object-cover border border-gray-100 shrink-0"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                            <Store className="w-5 h-5" />
                           </div>
                         )}
-
-                        {/* Description / Products */}
-                        {shop.description && (
-                          <p className="text-[11px] text-gray-700 font-medium line-clamp-2 leading-relaxed bg-purple-50/30 p-2 rounded-xl border border-purple-100/50">
-                            <strong className="text-purple-950 font-bold">পণ্য/সেবা: </strong>
-                            {shop.description}
-                          </p>
-                        )}
-
-                        {/* Contacts & Quick Call/WhatsApp */}
-                        <div className="flex items-center justify-between text-[11px] text-gray-600 pt-0.5">
-                          <div className="truncate">
-                            <span className="font-semibold text-gray-400 text-[10px] uppercase">Contact: </span>
-                            <strong className="text-gray-900 text-xs">{shop.contactPerson || 'N/A'}</strong>
-                          </div>
-                          <div className="flex items-center space-x-1.5 shrink-0">
-                            {shop.whatsapp && (
-                              <>
-                                <a
-                                  href={`tel:${shop.whatsapp}`}
-                                  className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-bold transition-all flex items-center gap-1 border border-emerald-200/80"
-                                  title="Call Store"
-                                >
-                                  <Phone className="w-3 h-3 text-emerald-600" />
-                                  <span>Call</span>
-                                </a>
-                                {waUrl && (
-                                  <a
-                                    href={waUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="px-2 py-1 rounded-lg bg-[#25D366]/15 hover:bg-[#25D366]/25 text-emerald-900 text-[10px] font-bold transition-all flex items-center gap-1 border border-emerald-300/60"
-                                    title="WhatsApp Chat"
-                                  >
-                                    <MessageSquare className="w-3 h-3 text-emerald-700" />
-                                    <span>WhatsApp</span>
-                                  </a>
-                                )}
-                              </>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <h4 className="font-bold text-sm text-gray-900 leading-snug truncate">{shop.name}</h4>
+                            {shop.commissionPercent !== undefined && (
+                              <span className="shrink-0 text-[10px] font-semibold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded-md">
+                                কমিশন {shop.commissionPercent}%
+                              </span>
                             )}
                           </div>
+                          <p className="text-xs text-gray-500 mt-0.5 truncate">{meta}</p>
+                          {isRequested && (
+                            <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-semibold text-emerald-700">
+                              <CheckCircle2 className="w-3 h-3" />
+                              অনুরোধ পাঠানো হয়েছে
+                            </span>
+                          )}
                         </div>
                       </div>
 
-                      {/* Card Action Buttons */}
-                      <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
-                        {/* 1. Google Maps Redirection Button */}
+                      {/* Where it is and what it sells */}
+                      {(shop.location?.address || shop.description) && (
+                        <div className="space-y-1 text-xs text-gray-600 leading-relaxed">
+                          {shop.location?.address && (
+                            <p className="flex items-start gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                              <span className="line-clamp-1">{shop.location.address}</span>
+                            </p>
+                          )}
+                          {shop.description && (
+                            <p className="flex items-start gap-1.5">
+                              <Store className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                              <span className="line-clamp-1">{shop.description}</span>
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+                        {shop.whatsapp && (
+                          <a
+                            href={`tel:${shop.whatsapp}`}
+                            className={iconBtn}
+                            title={`Call${shop.contactPerson ? ` ${shop.contactPerson}` : ''}`}
+                            aria-label={`Call${shop.contactPerson ? ` ${shop.contactPerson}` : ''}`}
+                          >
+                            <Phone className="w-4 h-4" />
+                          </a>
+                        )}
+                        {waUrl && (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={iconBtn}
+                            title="WhatsApp"
+                            aria-label="WhatsApp"
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                          </a>
+                        )}
                         <a
                           href={gMapUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center justify-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-[11px] font-extrabold transition-all active:scale-95 shrink-0"
-                          title="Open Google Maps for Direction"
+                          className={iconBtn}
+                          title="Directions (Google Maps)"
+                          aria-label="Directions (Google Maps)"
                         >
-                          <Navigation className="w-3 h-3 text-emerald-600" />
-                          <span>Map</span>
+                          <Navigation className="w-4 h-4" />
                         </a>
-
-                        {/* 2. Locate on Interactive Map */}
                         <button
                           type="button"
                           onClick={() => handleLocateStore(shop)}
-                          className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-[11px] font-bold transition-all shrink-0 cursor-pointer"
-                          title="View on Interactive Map"
+                          className={iconBtn}
+                          title="ম্যাপে দেখুন"
+                          aria-label="ম্যাপে দেখুন"
                         >
-                          ম্যাপে দেখুন
+                          <Map className="w-4 h-4" />
                         </button>
 
-                        {/* 3. Send Order / Select Shop Button */}
                         {onSelectShop && (
                           <button
                             type="button"
                             onClick={() => onSelectShop(shop)}
-                            className="flex-1 py-1.5 px-3 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white rounded-xl text-[11px] font-extrabold shadow-2xs transition-all active:scale-95 flex items-center justify-center gap-1 cursor-pointer"
+                            className={`ml-auto h-9 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors active:scale-95 cursor-pointer ${
+                              isRequested
+                                ? 'bg-white border border-purple-200 text-purple-700 hover:bg-purple-50'
+                                : 'bg-purple-600 hover:bg-purple-700 text-white'
+                            }`}
                           >
-                            <span>{isRequested ? 'পুনরায় অনুরোধ' : 'অর্ডার পাঠান'}</span>
-                            <ArrowRight className="w-3 h-3" />
+                            <span>{isRequested ? 'পুনরায় অনুরোধ' : 'অর্ডার পাঠান'}</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
