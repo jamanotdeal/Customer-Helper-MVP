@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
-import { fallbackStore, db } from '@/lib/firebase';
+import { fallbackStore, db, versionOf } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
@@ -565,65 +565,108 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     withdrawalsEndDate,
   ]);
 
+  // What syncAdminData last copied out of the store. Every snapshot wakes this
+  // subscriber, so copying (and re-rendering) only what actually changed is what
+  // keeps a wallet or notification update from re-rendering every list here.
+  const adminSyncSeenRef = useRef<Record<string, unknown>>({});
+  // True while the full order history is still arriving in the background, so
+  // lifetime totals and reports can say they are not final yet.
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
+
   useEffect(() => {
     const syncAdminData = () => {
-      const freshOrders = Array.from(fallbackStore.orders.values());
-      setOrders(freshOrders);
-      setAllOrders(freshOrders);
-      setServerOrders((prev) => (prev ? freshOrders : null));
+      setOrderHistoryLoading(fallbackStore.adminOrderHistoryLoading);
+      const seen = adminSyncSeenRef.current;
+      const changed = (key: string, current: unknown) => {
+        if (seen[key] === current) return false;
+        seen[key] = current;
+        return true;
+      };
 
-      const freshApps = Array.from(fallbackStore.helperApplications.values());
-      setApplications((prev) => {
-        if (prev.length > 0 && freshApps.length > prev.length) {
-          const diff = freshApps.length - prev.length;
-          setExactActiveHelpers((count) => (count !== null ? count : null));
-        }
-        return freshApps;
-      });
+      if (changed('orders', versionOf(fallbackStore.orders))) {
+        const freshOrders = Array.from(fallbackStore.orders.values());
+        setOrders(freshOrders);
+        setAllOrders(freshOrders);
+        setServerOrders((prev) => (prev ? freshOrders : null));
+      }
 
-      const freshStoreApps = Array.from(fallbackStore.storeApplications.values());
-      setStoreApplications(freshStoreApps);
+      if (changed('helperApplications', versionOf(fallbackStore.helperApplications))) {
+        const freshApps = Array.from(fallbackStore.helperApplications.values());
+        setApplications((prev) => {
+          if (prev.length > 0 && freshApps.length > prev.length) {
+            const diff = freshApps.length - prev.length;
+            setExactActiveHelpers((count) => (count !== null ? count : null));
+          }
+          return freshApps;
+        });
+      }
 
-      const freshWds = Array.from(fallbackStore.withdrawals.values());
-      setWithdrawals((prev) => {
-        if (prev.length > 0 && freshWds.length > prev.length) {
-          const diff = freshWds.length - prev.length;
-          setExactWithdrawalsCount((count) => (count !== null ? count + diff : null));
-        }
-        return freshWds;
-      });
+      if (changed('storeApplications', versionOf(fallbackStore.storeApplications))) {
+        const freshStoreApps = Array.from(fallbackStore.storeApplications.values());
+        setStoreApplications(freshStoreApps);
+      }
 
-      const freshUsers = Array.from(fallbackStore.users.values());
-      setUsers((prev) => {
-        if (prev.length > 0 && freshUsers.length > prev.length) {
-          const diff = freshUsers.length - prev.length;
-          setExactCustomerAccounts((count) => (count !== null ? count + diff : null));
-        }
-        return freshUsers;
-      });
+      if (changed('withdrawals', versionOf(fallbackStore.withdrawals))) {
+        const freshWds = Array.from(fallbackStore.withdrawals.values());
+        setWithdrawals((prev) => {
+          if (prev.length > 0 && freshWds.length > prev.length) {
+            const diff = freshWds.length - prev.length;
+            setExactWithdrawalsCount((count) => (count !== null ? count + diff : null));
+          }
+          return freshWds;
+        });
+      }
 
-      const freshShops = Array.from(fallbackStore.shops.values());
-      setShops((prev) => {
-        if (prev.length > 0 && freshShops.length > prev.length) {
-          const diff = freshShops.length - prev.length;
-          setExactShopsCount((count) => (count !== null ? count + diff : null));
-        }
-        return freshShops;
-      });
+      if (changed('users', versionOf(fallbackStore.users))) {
+        const freshUsers = Array.from(fallbackStore.users.values());
+        setUsers((prev) => {
+          if (prev.length > 0 && freshUsers.length > prev.length) {
+            const diff = freshUsers.length - prev.length;
+            setExactCustomerAccounts((count) => (count !== null ? count + diff : null));
+          }
+          return freshUsers;
+        });
+      }
 
-      const freshShopOrders = Array.from(fallbackStore.shopOrders.values());
-      setShopOrders(freshShopOrders);
+      if (changed('shops', versionOf(fallbackStore.shops))) {
+        const freshShops = Array.from(fallbackStore.shops.values());
+        setShops((prev) => {
+          if (prev.length > 0 && freshShops.length > prev.length) {
+            const diff = freshShops.length - prev.length;
+            setExactShopsCount((count) => (count !== null ? count + diff : null));
+          }
+          return freshShops;
+        });
+      }
 
-      const freshFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
-      setFeedbacks((prev) => {
-        if (prev.length > 0 && freshFeedbacks.length > prev.length) {
-          const diff = freshFeedbacks.length - prev.length;
-          setExactFeedbacksCount((count) => (count !== null ? count + diff : null));
-        }
-        return freshFeedbacks;
-      });
+      if (changed('shopOrders', versionOf(fallbackStore.shopOrders))) {
+        const freshShopOrders = Array.from(fallbackStore.shopOrders.values());
+        setShopOrders(freshShopOrders);
+      }
 
-      setCustomModals(Array.from(fallbackStore.customModals.values()));
+      if (changed('orderFeedbacks', versionOf(fallbackStore.orderFeedbacks))) {
+        const freshFeedbacks = Array.from(fallbackStore.orderFeedbacks.values());
+        setFeedbacks((prev) => {
+          if (prev.length > 0 && freshFeedbacks.length > prev.length) {
+            const diff = freshFeedbacks.length - prev.length;
+            setExactFeedbacksCount((count) => (count !== null ? count + diff : null));
+          }
+          return freshFeedbacks;
+        });
+      }
+
+      if (changed('customModals', versionOf(fallbackStore.customModals))) {
+        setCustomModals(Array.from(fallbackStore.customModals.values()));
+      }
+
+      if (changed('feeSuggestions', versionOf(fallbackStore.feeSuggestions))) {
+        setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
+      }
+
+      // Settings are replaced as a whole object whenever they change. Re-seeding
+      // the form fields only then also stops a stray snapshot from wiping
+      // whatever the admin is typing into them.
+      if (!changed('pricingSettings', fallbackStore.pricingSettings)) return;
       const settings = { ...fallbackStore.pricingSettings };
       setPricing(settings);
       setPlaceholdersText((settings.inputPlaceholders || []).join('\n'));
@@ -735,7 +778,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setFeeCalculatorMaxLimit(settings.feeCalculatorMaxLimit ?? 70);
       setFeeCalculatorMaxLimitMessage(settings.feeCalculatorMaxLimitMessage || '');
       setFeeCalculatorCompanyDetails(settings.feeCalculatorCompanyDetails || '');
-      setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
     };
 
     if (currentUser?.uid) {
@@ -750,33 +792,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Search input state is held locally; search queries are applied when user clicks the Search button or presses Enter
 
-  // Server-side fetching effects - fetches full orders list when on ORDERS, USERS_LIST, or HELPERS tabs
-  useEffect(() => {
-    const fetchOrders = async () => {
-      if (activeTab !== 'ORDERS' && activeTab !== 'USERS_LIST' && activeTab !== 'HELPERS') return;
-      // Always fetch all orders from server to support full pagination & filtering
-      if (serverOrders !== null) return; // already fetched
-
-      setIsFetchingServer(true);
-      try {
-        const fetched = await fallbackStore.getAllOrders();
-        setServerOrders(fetched);
-        setAllOrders(fetched);
-      } catch (err) {
-        console.error('Error fetching server orders:', err);
-      } finally {
-        setIsFetchingServer(false);
-      }
-    };
-
-    fetchOrders();
-  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Re-fetch when filters change so fresh data is loaded
+  // Orders come from the store: live queries first, the full history in the
+  // background (fallbackStore.loadAdminOrderHistory). A search for an exact
+  // order id is also looked up on the server, so it is found straight away
+  // even while that history is still loading.
   useEffect(() => {
     if (activeTab !== 'ORDERS') return;
-    setServerOrders(null); // reset to trigger re-fetch
-  }, [activeTab, ordersAppliedSearchQuery, statusFilter, ordersStartDate, ordersEndDate]);
+    const q = ordersAppliedSearchQuery.trim().replace(/^#/, '');
+    if (!/^[A-Za-z0-9_-]{3,40}$/.test(q) || fallbackStore.orders.has(q)) return;
+    fallbackStore.getOrderFromServer(q).catch(() => { });
+  }, [activeTab, ordersAppliedSearchQuery]);
 
   useEffect(() => {
     if (activeTab === 'STORE_ORDERS') {
@@ -913,43 +938,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setAllOrders(orders);
   }, [orders]);
 
-  // Initial mount: load overall database datasets for cumulative accurate top stats & counts
-  useEffect(() => {
-    const fetchOverallAdminData = async () => {
-      try {
-        const [
-          fetchedOrders,
-          fetchedUsers,
-          fetchedApps,
-          fetchedWds,
-          fetchedShops,
-          fetchedFeedbacks,
-          fetchedModals,
-        ] = await Promise.all([
-          fallbackStore.getAllOrders(),
-          fallbackStore.getAllUsers(),
-          fallbackStore.getAllHelperApplications(),
-          fallbackStore.getAllWithdrawals(),
-          fallbackStore.getAllShops(),
-          fallbackStore.getAllOrderFeedbacks(),
-          fallbackStore.getAllCustomModals(),
-        ]);
-        setAllOrders(fetchedOrders);
-        setServerOrders(fetchedOrders);
-        setUsers(fetchedUsers);
-        setApplications(fetchedApps);
-        setWithdrawals(fetchedWds);
-        setShops(fetchedShops);
-        setFeedbacks(fetchedFeedbacks);
-        setCustomModals(fetchedModals);
-      } catch (err) {
-        console.error('Error fetching overall admin data:', err);
-      }
-    };
-
-    fetchOverallAdminData();
-  }, []);
-
   // On-demand refresh — called by the Refresh button or automatically after admin actions.
   // Subset targets a specific collection; omitting it refreshes all non-realtime collections.
   const handleAdminRefresh = async (
@@ -1074,29 +1062,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     fetchServerAvgAcceptanceTime();
   }, []);
 
+  // "Delayed" depends on the clock, not just the data. These queues used to be
+  // recomputed on every render, which kept that current by accident; now that
+  // they are memoised, a once-a-minute tick does it on purpose.
+  const [minuteTick, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setMinuteTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // Needs Attention Queue calculations — computed from overall allOrders dataset for complete accuracy across DB
-  const cancellingRequests = allOrders.filter(
-    (o) =>
-      o.cancellationRequest && o.cancellationRequest.status === 'PENDING'
-  );
+  const { cancellingRequests, notAcceptedRequests, feeAdjustmentsPending, delayedOrders } = useMemo(() => {
+    const now = Date.now();
+    const cancelling: Order[] = [];
+    const notAccepted: Order[] = [];
+    const feeAdjustments: Order[] = [];
+    const delayed: Order[] = [];
+    allOrders.forEach((o) => {
+      if (o.cancellationRequest && o.cancellationRequest.status === 'PENDING') cancelling.push(o);
+      if (o.status === 'PENDING' && !o.helperId && o.cancellationRequest?.status !== 'APPROVED') notAccepted.push(o);
+      if (o.feeAdjustment && o.feeAdjustment.status === 'PENDING') feeAdjustments.push(o);
+      if (
+        o.status !== 'DELIVERED' &&
+        o.status !== 'CANCELED' &&
+        !o.mutuallyDiscussed &&
+        now - new Date(o.createdAt).getTime() >= 3600000
+      ) {
+        delayed.push(o);
+      }
+    });
+    return {
+      cancellingRequests: cancelling,
+      notAcceptedRequests: notAccepted,
+      feeAdjustmentsPending: feeAdjustments,
+      delayedOrders: delayed,
+    };
+  }, [allOrders, minuteTick]);
 
-  const notAcceptedRequests = allOrders.filter(
-    (o) => o.status === 'PENDING' && !o.helperId && o.cancellationRequest?.status !== 'APPROVED'
-  );
-  const feeAdjustmentsPending = allOrders.filter(
-    (o) => o.feeAdjustment && o.feeAdjustment.status === 'PENDING'
-  );
-  const pendingApps = applications.filter((a) => a.status === 'PENDING');
-  const pendingWds = withdrawals.filter((w) => w.status === 'PENDING');
-  const pendingStoreApps = storeApplications.filter((a) => a.status === 'PENDING');
-
-  const delayedOrders = allOrders.filter(
-    (o) =>
-      o.status !== 'DELIVERED' &&
-      o.status !== 'CANCELED' &&
-      !o.mutuallyDiscussed &&
-      (new Date().getTime() - new Date(o.createdAt).getTime() >= 3600000)
-  );
+  const pendingApps = useMemo(() => applications.filter((a) => a.status === 'PENDING'), [applications]);
+  const pendingWds = useMemo(() => withdrawals.filter((w) => w.status === 'PENDING'), [withdrawals]);
+  const pendingStoreApps = useMemo(() => storeApplications.filter((a) => a.status === 'PENDING'), [storeApplications]);
 
   const pendingRewardClaims = Array.from(fallbackStore.rewardClaims.values()).filter(
     (c) => c.status === 'PENDING'
@@ -2355,7 +2360,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span className="text-3xl font-extrabold text-gray-900">
               {totalHoursOfWork} <span className="text-lg font-bold text-gray-600">hrs</span>
             </span>
-            <span className="text-xs text-teal-700 font-semibold">sum of durations</span>
+            <span className="text-xs text-teal-700 font-semibold">{orderHistoryLoading ? 'calculating…' : 'sum of durations'}</span>
           </div>
         </div>
 
@@ -3808,6 +3813,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
       })()}
 
+      {/* Reports and the helper/user tables total every order ever placed;
+          until the background history load finishes they cover recent ones. */}
+      {orderHistoryLoading && (['REVENUE', 'GROWTH', 'HELPERS', 'USERS_LIST'] as string[]).includes(activeTab) && (
+        <div className="px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold flex items-center gap-2">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+          Loading full order history — totals below will update when it finishes.
+        </div>
+      )}
+
       {/* --- TAB 2: ALL ORDERS TAB --- */}
       {activeTab === 'ORDERS' && isTabAllowed('ORDERS') && (() => {
         // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
@@ -3826,6 +3840,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div>
                 <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
                 <p className="text-xs text-gray-500">Select multiple orders to batch delete or manage</p>
+                {orderHistoryLoading && (
+                  <p className="text-xs text-amber-700 font-semibold flex items-center gap-1 mt-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Loading older orders… recent orders are shown below.
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3 flex-wrap">
                 {selectedOrderIds.length > 0 && (
