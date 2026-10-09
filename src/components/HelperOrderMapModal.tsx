@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Map, List, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search, Store, Phone, MessageSquare, ExternalLink, Percent, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Map, List, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search, Store, Phone, MessageSquare, ExternalLink, Percent, ArrowRight, CheckCircle2, Clock } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder, AllowedAreaPolygon } from '@/types';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
@@ -301,6 +301,19 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       .filter((so) => so.shopId && so.shopId !== 'myself')
       .map((so) => so.shopId)
   ), [shopOrders]);
+
+  // Stores whose only request is still waiting to reach the server.
+  const sendingShopIds = useMemo(() => {
+    const delivered = new Set<string>();
+    const sending = new Set<string>();
+    (shopOrders || []).forEach((so) => {
+      if (!so.shopId || so.shopId === 'myself') return;
+      if (fallbackStore.isShopOrderUnsent(so.id)) sending.add(so.shopId);
+      else delivered.add(so.shopId);
+    });
+    delivered.forEach((id) => sending.delete(id));
+    return sending;
+  }, [shopOrders]);
 
   const isDone =
     order.status === 'DELIVERED' ||
@@ -882,7 +895,12 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                             )}
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5 truncate">{meta}</p>
-                          {isRequested && (
+                          {isRequested && sendingShopIds.has(shop.id) ? (
+                            <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-semibold text-orange-700 animate-pulse">
+                              <Clock className="w-3 h-3" />
+                              অনুরোধ পাঠানো হচ্ছে…
+                            </span>
+                          ) : isRequested && (
                             <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-semibold text-emerald-700">
                               <CheckCircle2 className="w-3 h-3" />
                               অনুরোধ পাঠানো হয়েছে

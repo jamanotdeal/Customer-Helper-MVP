@@ -550,6 +550,32 @@ const RECONNECT_AFTER_HIDDEN_MS = 10_000;
  */
 const MAX_CACHED_ORDERS = 200;
 
+/**
+ * Shop orders (a helper's request to a store) not yet confirmed by the server.
+ * Kept in their own small key, written synchronously, so a request survives
+ * the app being frozen or killed right after Send — see addShopOrder.
+ */
+const SHOP_ORDER_OUTBOX_KEY = 'jamanot_shop_order_outbox';
+
+/** How long Send waits for the server before telling the helper it is queued. */
+const SHOP_ORDER_SEND_WAIT_MS = 15_000;
+
+/** Errors a retry cannot fix; anything else is kept in the outbox and retried. */
+const PERMANENT_WRITE_ERRORS = ['invalid-argument', 'permission-denied', 'failed-precondition', 'out-of-range'];
+
+/** An error whose message is meant for the helper, in Bangla. */
+export class ShopOrderError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
 let lastMapVersion = 0;
 
 /**
@@ -759,12 +785,17 @@ class FallbackStore {
   private _allUsersPromise: Promise<void> | null = null;
   // Orders being re-read after leaving one of the admin's live queries.
   private _recheckingOrders: Set<string> = new Set();
+  // Shop orders saved on this device whose write the server has not confirmed,
+  // and the sends currently in flight (see addShopOrder).
+  private _shopOrderOutbox: Map<string, ShopOrder> = new Map();
+  private _shopOrderSends: Map<string, Promise<void>> = new Map();
   // Always-on pricing listener — started immediately so unauthenticated users
   // (e.g. in-app browser visitors) always see the latest admin settings.
   private _unsubPricingListener: (() => void) | null = null;
 
   constructor() {
     this.loadFromLocalStorage();
+    this._loadShopOrderOutbox();
     // The notification sets are hydrated lazily instead — they are keyed by uid,
     // which isn't known until AuthContext sets currentUserId.
     // NOTE: Role-scoped Firestore listeners are NOT started here.
@@ -821,6 +852,8 @@ class FallbackStore {
       const hiddenFor = this._hiddenSince === null ? 0 : Date.now() - this._hiddenSince;
       this._hiddenSince = null;
       if (hiddenFor >= RECONNECT_AFTER_HIDDEN_MS) this.reconnectAfterBackground();
+      // A store request sent just before the app was frozen is still waiting.
+      this.retryShopOrderOutbox();
     });
 
     window.addEventListener('pagehide', () => this.flushLocalStoreSave());
@@ -1636,6 +1669,10 @@ class FallbackStore {
       this.walletTransactions.clear();
     }
     this._dataOwnerUid = userId;
+
+    // Store requests left unsent by a previous session (app killed or frozen
+    // before the server confirmed them) go out now.
+    this.retryShopOrderOutbox();
 
     const unsubs: (() => void)[] = [];
 
@@ -3947,29 +3984,124 @@ class FallbackStore {
     this.updateShopOrder(id, (so) => ({ ...so, viewedByStore: true }), 'store');
   }
 
-  public async addShopOrder(shopOrder: ShopOrder): Promise<void> {
-    const shop = this.shops.get(shopOrder.shopId);
-    if (shop?.isBlocked) {
-      throw new Error('এই স্টোরটি বর্তমানে সাময়িকভাবে স্থগিত রয়েছে।');
-    }
+  /**
+   * Sends a helper's request to a store. Resolves 'sent' once the server has
+   * it, or 'queued' if the network is too slow to confirm within
+   * SHOP_ORDER_SEND_WAIT_MS — the request then stays in the outbox and is sent
+   * as soon as the connection allows, including after a restart. Rejects with
+   * a ShopOrderError when the store can't take it, or with the write error.
+   *
+   * This used to show the request as sent the moment Send was pressed and only
+   * then write it. When that write never finished (a slow network, or the app
+   * frozen in the background while the helper phoned the store) the request was
+   * lost, yet the helper's phone kept showing it as sent, even across restarts,
+   * since it sat in the local cache. Hence "sometimes the request doesn't go".
+   *
+   * Calling this again with the same id (Send pressed again after an error) is
+   * safe: it is the same request, never a second one.
+   */
+  public async addShopOrder(shopOrder: ShopOrder): Promise<'sent' | 'queued'> {
+    if (shopOrder.shopId !== 'myself') await this._checkShopAcceptsOrders(shopOrder.shopId);
+
+    const isRetry = this._shopOrderOutbox.has(shopOrder.id);
     this.shopOrders.set(shopOrder.id, shopOrder);
+    this._shopOrderOutbox.set(shopOrder.id, shopOrder);
+    this._saveShopOrderOutbox();
     this.notify();
 
+    const sending = this._sendShopOrder(shopOrder, isRetry);
     try {
-      await setDoc(doc(db, 'shopOrders', shopOrder.id), cleanForFirestore(shopOrder));
+      await withTimeout(sending, SHOP_ORDER_SEND_WAIT_MS);
+      return 'sent';
     } catch (e: any) {
-      this.shopOrders.delete(shopOrder.id);
-      this.notify();
-      console.error('[Firestore] addShopOrder failed to persist to Firestore:', e?.message || e);
+      if (e?.message === 'timeout') return 'queued'; // still sending in the background
       throw e;
     }
+  }
 
-    // Notify the store owner if this shop belongs to one
+  /** True while a shop order is saved on this device but not yet on the server. */
+  public isShopOrderUnsent(shopOrderId: string): boolean {
+    return this._shopOrderOutbox.has(shopOrderId);
+  }
+
+  /**
+   * Checks the store against the server before a request goes to it: the
+   * helper's list of stores is cached for up to 30 minutes, and a store
+   * deleted or blocked since then would take the request and never see it.
+   * Offline, the cached copy decides.
+   */
+  private async _checkShopAcceptsOrders(shopId: string) {
+    let shop = this.shops.get(shopId);
+    try {
+      const snap = await withTimeout(getDocFromServer(doc(db, 'shops', shopId)), 5000);
+      if (!snap.exists()) {
+        this.shops.delete(shopId);
+        this.notify();
+        throw new ShopOrderError('এই দোকানটি আর পাওয়া যাচ্ছে না। অনুগ্রহ করে অন্য দোকান নির্বাচন করুন।');
+      }
+      shop = { ...(snap.data() as Shop), id: shopId };
+      this.shops.set(shopId, shop);
+    } catch (e) {
+      if (e instanceof ShopOrderError) throw e;
+      // Offline or slow: go on with the cached store.
+    }
+    if (shop?.isBlocked) {
+      throw new ShopOrderError('এই স্টোরটি বর্তমানে সাময়িকভাবে স্থগিত রয়েছে।');
+    }
+  }
+
+  /**
+   * Writes one outbox entry and, once the server has it, alerts the store.
+   * Concurrent calls for the same request share one send. A retry checks the
+   * server first: an earlier attempt may have landed without this device
+   * hearing back, and the store may already have accepted it, which writing
+   * the original again would undo.
+   */
+  private _sendShopOrder(shopOrder: ShopOrder, isRetry: boolean): Promise<void> {
+    const inFlight = this._shopOrderSends.get(shopOrder.id);
+    if (inFlight) return inFlight;
+
+    const send = (async () => {
+      const ref = doc(db, 'shopOrders', shopOrder.id);
+      try {
+        const alreadyThere = isRetry ? (await getDocFromServer(ref)).exists() : false;
+        if (!alreadyThere) await setDoc(ref, cleanForFirestore(shopOrder));
+      } catch (e: any) {
+        console.error('[Firestore] shop order send failed:', e?.code || '', e?.message || e);
+        if (PERMANENT_WRITE_ERRORS.includes(e?.code)) {
+          // Retrying cannot fix it; don't leave a request that will never arrive.
+          this._shopOrderOutbox.delete(shopOrder.id);
+          this._saveShopOrderOutbox();
+          this.shopOrders.delete(shopOrder.id);
+          this.notify();
+        }
+        throw e;
+      }
+
+      this._shopOrderOutbox.delete(shopOrder.id);
+      this._saveShopOrderOutbox();
+      this.notify();
+      await this._alertStoreOfShopOrder(shopOrder);
+    })().finally(() => {
+      this._shopOrderSends.delete(shopOrder.id);
+    });
+
+    this._shopOrderSends.set(shopOrder.id, send);
+    return send;
+  }
+
+  /**
+   * Tells the store owner about a new request. Runs only after the server has
+   * confirmed the request, so a retried request was never alerted before. The
+   * id is still pinned to the request's createdAt, not the time of sending, so
+   * a repeat would overwrite the same document instead of pushing again.
+   */
+  private async _alertStoreOfShopOrder(shopOrder: ShopOrder) {
     try {
       const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
       if (ownerUserId) {
         await this.addNotification({
-          id: coalescedNotifId('shop-order', shopOrder.id),
+          id: coalescedNotifId('shop-order', shopOrder.id, Date.parse(shopOrder.createdAt) || Date.now()),
           userId: ownerUserId,
           title: `নতুন অর্ডার: ${shopOrder.helperName}`,
           body: `হেলপার অর্ডার করেছেন: ${shopOrder.requestText.substring(0, 80)}`,
@@ -3983,6 +4115,37 @@ class FallbackStore {
     } catch (notifErr: any) {
       console.warn('[Firestore] Broadcast shop order notification note:', notifErr?.message || notifErr);
     }
+  }
+
+  /**
+   * Sends whatever is still in the outbox. Runs when listeners start, when the
+   * app returns to the foreground and when the device comes back online.
+   */
+  public retryShopOrderOutbox() {
+    if (typeof window === 'undefined') return;
+    this._shopOrderOutbox.forEach((so) => {
+      this._sendShopOrder(so, true).catch(() => { /* stays in the outbox */ });
+    });
+  }
+
+  private _loadShopOrderOutbox() {
+    if (typeof window === 'undefined') return;
+    window.addEventListener('online', () => this.retryShopOrderOutbox());
+    const saved = this.safeParse<ShopOrder[]>(SHOP_ORDER_OUTBOX_KEY);
+    if (!Array.isArray(saved)) return;
+    saved.forEach((so) => {
+      if (!so?.id) return;
+      this._shopOrderOutbox.set(so.id, so);
+      this.shopOrders.set(so.id, so);
+    });
+  }
+
+  private _saveShopOrderOutbox() {
+    if (typeof window === 'undefined') return;
+    try {
+      if (this._shopOrderOutbox.size === 0) localStorage.removeItem(SHOP_ORDER_OUTBOX_KEY);
+      else localStorage.setItem(SHOP_ORDER_OUTBOX_KEY, JSON.stringify(Array.from(this._shopOrderOutbox.values())));
+    } catch (_) { }
   }
 
   public async updateShopOrder(
@@ -4274,7 +4437,21 @@ class FallbackStore {
         await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
       }
 
-      if (snap.size > 0) {
+      // A request held on this device that the server doesn't have, and that
+      // isn't waiting in the outbox, was never delivered (or was deleted since).
+      // Keeping it showed the helper a store as "requested" that never got the
+      // request, so it goes, and the helper can send it again.
+      let evicted = false;
+      if (!snap.metadata.fromCache) {
+        const onServer = new Set(snap.docs.map((d) => d.id));
+        this.getShopOrdersForOrder(parentOrderId).forEach((so) => {
+          if (onServer.has(so.id) || this._shopOrderOutbox.has(so.id) || this._shopOrderSends.has(so.id)) return;
+          this.shopOrders.delete(so.id);
+          evicted = true;
+        });
+      }
+
+      if (snap.size > 0 || evicted) {
         this.notify();
       }
       return fetched.length > 0 ? fetched : this.getShopOrdersForOrder(parentOrderId);

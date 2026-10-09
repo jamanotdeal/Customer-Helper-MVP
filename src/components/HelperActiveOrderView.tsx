@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderStatus, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, ShopOrderError } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown } from 'lucide-react';
@@ -289,6 +289,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [orderText, setOrderText] = useState('');
   const [orderTextError, setOrderTextError] = useState('');
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  // One id per request being drafted. Pressing Send again after an error then
+  // retries the same request instead of creating a second one, which matters
+  // because the first attempt may still reach the store on its own.
+  const shopOrderDraftIdRef = useRef<string | null>(null);
+  const customCostDraftIdRef = useRef<string | null>(null);
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>(() =>
     fallbackStore.getShopOrdersForOrder(order.id)
   );
@@ -493,6 +498,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const openCustomCostModal = () => {
+    customCostDraftIdRef.current = null; // a fresh entry, not a retry
     setCustomCostItems(getInitialSelectedItemList());
     setCustomSellerName('');
     setCustomSellerPhone('');
@@ -510,8 +516,26 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setShowAddCustomShopItem(false);
     setStoreInstructionNote('');
     setOrderTextError('');
+    shopOrderDraftIdRef.current = `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     setPlaceOrderShop(shop);
   };
+
+  // Tells the helper how a store request went; the request itself is never
+  // lost — see fallbackStore.addShopOrder.
+  const reportShopOrderResult = (result: 'sent' | 'queued') => {
+    if (result === 'queued') {
+      showAlert(
+        'অনুরোধ পাঠানো হচ্ছে',
+        'ইন্টারনেট সংযোগ ধীর, তাই অনুরোধটি এখনো দোকানে পৌঁছায়নি। সংযোগ পেলেই এটি স্বয়ংক্রিয়ভাবে পাঠানো হবে।',
+        'warning'
+      );
+    }
+  };
+
+  const shopOrderErrorText = (err: unknown) =>
+    err instanceof ShopOrderError
+      ? err.message
+      : 'অনুরোধটি পাঠানো যায়নি। ইন্টারনেট সংযোগ দেখে আবার "Send Request" চাপুন।';
 
   const handleAddCustomShopItem = () => {
     if (!customShopItemName.trim()) return;
@@ -970,7 +994,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         : 'Helper sent request with product cost';
 
       const newShopOrder: ShopOrder = {
-        id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: shopOrderDraftIdRef.current || `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         parentOrderId: order.id,
         shopId: placeOrderShop.id,
         shopName: placeOrderShop.name,
@@ -989,7 +1013,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         updatedAt: new Date().toISOString(),
         statusHistory: [{ status: initialStatus, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper', note: statusNote }],
       };
-      await fallbackStore.addShopOrder(newShopOrder);
+      shopOrderDraftIdRef.current = newShopOrder.id;
+      const result = await fallbackStore.addShopOrder(newShopOrder);
 
       // Ensure all selected items remain permanently checked/purchased in order
       const relatedItemIds = checkedItems.filter(i => !i.isNote).map(i => i.originalId);
@@ -1000,10 +1025,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         }));
       }
 
+      shopOrderDraftIdRef.current = null;
       setPlaceOrderShop(null);
       setShopOrderItems([]);
       setStoreInstructionNote('');
       setOrderTextError('');
+      reportShopOrderResult(result);
+    } catch (err) {
+      // Used to fall through silently: no message, and the helper assumed the
+      // request had gone. The modal stays open so Send can be pressed again.
+      setOrderTextError(shopOrderErrorText(err));
     } finally {
       setIsSubmittingOrder(false);
     }
@@ -2215,6 +2246,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             </span>
                           ) : (
                             <div className="flex flex-col items-end gap-0.5 shrink-0">
+                              {/* Saved on this phone but not yet confirmed by the server: the store can't see it yet. */}
+                              {fallbackStore.isShopOrderUnsent(so.id) && (
+                                <span className="text-[9px] font-black px-2 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-250 animate-pulse">
+                                  পাঠানো হচ্ছে…
+                                </span>
+                              )}
                               <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${so.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
                                   so.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
                                     so.status === 'PREPARING' ? 'bg-purple-100 text-purple-800 border-purple-250' :
@@ -3994,8 +4031,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     .map((i) => i.name)
                     .join(', ');
 
+                  if (!customCostDraftIdRef.current) {
+                    customCostDraftIdRef.current = `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+                  }
                   const newShopOrder: ShopOrder = {
-                    id: `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                    id: customCostDraftIdRef.current,
                     parentOrderId: order.id,
                     shopId: 'myself',
                     shopName: 'MySelf',
@@ -4014,7 +4054,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     updatedAt: new Date().toISOString(),
                     statusHistory: [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
                   };
-                  await fallbackStore.addShopOrder(newShopOrder);
+                  const result = await fallbackStore.addShopOrder(newShopOrder);
 
                   // Ensure all checked items remain permanently checked/purchased in order
                   const relatedItemIds = checkedItems.filter((i) => !i.isNote).map((i) => i.originalId);
@@ -4025,10 +4065,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     }));
                   }
 
+                  customCostDraftIdRef.current = null;
                   setShowCustomCostModal(false);
                   setCustomCostItems([]);
                   setCustomSellerName('');
                   setCustomSellerPhone('');
+                  reportShopOrderResult(result);
+                } catch (err) {
+                  showAlert('খরচ যুক্ত করা যায়নি', shopOrderErrorText(err), 'error');
                 } finally {
                   setIsSubmittingCustomCost(false);
                 }
