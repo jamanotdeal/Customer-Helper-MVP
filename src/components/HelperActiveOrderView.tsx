@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
+import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderStatus, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
@@ -70,68 +70,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [earnedAmount, setEarnedAmount] = useState(0);
 
-  // Helper Due Payment state
-  const [showHelperDueModal, setShowHelperDueModal] = useState(false);
-  const [helperDueAmountInput, setHelperDueAmountInput] = useState('');
-  const [helperDueNoteInput, setHelperDueNoteInput] = useState('');
-
-  const openHelperDueModal = () => {
-    if (order.duePayment) {
-      setHelperDueAmountInput(order.duePayment.amount.toString());
-      setHelperDueNoteInput(order.duePayment.note || '');
-    } else {
-      setHelperDueAmountInput('');
-      setHelperDueNoteInput('');
-    }
-    setShowHelperDueModal(true);
-  };
-
-  const handleSaveHelperDue = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(helperDueAmountInput);
-    if (isNaN(amount) || amount <= 0) {
-      showAlert('সঠিক টাকা পরিমাণ লিখুন', 'অনুগ্রহ করে বাকি টাকার সঠিক পরিমাণ লিখুন।', 'warning');
-      return;
-    }
-    if (!helperDueNoteInput.trim()) {
-      showAlert('নোট প্রয়োজন', 'অনুগ্রহ করে কাস্টমারের জন্য বাকি পেমেন্টের কারণ লিখুন।', 'warning');
-      return;
-    }
-
-    await fallbackStore.updateOrder(order.id, (prev) => ({
-      ...prev,
-      duePayment: {
-        amount,
-        note: helperDueNoteInput.trim(),
-        addedBy: 'helper',
-        addedByName: user?.displayName || 'Helper',
-        addedAt: prev.duePayment?.addedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        status: prev.duePayment?.status || 'UNPAID',
-      },
-    }));
-
-    setShowHelperDueModal(false);
-    showAlert('সংরক্ষণ সম্পন্ন', 'বাকি পেমেন্ট সংরক্ষণ করা হয়েছে। এটি কাস্টমারের পরবর্তী অর্ডারে যোগ হবে।', 'success');
-  };
-
-  const handleRemoveHelperDue = async () => {
-    const confirmed = await showConfirm(
-      'ডিলিট নিশ্চিতকরণ',
-      'আপনি কি নিশ্চিতভাবে এই বাকি পেমেন্ট রেকর্ডটি মুছে ফেলতে চান?',
-      'হ্যাঁ, মুছে ফেলুন',
-      'বাতিল'
-    );
-    if (!confirmed) return;
-
-    await fallbackStore.updateOrder(order.id, (prev) => {
-      const copy = { ...prev };
-      delete copy.duePayment;
-      return copy;
-    });
-
-    setShowHelperDueModal(false);
-  };
 
   // Delivery confirmation modal
   const [showDeliveryConfirmModal, setShowDeliveryConfirmModal] = useState(false);
@@ -561,6 +499,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const openPlaceShopOrder = (shop: Shop) => {
+    if (shop.isBlocked) {
+      showAlert('দোকান সাময়িকভাবে স্থগিত', 'এই দোকানটি বর্তমানে স্থগিত রয়েছে। অনুগ্রহ করে অন্য দোকান নির্বাচন করুন।', 'error');
+      return;
+    }
     setShopOrderItems(getInitialSelectedItemList());
     setCustomShopItemName('');
     setCustomShopItemPrice('');
@@ -772,10 +714,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   }, [shopOrders, order.id, order.productCost]);
 
   const selectedShopIds = order.selectedShopIds || [];
-  const selectedShops = Array.from(fallbackStore.shops.values()).filter((s) => selectedShopIds.includes(s.id));
+  const selectedShops = Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked && selectedShopIds.includes(s.id));
 
-  // Filter and sort nearby shops
-  const allShops = Array.from(fallbackStore.shops.values());
+  // Filter and sort nearby shops (excluding blocked shops)
+  const allShops = Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked);
   const maxDistance = fallbackStore.pricingSettings.helperRadiusKm ?? 3.5;
 
   const nearbyShops = allShops.filter((shop) => {
@@ -1020,7 +962,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         .map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`)
         .join(', ');
 
-      const helperNote = storeInstructionNote.trim() || undefined;
+      const isReceiveDisabled = placeOrderShop.canReceiveOrders === false;
+      const initialStatus: ShopOrderStatus = isReceiveDisabled ? 'ACCEPTED' : 'PENDING';
+      const statusNote = isReceiveDisabled
+        ? 'Order cost auto-approved (Receive Order disabled for store)'
+        : 'Helper sent request with product cost';
 
       const newShopOrder: ShopOrder = {
         id: `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1030,8 +976,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         helperId: order.helperId || '',
         helperName: order.helperName || 'Helper',
         requestText: itemsListText,
-        helperNote: helperNote,
-        status: 'PENDING',
+        helperNote: storeInstructionNote.trim() || undefined,
+        status: initialStatus,
         price: calculatedTotal,
         itemsWithPrice: checkedItems.map((i) => ({
           name: i.name,
@@ -1040,7 +986,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         })),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper', note: 'Helper sent request with product cost' }],
+        statusHistory: [{ status: initialStatus, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper', note: statusNote }],
       };
       await fallbackStore.addShopOrder(newShopOrder);
 
@@ -1282,7 +1228,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       distanceKm: Math.ceil(distanceKm),
       weightKg: Math.ceil(currentWeight),
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
-      productPrice: 0,
+      productPrice: val,
     }, settings);
     const finalFee = estd.totalFee;
 
@@ -1302,7 +1248,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       distanceKm: Math.ceil(distanceKm),
       weightKg: 0,
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
-      productPrice: 0,
+      productPrice: newCost,
     }, settings);
 
     const perKgRate = settings.feeCalculatorPerKgRate ?? 5;
@@ -1312,7 +1258,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       distanceKm: Math.ceil(distanceKm),
       weightKg: Math.ceil(newWeight),
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
-      productPrice: 0,
+      productPrice: newCost,
     }, settings);
     const finalFee = estd.totalFee;
 
@@ -1979,7 +1925,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </span>
                               <div className="flex items-center gap-1.5 font-mono">
                                 <span className="bg-white/30 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider">
-                                  {connectedShopOrder.status === 'PREPARING' ? 'Processing' : connectedShopOrder.status}
+                                  {connectedShopOrder.status === 'PREPARING' ? 'Processing' : connectedShopOrder.status === 'ACCEPTED' ? 'Approved' : connectedShopOrder.status}
                                 </span>
                                 {itemPrice !== undefined && (
                                   <span className="font-extrabold bg-white/20 px-2 py-0.5 rounded">৳{itemPrice}</span>
@@ -2282,7 +2228,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                             so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
                                               'bg-gray-100 text-gray-700 border-gray-250'
                                 }`}>
-                                {so.status === 'PREPARING' ? 'Processing' : so.status}
+                                {so.status === 'PREPARING' ? 'Processing' : so.status === 'ACCEPTED' ? 'Approved' : so.status}
                               </span>
                               {so.price !== undefined && (
                                 <span className="text-lg sm:text-xl font-black text-emerald-950 font-mono">
@@ -2412,19 +2358,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       </button>
                     )}
                   </div>
-                  <div className="pt-1 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowMapModal(true)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
-                    >
-                      <Map className="w-3.5 h-3.5" />
-                      <span>Road and Shops</span>
-                    </button>
+                  <div className="pt-1">
                     <button
                       type="button"
                       onClick={handleOpenGoogleMapsDirection}
-                      className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 shrink-0 cursor-pointer"
+                      className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
                       title="Google Map Direction"
                     >
                       <Navigation className="w-3.5 h-3.5" />
@@ -2500,10 +2438,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </div>
                   </div>
 
-                  {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
+                  {(((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) || (order.processingFee || 0) > 0) && (
                     <div className="flex items-center justify-between">
                       <span className="text-gray-500 font-bold">Processing Fee</span>
-                      <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.processingFee}</span>
+                      <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.processingFee || order.processingFee || 0}</span>
                     </div>
                   )}
 
@@ -2566,7 +2504,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
                     <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
                     <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
-                      ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 ? estdPricing.processingFee : 0) + (order.appliedDuePayment?.amount || 0)}
+                      ৳{shopOrders.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price || 0), 0) + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0)}
                     </span>
                   </div>
 
@@ -2598,52 +2536,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
 
-              {/* 7. DUE PAYMENT MANAGEMENT (Helper) */}
-              {(isAcceptedByThisHelper || isDone) && (
-                <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3 animate-in fade-in">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
-                        <DollarSign className="w-4 h-4" />
-                      </div>
-                      <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={openHelperDueModal}
-                      className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1 cursor-pointer"
-                    >
-                      <FileEdit className="w-3.5 h-3.5" />
-                      <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
-                    </button>
-                  </div>
-
-                  {order.duePayment ? (
-                    <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5 text-xs">
-                      <div className="flex items-center justify-between font-bold">
-                        <span className="text-purple-900">বাকি পরিমাণ:</span>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
-                          <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
-                            {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
-                          </span>
-                        </div>
-                      </div>
-                      {order.duePayment.note && (
-                        <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
-                          <strong>নোট:</strong> {order.duePayment.note}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-2xl bg-gray-50 border border-dashed border-gray-200 text-center">
-                      <p className="text-xs text-gray-500 font-semibold">
-                        কোনো বাকি পেমেন্ট যোগ করা নেই
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}
               <div className="pt-2 border-t border-gray-100 space-y-1.5 animate-in fade-in">
@@ -3304,33 +3196,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               <Sparkles className="w-8 h-8" />
             </div>
 
-            {(() => {
-              const baseFeeForHelper = order.isFreeDelivery ? Math.max(order.originalDeliveryFee || 0, estdPricing.minFee) : Math.max(order.deliveryFee || 0, estdPricing.minFee);
-              const netEarned = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
-
-              return (
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="text-xl font-black text-gray-900">
-                      Congratulations! 🎉
-                    </h3>
-                    <p className="text-xs text-gray-500 font-bold mt-0.5">Order Completed</p>
-                  </div>
-
-                  <div className="bg-emerald-50 py-3.5 px-4 rounded-2xl border border-emerald-200/80">
-                    <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                      You Earned
-                    </span>
-                    <span className="text-3xl font-black text-emerald-600 tracking-tight block my-0.5">
-                      ৳{netEarned}
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100/70 px-2.5 py-0.5 rounded-full mt-1">
-                      <Wallet className="w-3.5 h-3.5" /> Added to Wallet
-                    </span>
-                  </div>
-                </div>
-              );
-            })()}
+            <div>
+              <h3 className="text-xl font-black text-gray-900">
+                Congratulations! 🎉
+              </h3>
+              <p className="text-xs text-gray-500 font-bold mt-0.5">Order Completed</p>
+            </div>
 
             <button
               onClick={() => {
@@ -3390,9 +3261,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           order={order}
           helperLocation={helperLocation}
           onAccept={order.status === 'PENDING' ? onAccept : undefined}
-          shops={Array.from(fallbackStore.shops.values())}
+          shops={Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked)}
           shopOrders={shopOrders}
           onSelectShop={(shop) => {
+            if (shop.isBlocked) {
+              showAlert('দোকান সাময়িকভাবে স্থগিত', 'এই দোকানটি বর্তমানে স্থগিত রয়েছে। অনুগ্রহ করে অন্য দোকান নির্বাচন করুন।', 'error');
+              return;
+            }
             if (isDone) {
               showAlert('অর্ডার সম্পন্ন/বাতিল', 'এই অর্ডারটি ইতিমধ্যে সম্পন্ন/বাতিল হয়ে গেছে। এখান থেকে নতুন দোকানে অর্ডার পাঠানোর সুবিধা বন্ধ রয়েছে।', 'warning');
               return;
@@ -3621,6 +3496,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
 
 
+              <div>
+                <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                  দোকানের জন্য বিশেষ নোট / নির্দেশনা (ঐচ্ছিক)
+                </label>
+                <textarea
+                  value={storeInstructionNote}
+                  onChange={(e) => setStoreInstructionNote(e.target.value)}
+                  placeholder="যেমন: ১ কেজি ওজনের দুটি প্যাকেট দিন..."
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl focus:border-purple-500 outline-none text-gray-800 resize-none h-14"
+                />
+              </div>
+
               {orderTextError && (
                 <p className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded-xl border border-red-100">
                   {orderTextError}
@@ -3640,7 +3527,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   disabled={isSubmittingOrder || shopOrderItems.filter((i) => i.isChecked).length === 0}
                   className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:bg-gray-200 disabled:opacity-50"
                 >
-                  {isSubmittingOrder ? 'পাঠানো হচ্ছে...' : 'Send Request'}
+                  {isSubmittingOrder
+                    ? 'সংরক্ষণ হচ্ছে...'
+                    : (placeOrderShop.canReceiveOrders === false ? 'Add Cost (খরচ যুক্ত করুন)' : 'Send Request')}
                 </button>
               </div>
             </form>
@@ -3696,7 +3585,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                     viewRequestDetails.status === 'CANCELED' || (viewRequestDetails.status as string) === 'CANCELLED' ? 'bg-rose-100 text-rose-800 border-rose-250' :
                                       'bg-gray-100 text-gray-700 border-gray-250'
                         }`}>
-                        {viewRequestDetails.status === 'PREPARING' ? 'Processing' : viewRequestDetails.status}
+                        {viewRequestDetails.status === 'PREPARING' ? 'Processing' : viewRequestDetails.status === 'ACCEPTED' ? 'Approved' : viewRequestDetails.status}
                       </span>
                     )}
                   </div>
@@ -4293,89 +4182,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             setRetailerDetailsShop(null);
           }}
         />
-      )}
-      {/* Helper: Manage Due Payment Modal */}
-      {showHelperDueModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-gray-100 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b pb-3">
-              <div className="flex items-center space-x-2">
-                <DollarSign className="w-5 h-5 text-purple-600" />
-                <h3 className="font-extrabold text-base text-gray-900">
-                  {order.duePayment ? 'বাকি পেমেন্ট এডিট করুন' : 'নতুন বাকি পেমেন্ট যোগ করুন'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowHelperDueModal(false)}
-                className="p-1 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveHelperDue} className="space-y-4">
-              <div>
-                <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  বাকি টাকার পরিমাণ (৳) *
-                </label>
-                <input
-                  type="number"
-                  value={helperDueAmountInput}
-                  onChange={(e) => setHelperDueAmountInput(e.target.value)}
-                  placeholder="যেমন: ৫০"
-                  min="1"
-                  step="any"
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-bold text-gray-900"
-                  required
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  নোট / কারণ *
-                </label>
-                <textarea
-                  value={helperDueNoteInput}
-                  onChange={(e) => setHelperDueNoteInput(e.target.value)}
-                  placeholder="যেমন: দোকানে ৫০ টাকা বাকি ছিলো..."
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-20"
-                  required
-                />
-              </div>
-
-              <p className="text-[11px] text-gray-400">
-                * পরবর্তী অর্ডারে স্বয়ংক্রিয়ভাবে যোগ হবে।
-              </p>
-
-              <div className="flex items-center space-x-3 pt-2">
-                {order.duePayment && (
-                  <button
-                    type="button"
-                    onClick={handleRemoveHelperDue}
-                    className="px-4 py-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs transition-all flex items-center space-x-1"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>ডিলিট</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowHelperDueModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-extrabold text-xs transition-all active:scale-95"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95"
-                >
-                  সংরক্ষণ করুন
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
       )}
     </div>
   );

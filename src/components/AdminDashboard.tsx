@@ -175,10 +175,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Single-box format: "ServiceName = placeholder text" (one per line)
   const [serviceHintsText, setServiceHintsText] = useState<string>('');
   const [eduEmailDomainsText, setEduEmailDomainsText] = useState<string>('@diu.edu.bd');
-  const [dedicatedDelayMins, setDedicatedDelayMins] = useState<number>(7);
+  const [dedicatedDelayMins, setDedicatedDelayMins] = useState<number | string>(7);
   const [receiverRule, setReceiverRule] = useState<'commuter_first' | 'dedicated_first' | 'both_simultaneous'>('commuter_first');
   const [allowedHelperTypes, setAllowedHelperTypes] = useState<'dedicated_only' | 'commuters_only' | 'both'>('both');
-  const [helperRadiusKm, setHelperRadiusKm] = useState<number>(3.5);
+  const [helperRadiusKm, setHelperRadiusKm] = useState<number | string>(3.5);
   const [mapLocationPref, setMapLocationPref] = useState<'BD' | 'GLOBAL' | 'CUSTOM'>('BD');
   const [customCountryCode, setCustomCountryCode] = useState<string>('bd');
 
@@ -1420,10 +1420,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       services: parsedServices.length > 0 ? parsedServices : undefined,
       serviceDescriptionHints: Object.keys(cleanedHints).length > 0 ? cleanedHints : undefined,
       eduEmailDomains: parsedEduDomains.length > 0 ? parsedEduDomains : ['@diu.edu.bd'],
-      dedicatedHelperDelayMinutes: Number(dedicatedDelayMins) || 7,
+      dedicatedHelperDelayMinutes: dedicatedDelayMins !== '' && !isNaN(Number(dedicatedDelayMins)) ? Number(dedicatedDelayMins) : 7,
       orderReceiverRule: receiverRule,
       allowedHelperTypes: allowedHelperTypes,
-      helperRadiusKm: Number(helperRadiusKm) || 3.5,
+      helperRadiusKm: helperRadiusKm !== '' && !isNaN(Number(helperRadiusKm)) ? Number(helperRadiusKm) : 3.5,
       mapLocationPreference: mapLocationPref,
       customCountryCode: customCountryCode.trim().toLowerCase() || 'bd',
       allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
@@ -1490,15 +1490,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       googleAnalyticsId: googleAnalyticsId.trim() || undefined,
       microsoftClarityId: microsoftClarityId.trim() || undefined,
       // Fee Calculator settings
-      feeCalculatorBasePrice: Number(feeCalculatorBasePrice) || 20,
-      feeCalculatorPerKmRate: Number(feeCalculatorPerKmRate) || 10,
-      feeCalculatorPerKgRate: Number(feeCalculatorPerKgRate) || 5,
-      feeCalculatorReturnFee: Number(feeCalculatorReturnFee) || 15,
-      feeCalculatorReturnPercent: feeCalculatorReturnPercent !== '' ? Number(feeCalculatorReturnPercent) : 0,
-      feeCalculatorProcessingFee: feeCalculatorProcessingFee !== '' ? Number(feeCalculatorProcessingFee) : 0,
+      feeCalculatorBasePrice: feeCalculatorBasePrice !== '' && !isNaN(Number(feeCalculatorBasePrice)) ? Number(feeCalculatorBasePrice) : 20,
+      feeCalculatorPerKmRate: feeCalculatorPerKmRate !== '' && !isNaN(Number(feeCalculatorPerKmRate)) ? Number(feeCalculatorPerKmRate) : 10,
+      feeCalculatorPerKgRate: feeCalculatorPerKgRate !== '' && !isNaN(Number(feeCalculatorPerKgRate)) ? Number(feeCalculatorPerKgRate) : 5,
+      feeCalculatorReturnFee: feeCalculatorReturnFee !== '' && !isNaN(Number(feeCalculatorReturnFee)) ? Number(feeCalculatorReturnFee) : 15,
+      feeCalculatorReturnPercent: feeCalculatorReturnPercent !== '' && !isNaN(Number(feeCalculatorReturnPercent)) ? Number(feeCalculatorReturnPercent) : 0,
+      feeCalculatorProcessingFee: feeCalculatorProcessingFee !== '' && !isNaN(Number(feeCalculatorProcessingFee)) ? Number(feeCalculatorProcessingFee) : 0,
       feeCalculatorProcessingFeeType,
-      feeCalculatorMinFee: Number(feeCalculatorMinFee) || 25,
-      feeCalculatorMaxLimit: feeCalculatorMaxLimit !== '' ? Number(feeCalculatorMaxLimit) : 70,
+      feeCalculatorMinFee: feeCalculatorMinFee !== '' && !isNaN(Number(feeCalculatorMinFee)) ? Number(feeCalculatorMinFee) : 25,
+      feeCalculatorMaxLimit: feeCalculatorMaxLimit !== '' && !isNaN(Number(feeCalculatorMaxLimit)) ? Number(feeCalculatorMaxLimit) : 70,
       feeCalculatorMaxLimitMessage: feeCalculatorMaxLimitMessage.trim() || undefined,
       feeCalculatorCompanyDetails: feeCalculatorCompanyDetails.trim() || undefined,
       allowedAdminTabs: allowedAdminTabs,
@@ -6085,8 +6085,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="text-xs font-bold text-gray-700 block mb-1">Rate per KM (প্রতি কিমি চার্জ ৳):</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0"
                   value={feeCalculatorPerKmRate}
-                  onChange={(e) => setFeeCalculatorPerKmRate(Number(e.target.value))}
+                  onChange={(e) => setFeeCalculatorPerKmRate(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                 />
               </div>
@@ -6095,8 +6097,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="text-xs font-bold text-gray-700 block mb-1">Rate per KG Weight (ওজন চার্জ ৳):</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0"
                   value={feeCalculatorPerKgRate}
-                  onChange={(e) => setFeeCalculatorPerKgRate(Number(e.target.value))}
+                  onChange={(e) => setFeeCalculatorPerKgRate(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                 />
               </div>
@@ -6105,9 +6109,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="text-xs font-bold text-gray-700 block mb-1">Return Charge (% ডেলিভারি ফি-এর শতাংশ):</label>
                 <input
                   type="number"
+                  step="any"
                   min="0"
                   value={feeCalculatorReturnPercent}
-                  onChange={(e) => setFeeCalculatorReturnPercent(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setFeeCalculatorReturnPercent(e.target.value === '' ? '' : e.target.value)}
                   placeholder="খালি রাখলে অপশনটি হাইড হবে"
                   className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                 />
@@ -6118,9 +6123,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="flex gap-2">
                   <input
                     type="number"
+                    step="any"
                     min="0"
                     value={feeCalculatorProcessingFee}
-                    onChange={(e) => setFeeCalculatorProcessingFee(e.target.value === '' ? '' : Number(e.target.value))}
+                    onChange={(e) => setFeeCalculatorProcessingFee(e.target.value === '' ? '' : e.target.value)}
                     placeholder="খালি রাখলে ইনপুটটি হাইড হবে"
                     className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                   />
@@ -6139,8 +6145,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="text-xs font-bold text-gray-700 block mb-1">Minimum Fee (সর্বনিম্ন ফি ৳):</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0"
                   value={feeCalculatorMinFee}
-                  onChange={(e) => setFeeCalculatorMinFee(Number(e.target.value))}
+                  onChange={(e) => setFeeCalculatorMinFee(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                 />
               </div>
@@ -6149,9 +6157,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="text-xs font-bold text-gray-700 block mb-1">Delivery Fee Alert Limit (সর্বোচ্চ ফি লিমিট ৳):</label>
                 <input
                   type="number"
+                  step="any"
                   min="0"
                   value={feeCalculatorMaxLimit}
-                  onChange={(e) => setFeeCalculatorMaxLimit(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setFeeCalculatorMaxLimit(e.target.value === '' ? '' : e.target.value)}
                   placeholder="e.g. 70"
                   className="w-full p-3 rounded-xl border border-gray-200 text-xs font-extrabold outline-none focus:border-emerald-600"
                 />
@@ -6401,11 +6410,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </label>
                 <input
                   type="number"
-                  step="0.5"
-                  min={0.5}
+                  step="any"
+                  min={0}
                   max={50}
                   value={helperRadiusKm}
-                  onChange={(e) => setHelperRadiusKm(Number(e.target.value))}
+                  onChange={(e) => setHelperRadiusKm(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
                 />
                 <p className="text-[10px] text-gray-500 mt-1">
@@ -6419,10 +6428,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </label>
                 <input
                   type="number"
-                  min={1}
+                  step="any"
+                  min={0}
                   max={60}
                   value={dedicatedDelayMins}
-                  onChange={(e) => setDedicatedDelayMins(Number(e.target.value))}
+                  onChange={(e) => setDedicatedDelayMins(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
                 />
                 <p className="text-[10px] text-gray-500 mt-1">
@@ -6436,11 +6446,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </label>
                 <input
                   type="number"
+                  step="any"
                   min={0}
                   max={60}
                   value={pricing.adminAcceptedDelayMinutes ?? 5}
                   onChange={(e) =>
-                    setPricing({ ...pricing, adminAcceptedDelayMinutes: Number(e.target.value) })
+                    setPricing({ ...pricing, adminAcceptedDelayMinutes: e.target.value === '' ? ('' as any) : Number(e.target.value) })
                   }
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
                 />
@@ -7823,7 +7834,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   )}
                                 </td>
                                 <td className="py-4 px-4">
-                                  {app.commissionPercent > 0 ? (
+                                  {app.commissionPercent !== undefined && app.commissionPercent !== null ? (
                                     <span className="font-extrabold text-emerald-700">{app.commissionPercent}%</span>
                                   ) : <span className="text-gray-400">—</span>}
                                 </td>
@@ -8384,7 +8395,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
                         </td>
                         <td className="py-4 px-4">
-                          {app.commissionPercent > 0 ? (
+                          {app.commissionPercent !== undefined && app.commissionPercent !== null ? (
                             <span className="font-extrabold text-emerald-700">{app.commissionPercent}%</span>
                           ) : <span className="text-gray-400">—</span>}
                         </td>

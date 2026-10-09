@@ -250,16 +250,16 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [completedReqHasMore, setCompletedReqHasMore] = useState(true);
 
   const storeId = useMemo(() => {
-    if (user?.storeId) return user.storeId;
+    if (user?.storeId && fallbackStore.shops.has(user.storeId)) return user.storeId;
     const foundShop = Array.from(fallbackStore.shops.values()).find(
-      (s) => s.ownerUserId === user?.uid
+      (s) => s.ownerUserId === user?.uid || (s.assignedUserIds && s.assignedUserIds.includes(user?.uid || ''))
     );
-    return foundShop?.id || undefined;
+    return foundShop?.id || (user?.isStoreApproved ? user?.storeId : undefined);
   }, [user]);
 
   // If user is not an approved store or has no shop, switch back to customer mode
   useEffect(() => {
-    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store' || Boolean(user?.storeId));
+    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store');
     if (user && !isStore) {
       setActiveMode('customer');
     }

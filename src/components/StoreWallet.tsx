@@ -66,11 +66,11 @@ export const StoreWallet: React.FC = () => {
   const [breakdownSearch, setBreakdownSearch] = useState('');
 
   const storeId = useMemo(() => {
-    if (user?.storeId) return user.storeId;
+    if (user?.storeId && fallbackStore.shops.has(user.storeId)) return user.storeId;
     const foundShop = Array.from(fallbackStore.shops.values()).find(
-      (s) => s.ownerUserId === user?.uid || s.id === `store-${user?.uid}`
+      (s) => s.ownerUserId === user?.uid || (s.assignedUserIds && s.assignedUserIds.includes(user?.uid || '')) || s.id === `store-${user?.uid}`
     );
-    return foundShop?.id || (user?.uid ? `store-${user.uid}` : undefined);
+    return foundShop?.id || (user?.isStoreApproved ? user?.storeId : undefined);
   }, [user]);
 
   const shopDoc = useMemo(() => {
@@ -79,7 +79,7 @@ export const StoreWallet: React.FC = () => {
       return fallbackStore.shops.get(storeId) || null;
     }
     return Array.from(fallbackStore.shops.values()).find(
-      (s) => (storeId && s.id === storeId) || (user?.uid && s.ownerUserId === user.uid) || (user?.uid && s.id === `store-${user.uid}`)
+      (s) => (storeId && s.id === storeId) || (user?.uid && s.ownerUserId === user.uid) || (user?.uid && s.assignedUserIds?.includes(user.uid)) || (user?.uid && s.id === `store-${user.uid}`)
     ) || null;
   }, [storeId, user]);
 
@@ -94,12 +94,6 @@ export const StoreWallet: React.FC = () => {
     return 0;
   }, [shopDoc, user]);
 
-  // Date Range Filtering State (Default: ALL_TIME)
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
-  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
-
   // Local YYYY-MM-DD Helper
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {
     const year = d.getFullYear();
@@ -109,6 +103,12 @@ export const StoreWallet: React.FC = () => {
   };
 
   const getTodayStr = () => getLocalYYYYMMDD(new Date());
+
+  // Date Range Filtering State (Default: TODAY)
+  const [startDate, setStartDate] = useState<string>(() => getTodayStr());
+  const [endDate, setEndDate] = useState<string>(() => getTodayStr());
+  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const getDaysAgoStr = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() - days);

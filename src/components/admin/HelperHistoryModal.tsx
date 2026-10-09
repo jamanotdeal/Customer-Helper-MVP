@@ -397,14 +397,23 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     // 5. Store Orders Placed to Partner Stores
     let storeOrdersCount = 0;
     let storeOrdersGMV = 0;
+    let storeOrdersRealGMV = 0; // Only real partner store purchases (no custom costs)
     dateFilteredOrders.forEach((o) => {
       if (isOrderPlacedToStore(o)) {
         storeOrdersCount++;
         const shopOrders = fallbackStore.getShopOrdersForOrder(o.id);
-        const storeSpent = shopOrders && shopOrders.length > 0
-          ? shopOrders.filter((so) => so.status !== 'CANCELED').reduce((s, so) => s + (so.price || 0), 0)
+        const activeShopOrders = shopOrders && shopOrders.length > 0
+          ? shopOrders.filter((so) => so.status !== 'CANCELED')
+          : [];
+        const storeSpent = activeShopOrders.length > 0
+          ? activeShopOrders.reduce((s, so) => s + (so.price || 0), 0)
           : (o.productCost || 0);
         storeOrdersGMV += storeSpent;
+        // Real partner store = not a 'myself'/custom-cost entry
+        const realShopOrders = activeShopOrders.filter(
+          (so) => so.shopId !== 'myself' && so.shopName !== 'MySelf' && !so.id?.startsWith('so-myself')
+        );
+        storeOrdersRealGMV += realShopOrders.reduce((s, so) => s + (so.price || 0), 0);
       }
     });
 
@@ -435,6 +444,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       storeOrdersCount,
       storeOrdersPercentage,
       storeOrdersGMV,
+      storeOrdersRealGMV,
       deliveredStoreOrdersCount,
       deliveredStoreOrdersPercentage,
     };
@@ -460,6 +470,42 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       }
     });
 
+    // Shop / Store order financials for this helper in the date range
+    let totalStoreOrdersAmount = 0;
+    let returnableStoreAmount = 0;    // Acceptable (registered) stores — full amount returned to company
+    let nonAcceptableStoreCommission = 0; // Non-acceptable stores — commission owed
+
+    filteredDeliveredOrders.forEach((o) => {
+      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
+      shopOrders.forEach((so) => {
+        const price = so.price || 0;
+        if (price <= 0) return;
+        totalStoreOrdersAmount += price;
+
+        const isMyself = so.shopId === 'myself';
+        const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+
+        if (canReceive) {
+          returnableStoreAmount += price;
+        } else {
+          let commissionRate = Number(shop?.commissionPercent);
+          if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
+            const app = Array.from(fallbackStore.storeApplications.values()).find(
+              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+            );
+            commissionRate = Number(app?.commissionPercent) || 0;
+          }
+          if (commissionRate > 0) {
+            nonAcceptableStoreCommission += Math.round(price * (commissionRate / 100));
+          }
+        }
+      });
+    });
+
+    // Total receivable by admin = total delivery collected + returnable store amounts + non-acceptable store commissions
+    const totalAdminReceivable = totalCollected + returnableStoreAmount + nonAcceptableStoreCommission;
+
     return {
       totalCollected,
       totalEarned,
@@ -468,6 +514,10 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       dueCommission: Math.max(0, totalPlatformShare - paidCommission),
       completedCount: filteredDeliveredOrders.length,
       avgDeliveryTimeText: performanceKPIs.avgDeliveryTimeText,
+      totalStoreOrdersAmount,
+      returnableStoreAmount,
+      nonAcceptableStoreCommission,
+      totalAdminReceivable,
     };
   }, [filteredDeliveredOrders, filteredWithdrawals, performanceKPIs.avgDeliveryTimeText]);
 
@@ -744,6 +794,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
 
   // Pagination for Earnings tab
   const [earningsPage, setEarningsPage] = useState(1);
+  const [showStoreOrdersPanel, setShowStoreOrdersPanel] = useState(false);
   const earningsPageSize = 10;
   const totalEarningsPages = Math.ceil(sortedDeliveredOrders.length / earningsPageSize) || 1;
   const paginatedDeliveredOrders = sortedDeliveredOrders.slice(
@@ -1598,32 +1649,17 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
             {/* TAB 2: EARNINGS BREAKDOWN */}
             {activeTab === 'EARNINGS' && (
               <div className="space-y-3">
-                {/* Stats Summary Bar */}
-                <div className="grid grid-cols-2 sm:grid-cols-7 gap-2.5 p-3.5 bg-indigo-50/50 border border-gray-200 rounded-3xl text-center text-xs">
+                {/* Stats Summary Bar — Row 1: Delivery & Earnings */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3.5 pb-2 bg-indigo-50/50 border border-gray-200 rounded-t-3xl text-center text-xs">
                   <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
                     <span className="text-[10px] font-bold text-gray-400 uppercase block">Total Collected</span>
                     <span className="text-lg font-black text-indigo-950">৳{earningsMetrics.totalCollected}</span>
-                    <span className="text-[9px] text-gray-400 block">Charges Before Comm.</span>
+                    <span className="text-[9px] text-gray-400 block">Delivery Charges</span>
                   </div>
                   <div className="p-2.5 bg-white rounded-2xl border border-emerald-200 shadow-xs">
                     <span className="text-[10px] font-bold text-emerald-700 uppercase block">Helper Net Earned</span>
                     <span className="text-lg font-black text-emerald-600">৳{earningsMetrics.totalEarned}</span>
                     <span className="text-[9px] text-emerald-600/70 block">Helper Income</span>
-                  </div>
-                  <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase block">Platform Comm.</span>
-                    <span className="text-lg font-black text-purple-900">৳{earningsMetrics.totalPlatformShare}</span>
-                    <span className="text-[9px] text-gray-400 block">Platform Share</span>
-                  </div>
-                  <div className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs">
-                    <span className="text-[10px] font-bold text-amber-800 uppercase block">Store Orders</span>
-                    <span className="text-lg font-black text-amber-900">{performanceKPIs.deliveredStoreOrdersCount} <span className="text-xs font-bold text-amber-600">({performanceKPIs.deliveredStoreOrdersPercentage}%)</span></span>
-                    <span className="text-[9px] text-amber-700 block">৳{performanceKPIs.storeOrdersGMV} GMV</span>
-                  </div>
-                  <div className="p-2.5 bg-white rounded-2xl border border-gray-200/80 shadow-xs">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase block">Paid Comm.</span>
-                    <span className="text-lg font-black text-blue-600">৳{earningsMetrics.paidCommission}</span>
-                    <span className="text-[9px] text-gray-400 block">Approved Paybacks</span>
                   </div>
                   <div className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs flex flex-col justify-between">
                     <div>
@@ -1650,6 +1686,55 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     <span className="text-[10px] font-bold text-gray-400 uppercase block">Delivered</span>
                     <span className="text-lg font-black text-gray-800">{earningsMetrics.completedCount} jobs</span>
                     <span className="text-[9px] text-gray-400 block">Avg: {earningsMetrics.avgDeliveryTimeText}</span>
+                  </div>
+                </div>
+
+                {/* Stats Summary Bar — Row 2: Store Orders & Admin Receivable */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 px-3.5 pt-0 pb-3.5 bg-indigo-50/50 border border-gray-200 border-t-0 rounded-b-3xl text-center text-xs">
+                  {/* Combined Store Orders block (count + GMV + store amount) */}
+                  <button
+                    type="button"
+                    onClick={() => setShowStoreOrdersPanel(true)}
+                    className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs text-left transition-all cursor-pointer active:scale-95 hover:border-amber-400 hover:bg-amber-50 hover:shadow-md col-span-1"
+                    title="Click to view store orders with item details"
+                  >
+                    <span className="text-[10px] font-bold text-amber-800 uppercase block">Store Orders</span>
+                    <span className="text-base font-black text-amber-900 block leading-tight">
+                      {performanceKPIs.deliveredStoreOrdersCount}
+                      <span className="text-xs font-bold text-amber-600 ml-1">({performanceKPIs.deliveredStoreOrdersPercentage}%)</span>
+                    </span>
+                    <span className="text-[9px] text-amber-700 block mt-0.5">
+                      GMV ৳{performanceKPIs.storeOrdersGMV}
+                      {performanceKPIs.storeOrdersGMV !== performanceKPIs.storeOrdersRealGMV && (
+                        <span className="text-gray-400 ml-1">• Partner ৳{performanceKPIs.storeOrdersRealGMV}</span>
+                      )}
+                    </span>
+                    <span className="text-[9px] text-amber-600/70 block mt-0.5">Tap to view details →</span>
+                  </button>
+
+                  {/* Non-Acceptable Store Commission block */}
+                  <div className="p-2.5 bg-white rounded-2xl border border-orange-200 shadow-xs text-left">
+                    <span className="text-[10px] font-bold text-orange-700 uppercase block">Non-Store Comm.</span>
+                    <span className="text-base font-black text-orange-900 block leading-tight">৳{earningsMetrics.nonAcceptableStoreCommission}</span>
+                    <span className="text-[9px] text-orange-600/80 block mt-0.5">
+                      Commission on ৳{earningsMetrics.totalStoreOrdersAmount - earningsMetrics.returnableStoreAmount} bought from non-partner stores
+                    </span>
+                  </div>
+
+                  {/* Returnable / Acceptable Store Amount */}
+                  <div className="p-2.5 bg-white rounded-2xl border border-purple-200 shadow-xs text-left">
+                    <span className="text-[10px] font-bold text-purple-700 uppercase block">Returnable Amt.</span>
+                    <span className="text-base font-black text-purple-900 block leading-tight">৳{earningsMetrics.returnableStoreAmount}</span>
+                    <span className="text-[9px] text-purple-600/80 block mt-0.5">Full amount from partner/registered stores</span>
+                  </div>
+
+                  {/* Total Admin Receivable / Payable */}
+                  <div className="p-2.5 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl border border-indigo-300 shadow-xs text-left">
+                    <span className="text-[10px] font-bold text-indigo-800 uppercase block">Total Payable Amount</span>
+                    <span className="text-base font-black text-indigo-900 block leading-tight">৳{earningsMetrics.totalAdminReceivable}</span>
+                    <span className="text-[9px] text-indigo-600/80 block mt-0.5">
+                      Delivery collected + returnable + store comm.
+                    </span>
                   </div>
                 </div>
 
@@ -2251,6 +2336,138 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Store Orders Detail Panel */}
+      {showStoreOrdersPanel && (
+        <div className="fixed inset-0 z-[9999] flex justify-end" style={{ background: 'rgba(0,0,0,0.45)' }}>
+          {/* Backdrop */}
+          <div className="absolute inset-0" onClick={() => setShowStoreOrdersPanel(false)} />
+          {/* Panel */}
+          <div className="relative w-full max-w-lg h-full bg-white shadow-2xl flex flex-col overflow-hidden animate-[slideInRight_0.25s_ease-out]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200 shrink-0">
+              <div>
+                <h2 className="font-black text-amber-900 text-base flex items-center gap-2">
+                  <Store className="w-4 h-4 text-amber-600" />
+                  Store Orders
+                </h2>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  {filteredDeliveredOrders.filter(isOrderPlacedToStore).length} store orders • Total ৳{performanceKPIs.storeOrdersGMV}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStoreOrdersPanel(false)}
+                className="p-1.5 rounded-xl hover:bg-amber-100 text-amber-700 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Orders list */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {filteredDeliveredOrders.filter(isOrderPlacedToStore).length === 0 ? (
+                <div className="py-16 text-center text-gray-400 space-y-2">
+                  <Store className="w-10 h-10 mx-auto text-gray-300" />
+                  <p className="font-bold text-gray-500">No store orders in this period.</p>
+                </div>
+              ) : (
+                filteredDeliveredOrders.filter(isOrderPlacedToStore).map((ord) => {
+                  const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id).filter((so) => so.status !== 'CANCELED');
+                  const orderTotal = shopOrders.length > 0
+                    ? shopOrders.reduce((s, so) => s + (so.price || 0), 0)
+                    : (ord.productCost || 0);
+                  const itemsSummary = ord.items && ord.items.length > 0
+                    ? ord.items.map((i) => `${i.name}${i.qty ? ` (${i.qty})` : ''}`).join(', ')
+                    : ord.title || 'Store Request';
+
+                  return (
+                    <div key={ord.id} className="bg-white border border-amber-200 rounded-2xl overflow-hidden shadow-xs">
+                      {/* Order header */}
+                      <div className="flex items-center justify-between px-3.5 py-2.5 bg-amber-50 border-b border-amber-100">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-amber-900 text-xs">#{ord.id}</span>
+                          <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">DELIVERED</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black text-amber-900">৳{orderTotal}</span>
+                          <button
+                            type="button"
+                            onClick={() => { setShowStoreOrdersPanel(false); setSelectedOrderId(ord.id); }}
+                            className="flex items-center gap-0.5 px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 font-extrabold text-[9px] transition-colors cursor-pointer"
+                          >
+                            Details <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Order meta */}
+                      <div className="px-3.5 pt-2.5 pb-1">
+                        <p className="text-xs font-extrabold text-gray-800 line-clamp-1">{itemsSummary}</p>
+                        <p className="text-[10px] text-gray-500">
+                          Customer: <strong className="text-gray-700">{ord.customerName}</strong>
+                          {ord.customerPhone ? ` · ${ord.customerPhone}` : ''}
+                        </p>
+                      </div>
+
+                      {/* Shop orders with items */}
+                      {shopOrders.length > 0 ? (
+                        <div className="px-3.5 pb-3 space-y-2 pt-1">
+                          {shopOrders.map((so) => {
+                            const items = so.itemsWithPrice || [];
+                            const soTotal = so.price || 0;
+                            return (
+                              <div key={so.id} className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+                                {/* Shop name row */}
+                                <div className="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-200">
+                                  <span className="text-[10px] font-black text-gray-700 flex items-center gap-1">
+                                    <Store className="w-2.5 h-2.5 text-amber-600" />
+                                    {so.shopName}
+                                  </span>
+                                  <span className="text-[10px] font-black text-amber-800">৳{soTotal}</span>
+                                </div>
+                                {/* Items */}
+                                {items.length > 0 ? (
+                                  <div className="divide-y divide-gray-100">
+                                    {items.map((item, idx) => (
+                                      <div key={idx} className="flex items-center justify-between px-3 py-1.5">
+                                        <span className="text-[10px] font-semibold text-gray-700">
+                                          {item.name}{item.unit ? <span className="text-gray-400 font-normal ml-1">({item.unit})</span> : null}
+                                        </span>
+                                        <span className="text-[10px] font-black text-gray-900">
+                                          {item.price != null ? `৳${item.price}` : <span className="text-gray-400">—</span>}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="px-3 py-2">
+                                    <p className="text-[10px] text-gray-400 italic">{so.requestText || 'No item details'}</p>
+                                  </div>
+                                )}
+                                {/* Store note */}
+                                {so.note && (
+                                  <div className="px-3 py-1.5 bg-blue-50 border-t border-blue-100">
+                                    <p className="text-[9px] text-blue-700"><span className="font-bold">Note:</span> {so.note}</p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="px-3.5 pb-3 pt-1">
+                          <p className="text-[10px] text-gray-400 italic">৳{ord.productCost || 0} (estimated product cost)</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
