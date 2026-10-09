@@ -110,9 +110,9 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
       setError('অনুগ্রহ করে মানচিত্রে দোকানের সঠিক অবস্থান পিন করুন।');
       return;
     }
-    const commPercent = commissionPercent ? parseFloat(commissionPercent) : 0;
-    if (!commissionPercent || isNaN(commPercent) || commPercent < 2 || commPercent > 100) {
-      setError('প্রতি অর্ডারে কমিশন শতাংশ কমপক্ষে ২% হতে হবে।');
+    const commPercent = commissionPercent !== '' ? parseFloat(commissionPercent) : 0;
+    if (commissionPercent === '' || isNaN(commPercent) || commPercent < 0 || commPercent > 100) {
+      setError('প্রতি অর্ডারে কমিশন শতাংশ ০% থেকে ১০০% এর মধ্যে হতে হবে।');
       return;
     }
 
@@ -347,7 +347,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
               <div className="relative">
                 <input
                   type="number"
-                  min="2"
+                  min="0"
                   max="100"
                   step="0.5"
                   value={commissionPercent}
@@ -358,7 +358,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
                 />
                 <span className="absolute right-4 top-3.5 text-sm font-black text-gray-400">%</span>
               </div>
-              <p className="text-[10px] text-gray-400">সর্বনিম্ন ২% কমিশন প্রয়োজন।</p>
+              <p className="text-[10px] text-gray-400">০% থেকে ১০০% পর্যন্ত কমিশন নির্ধারণ করা যাবে।</p>
             </div>
 
             {/* 6. দোকানে কী কী পণ্য পাওয়া যায় (description) */}

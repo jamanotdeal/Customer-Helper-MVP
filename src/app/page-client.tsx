@@ -65,7 +65,7 @@ export default function PageClient() {
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))
+    user && (user.isStoreApproved || user.role === 'store')
   );
 
   const isHelperUser = Boolean(

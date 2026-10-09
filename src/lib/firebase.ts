@@ -2450,51 +2450,37 @@ class FallbackStore {
 
     // ── Store applications & Direct Shop Assignment & Shop Existence ────────
     try {
-      // 1. Check direct shop assignment (admin assigned shop where ownerUserId === profile.uid)
+      // 1. Check direct shop assignment (admin assigned shop where ownerUserId === profile.uid or assignedUserIds contains profile.uid)
       let assignedShop: Shop | undefined;
       for (const s of Array.from(this.shops.values())) {
-        if (s.ownerUserId === profile.uid || (next.storeId && s.id === next.storeId)) {
+        if (s.ownerUserId === profile.uid || (s.assignedUserIds && s.assignedUserIds.includes(profile.uid))) {
           assignedShop = s;
           break;
         }
       }
 
-      if (!assignedShop) {
+      if (!assignedShop && profile.uid) {
         try {
-          const shopByOwnerSnap = profile.uid ? await getDocs(
+          const shopByOwnerSnap = await getDocs(
             query(collection(db, 'shops'), where('ownerUserId', '==', profile.uid), limit(1))
-          ) : null;
+          );
           if (shopByOwnerSnap && !shopByOwnerSnap.empty) {
             assignedShop = shopByOwnerSnap.docs[0].data() as Shop;
             this.shops.set(assignedShop.id, assignedShop);
-          } else if (next.storeId) {
-            const shopSnap = await getDoc(doc(db, 'shops', next.storeId));
-            if (shopSnap.exists()) {
-              assignedShop = shopSnap.data() as Shop;
+          } else {
+            const shopByAssignedSnap = await getDocs(
+              query(collection(db, 'shops'), where('assignedUserIds', 'array-contains', profile.uid), limit(1))
+            );
+            if (shopByAssignedSnap && !shopByAssignedSnap.empty) {
+              assignedShop = shopByAssignedSnap.docs[0].data() as Shop;
               this.shops.set(assignedShop.id, assignedShop);
             }
           }
         } catch (_) { }
       }
 
-      // 2. Check store applications
-      const snap = await getDocs(
-        query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
-      );
-      const apps: StoreApplication[] = [];
-      snap.forEach((docSnap) => {
-        const a = docSnap.data() as StoreApplication;
-        if (a && a.id) {
-          this.storeApplications.set(a.id, a);
-          apps.push(a);
-        }
-      });
-
-      const approvedApp = apps.some((a) => a.status === 'APPROVED');
-      const hasValidStore = Boolean(assignedShop || (approvedApp && next.storeId && this.shops.has(next.storeId)));
-      const effectiveShopId = assignedShop?.id || next.storeId || `store-${profile.uid}`;
-
-      if (hasValidStore) {
+      if (assignedShop) {
+        const effectiveShopId = assignedShop.id;
         if (!next.isStore || !next.isStoreApproved || next.storeId !== effectiveShopId || next.role !== 'store' || next.lastActiveMode !== 'store') {
           next = {
             ...next,
@@ -2506,14 +2492,21 @@ class FallbackStore {
           };
           changed = true;
         }
-      } else if (next.isStore || next.isStoreApproved || next.storeId || next.role === 'store') {
-        // Shop was deleted or revoked and no valid assignment/application exists — reset to customer
-        apps.forEach((a) => {
-          if (a.status === 'APPROVED') {
-            this.storeApplications.delete(a.id);
-            deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => { });
-          }
-        });
+      } else if (next.isStore || next.isStoreApproved || next.storeId || next.role === 'store' || next.lastActiveMode === 'store') {
+        // Shop was deleted or user was unassigned/removed — clean up store applications and reset user to customer
+        try {
+          const snap = await getDocs(
+            query(collection(db, 'storeApplications'), where('userId', '==', profile.uid), limit(10))
+          );
+          snap.forEach((docSnap) => {
+            const a = docSnap.data() as StoreApplication;
+            if (a && a.id) {
+              this.storeApplications.delete(a.id);
+              deleteDoc(doc(db, 'storeApplications', a.id)).catch(() => { });
+            }
+          });
+        } catch (_) { }
+
         next = {
           ...next,
           isStore: false,
@@ -2523,6 +2516,20 @@ class FallbackStore {
           lastActiveMode: next.lastActiveMode === 'store' ? 'customer' : next.lastActiveMode,
         };
         changed = true;
+
+        try {
+          await setDoc(
+            doc(db, 'users', profile.uid),
+            {
+              isStore: false,
+              isStoreApproved: false,
+              storeId: null,
+              role: next.role,
+              lastActiveMode: next.lastActiveMode,
+            },
+            { merge: true }
+          );
+        } catch (_) { }
       }
     } catch (e: any) {
       console.warn('[Firestore] syncApprovedRolesForUser store note:', e?.message || e);
@@ -3207,11 +3214,12 @@ class FallbackStore {
       }
     }
 
-    // Product cost addition / update notification to customer
+    // Product cost addition / update notification to customer (suppressed if updated by helper)
     if (
       updated.productCost !== undefined &&
       existing.productCost !== updated.productCost &&
-      updated.customerId
+      updated.customerId &&
+      updated.lastEditedBy !== 'helper'
     ) {
       this.addNotification({
         id: coalescedNotifId('cost', updated.id),
@@ -3226,12 +3234,12 @@ class FallbackStore {
       });
     }
 
-    // Delivery fee update notification to customer & helper
+    // Delivery fee update notification to customer & helper (customer notification suppressed if updated by helper)
     if (
       existing.deliveryFee !== undefined &&
       (existing.deliveryFee !== updated.deliveryFee || existing.originalDeliveryFee !== updated.originalDeliveryFee)
     ) {
-      if (updated.customerId) {
+      if (updated.customerId && updated.lastEditedBy !== 'helper') {
         this.addNotification({
           id: coalescedNotifId('fee-change', updated.id),
           userId: updated.customerId,
@@ -3338,21 +3346,20 @@ class FallbackStore {
       }
     }
 
-    // Helper/Admin items or general info edit notification to customer (Requirement 2)
+    // Admin items or general info edit notification to customer (suppressed if edited by helper)
     if (
-      (updated.lastEditedBy === 'helper' || updated.lastEditedBy === 'admin') &&
+      updated.lastEditedBy === 'admin' &&
       existing.lastEditedAt !== updated.lastEditedAt &&
       updated.customerId &&
       (JSON.stringify(existing.items) !== JSON.stringify(updated.items) ||
         existing.title !== updated.title ||
         existing.additionalNote !== updated.additionalNote)
     ) {
-      const editorName = updated.lastEditedBy === 'helper' ? (updated.helperName || 'হেলপার') : 'এডমিন';
       this.addNotification({
         id: coalescedNotifId('general-edit', updated.id),
         userId: updated.customerId,
         title: 'অর্ডার আপডেট করা হয়েছে (Order Updated)',
-        body: `${editorName} আপনার অর্ডার #${updated.id} এর বিবরণ বা পণ্য তালিকা পরিবর্তন করেছেন।`,
+        body: `এডমিন আপনার অর্ডার #${updated.id} এর বিবরণ বা পণ্য তালিকা পরিবর্তন করেছেন।`,
         orderId: updated.id,
         read: false,
         createdAt: new Date().toISOString(),
@@ -3388,21 +3395,6 @@ class FallbackStore {
           type: 'order_update',
         });
       }
-    }
-
-    // Fee adjustment notification to customer
-    if (updated.feeAdjustment && updated.feeAdjustment.status === 'PENDING' && existing.feeAdjustment?.status !== 'PENDING') {
-      this.addNotification({
-        id: coalescedNotifId('fee-adjust', updated.id),
-        userId: updated.customerId,
-        title: 'ডেলিভারি ফি সমন্বয় অনুরোধ',
-        body: `হেলপার ডেলিভারি ফি সমন্বয়ের অনুরোধ করেছেন।`,
-        orderId: updated.id,
-        read: false,
-        createdAt: new Date().toISOString(),
-        targetRole: 'customer',
-        type: 'fee_adjustment',
-      });
     }
 
     // Helper Wallet Management (Order completion, cancellation reversals, or admin fee adjustments)
@@ -3544,9 +3536,43 @@ class FallbackStore {
     this.notify();
 
     try {
-      await setDoc(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
+      if (db) {
+        if (existing.duePayment && !updated.duePayment) {
+          try {
+            await updateDoc(doc(db, 'orders', orderId), {
+              duePayment: deleteField(),
+            });
+          } catch (_) { }
+        }
+        await setDoc(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
+      }
     } catch (e: any) {
       console.warn('[Firestore] updateOrder note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async removeOrderDuePayment(orderId: string) {
+    let existing = this.orders.get(orderId);
+    if (!existing) {
+      existing = await this.getOrder(orderId);
+    }
+    if (!existing) return;
+
+    const updated: Order = { ...existing };
+    delete updated.duePayment;
+    updated.updatedAt = new Date().toISOString();
+    this.orders.set(orderId, updated);
+    this.notify();
+
+    try {
+      if (db) {
+        await updateDoc(doc(db, 'orders', orderId), {
+          duePayment: deleteField(),
+          updatedAt: updated.updatedAt,
+        });
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] removeOrderDuePayment note:', e?.message || e);
     }
   }
 
@@ -4045,6 +4071,8 @@ class FallbackStore {
     const helperOrders = allOrders.filter(
       (o) => o.helperId === helperId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
     );
+    const helperOrderIds = new Set(helperOrders.map((o) => o.id));
+
     // All approved withdrawals are the single source of truth for paid commission.
     // Manual paybacks recorded by admin also create an APPROVED withdrawal record.
     const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
@@ -4064,8 +4092,50 @@ class FallbackStore {
       totalPlatformShare += (baseFeeForHelper - helperShare);
     });
 
+    // Store Order amounts and commissions calculation
+    let returnableStoreAmount = 0;
+    let nonAcceptableStoreCommission = 0;
+
+    const allShopOrders = Array.from(this.shopOrders.values());
+    const validHelperShopOrders = allShopOrders.filter((so) => {
+      if (so.status === 'CANCELED') return false;
+      if (so.helperId === helperId || (so.parentOrderId && helperOrderIds.has(so.parentOrderId))) {
+        const parentOrder = this.orders.get(so.parentOrderId);
+        return parentOrder ? (parentOrder.status === 'DELIVERED' || (parentOrder.status as string) === 'COMPLETED') : true;
+      }
+      return false;
+    });
+
+    validHelperShopOrders.forEach((so) => {
+      const price = so.price || 0;
+      if (price <= 0) return;
+
+      const isMyself = so.shopId === 'myself';
+      const shop = !isMyself ? this.shops.get(so.shopId) : null;
+      const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+
+      if (canReceive) {
+        // Registered order-acceptable store: full store order amount is returnable to company
+        returnableStoreAmount += price;
+      } else {
+        // Non-order-acceptable store: commission on store order is added to amount owed to company
+        let commissionRate = Number(shop?.commissionPercent);
+        if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
+          const app = Array.from(this.storeApplications.values()).find(
+            (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+          );
+          commissionRate = Number(app?.commissionPercent) || 0;
+        }
+        if (commissionRate > 0) {
+          const comm = Math.round(price * (commissionRate / 100));
+          nonAcceptableStoreCommission += comm;
+        }
+      }
+    });
+
+    const totalPayableToCompany = totalPlatformShare + returnableStoreAmount + nonAcceptableStoreCommission;
     const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const balance = Math.max(0, totalPlatformShare - totalPaidCommission);
+    const balance = Math.max(0, totalPayableToCompany - totalPaidCommission);
 
     return {
       userId: helperId,
@@ -5104,6 +5174,11 @@ class FallbackStore {
 
   public async savePricingSettings(settings: PricingSettings) {
     this.pricingSettings = settings;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
+      }
+    } catch {}
     this.notify();
     try {
       await setDoc(doc(db, 'settings', 'pricing'), cleanForFirestore(settings), { merge: true });

@@ -507,7 +507,7 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   const selectedHelperActiveOrders = selectedHelper
     ? orders.filter((o) => o.helperId === selectedHelper.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED')
     : [];
-  const selectedHelperWallet = selectedHelper ? fallbackStore.wallets.get(selectedHelper.uid) : null;
+  const selectedHelperWallet = selectedHelper ? fallbackStore.getHelperWallet(selectedHelper.uid) : null;
 
   return (
     <div

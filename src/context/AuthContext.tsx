@@ -330,7 +330,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(profile.email)) {
       setActiveModeState('admin');
       saveActiveMode('admin');
-    } else if (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId)) {
+    } else if (profile.isStoreApproved || profile.role === 'store') {
       // Approved stores are always locked into store mode
       setActiveModeState('store');
       saveActiveMode('store');
@@ -370,7 +370,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!prevUser) return null;
         const updatedUser = fallbackStore.users.get(prevUser.uid);
         if (!updatedUser) return prevUser;
-        const isStillStore = Boolean(updatedUser.isStoreApproved || updatedUser.role === 'store' || Boolean(updatedUser.storeId));
+
+        const isStillStore = Boolean(updatedUser.isStoreApproved || updatedUser.role === 'store');
         const currentSavedMode = getSavedActiveMode();
         if ((currentSavedMode === 'store' || activeMode === 'store') && !isStillStore) {
           const nextMode = updatedUser.role === 'helper' || updatedUser.isHelper ? 'helper' : 'customer';
@@ -443,7 +444,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 3. Initialize role-scoped Firestore listeners
       const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
         ? 'admin'
-        : (profile.isStoreApproved || profile.role === 'store' || Boolean(profile.storeId))
+        : (profile.isStoreApproved || profile.role === 'store')
         ? 'store'
         : (profile.isHelper || profile.role === 'helper')
         ? 'helper'
@@ -549,7 +550,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Guard against lingering store mode if user permissions were revoked
   useEffect(() => {
     if (!user) return;
-    const isStore = Boolean(user.isStoreApproved || user.role === 'store' || Boolean(user.storeId));
+    const isStore = Boolean(user.isStoreApproved || user.role === 'store');
     if (activeMode === 'store' && !isStore) {
       const nextMode = user.role === 'helper' || user.isHelper ? 'helper' : 'customer';
       setActiveModeState(nextMode);
@@ -631,7 +632,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     // Approved stores are locked into store mode
-    if (user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))) {
+    if (user && (user.isStoreApproved || user.role === 'store')) {
       setActiveModeState('store');
       saveActiveMode('store');
       return;

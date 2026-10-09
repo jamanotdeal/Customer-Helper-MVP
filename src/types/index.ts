@@ -109,6 +109,7 @@ export interface Order {
   originalDeliveryFee: number;
   feeAdjustment?: FeeAdjustment;
   productCost?: number;
+  processingFee?: number;
   
   helperId?: string;
   helperName?: string;
