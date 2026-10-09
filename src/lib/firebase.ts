@@ -23,7 +23,10 @@ import {
   writeBatch,
   increment,
   deleteField,
+  documentId,
+  startAfter,
 } from 'firebase/firestore';
+import type { Query, QuerySnapshot, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import {
   getMessaging,
   getToken,
@@ -412,23 +415,133 @@ function getSharedAudioCtx(): AudioContext | null {
   }
 }
 
+/**
+ * Most recent orders kept in the localStorage cache. The cache only has to make
+ * a cold start look warm; the listeners refill everything else within a second.
+ * Writing every order this device had ever seen made each save and each launch
+ * slower as an account's history grew.
+ */
+const MAX_CACHED_ORDERS = 200;
+
+let lastMapVersion = 0;
+
+/**
+ * A Map that records when it last changed. Every subscriber is woken by every
+ * notify(), so without this a notification or wallet snapshot made each screen
+ * re-copy and re-render its whole order list. Comparing versions lets them skip
+ * the work when their collection is untouched.
+ *
+ * Versions come from one counter shared by every map, so a replacement map is
+ * always newer than the one it replaced.
+ */
+class VersionedMap<K, V> extends Map<K, V> {
+  // Assigned in the methods rather than initialised here: Map's constructor
+  // calls set() before subclass fields exist.
+  version?: number;
+
+  set(key: K, value: V): this {
+    super.set(key, value);
+    this.version = ++lastMapVersion;
+    return this;
+  }
+
+  delete(key: K): boolean {
+    const removed = super.delete(key);
+    if (removed) this.version = ++lastMapVersion;
+    return removed;
+  }
+
+  clear(): void {
+    if (this.size > 0) this.version = ++lastMapVersion;
+    super.clear();
+  }
+
+  static adopt<K, V>(source: Map<K, V>): VersionedMap<K, V> {
+    const m = source instanceof VersionedMap ? source : new VersionedMap<K, V>(source);
+    m.version = ++lastMapVersion;
+    return m;
+  }
+}
+
+/** Change version of a store collection; changes whenever its contents do. */
+export function versionOf(map: Map<unknown, unknown>): number {
+  return (map as VersionedMap<unknown, unknown>).version ?? 0;
+}
+
+/**
+ * For store subscribers: returns a check that is true on the first call and
+ * afterwards only when one of the values passed differs from the previous call.
+ * Pass versionOf(...) for collections and the object itself for pricingSettings.
+ */
+export function createChangeGate() {
+  let last: unknown[] | null = null;
+  return (...current: unknown[]): boolean => {
+    const prev = last;
+    if (prev && prev.length === current.length && current.every((v, i) => v === prev[i])) return false;
+    last = current;
+    return true;
+  };
+}
+
 class FallbackStore {
   private listeners: Set<Listener> = new Set();
 
-  public users: Map<string, UserProfile> = new Map();
-  public orders: Map<string, Order> = new Map();
-  public helperApplications: Map<string, HelperApplication> = new Map();
-  public storeApplications: Map<string, StoreApplication> = new Map();
-  public wallets: Map<string, Wallet> = new Map();
-  public walletTransactions: Map<string, WalletTransaction[]> = new Map();
-  public withdrawals: Map<string, WithdrawalRequest> = new Map();
+  // Each collection sits behind an accessor so that code assigning a whole new
+  // Map (the admin fetchers do) still gets a VersionedMap.
+  private _users = new VersionedMap<string, UserProfile>();
+  public get users(): Map<string, UserProfile> { return this._users; }
+  public set users(m: Map<string, UserProfile>) { this._users = VersionedMap.adopt(m); }
+
+  private _orders = new VersionedMap<string, Order>();
+  public get orders(): Map<string, Order> { return this._orders; }
+  public set orders(m: Map<string, Order>) { this._orders = VersionedMap.adopt(m); }
+
+  private _helperApplications = new VersionedMap<string, HelperApplication>();
+  public get helperApplications(): Map<string, HelperApplication> { return this._helperApplications; }
+  public set helperApplications(m: Map<string, HelperApplication>) { this._helperApplications = VersionedMap.adopt(m); }
+
+  private _storeApplications = new VersionedMap<string, StoreApplication>();
+  public get storeApplications(): Map<string, StoreApplication> { return this._storeApplications; }
+  public set storeApplications(m: Map<string, StoreApplication>) { this._storeApplications = VersionedMap.adopt(m); }
+
+  private _wallets = new VersionedMap<string, Wallet>();
+  public get wallets(): Map<string, Wallet> { return this._wallets; }
+  public set wallets(m: Map<string, Wallet>) { this._wallets = VersionedMap.adopt(m); }
+
+  private _walletTransactions = new VersionedMap<string, WalletTransaction[]>();
+  public get walletTransactions(): Map<string, WalletTransaction[]> { return this._walletTransactions; }
+  public set walletTransactions(m: Map<string, WalletTransaction[]>) { this._walletTransactions = VersionedMap.adopt(m); }
+
+  private _withdrawals = new VersionedMap<string, WithdrawalRequest>();
+  public get withdrawals(): Map<string, WithdrawalRequest> { return this._withdrawals; }
+  public set withdrawals(m: Map<string, WithdrawalRequest>) { this._withdrawals = VersionedMap.adopt(m); }
+
   public notifications: Map<string, AppNotification[]> = new Map();
-  public adminNotificationsHistory: Map<string, AppNotification> = new Map();
-  public shops: Map<string, Shop> = new Map();
-  public shopOrders: Map<string, ShopOrder> = new Map();
-  public orderFeedbacks: Map<string, OrderFeedback> = new Map();
-  public customModals: Map<string, AdminCustomModalConfig> = new Map();
-  public feeSuggestions: Map<string, FeeSuggestion> = new Map();
+
+  private _adminNotificationsHistory = new VersionedMap<string, AppNotification>();
+  public get adminNotificationsHistory(): Map<string, AppNotification> { return this._adminNotificationsHistory; }
+  public set adminNotificationsHistory(m: Map<string, AppNotification>) { this._adminNotificationsHistory = VersionedMap.adopt(m); }
+
+  private _shops = new VersionedMap<string, Shop>();
+  public get shops(): Map<string, Shop> { return this._shops; }
+  public set shops(m: Map<string, Shop>) { this._shops = VersionedMap.adopt(m); }
+
+  private _shopOrders = new VersionedMap<string, ShopOrder>();
+  public get shopOrders(): Map<string, ShopOrder> { return this._shopOrders; }
+  public set shopOrders(m: Map<string, ShopOrder>) { this._shopOrders = VersionedMap.adopt(m); }
+
+  private _orderFeedbacks = new VersionedMap<string, OrderFeedback>();
+  public get orderFeedbacks(): Map<string, OrderFeedback> { return this._orderFeedbacks; }
+  public set orderFeedbacks(m: Map<string, OrderFeedback>) { this._orderFeedbacks = VersionedMap.adopt(m); }
+
+  private _customModals = new VersionedMap<string, AdminCustomModalConfig>();
+  public get customModals(): Map<string, AdminCustomModalConfig> { return this._customModals; }
+  public set customModals(m: Map<string, AdminCustomModalConfig>) { this._customModals = VersionedMap.adopt(m); }
+
+  private _feeSuggestions = new VersionedMap<string, FeeSuggestion>();
+  public get feeSuggestions(): Map<string, FeeSuggestion> { return this._feeSuggestions; }
+  public set feeSuggestions(m: Map<string, FeeSuggestion>) { this._feeSuggestions = VersionedMap.adopt(m); }
+
   public scheduledNotifications: Map<string, AppNotification> = new Map();
   public rewardPrizes: Map<string, RewardPrize> = new Map();
   public rewardClaims: Map<string, RewardClaim> = new Map();
@@ -458,6 +571,18 @@ class FallbackStore {
   private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
   private _addressesCachedAt = 0; // epoch ms when serverAddresses were last fetched
   private _listenersRole: string | null = null; // e.g. 'helper:uid123'
+  // uid the per-account collections currently belong to. Unlike _listenersRole
+  // it survives teardown, so a different account signing in can be detected.
+  private _dataOwnerUid: string | null = null;
+  // Admin: the background read of every order, and of every user (see
+  // loadAdminOrderHistory / getAllUsers). Kept for the session so switching
+  // tabs or re-running a search does not download the collection again.
+  private _orderHistoryPromise: Promise<void> | null = null;
+  public adminOrderHistoryLoading = false;
+  public adminOrderHistoryLoaded = false;
+  private _allUsersPromise: Promise<void> | null = null;
+  // Orders being re-read after leaving one of the admin's live queries.
+  private _recheckingOrders: Set<string> = new Set();
   // Always-on pricing listener — started immediately so unauthenticated users
   // (e.g. in-app browser visitors) always see the latest admin settings.
   private _unsubPricingListener: (() => void) | null = null;
@@ -580,7 +705,7 @@ class FallbackStore {
         } catch (_) { }
       }
       this.notify();
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
     }
   }
 
@@ -626,9 +751,12 @@ class FallbackStore {
   private loadFromLocalStorage() {
     if (typeof window === 'undefined') return;
     try {
+      this._dataOwnerUid = localStorage.getItem('jamanot_cache_owner') || null;
+
       const parsedOrders = this.safeParse<[string, Order][]>('jamanot_orders_store');
       if (parsedOrders && Array.isArray(parsedOrders)) {
-        parsedOrders.forEach(([id, order]) => {
+        // Caches written before the cap could hold an account's whole history.
+        this.cacheableOrders(parsedOrders.filter((e) => Array.isArray(e) && e[1])).forEach(([id, order]) => {
           if (id && order) this.orders.set(id, order);
         });
       }
@@ -765,21 +893,43 @@ class FallbackStore {
     }
   }
 
+  /**
+   * The orders worth caching: the newest MAX_CACHED_ORDERS, plus any still in
+   * progress however old, since those are what the first screen shows.
+   */
+  private cacheableOrders(entries: [string, Order][]): [string, Order][] {
+    if (entries.length <= MAX_CACHED_ORDERS) return entries;
+    const isOpen = (o: Order) => o.status !== 'DELIVERED' && o.status !== 'CANCELED';
+    const newestFirst = [...entries].sort(([, a], [, b]) =>
+      (b.createdAt || '').localeCompare(a.createdAt || '')
+    );
+    return newestFirst.filter(([, o], i) => i < MAX_CACHED_ORDERS || isOpen(o));
+  }
+
   private saveLocalStore() {
     if (typeof window === 'undefined') return;
+    // Admin holds platform-wide users, ledgers and shop orders. They are
+    // fetched again on every admin load, so caching them only made each save
+    // and each cold start slower; keep just the admin's own profile.
+    const isAdmin = Boolean(this._listenersRole?.startsWith('admin:'));
+    const ownUser = this.currentUserId ? this.users.get(this.currentUserId) : undefined;
     try {
-      localStorage.setItem('jamanot_orders_store', JSON.stringify(Array.from(this.orders.entries())));
-      localStorage.setItem('jamanot_users_store', JSON.stringify(Array.from(this.users.entries())));
+      localStorage.setItem('jamanot_cache_owner', this._dataOwnerUid || '');
+      localStorage.setItem('jamanot_orders_store', JSON.stringify(this.cacheableOrders(Array.from(this.orders.entries()))));
+      localStorage.setItem(
+        'jamanot_users_store',
+        JSON.stringify(isAdmin ? (ownUser ? [[this.currentUserId, ownUser]] : []) : Array.from(this.users.entries()))
+      );
       localStorage.setItem('jamanot_helper_apps_store', JSON.stringify(Array.from(this.helperApplications.entries())));
       localStorage.setItem('jamanot_store_apps_store', JSON.stringify(Array.from(this.storeApplications.entries())));
       localStorage.setItem('jamanot_wallets_store', JSON.stringify(Array.from(this.wallets.entries())));
-      localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(Array.from(this.walletTransactions.entries())));
+      localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(isAdmin ? [] : Array.from(this.walletTransactions.entries())));
       localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
       localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
       localStorage.setItem('jamanot_admin_notifs_history_store', JSON.stringify(Array.from(this.adminNotificationsHistory.entries())));
       localStorage.setItem('jamanot_scheduled_notifs_store', JSON.stringify(Array.from(this.scheduledNotifications.entries())));
       localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
-      localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(Array.from(this.shopOrders.entries())));
+      localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(isAdmin ? [] : Array.from(this.shopOrders.entries())));
       localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
       localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
       localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
@@ -906,7 +1056,7 @@ class FallbackStore {
       }
     }
 
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
   }
 
@@ -959,7 +1109,7 @@ class FallbackStore {
         this.orders.forEach((ord, id) => {
           this.orders.set(id, this.resolveOrderLocations(ord));
         });
-        this.saveLocalStore();
+        this.scheduleLocalStoreSave();
         this.notify();
       })
       .catch((err) => console.warn('[Firestore] ServerAddresses getDocs note:', err));
@@ -971,6 +1121,10 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this._orderHistoryPromise = null;
+    this.adminOrderHistoryLoading = false;
+    this.adminOrderHistoryLoaded = false;
+    this._allUsersPromise = null;
     this.notifications.clear();
     this._knownNotifIds.clear();
     if (typeof sessionStorage !== 'undefined') {
@@ -979,6 +1133,34 @@ class FallbackStore {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem('jamanot_notifications_store');
     }
+  }
+
+  /**
+   * Listens to `newest` — a query ordered by createdAt desc, so a capped
+   * listener holds an account's most recent documents. A cap without an order
+   * returns documents by id, and ids here are random (order ids are random
+   * numbers), so on an account past the cap recent orders were simply missing.
+   *
+   * Ordering needs a composite index (firestore.indexes.json). Until that is
+   * deployed Firestore rejects the query with failed-precondition, and this
+   * falls back to `unordered` — the query used before — rather than leaving
+   * the list empty.
+   */
+  private _listenNewestFirst(
+    newest: Query<DocumentData>,
+    unordered: Query<DocumentData>,
+    onNext: (snapshot: QuerySnapshot<DocumentData>) => void,
+    label: string
+  ): () => void {
+    let unsub = onSnapshot(newest, onNext, (err) => {
+      if ((err as { code?: string })?.code === 'failed-precondition') {
+        console.warn(`[Firestore] ${label}: index not deployed yet, using the unordered query.`, err.message);
+        unsub = onSnapshot(unordered, onNext, (e) => console.warn(`[Firestore] ${label} sync note:`, e));
+      } else {
+        console.warn(`[Firestore] ${label} sync note:`, err);
+      }
+    });
+    return () => unsub();
   }
 
   // ─── Role-scoped Firestore listener initialization ────────────────────────
@@ -997,6 +1179,17 @@ class FallbackStore {
     // Tear down previous set before starting new one
     this.teardownListeners();
     this._listenersRole = roleKey;
+
+    // Another account on this device: drop the previous one's orders and
+    // ledgers rather than mixing them into this account's lists. A role switch
+    // or pull-to-refresh by the same account keeps them, so lists don't blank.
+    if (this._dataOwnerUid && this._dataOwnerUid !== userId) {
+      this.orders.clear();
+      this.shopOrders.clear();
+      this.withdrawals.clear();
+      this.walletTransactions.clear();
+    }
+    this._dataOwnerUid = userId;
 
     const unsubs: (() => void)[] = [];
 
@@ -1021,7 +1214,7 @@ class FallbackStore {
           this.orders.forEach((ord, id) => {
             this.orders.set(id, this.resolveOrderLocations(ord));
           });
-          this.saveLocalStore();
+          this.scheduleLocalStoreSave();
           this.notify();
         },
         (err) => console.warn('[Firestore] ServerAddresses realtime sync note:', err)
@@ -1079,7 +1272,13 @@ class FallbackStore {
 
       // Shop orders submitted to this store (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(
+            collection(db, 'shopOrders'),
+            where('shopId', '==', effectiveStoreId),
+            orderBy('createdAt', 'desc'),
+            limit(100)
+          ),
           query(
             collection(db, 'shopOrders'),
             where('shopId', '==', effectiveStoreId),
@@ -1095,13 +1294,19 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Store shopOrders sync note:', err)
+          'Store shopOrders'
         )
       );
 
       // Parent orders selected for this store (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(
+            collection(db, 'orders'),
+            where('selectedShopIds', 'array-contains', effectiveStoreId),
+            orderBy('createdAt', 'desc'),
+            limit(100)
+          ),
           query(
             collection(db, 'orders'),
             where('selectedShopIds', 'array-contains', effectiveStoreId),
@@ -1117,7 +1322,7 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Store orders sync note:', err)
+          'Store orders'
         )
       );
 
@@ -1188,7 +1393,8 @@ class FallbackStore {
 
       // Store owner's withdrawals (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(50)),
           query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1200,13 +1406,14 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Store withdrawals sync note:', err)
+          'Store withdrawals'
         )
       );
 
       if (effectiveStoreId && effectiveStoreId !== userId) {
         unsubs.push(
-          onSnapshot(
+          this._listenNewestFirst(
+            query(collection(db, 'withdrawals'), where('helperId', '==', effectiveStoreId), orderBy('createdAt', 'desc'), limit(50)),
             query(collection(db, 'withdrawals'), where('helperId', '==', effectiveStoreId), limit(50)),
             (snapshot) => {
               snapshot.docChanges().forEach((change) => {
@@ -1218,7 +1425,7 @@ class FallbackStore {
               });
               this.notify();
             },
-            (err) => console.warn('[Firestore] Store shop withdrawals sync note:', err)
+            'Store shop withdrawals'
           )
         );
       }
@@ -1232,7 +1439,8 @@ class FallbackStore {
     } else if (role === 'customer') {
       // Only this customer's orders (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'orders'), where('customerId', '==', userId), orderBy('createdAt', 'desc'), limit(100)),
           query(collection(db, 'orders'), where('customerId', '==', userId), limit(100)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1267,7 +1475,7 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Customer orders sync note:', err)
+          'Customer orders'
         )
       );
 
@@ -1286,7 +1494,8 @@ class FallbackStore {
 
       // Own withdrawals (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(50)),
           query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1298,7 +1507,7 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Customer withdrawals sync note:', err)
+          'Customer withdrawals'
         )
       );
 
@@ -1316,7 +1525,7 @@ class FallbackStore {
               prizeMap.set(docSnap.id, docSnap.data() as RewardPrize);
             });
             this.rewardPrizes = prizeMap;
-            this.saveLocalStore();
+            this.scheduleLocalStoreSave();
             this.notify();
           },
           (err) => console.warn('[Firestore] Customer rewardPrizes sync note:', err)
@@ -1410,9 +1619,10 @@ class FallbackStore {
       );
 
       // This helper's own orders — all statuses (history, delivered, canceled, active) (realtime)
-      // Limit 200 without compound orderBy on different field avoids missing composite index failure in Firestore.
+      // The newest 200; older history is paged in on demand (loadOlderOrders).
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'orders'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(200)),
           query(collection(db, 'orders'), where('helperId', '==', userId), limit(200)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1424,13 +1634,14 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Helper own orders sync note:', err)
+          'Helper own orders'
         )
       );
 
       // Own withdrawals (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'withdrawals'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(50)),
           query(collection(db, 'withdrawals'), where('helperId', '==', userId), limit(50)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1442,7 +1653,7 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Helper withdrawals sync note:', err)
+          'Helper withdrawals'
         )
       );
 
@@ -1475,7 +1686,8 @@ class FallbackStore {
 
       // Helper's own wallet transactions (realtime, needed for ledger display)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'walletTransactions'), where('userId', '==', userId), orderBy('createdAt', 'desc'), limit(100)),
           query(collection(db, 'walletTransactions'), where('userId', '==', userId), limit(100)),
           (snapshot) => {
             const txs: WalletTransaction[] = [];
@@ -1486,7 +1698,7 @@ class FallbackStore {
             this.walletTransactions.set(userId, txs);
             this.notify();
           },
-          (err) => console.warn('[Firestore] Helper walletTransactions sync note:', err)
+          'Helper walletTransactions'
         )
       );
 
@@ -1497,7 +1709,8 @@ class FallbackStore {
 
       // Shop orders placed by this helper (realtime)
       unsubs.push(
-        onSnapshot(
+        this._listenNewestFirst(
+          query(collection(db, 'shopOrders'), where('helperId', '==', userId), orderBy('createdAt', 'desc'), limit(100)),
           query(collection(db, 'shopOrders'), where('helperId', '==', userId), limit(100)),
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1509,7 +1722,7 @@ class FallbackStore {
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Helper shopOrders sync note:', err)
+          'Helper shopOrders'
         )
       );
 
@@ -1530,23 +1743,41 @@ class FallbackStore {
 
       // ── ADMIN role ────────────────────────────────────────────────────────────
     } else if (role === 'admin') {
-      // ── REALTIME: orders (most recent 100 — Needs Attention section) ─────────
-      unsubs.push(
+      // ── REALTIME: orders ──────────────────────────────────────────────────
+      // The newest 100, plus every order the Needs Attention queue can list,
+      // however old. Together they make the dashboard correct from the first
+      // second; the full history arrives later (loadAdminOrderHistory).
+      //
+      // An order leaving one of these queries has not necessarily been deleted:
+      // it may have been pushed out of the newest 100, or stopped being
+      // PENDING. Deleting it here made orders vanish from the admin lists, so
+      // it is re-read instead (recheckOrder).
+      const trackOrders = (q: Query<DocumentData>, label: string) =>
         onSnapshot(
-          query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100)),
+          q,
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                this.orders.delete(change.doc.id);
+                this.recheckOrder(change.doc.id);
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
             this.notify();
           },
-          (err) => console.warn('[Firestore] Admin orders sync note:', err)
+          (err) => console.warn(`[Firestore] Admin ${label} sync note:`, err)
+        );
+      const ordersCol = collection(db, 'orders');
+      unsubs.push(trackOrders(query(ordersCol, orderBy('createdAt', 'desc'), limit(100)), 'recent orders'));
+      unsubs.push(trackOrders(query(ordersCol, where('status', '==', 'PENDING'), limit(200)), 'pending orders'));
+      unsubs.push(
+        trackOrders(
+          query(ordersCol, where('status', 'in', ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED']), limit(300)),
+          'in-progress orders'
         )
       );
+      unsubs.push(trackOrders(query(ordersCol, where('cancellationRequest.status', '==', 'PENDING'), limit(100)), 'cancellation requests'));
+      unsubs.push(trackOrders(query(ordersCol, where('feeAdjustment.status', '==', 'PENDING'), limit(100)), 'fee adjustments'));
 
       // ── REALTIME: reward claims (for Needs Attention pending badges) ──────────
       unsubs.push(
@@ -1578,7 +1809,7 @@ class FallbackStore {
             snapshot.docs.forEach((docSnap) => {
               this.orderFeedbacks.set(docSnap.id, docSnap.data() as OrderFeedback);
             });
-            this.saveLocalStore();
+            this.scheduleLocalStoreSave();
             this.notify();
           },
           (err) => console.warn('[Firestore] Admin orderFeedbacks sync note:', err)
@@ -1599,7 +1830,7 @@ class FallbackStore {
             });
             this.adminNotificationsHistory = currentAdminNotifs;
             this._handleNotificationSnapshot(snapshot, userId);
-            this.saveLocalStore();
+            this.scheduleLocalStoreSave();
             this.notify();
           },
           (err) => console.warn('[Firestore] Admin notifications sync note:', err)
@@ -1628,10 +1859,9 @@ class FallbackStore {
   //
   // Called once after initListenersForRole (admin). Also called by
   // refreshAdminData() when the admin clicks a "Refresh" button.
-  private async _adminInitialFetch() {
+  private async _adminInitialFetch(refresh = false) {
     try {
       await Promise.all([
-        this.getAllOrders(),
         this._fetchAdminUsers(),
         this._fetchAdminWithdrawals(),
         this._fetchAdminHelperApplications(),
@@ -1647,11 +1877,109 @@ class FallbackStore {
         this._fetchAdminScheduledNotifications(),
         this._fetchServerAddresses(),
       ]);
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
     } catch (err) {
       console.warn('[Firestore] Admin initial fetch error:', err);
     }
+    // Not awaited: the dashboard is usable on the live queries alone, and the
+    // history only completes the reports and lifetime totals.
+    this.loadAdminOrderHistory(refresh).catch(() => { });
+  }
+
+  /**
+   * Reads a whole collection a page at a time, letting the UI run between
+   * pages. A single getDocs over thousands of documents is parsed in one go,
+   * which is what froze the admin dashboard while it loaded. Ordered by
+   * document id because every document has one; ordering by a field would
+   * silently skip documents missing it.
+   */
+  private async _scanCollection(path: string, pageSize = 500): Promise<QueryDocumentSnapshot<DocumentData>[]> {
+    const out: QueryDocumentSnapshot<DocumentData>[] = [];
+    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    for (;;) {
+      const q: Query<DocumentData> = cursor
+        ? query(collection(db, path), orderBy(documentId()), startAfter(cursor), limit(pageSize))
+        : query(collection(db, path), orderBy(documentId()), limit(pageSize));
+      const snap: QuerySnapshot<DocumentData> = await getDocs(q);
+      out.push(...snap.docs);
+      if (snap.docs.length < pageSize) return out;
+      cursor = snap.docs[snap.docs.length - 1];
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  /**
+   * Admin: every order on the platform, for the lifetime totals, the helper
+   * table and the revenue/growth reports. Runs in the background once per
+   * session (or again when the admin presses Refresh) and is published in a
+   * single update at the end, so the dashboard re-renders once rather than
+   * once per page. It is never written to localStorage (see cacheableOrders).
+   */
+  public loadAdminOrderHistory(force = false): Promise<void> {
+    if (this._orderHistoryPromise && !force) return this._orderHistoryPromise;
+
+    const run = async (): Promise<void> => {
+      this.adminOrderHistoryLoading = true;
+      this.notify();
+      const startedAt = new Date().toISOString();
+      try {
+        const docs = await this._scanCollection('orders');
+        // Superseded while reading — a forced reload, or the admin left admin
+        // mode (teardownListeners). Its orders must not land in another role.
+        if (this._orderHistoryPromise !== promise) return;
+        const seen = new Set<string>();
+        docs.forEach((d) => {
+          const o = this.resolveOrderLocations(d.data() as Order);
+          const id = o?.id || d.id;
+          if (!o) return;
+          seen.add(id);
+          this.orders.set(id, o);
+        });
+        // The scan listed every order, so a cached one it did not see, and
+        // that is older than the scan, has been deleted since it was cached.
+        Array.from(this.orders.entries()).forEach(([id, o]) => {
+          if (!seen.has(id) && (o.createdAt || '') < startedAt) this.orders.delete(id);
+        });
+        this.adminOrderHistoryLoaded = true;
+      } catch (e) {
+        console.warn('[Firestore] Admin order history load error:', e);
+        if (this._orderHistoryPromise === promise) this._orderHistoryPromise = null; // let the next call try again
+      } finally {
+        if (this._orderHistoryPromise === promise || this._orderHistoryPromise === null) {
+          this.adminOrderHistoryLoading = false;
+          this.notify();
+        }
+      }
+    };
+
+    // Assigned before run() can reach its first check: run() is suspended at
+    // its first await until after this line.
+    let promise: Promise<void> = Promise.resolve();
+    promise = run();
+    this._orderHistoryPromise = promise;
+    return promise;
+  }
+
+  /**
+   * Re-reads one order after it left an admin live query, then keeps it or
+   * drops it according to the server. Coalesces repeats, since one change can
+   * remove the same order from several queries at once.
+   */
+  private recheckOrder(orderId: string) {
+    if (this._recheckingOrders.has(orderId)) return;
+    this._recheckingOrders.add(orderId);
+    getDoc(doc(db, 'orders', orderId))
+      .then((snap) => {
+        if (snap.exists()) {
+          this.orders.set(orderId, this.resolveOrderLocations(snap.data() as Order));
+        } else {
+          this.orders.delete(orderId);
+        }
+        this.notify();
+      })
+      .catch(() => { })
+      .finally(() => this._recheckingOrders.delete(orderId));
   }
 
   // Public: called by AdminDashboard when admin clicks "Refresh" on a tab,
@@ -1666,11 +1994,11 @@ class FallbackStore {
     try {
       const target = subset ?? 'all';
       if (target === 'all') {
-        await this._adminInitialFetch();
+        await this._adminInitialFetch(true);
         return;
       }
       switch (target) {
-        case 'orders': await this.getAllOrders(); break;
+        case 'orders': await this.loadAdminOrderHistory(true); break;
         case 'users': await this._fetchAdminUsers(); break;
         case 'withdrawals': await this._fetchAdminWithdrawals(); break;
         case 'helperApplications': await this._fetchAdminHelperApplications(); break;
@@ -1686,7 +2014,7 @@ class FallbackStore {
         case 'scheduledNotifications': await this._fetchAdminScheduledNotifications(); break;
         case 'serverAddresses': await this._fetchServerAddresses(); break;
       }
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
     } catch (err) {
       console.warn('[Firestore] refreshAdminData error:', err);
@@ -1694,7 +2022,15 @@ class FallbackStore {
   }
 
   private async _fetchAdminUsers() {
+    // Once a tab has needed every user, a refresh re-reads every user rather
+    // than shrinking the list back to the first 500.
+    if (this._allUsersPromise) {
+      await this.getAllUsers(true);
+      return;
+    }
     const snap = await getDocs(query(collection(db, 'users'), limit(500)));
+    // A full read started while this one was in flight; don't shrink it back.
+    if (this._allUsersPromise) return;
     const map = new Map<string, UserProfile>();
     snap.docs.forEach((d) => {
       const u = d.data() as UserProfile;
@@ -1702,7 +2038,7 @@ class FallbackStore {
       map.set(uid, { ...u, uid });
     });
     this.users = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminWithdrawals() {
@@ -1714,7 +2050,7 @@ class FallbackStore {
       map.set(id, { ...w, id });
     });
     this.withdrawals = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminHelperApplications() {
@@ -1726,7 +2062,7 @@ class FallbackStore {
       map.set(id, { ...a, id });
     });
     this.helperApplications = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminStoreApplications() {
@@ -1738,7 +2074,7 @@ class FallbackStore {
       map.set(id, { ...a, id });
     });
     this.storeApplications = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminOrderFeedbacks() {
@@ -1750,7 +2086,7 @@ class FallbackStore {
       map.set(id, { ...f, id });
     });
     this.orderFeedbacks = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminFeeSuggestions() {
@@ -1762,7 +2098,7 @@ class FallbackStore {
       map.set(id, { ...s, id });
     });
     this.feeSuggestions = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminCustomModals() {
@@ -1774,7 +2110,7 @@ class FallbackStore {
       map.set(id, { ...c, id });
     });
     this.customModals = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   public async fetchRewardPrizes(): Promise<RewardPrize[]> {
@@ -1789,7 +2125,7 @@ class FallbackStore {
         prizeMap.set(d.id, d.data() as RewardPrize);
       });
       this.rewardPrizes = prizeMap;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return Array.from(prizeMap.values());
     } catch (e: any) {
@@ -1811,7 +2147,7 @@ class FallbackStore {
       map.set(id, { ...s, id });
     });
     this.shops = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminShopOrders() {
@@ -1823,7 +2159,7 @@ class FallbackStore {
       map.set(id, { ...so, id });
     });
     this.shopOrders = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminWallets() {
@@ -1835,7 +2171,7 @@ class FallbackStore {
       map.set(userId, { ...w, userId });
     });
     this.wallets = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminWalletTransactions() {
@@ -1851,7 +2187,7 @@ class FallbackStore {
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     });
     this.walletTransactions = map;
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchAdminScheduledNotifications() {
@@ -1859,7 +2195,7 @@ class FallbackStore {
     // Clear and reload to reflect deletions
     this.scheduledNotifications.clear();
     snap.docs.forEach((d) => { this.scheduledNotifications.set(d.id, d.data() as AppNotification); });
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   private async _fetchServerAddresses() {
@@ -1873,7 +2209,7 @@ class FallbackStore {
           this.serverAddresses.set(id, { ...a, id });
         }
       });
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
     } catch (e) {
       console.warn('[Firestore] _fetchServerAddresses error:', e);
     }
@@ -1891,10 +2227,19 @@ class FallbackStore {
     // (so the UI stays snappy), but only persist to localStorage at most every 2s.
     // This prevents blocking the main thread on every Firestore snapshot.
     this.listeners.forEach((l) => l());
+    this.scheduleLocalStoreSave();
+  }
+
+  /**
+   * Persists the cache at most every 2s. saveLocalStore serialises every
+   * collection, so it must not run once per snapshot or per fetch; the many
+   * places that change the store all come through here instead.
+   */
+  private scheduleLocalStoreSave() {
     if (this._saveDebounceTimer) clearTimeout(this._saveDebounceTimer);
     this._saveDebounceTimer = setTimeout(() => {
-      this.saveLocalStore();
       this._saveDebounceTimer = null;
+      this.saveLocalStore();
     }, 2000);
   }
 
@@ -2064,7 +2409,7 @@ class FallbackStore {
       totalEarnedCoins: user.totalEarnedCoins !== undefined ? user.totalEarnedCoins : existing?.totalEarnedCoins,
     };
     this.users.set(user.uid, mergedUser);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
@@ -2126,7 +2471,7 @@ class FallbackStore {
     });
 
     if (ordersToUpdate.length > 0) {
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       try {
         await Promise.all(
@@ -2186,7 +2531,7 @@ class FallbackStore {
     this.users.delete(uid);
     this.wallets.delete(uid);
     this.walletTransactions.delete(uid);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'users', uid));
@@ -2321,7 +2666,7 @@ class FallbackStore {
 
   public async deleteOrder(orderId: string) {
     this.orders.delete(orderId);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'orders', orderId));
@@ -2995,7 +3340,7 @@ class FallbackStore {
   public async deleteShopOrder(shopOrderId: string): Promise<void> {
     const existing = this.shopOrders.get(shopOrderId);
     this.shopOrders.delete(shopOrderId);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
 
     if (existing) {
@@ -3198,7 +3543,7 @@ class FallbackStore {
         }
       });
       this.shopOrders = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return Array.from(map.values());
     } catch (e: any) {
@@ -3212,7 +3557,7 @@ class FallbackStore {
           }
         });
         this.shopOrders = map2;
-        this.saveLocalStore();
+        this.scheduleLocalStoreSave();
         this.notify();
         return Array.from(map2.values());
       } catch (err) {
@@ -3266,15 +3611,22 @@ class FallbackStore {
 
 
   public async fetchCustomerOrders(userId: string): Promise<Order[]> {
-    if (!userId || !db) return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    const own = () => Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+    if (!userId || !db) return own();
+    const windowSize = 100; // matches the customer orders listener
     try {
-      const q = query(
-        collection(db, 'orders'),
-        where('customerId', '==', userId),
-        limit(50)
-      );
-      const snap = await getDocs(q);
-      // Collect the IDs that actually exist in Firestore
+      let ordered = true;
+      let snap: QuerySnapshot<DocumentData>;
+      try {
+        snap = await getDocs(
+          query(collection(db, 'orders'), where('customerId', '==', userId), orderBy('createdAt', 'desc'), limit(windowSize))
+        );
+      } catch (e: any) {
+        if (e?.code !== 'failed-precondition') throw e;
+        // Index not deployed yet (see _listenNewestFirst).
+        ordered = false;
+        snap = await getDocs(query(collection(db, 'orders'), where('customerId', '==', userId), limit(windowSize)));
+      }
       const firestoreIds = new Set<string>();
       snap.forEach((docSnap) => {
         const orderData = docSnap.data() as Order;
@@ -3283,18 +3635,66 @@ class FallbackStore {
           firestoreIds.add(orderData.id);
         }
       });
-      // Evict any locally-cached orders for this customer that no longer exist in Firestore
-      // (e.g. deleted by admin). This prevents deleted orders from persisting in the UI.
-      for (const [id, order] of Array.from(this.orders.entries())) {
-        if (order.customerId === userId && !firestoreIds.has(id)) {
-          this.orders.delete(id);
+      // Evict locally-cached orders that no longer exist in Firestore (e.g.
+      // deleted by admin). Only orders inside the range this read covered can
+      // be judged: past the window, an order missing from the result is just
+      // older, and evicting those emptied heavy accounts' history on every
+      // focus — the read used to be 50 unordered orders.
+      const complete = snap.size < windowSize;
+      const oldestRead = ordered && snap.size > 0
+        ? (snap.docs[snap.docs.length - 1].data() as Order).createdAt || ''
+        : null;
+      if (complete || oldestRead !== null) {
+        for (const [id, order] of Array.from(this.orders.entries())) {
+          if (order.customerId !== userId || firestoreIds.has(id)) continue;
+          if (complete || (order.createdAt || '') >= (oldestRead as string)) this.orders.delete(id);
         }
       }
       this.notify();
-      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+      return own();
     } catch (e: any) {
       console.warn('[Firestore] fetchCustomerOrders note:', e?.message || e);
-      return Array.from(this.orders.values()).filter((o) => o.customerId === userId);
+      return own();
+    }
+  }
+
+  // Where each account's "load older" paging has got to, keyed `${field}:${uid}`.
+  private _olderOrdersCursor: Map<string, string> = new Map();
+
+  /**
+   * Pages in an account's orders older than its live listener's window (the
+   * newest 100 for a customer, 200 for a helper). Returns whether more remain.
+   * Needs the same createdAt index as those listeners; until it is deployed
+   * this reports nothing more rather than failing.
+   */
+  public async loadOlderOrders(field: 'customerId' | 'helperId', uid: string, pageSize = 50): Promise<boolean> {
+    if (!uid || !db) return false;
+    const key = `${field}:${uid}`;
+    let cursor = this._olderOrdersCursor.get(key);
+    if (!cursor) {
+      // Start below the oldest finished order already held. Open orders are
+      // left out: an old one still in progress would make the paging jump
+      // past everything between it and the window.
+      this.orders.forEach((o) => {
+        if (o[field] !== uid || !o.createdAt || o.status === 'PENDING') return;
+        if (o.status !== 'DELIVERED' && o.status !== 'CANCELED') return;
+        if (!cursor || o.createdAt < cursor) cursor = o.createdAt;
+      });
+    }
+    if (!cursor) return false;
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'orders'), where(field, '==', uid), orderBy('createdAt', 'desc'), startAfter(cursor), limit(pageSize))
+      );
+      snap.docs.forEach((d) => this.orders.set(d.id, this.resolveOrderLocations(d.data() as Order)));
+      if (snap.size > 0) {
+        this._olderOrdersCursor.set(key, (snap.docs[snap.docs.length - 1].data() as Order).createdAt);
+        this.notify();
+      }
+      return snap.size === pageSize;
+    } catch (e: any) {
+      console.warn('[Firestore] loadOlderOrders note:', e?.message || e);
+      return false;
     }
   }
 
@@ -4145,7 +4545,7 @@ class FallbackStore {
     }
 
     this.adminNotificationsHistory.set(notif.id, notif);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
 
     // In-app feedback: sound + vibration on the device that created the notification (for manual admin notifications)
@@ -4253,7 +4653,7 @@ class FallbackStore {
     if (isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE')) {
       this.scheduledNotifications.set(notif.id, notif);
       this.notify();
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       try {
         await setDoc(doc(db, 'scheduledNotifications', notif.id), cleanForFirestore(notif));
       } catch (e) {
@@ -4276,7 +4676,7 @@ class FallbackStore {
     };
     this.scheduledNotifications.set(notifId, updated);
     this.notify();
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     try {
       await setDoc(doc(db, 'scheduledNotifications', notifId), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
@@ -4288,7 +4688,7 @@ class FallbackStore {
   public async deleteScheduledNotification(notifId: string) {
     this.scheduledNotifications.delete(notifId);
     this.notify();
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     try {
       await deleteDoc(doc(db, 'scheduledNotifications', notifId));
     } catch (e: any) {
@@ -4325,7 +4725,7 @@ class FallbackStore {
       } catch (_) { }
     }
     this.notify();
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
   }
 
   public async deleteNotification(notifId: string) {
@@ -4337,7 +4737,7 @@ class FallbackStore {
       }
     });
     this.notify();
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     try {
       await deleteDoc(doc(db, 'notifications', notifId));
     } catch (e: any) {
@@ -4472,7 +4872,7 @@ class FallbackStore {
       }
     }
     this.helperApplications.delete(appId);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'helperApplications', appId));
@@ -4684,7 +5084,7 @@ class FallbackStore {
       });
     }
 
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
   }
 
@@ -4973,7 +5373,7 @@ class FallbackStore {
 
   public async saveRewardPrize(prize: RewardPrize): Promise<void> {
     this.rewardPrizes.set(prize.id, prize);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'rewardPrizes', prize.id), cleanForFirestore(prize), { merge: true });
@@ -4984,7 +5384,7 @@ class FallbackStore {
 
   public async deleteRewardPrize(prizeId: string): Promise<void> {
     this.rewardPrizes.delete(prizeId);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'rewardPrizes', prizeId));
@@ -5342,7 +5742,7 @@ class FallbackStore {
       }
     }
     this.storeApplications.delete(appId);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'storeApplications', appId));
@@ -5362,55 +5762,45 @@ class FallbackStore {
       isStoreApproved: false,
     };
     this.users.set(userId, updatedUser);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try { await this.saveUser(updatedUser); } catch (_) { }
   }
 
-  public async getAllOrders(): Promise<Order[]> {
-    try {
-      const snap = await getDocs(collection(db, 'orders'));
-      const list: Order[] = [];
-      const map = new Map<string, Order>();
-      snap.forEach((docSnap) => {
-        const o = this.resolveOrderLocations(docSnap.data() as Order);
-        if (o && o.id) {
-          map.set(o.id, o);
-          list.push(o);
+  /**
+   * Admin: every user. Read in pages (_scanCollection) and kept for the session,
+   * since the user and helper tabs call this on each search and page change and
+   * the admin modals on each open. Pass force to read it again.
+   */
+  public async getAllUsers(force = false): Promise<UserProfile[]> {
+    if (!this._allUsersPromise || force) {
+      const load = async () => {
+        try {
+          const docs = await this._scanCollection('users');
+          // The admin left admin mode while this was reading: every user's
+          // profile has no place in another role's store (or its cache).
+          if (!this._listenersRole?.startsWith('admin:')) {
+            this._allUsersPromise = null;
+            return;
+          }
+          const map = new Map<string, UserProfile>();
+          docs.forEach((d) => {
+            const u = d.data() as UserProfile;
+            const uid = u.uid || d.id;
+            if (uid) map.set(uid, { ...u, uid });
+          });
+          this.users = map;
+          this.scheduleLocalStoreSave();
+          this.notify();
+        } catch (e) {
+          console.warn('[Firestore] getAllUsers error:', e);
+          this._allUsersPromise = null; // let the next call try again
         }
-      });
-      this.orders = map;
-      this.saveLocalStore();
-      this.notify();
-      return list;
-    } catch (e) {
-      console.warn('[Firestore] getAllOrders error:', e);
-      return Array.from(this.orders.values());
+      };
+      this._allUsersPromise = load();
     }
-  }
-
-  public async getAllUsers(): Promise<UserProfile[]> {
-    try {
-      const snap = await getDocs(collection(db, 'users'));
-      const list: UserProfile[] = [];
-      const map = new Map<string, UserProfile>();
-      snap.forEach((docSnap) => {
-        const u = docSnap.data() as UserProfile;
-        const uid = u.uid || docSnap.id;
-        if (uid) {
-          const userObj = { ...u, uid };
-          map.set(uid, userObj);
-          list.push(userObj);
-        }
-      });
-      this.users = map;
-      this.saveLocalStore();
-      this.notify();
-      return list;
-    } catch (e) {
-      console.warn('[Firestore] getAllUsers error:', e);
-      return Array.from(this.users.values());
-    }
+    await this._allUsersPromise;
+    return Array.from(this.users.values());
   }
 
   public async getAllShops(): Promise<Shop[]> {
@@ -5428,7 +5818,7 @@ class FallbackStore {
         }
       });
       this.shops = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return list;
     } catch (e) {
@@ -5452,7 +5842,7 @@ class FallbackStore {
         }
       });
       this.helperApplications = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return list;
     } catch (e) {
@@ -5476,7 +5866,7 @@ class FallbackStore {
         }
       });
       this.withdrawals = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return list;
     } catch (e) {
@@ -5500,7 +5890,7 @@ class FallbackStore {
         }
       });
       this.orderFeedbacks = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return list;
     } catch (e) {
@@ -5524,7 +5914,7 @@ class FallbackStore {
         }
       });
       this.customModals = map;
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return list;
     } catch (e) {
@@ -5535,7 +5925,7 @@ class FallbackStore {
 
   public async addServerAddress(addr: ServerAddress): Promise<void> {
     this.serverAddresses.set(addr.id, addr);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'server_addresses', addr.id), cleanForFirestore(addr), { merge: true });
@@ -5730,7 +6120,7 @@ class FallbackStore {
       } catch (_) { }
     }
 
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'server_addresses', id), cleanForFirestore(updated), { merge: true });
@@ -5742,7 +6132,7 @@ class FallbackStore {
 
   public async deleteServerAddress(id: string): Promise<void> {
     this.serverAddresses.delete(id);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await deleteDoc(doc(db, 'server_addresses', id));
@@ -5766,7 +6156,7 @@ class FallbackStore {
       this.orders.forEach((ord, id) => {
         this.orders.set(id, this.resolveOrderLocations(ord));
       });
-      this.saveLocalStore();
+      this.scheduleLocalStoreSave();
       this.notify();
       return Array.from(map.values());
     } catch (e) {
@@ -5848,7 +6238,7 @@ class FallbackStore {
           updatedAt: new Date().toISOString(),
         };
         this.serverAddresses.set(matched.id, updated);
-        this.saveLocalStore();
+        this.scheduleLocalStoreSave();
         this.notify();
         setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => { });
         return updated;
@@ -5871,7 +6261,7 @@ class FallbackStore {
     };
 
     this.serverAddresses.set(id, newAddr);
-    this.saveLocalStore();
+    this.scheduleLocalStoreSave();
     this.notify();
     setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => { });
     return newAddr;

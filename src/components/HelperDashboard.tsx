@@ -3,9 +3,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { Order } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, versionOf, createChangeGate } from '@/lib/firebase';
 import { isHelperWithinOrderRadius } from '@/lib/pricing';
 import { isHelperEligibleForOrder } from '@/lib/geofenceUtils';
+import { useOlderOrders } from '@/hooks/useOlderOrders';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -38,6 +39,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
+  // Orders of this helper held in the store, every status. The live listener
+  // holds the newest 200; at that size there may be older ones on the server.
+  const [ownOrderCount, setOwnOrderCount] = useState(0);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [loadingSelectedOrder, setLoadingSelectedOrder] = useState(false);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
@@ -426,7 +430,11 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [completedVisibleCount, setCompletedVisibleCount] = useState(PAGE_SIZE);
 
   useEffect(() => {
+    // Every store update wakes this; the lists only change with the orders or
+    // the admin's routing settings (the user's own changes re-run the effect).
+    const ordersChanged = createChangeGate();
     const syncOrders = () => {
+      if (!ordersChanged(versionOf(fallbackStore.orders), fallbackStore.pricingSettings)) return;
       if (user) {
         const all = Array.from(fallbackStore.orders.values());
 
@@ -535,6 +543,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         });
         setActiveOrders(act);
         setCompletedOrders(comp);
+        setOwnOrderCount(all.filter((o) => o.helperId === user.uid).length);
         setActiveOrderLimit(fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5);
 
         // Compute which orders are each customer's very first
@@ -821,6 +830,11 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   }, [activeTab, hasMoreActive, activeVisibleCount, filteredActiveOrders.length]);
 
   const hasMoreCompleted = completedVisibleCount < filteredCompletedOrders.length;
+  const olderCompleted = useOlderOrders(
+    'helperId',
+    user?.uid,
+    activeTab === 'COMPLETED' && !hasMoreCompleted && ownOrderCount >= 200
+  );
   useEffect(() => {
     if (activeTab !== 'COMPLETED' || !hasMoreCompleted) return;
     const observer = new IntersectionObserver(
@@ -1466,6 +1480,12 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
                 <div ref={completedLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
                   <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
                   <span>Loading more orders... ({filteredCompletedOrders.length - completedVisibleCount} remaining)</span>
+                </div>
+              )}
+              {olderCompleted.showSentinel && (
+                <div ref={olderCompleted.sentinelRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading older orders...</span>
                 </div>
               )}
             </div>
