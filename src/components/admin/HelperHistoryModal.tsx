@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Order, WithdrawalRequest, OrderFeedback } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
@@ -795,6 +795,66 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   // Pagination for Earnings tab
   const [earningsPage, setEarningsPage] = useState(1);
   const [showStoreOrdersPanel, setShowStoreOrdersPanel] = useState(false);
+  const [storeOrdersFilter, setStoreOrdersFilter] = useState<'ALL' | 'RETURNABLE' | 'NON_STORE'>('ALL');
+
+  // Helper to check if an order has returnable store amount (partner / registered store orders)
+  const orderHasReturnableStore = useCallback((ord: Order): boolean => {
+    const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id).filter((so) => so.status !== 'CANCELED');
+    if (shopOrders.length === 0) return false;
+    return shopOrders.some((so) => {
+      const price = so.price || 0;
+      if (price <= 0) return false;
+      const isMyself = so.shopId === 'myself';
+      const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+      return !isMyself && !!shop && shop.canReceiveOrders !== false;
+    });
+  }, []);
+
+  // Helper to check if an order has non-store / non-partner store commission
+  const orderHasNonStoreCommission = useCallback((ord: Order): boolean => {
+    const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id).filter((so) => so.status !== 'CANCELED');
+    if (shopOrders.length === 0) return true; // Direct/non-partner store purchase
+    return shopOrders.some((so) => {
+      const price = so.price || 0;
+      if (price <= 0) return false;
+      const isMyself = so.shopId === 'myself';
+      const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+      const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+      return !canReceive;
+    });
+  }, []);
+
+  const allStoreOrdersDelivered = useMemo(() => {
+    return filteredDeliveredOrders.filter(isOrderPlacedToStore);
+  }, [filteredDeliveredOrders, isOrderPlacedToStore]);
+
+  const returnableOrdersCount = useMemo(() => {
+    return allStoreOrdersDelivered.filter(orderHasReturnableStore).length;
+  }, [allStoreOrdersDelivered, orderHasReturnableStore]);
+
+  const nonStoreOrdersCount = useMemo(() => {
+    return allStoreOrdersDelivered.filter(orderHasNonStoreCommission).length;
+  }, [allStoreOrdersDelivered, orderHasNonStoreCommission]);
+
+  const displayedStoreOrders = useMemo(() => {
+    if (storeOrdersFilter === 'RETURNABLE') {
+      return allStoreOrdersDelivered.filter(orderHasReturnableStore);
+    }
+    if (storeOrdersFilter === 'NON_STORE') {
+      return allStoreOrdersDelivered.filter(orderHasNonStoreCommission);
+    }
+    return allStoreOrdersDelivered;
+  }, [allStoreOrdersDelivered, storeOrdersFilter, orderHasReturnableStore, orderHasNonStoreCommission]);
+
+  const displayedStoreGMV = useMemo(() => {
+    return displayedStoreOrders.reduce((sum, ord) => {
+      const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id).filter((so) => so.status !== 'CANCELED');
+      const orderTotal = shopOrders.length > 0
+        ? shopOrders.reduce((s, so) => s + (so.price || 0), 0)
+        : (ord.productCost || 0);
+      return sum + orderTotal;
+    }, 0);
+  }, [displayedStoreOrders]);
   const earningsPageSize = 10;
   const totalEarningsPages = Math.ceil(sortedDeliveredOrders.length / earningsPageSize) || 1;
   const paginatedDeliveredOrders = sortedDeliveredOrders.slice(
@@ -1694,9 +1754,12 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                   {/* Combined Store Orders block (count + GMV + store amount) */}
                   <button
                     type="button"
-                    onClick={() => setShowStoreOrdersPanel(true)}
+                    onClick={() => {
+                      setStoreOrdersFilter('ALL');
+                      setShowStoreOrdersPanel(true);
+                    }}
                     className="p-2.5 bg-white rounded-2xl border border-amber-200 shadow-xs text-left transition-all cursor-pointer active:scale-95 hover:border-amber-400 hover:bg-amber-50 hover:shadow-md col-span-1"
-                    title="Click to view store orders with item details"
+                    title="Click to view all store orders with item details"
                   >
                     <span className="text-[10px] font-bold text-amber-800 uppercase block">Store Orders</span>
                     <span className="text-base font-black text-amber-900 block leading-tight">
@@ -1709,24 +1772,42 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                         <span className="text-gray-400 ml-1">• Partner ৳{performanceKPIs.storeOrdersRealGMV}</span>
                       )}
                     </span>
-                    <span className="text-[9px] text-amber-600/70 block mt-0.5">Tap to view details →</span>
+                    <span className="text-[9px] text-amber-600/70 block mt-0.5 font-semibold">Tap to view details →</span>
                   </button>
 
                   {/* Non-Acceptable Store Commission block */}
-                  <div className="p-2.5 bg-white rounded-2xl border border-orange-200 shadow-xs text-left">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStoreOrdersFilter('NON_STORE');
+                      setShowStoreOrdersPanel(true);
+                    }}
+                    className="p-2.5 bg-white rounded-2xl border border-orange-200 shadow-xs text-left transition-all cursor-pointer active:scale-95 hover:border-orange-400 hover:bg-orange-50 hover:shadow-md col-span-1"
+                    title="Click to view non-partner store order histories"
+                  >
                     <span className="text-[10px] font-bold text-orange-700 uppercase block">Non-Store Comm.</span>
                     <span className="text-base font-black text-orange-900 block leading-tight">৳{earningsMetrics.nonAcceptableStoreCommission}</span>
                     <span className="text-[9px] text-orange-600/80 block mt-0.5">
                       Commission on ৳{earningsMetrics.totalStoreOrdersAmount - earningsMetrics.returnableStoreAmount} bought from non-partner stores
                     </span>
-                  </div>
+                    <span className="text-[9px] text-orange-600/70 block mt-0.5 font-semibold">Tap to view details →</span>
+                  </button>
 
                   {/* Returnable / Acceptable Store Amount */}
-                  <div className="p-2.5 bg-white rounded-2xl border border-purple-200 shadow-xs text-left">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStoreOrdersFilter('RETURNABLE');
+                      setShowStoreOrdersPanel(true);
+                    }}
+                    className="p-2.5 bg-white rounded-2xl border border-purple-200 shadow-xs text-left transition-all cursor-pointer active:scale-95 hover:border-purple-400 hover:bg-purple-50 hover:shadow-md col-span-1"
+                    title="Click to view partner store order histories"
+                  >
                     <span className="text-[10px] font-bold text-purple-700 uppercase block">Returnable Amt.</span>
                     <span className="text-base font-black text-purple-900 block leading-tight">৳{earningsMetrics.returnableStoreAmount}</span>
                     <span className="text-[9px] text-purple-600/80 block mt-0.5">Full amount from partner/registered stores</span>
-                  </div>
+                    <span className="text-[9px] text-purple-600/70 block mt-0.5 font-semibold">Tap to view details →</span>
+                  </button>
 
                   {/* Total Admin Receivable / Payable */}
                   <div className="p-2.5 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl border border-indigo-300 shadow-xs text-left">
@@ -2348,34 +2429,75 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
           {/* Panel */}
           <div className="relative w-full max-w-lg h-full bg-white shadow-2xl flex flex-col overflow-hidden animate-[slideInRight_0.25s_ease-out]">
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200 shrink-0">
-              <div>
-                <h2 className="font-black text-amber-900 text-base flex items-center gap-2">
-                  <Store className="w-4 h-4 text-amber-600" />
-                  Store Orders
-                </h2>
-                <p className="text-[11px] text-amber-700 mt-0.5">
-                  {filteredDeliveredOrders.filter(isOrderPlacedToStore).length} store orders • Total ৳{performanceKPIs.storeOrdersGMV}
-                </p>
+            <div className="px-5 py-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200 shrink-0 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-black text-amber-900 text-base flex items-center gap-2">
+                    <Store className="w-4 h-4 text-amber-600" />
+                    {storeOrdersFilter === 'ALL' && 'All Store Orders'}
+                    {storeOrdersFilter === 'RETURNABLE' && 'Returnable Amount Orders'}
+                    {storeOrdersFilter === 'NON_STORE' && 'Non-Store Commission Orders'}
+                  </h2>
+                  <p className="text-[11px] text-amber-700 mt-0.5">
+                    {displayedStoreOrders.length} orders • Total ৳{displayedStoreGMV}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStoreOrdersPanel(false)}
+                  className="p-1.5 rounded-xl hover:bg-amber-100 text-amber-700 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowStoreOrdersPanel(false)}
-                className="p-1.5 rounded-xl hover:bg-amber-100 text-amber-700 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1.5 p-1 bg-amber-100/70 rounded-xl text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => setStoreOrdersFilter('ALL')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all text-[11px] cursor-pointer ${
+                    storeOrdersFilter === 'ALL'
+                      ? 'bg-white text-amber-900 shadow-xs font-black'
+                      : 'text-amber-800 hover:bg-amber-100/80'
+                  }`}
+                >
+                  All ({allStoreOrdersDelivered.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStoreOrdersFilter('RETURNABLE')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all text-[11px] cursor-pointer ${
+                    storeOrdersFilter === 'RETURNABLE'
+                      ? 'bg-purple-700 text-white shadow-xs font-black'
+                      : 'text-purple-900 hover:bg-purple-100'
+                  }`}
+                >
+                  Returnable ({returnableOrdersCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStoreOrdersFilter('NON_STORE')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all text-[11px] cursor-pointer ${
+                    storeOrdersFilter === 'NON_STORE'
+                      ? 'bg-orange-700 text-white shadow-xs font-black'
+                      : 'text-orange-900 hover:bg-orange-100'
+                  }`}
+                >
+                  Non-Store ({nonStoreOrdersCount})
+                </button>
+              </div>
             </div>
 
             {/* Orders list */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {filteredDeliveredOrders.filter(isOrderPlacedToStore).length === 0 ? (
+              {displayedStoreOrders.length === 0 ? (
                 <div className="py-16 text-center text-gray-400 space-y-2">
                   <Store className="w-10 h-10 mx-auto text-gray-300" />
-                  <p className="font-bold text-gray-500">No store orders in this period.</p>
+                  <p className="font-bold text-gray-500">No store orders found matching this filter.</p>
                 </div>
               ) : (
-                filteredDeliveredOrders.filter(isOrderPlacedToStore).map((ord) => {
+                displayedStoreOrders.map((ord) => {
                   const shopOrders = fallbackStore.getShopOrdersForOrder(ord.id).filter((so) => so.status !== 'CANCELED');
                   const orderTotal = shopOrders.length > 0
                     ? shopOrders.reduce((s, so) => s + (so.price || 0), 0)
@@ -2384,13 +2506,26 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                     ? ord.items.map((i) => `${i.name}${i.qty ? ` (${i.qty})` : ''}`).join(', ')
                     : ord.title || 'Store Request';
 
+                  const hasReturnable = orderHasReturnableStore(ord);
+                  const hasNonStore = orderHasNonStoreCommission(ord);
+
                   return (
                     <div key={ord.id} className="bg-white border border-amber-200 rounded-2xl overflow-hidden shadow-xs">
                       {/* Order header */}
                       <div className="flex items-center justify-between px-3.5 py-2.5 bg-amber-50 border-b border-amber-100">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-black text-amber-900 text-xs">#{ord.id}</span>
                           <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">DELIVERED</span>
+                          {hasReturnable && (
+                            <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-700 border border-purple-200">
+                              Returnable Amt
+                            </span>
+                          )}
+                          {hasNonStore && (
+                            <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-700 border border-orange-200">
+                              Non-Store Comm
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-black text-amber-900">৳{orderTotal}</span>
@@ -2419,6 +2554,10 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                           {shopOrders.map((so) => {
                             const items = so.itemsWithPrice || [];
                             const soTotal = so.price || 0;
+                            const isMyself = so.shopId === 'myself';
+                            const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+                            const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+
                             return (
                               <div key={so.id} className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
                                 {/* Shop name row */}
@@ -2427,7 +2566,18 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                                     <Store className="w-2.5 h-2.5 text-amber-600" />
                                     {so.shopName}
                                   </span>
-                                  <span className="text-[10px] font-black text-amber-800">৳{soTotal}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    {canReceive ? (
+                                      <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-200">
+                                        Partner Store (Returnable)
+                                      </span>
+                                    ) : (
+                                      <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">
+                                        Non-Partner Store
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] font-black text-amber-800">৳{soTotal}</span>
+                                  </div>
                                 </div>
                                 {/* Items */}
                                 {items.length > 0 ? (
@@ -2460,7 +2610,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                         </div>
                       ) : (
                         <div className="px-3.5 pb-3 pt-1">
-                          <p className="text-[10px] text-gray-400 italic">৳{ord.productCost || 0} (estimated product cost)</p>
+                          <p className="text-[10px] text-gray-400 italic">৳{ord.productCost || 0} (estimated product cost from non-partner store)</p>
                         </div>
                       )}
                     </div>
