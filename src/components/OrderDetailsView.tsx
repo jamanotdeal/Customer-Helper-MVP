@@ -79,69 +79,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const [cancelReason, setCancelReason] = useState('');
   const [cancelError, setCancelError] = useState('');
 
-  // Due Payment modal state
-  const [showDueModal, setShowDueModal] = useState(false);
-  const [dueAmountInput, setDueAmountInput] = useState('');
-  const [dueNoteInput, setDueNoteInput] = useState('');
 
-  const openDueModal = () => {
-    if (order?.duePayment) {
-      setDueAmountInput(order.duePayment.amount.toString());
-      setDueNoteInput(order.duePayment.note || '');
-    } else {
-      setDueAmountInput('');
-      setDueNoteInput('');
-    }
-    setShowDueModal(true);
-  };
-
-  const handleSaveDuePayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!order) return;
-    const amount = parseFloat(dueAmountInput);
-    if (isNaN(amount) || amount <= 0) {
-      alert('সঠিক টাকা পরিমাণ লিখুন');
-      return;
-    }
-    if (!dueNoteInput.trim()) {
-      alert('বাকি পেমেন্টের কারণ বা নোট লিখুন');
-      return;
-    }
-
-    const isHelper = user?.role === 'helper' || user?.lastActiveMode === 'helper' || user?.isHelper;
-    const isAdmin = user?.role === 'admin' || user?.lastActiveMode === 'admin' || user?.isAdmin;
-
-    const addedByRole = isAdmin ? ('admin' as const) : ('helper' as const);
-    const addedByName = user?.displayName || (isAdmin ? 'Admin' : 'Helper');
-
-    await fallbackStore.updateOrder(order.id, (prev) => ({
-      ...prev,
-      duePayment: {
-        amount,
-        note: dueNoteInput.trim(),
-        addedBy: addedByRole,
-        addedByName,
-        addedAt: prev.duePayment?.addedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        status: prev.duePayment?.status || 'UNPAID',
-      },
-    }));
-
-    setShowDueModal(false);
-  };
-
-  const handleRemoveDuePayment = async () => {
-    if (!order) return;
-    if (!confirm('আপনি কি নিশ্চিতভাবে এই বাকি পেমেন্ট রেকর্ডটি মুছে ফেলতে চান?')) return;
-
-    await fallbackStore.updateOrder(order.id, (prev) => {
-      const next = { ...prev };
-      delete next.duePayment;
-      return next;
-    });
-
-    setShowDueModal(false);
-  };
 
   useEffect(() => {
     let isCancelled = false;
@@ -259,11 +197,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
     : 0;
 
+  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED');
+  const totalShopOrdersCost = validShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
+  const effectiveProductCost = totalShopOrdersCost > 0 ? totalShopOrdersCost : (order?.productCost || 0);
+
   const estdPricing = order ? calculateEstimatedFee({
     distanceKm: Math.ceil(distanceKm),
     weightKg: Math.ceil(order.weightKg || 0),
     isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
-    productPrice: order.productCost || 0,
+    productPrice: effectiveProductCost,
   }, fallbackStore.pricingSettings) : null;
 
   // Timer: check every 30s if the customer should see "Admin Accepted" banner
@@ -289,7 +231,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     if (!user) {
       setShowEditModal(false);
       setShowCancelModal(false);
-      setShowDueModal(false);
       setShowFeedbackModal(false);
       onBack();
     }
@@ -400,6 +341,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     const formatted = cleanPhone.startsWith('0') ? `880${cleanPhone.slice(1)}` : cleanPhone;
     return `https://wa.me/${formatted}`;
   };
+
+  const isHelperAssigned = Boolean(order.helperId || order.helperName);
 
   // Simplified progress steps
   const steps: { status: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
@@ -614,11 +557,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
   const isCanceled = (order.status as string) === 'CANCELED';
 
-  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED');
-  const totalShopOrdersCost = validShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
-  const effectiveProductCost = totalShopOrdersCost > 0 ? totalShopOrdersCost : (order.productCost || 0);
   const effectiveDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
-  const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : 0;
+  const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
   const effectiveReturnFee = (estdPricing && estdPricing.returnFee > 0) ? estdPricing.returnFee : 0;
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
   const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment;
@@ -772,105 +712,118 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft">
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4">Order Progress</h3>
             <div className="space-y-3">
-              {steps.map((step, i) => {
+              {steps.map((step) => {
                 const state = getStepState(step.status);
                 const StepIcon = step.icon;
-                return (
-                  <div key={step.status} className="flex items-center space-x-3">
-                    <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
-                      state === 'COMPLETED'
-                        ? 'bg-emerald-600 text-white shadow-sm'
-                        : state === 'CURRENT'
-                        ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                        : 'bg-gray-100 text-gray-300'
-                    }`}>
-                      {state === 'COMPLETED'
-                        ? <Check className="w-4 h-4" />
-                        : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
-                      }
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-bold leading-tight ${
-                        state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-900' : 'text-gray-300'
+                const isHelperStep = step.status === 'ACCEPTED';
+                const showHelperDetails = isHelperStep && (order.helperId || order.helperName || showAdminAccepted);
+
+                if (showHelperDetails) {
+                  return (
+                    <div key={step.status} className="flex items-center space-x-3">
+                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
+                        state === 'COMPLETED'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : state === 'CURRENT'
+                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                          : 'bg-gray-100 text-gray-300'
                       }`}>
-                        {step.label}
-                      </p>
+                        {state === 'COMPLETED'
+                          ? <Check className="w-4 h-4" />
+                          : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
+                        }
+                      </div>
+
+                      <div className="flex-1 min-w-0 p-2.5 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-between gap-2.5 animate-in fade-in duration-150">
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          {order.helperId && helperInfo?.photoURL ? (
+                            <img
+                              src={helperInfo.photoURL}
+                              alt={helperName}
+                              className="w-8 h-8 rounded-full object-cover shrink-0 border border-emerald-200 shadow-2xs"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs shrink-0">
+                              {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider leading-none mb-1">
+                              Your Helper
+                            </p>
+                            <p className="font-extrabold text-xs text-gray-900 truncate leading-tight">
+                              {order.helperId ? helperName : 'Jamanot Admin'}
+                            </p>
+                            {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
+                              <p className="text-[11px] text-gray-500 truncate font-medium">
+                                {order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <a
+                              href={`tel:${order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}`}
+                              aria-label="Call"
+                              className="p-2 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 active:scale-95 transition-all shadow-2xs flex items-center justify-center"
+                              title="Call"
+                            >
+                              <Phone className="w-3.5 h-3.5 text-gray-700" />
+                            </a>
+                            <a
+                              href={getWhatsAppUrl(order.helperId ? helperPhone! : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || ''))}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label="WhatsApp"
+                              className="p-2 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] active:scale-95 transition-all shadow-2xs flex items-center justify-center"
+                              title="WhatsApp"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={step.status} className="space-y-2">
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
+                        state === 'COMPLETED'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : state === 'CURRENT'
+                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                          : 'bg-gray-100 text-gray-300'
+                      }`}>
+                        {state === 'COMPLETED'
+                          ? <Check className="w-4 h-4" />
+                          : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-bold leading-tight ${
+                          state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-900' : 'text-gray-300'
+                        }`}>
+                          {step.label}
+                        </p>
+                        {state === 'CURRENT' && (
+                          <p className="text-[11px] text-emerald-600 font-medium mt-0.5">{step.desc}</p>
+                        )}
+                      </div>
                       {state === 'CURRENT' && (
-                        <p className="text-[11px] text-emerald-600 font-medium mt-0.5">{step.desc}</p>
+                        <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
                       )}
                     </div>
-                    {state === 'CURRENT' && (
-                      <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
-                    )}
                   </div>
                 );
               })}
             </div>
           </div>
         )}
-
-        {/* ── HELPER OR ADMIN CONTACT (shown when helper is assigned OR admin accepted) ── */}
-        {(order.helperId || showAdminAccepted) && (
-          <div className="bg-white rounded-3xl border border-emerald-100 p-4 shadow-soft space-y-3">
-            <div className="flex items-center space-x-3">
-              {order.helperId && helperInfo?.photoURL ? (
-                <img
-                  src={helperInfo.photoURL}
-                  alt={helperName}
-                  className="w-11 h-11 rounded-2xl object-cover shadow-md shrink-0 border border-emerald-200"
-                />
-              ) : (
-                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shrink-0">
-                  {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
-                </div>
-              )}
-              <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
-                  {order.helperId ? 'Your Helper' : 'Admin Support'}
-                </p>
-                <h4 className="font-black text-base text-gray-900 leading-tight">
-                  {order.helperId ? helperName : 'Jamanot Admin'}
-                </h4>
-                {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
-                  <p className="text-xs font-bold text-gray-500 mt-0.5">
-                    {order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}
-                  </p>
-                )}
-              </div>
-              <span className={`ml-auto px-2.5 py-1 rounded-full text-white font-extrabold text-[10px] flex items-center space-x-1 shrink-0 ${order.helperId ? 'bg-emerald-600' : 'bg-purple-600'}`}>
-                {order.helperId ? <UserCheck className="w-3 h-3" /> : <ShieldCheck className="w-3 h-3" />}
-                <span>{order.helperId ? 'Active' : 'Admin Accepted'}</span>
-              </span>
-            </div>
-
-            {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) ? (
-              <div className="flex space-x-2">
-                <a
-                  href={`tel:${order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}`}
-                  className="flex-1 py-2.5 px-3 rounded-2xl bg-gray-100 text-gray-900 font-extrabold text-xs flex items-center justify-center space-x-1.5 hover:bg-gray-200 active:scale-95 transition-all"
-                >
-                  <Phone className="w-4 h-4 text-gray-600" />
-                  <span>Call</span>
-                </a>
-                <a
-                  href={getWhatsAppUrl(order.helperId ? helperPhone! : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || ''))}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 py-2.5 px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-md"
-                >
-                  <MessageSquare className="w-4 h-4" />
-                  <span>WhatsApp</span>
-                </a>
-              </div>
-            ) : (
-              <p className="text-xs text-gray-500 bg-gray-50 rounded-2xl p-3 text-center font-medium">Contact info not provided.</p>
-            )}
-          </div>
-        )}
-
-
-
-
 
         {/* ── ORDER ITEMS ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
@@ -888,45 +841,62 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </button>
             )}
           </div>
-          <div className="space-y-2">
-            {(order.items || []).map((it) => {
-              const itemPricing = (() => {
-                const cleanName = it.name.toLowerCase().trim();
-                for (const so of validShopOrders) {
-                  if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
-                    const found = so.itemsWithPrice.find(
-                      (p) => p.name.toLowerCase().trim() === cleanName || cleanName.includes(p.name.toLowerCase().trim()) || p.name.toLowerCase().trim().includes(cleanName)
-                    );
-                    if (found && found.price !== undefined) return { price: found.price, unit: found.unit };
-                  }
-                }
-                return undefined;
-              })();
 
-              return (
-                <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
-                  <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
-                    {it.name}
-                  </span>
-                  {itemPricing?.price !== undefined && (
-                    <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
-                      ৳{itemPricing.price}
+          {/* Previous item description line-through if edited */}
+          {(() => {
+            const previousDesc = order.editHistory
+              ?.flatMap((h) => h.changes)
+              ?.filter((c) => c.field === 'Details / Items' || c.field === 'Items / Details' || c.field === 'Details' || c.field === 'Items')
+              ?.slice(-1)[0]?.oldValue;
+
+            return (
+              <div className="space-y-2">
+                {previousDesc && previousDesc !== 'None' && previousDesc !== (order.items?.[0]?.name) && (
+                  <div className="p-3 rounded-2xl bg-amber-50/50 border border-dashed border-amber-200/80 text-xs">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-900/70 block mb-0.5">
+                      Previous Description (পূর্বের বিবরণ):
                     </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    <p className="line-through text-gray-400 font-medium break-words leading-relaxed">
+                      {previousDesc}
+                    </p>
+                  </div>
+                )}
+
+                {(order.items || []).map((it) => {
+                  const itemPricing = (() => {
+                    const cleanName = it.name.toLowerCase().trim();
+                    for (const so of validShopOrders) {
+                      if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+                        const found = so.itemsWithPrice.find(
+                          (p) => p.name.toLowerCase().trim() === cleanName || cleanName.includes(p.name.toLowerCase().trim()) || p.name.toLowerCase().trim().includes(cleanName)
+                        );
+                        if (found && found.price !== undefined) return { price: found.price, unit: found.unit };
+                      }
+                    }
+                    return undefined;
+                  })();
+
+                  return (
+                    <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
+                      <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
+                        {it.name}
+                      </span>
+                      {itemPricing?.price !== undefined && (
+                        <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
+                          ৳{itemPricing.price}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
           {order.additionalNote && (
             <div className="mt-3 p-3 rounded-2xl bg-amber-50/70 border border-amber-100 text-xs text-amber-900">
               <span className="font-extrabold block mb-0.5">Your Note:</span>
               <span>{order.additionalNote}</span>
-            </div>
-          )}
-          {(order.alternativePhone || order.customerPhone) && (
-            <div className="mt-2 p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs text-gray-700 flex items-center space-x-2">
-              <Phone className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-              <span className="font-semibold">Contact: <span className="font-bold text-gray-900">{order.alternativePhone || order.customerPhone}</span></span>
             </div>
           )}
           {order.helperNote && (user?.role === 'helper' || user?.role === 'admin' || user?.lastActiveMode === 'helper' || user?.lastActiveMode === 'admin' || user?.isAdmin) && (
@@ -940,68 +910,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           )}
         </div>
 
-        {/* ── MINIMALIST ORDER EDIT HISTORY LOG ── */}
-        {order.editHistory && order.editHistory.length > 0 && (() => {
-          const latestHistoryItem = order.editHistory[order.editHistory.length - 1];
-          if (!latestHistoryItem) return null;
-
-          const getEditorLabel = () => {
-            const by = (latestHistoryItem.editedBy || '').toLowerCase();
-            const name = (latestHistoryItem.editedByName || '').toLowerCase();
-            if (by === order.customerId?.toLowerCase() || by === user?.uid?.toLowerCase() || by === 'customer' || name.includes('customer') || name === 'you') {
-              return 'Me';
-            }
-            if (by === order.helperId?.toLowerCase() || by === 'helper' || name.includes('helper')) {
-              return 'Helper';
-            }
-            if (by === 'admin' || name.includes('admin')) {
-              return 'Admin';
-            }
-            return 'Customer';
-          };
-
-          const editorLabel = getEditorLabel();
-
-          return (
-            <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
-                  <FileText className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Order Update History</span>
-                </h3>
-                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
-                  Edited by {editorLabel}
-                </span>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-gray-50/80 border border-gray-100 text-xs space-y-2">
-                <div className="flex items-center justify-between text-[10px] text-gray-500 font-semibold border-b border-gray-200/60 pb-1.5">
-                  <span>Updated on {formatPlacedDateTime(latestHistoryItem.timestamp)}</span>
-                  <span className="font-bold text-gray-700">{editorLabel}</span>
-                </div>
-                <div className="space-y-1.5 pt-0.5">
-                  {latestHistoryItem.changes.map((c, idx) => (
-                    <div key={idx} className="text-left space-y-1">
-                      {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
-                        <div className="font-semibold text-gray-600 text-[11px]">{c.field}</div>
-                      )}
-                      <div className="text-left flex flex-wrap items-center gap-2">
-                        {c.oldValue && c.oldValue !== 'None' && (
-                          <span className="line-through text-gray-400 text-xs">{c.oldValue}</span>
-                        )}
-                        <span className="text-gray-900 font-bold bg-white border border-gray-200 px-2.5 py-1 rounded-xl inline-block text-xs">
-                          {c.newValue}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* ── ADDRESSES ── */}
+        {/* ── ADDRESSES & LOCATION ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
           <div>
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
@@ -1017,6 +926,37 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
             </div>
           </div>
+          {(order.alternativePhone || order.customerPhone) && (
+            <div>
+              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Contact Info</h3>
+              <div className="p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs text-gray-700 flex items-center justify-between">
+                <div className="flex items-center space-x-2 min-w-0">
+                  <Phone className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                  <span className="font-semibold truncate">
+                    Contact: <span className="font-bold text-gray-900 font-mono">{order.alternativePhone || order.customerPhone}</span>
+                  </span>
+                </div>
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <a
+                    href={`tel:${order.alternativePhone || order.customerPhone}`}
+                    className="p-1.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs flex items-center justify-center"
+                    title="Call"
+                  >
+                    <Phone className="w-3 h-3 text-gray-700" />
+                  </a>
+                  <a
+                    href={getWhatsAppUrl(order.alternativePhone || order.customerPhone || '')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] transition-colors shadow-2xs flex items-center justify-center"
+                    title="WhatsApp"
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── CALCULATION SUMMARY ── */}
@@ -1044,10 +984,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 <span className="font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
               </div>
 
-              {(fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0 && (
+              {effectiveProcessingFee > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-gray-500 font-bold">Processing Fee</span>
-                  <span className="font-bold text-gray-900">৳{estdPricing.processingFee}</span>
+                  <span className="font-bold text-gray-900">৳{effectiveProcessingFee}</span>
                 </div>
               )}
 
@@ -1331,49 +1271,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
-        {/* ── COMPLETED ORDER DUE PAYMENT MANAGEMENT (ADMIN & HELPER) OR DISPLAY (CUSTOMER) ── */}
-        {isDelivered && (order.duePayment || user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
-          <div className="bg-white rounded-3xl border border-purple-100 p-4 shadow-soft space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <DollarSign className="w-5 h-5 text-purple-600" />
-                <h3 className="font-extrabold text-sm text-gray-900">বাকি পেমেন্ট</h3>
-              </div>
-              {(user?.role === 'admin' || user?.role === 'helper' || user?.isAdmin || user?.isHelper || user?.lastActiveMode === 'admin' || user?.lastActiveMode === 'helper') && (
-                <button
-                  onClick={openDueModal}
-                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs border border-purple-200 transition-all active:scale-95 flex items-center space-x-1"
-                >
-                  <Edit2 className="w-3 h-3" />
-                  <span>{order.duePayment ? 'এডিট' : '+ বাকি যোগ করুন'}</span>
-                </button>
-              )}
-            </div>
-
-            {order.duePayment ? (
-              <div className="p-3.5 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-1.5 text-xs">
-                <div className="flex items-center justify-between font-bold">
-                  <span className="text-purple-900">বাকি পরিমাণ:</span>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-base font-black text-purple-950">৳{order.duePayment.amount}</span>
-                    <span className={`px-2 py-0.5 rounded-md font-extrabold text-[10px] ${order.duePayment.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
-                      {order.duePayment.status === 'PAID' ? '✓ পরিশোধিত' : '⚠️ বকেয়া'}
-                    </span>
-                  </div>
-                </div>
-                {order.duePayment.note && (
-                  <div className="text-[11px] text-purple-950 font-medium pt-1 border-t border-purple-200/60">
-                    <strong>নোট:</strong> {order.duePayment.note}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400 font-medium italic bg-gray-50 p-3 rounded-2xl text-center">
-                এই অর্ডারে কোনো বাকি পেমেন্ট যোগ করা নেই।
-              </p>
-            )}
-          </div>
-        )}
 
         {/* ── FEE UPDATED NOTICE ── */}
         {order.feeAdjustment?.status === 'APPROVED' && (
@@ -1729,88 +1626,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         }}
       />
 
-      {/* ── DUE PAYMENT ADD/EDIT MODAL ── */}
-      {showDueModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 border border-gray-100">
-            <div className="flex items-center justify-between border-b pb-3">
-              <div className="flex items-center space-x-2">
-                <DollarSign className="w-5 h-5 text-purple-600" />
-                <h3 className="font-extrabold text-base text-gray-900">
-                  {order.duePayment ? 'বাকি পেমেন্ট এডিট করুন' : 'নতুন বাকি পেমেন্ট যোগ করুন'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowDueModal(false)}
-                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveDuePayment} className="space-y-4">
-              <div>
-                <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  বাকি টাকার পরিমাণ (৳) *
-                </label>
-                <input
-                  type="number"
-                  value={dueAmountInput}
-                  onChange={(e) => setDueAmountInput(e.target.value)}
-                  placeholder="যেমন: ৫০"
-                  min="1"
-                  step="any"
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm font-bold text-gray-900"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-extrabold text-gray-700 mb-1">
-                  নোট / কারণ *
-                </label>
-                <textarea
-                  value={dueNoteInput}
-                  onChange={(e) => setDueNoteInput(e.target.value)}
-                  placeholder="যেমন: ৫০ টাকা বাকি ছিলো..."
-                  className="w-full px-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-sm text-gray-900 resize-none h-20"
-                  required
-                />
-              </div>
-
-              <p className="text-[11px] text-gray-400">
-                * পরবর্তী অর্ডারে স্বয়ংক্রিয়ভাবে যোগ হবে।
-              </p>
-
-              <div className="flex items-center space-x-3 pt-2">
-                {order.duePayment && (
-                  <button
-                    type="button"
-                    onClick={handleRemoveDuePayment}
-                    className="px-4 py-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-700 font-extrabold text-xs transition-all flex items-center space-x-1"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>ডিলিট</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowDueModal(false)}
-                  className="flex-1 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-extrabold text-xs transition-all active:scale-95"
-                >
-                  বাতিল
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95"
-                >
-                  সংরক্ষণ করুন
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {showFeedbackModal && (
         <OrderFeedbackModal

@@ -253,7 +253,7 @@ export default function PageClient() {
 
   // Request push notification permission (only for Helper or Store on load)
   useEffect(() => {
-    if (user && (user.isHelper || user.isStoreApproved || user.role === 'store' || user.role === 'helper' || Boolean(user.storeId))) {
+    if (user && (user.isHelper || user.isStoreApproved || user.role === 'store' || user.role === 'helper')) {
       const alreadyGranted = typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
       const alreadyAsked = typeof localStorage !== 'undefined' && localStorage.getItem('notification_permission_prompted') === 'true';
 
@@ -324,7 +324,7 @@ export default function PageClient() {
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store' || Boolean(user.storeId))
+    user && (user.isStoreApproved || user.role === 'store')
   );
 
   const isHelperUser = Boolean(

@@ -40,7 +40,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
   const isAdmin = Boolean(user.isAdmin || user.role === 'admin' || activeMode === 'admin');
   if (isAdmin) return null;
 
-  const isStore = Boolean(user.isStoreApproved || user.role === 'store' || Boolean(user.storeId));
+  const isStore = Boolean(user.isStoreApproved || user.role === 'store');
   const isHelper = Boolean((user.isHelper || user.role === 'helper' || activeMode === 'helper') && !isStore);
   const isDedicatedHelper = isHelper && user.helperType === 'dedicated';
   const isCustomer = !isStore && !isHelper;

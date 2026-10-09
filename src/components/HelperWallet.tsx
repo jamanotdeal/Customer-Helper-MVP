@@ -69,15 +69,6 @@ export const HelperWallet: React.FC = () => {
     }
   };
 
-  // Date Range Filtering State (Default: ALL_TIME)
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
-  const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
-  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
-
-  const minWithdrawal = fallbackStore.pricingSettings.minWithdrawalAmount || 100;
-
   // Local YYYY-MM-DD Helper
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {
     const year = d.getFullYear();
@@ -87,6 +78,15 @@ export const HelperWallet: React.FC = () => {
   };
 
   const getTodayStr = () => getLocalYYYYMMDD(new Date());
+
+  // Date Range Filtering State (Default: TODAY)
+  const [startDate, setStartDate] = useState<string>(() => getTodayStr());
+  const [endDate, setEndDate] = useState<string>(() => getTodayStr());
+  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
+  const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
+
+  const minWithdrawal = fallbackStore.pricingSettings.minWithdrawalAmount || 100;
   const getDaysAgoStr = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() - days);
@@ -151,16 +151,7 @@ export const HelperWallet: React.FC = () => {
   useEffect(() => {
     const syncWallet = () => {
       if (user) {
-        const firestoreWallet = fallbackStore.wallets.get(user.uid);
-        const w: Wallet = firestoreWallet ?? {
-          userId: user.uid,
-          totalEarned: 0,
-          balance: 0,
-          totalPaidCommission: 0,
-          totalWithdrawn: 0,
-          updatedAt: new Date().toISOString(),
-        };
-
+        const computedWallet = fallbackStore.getHelperWallet(user.uid);
         const wds = Array.from(fallbackStore.withdrawals.values()).filter((item) => item.helperId === user.uid);
 
         // Fetch all delivered/completed orders of this helper
@@ -169,7 +160,7 @@ export const HelperWallet: React.FC = () => {
           (o) => o.helperId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
         );
 
-        setWallet({ ...w });
+        setWallet({ ...computedWallet });
         setWithdrawals([...wds]);
         setDeliveredOrders(helperOrders);
       }
@@ -261,12 +252,41 @@ export const HelperWallet: React.FC = () => {
     let totalCollected = 0;
     let commissionDue = 0;
     let paidCommission = 0;
+    let totalStoreOrdersAmount = 0;
+    let returnableStoreAmount = 0;
+    let nonAcceptableStoreCommission = 0;
 
     filteredOrders.forEach((o) => {
       const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
       earned += helperShare;
       totalCollected += baseFeeForHelper;
       commissionDue += platformShare;
+
+      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
+      shopOrders.forEach((so) => {
+        const price = so.price || 0;
+        if (price <= 0) return;
+        totalStoreOrdersAmount += price;
+
+        const isMyself = so.shopId === 'myself';
+        const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+
+        if (canReceive) {
+          returnableStoreAmount += price;
+        } else {
+          let commissionRate = Number(shop?.commissionPercent);
+          if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
+            const app = Array.from(fallbackStore.storeApplications.values()).find(
+              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+            );
+            commissionRate = Number(app?.commissionPercent) || 0;
+          }
+          if (commissionRate > 0) {
+            nonAcceptableStoreCommission += Math.round(price * (commissionRate / 100));
+          }
+        }
+      });
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -275,8 +295,23 @@ export const HelperWallet: React.FC = () => {
       }
     });
 
-    return { earned, totalCollected, commissionDue, paidCommission, count: filteredOrders.length };
-  }, [filteredOrders, filteredWithdrawals]);
+    const grossReceivable = totalCollected + returnableStoreAmount + nonAcceptableStoreCommission;
+    const netCommissionDue = Math.max(0, commissionDue - paidCommission);
+    const totalReceivable = Math.max(0, grossReceivable - paidCommission);
+
+    return {
+      earned,
+      totalCollected,
+      commissionDue: netCommissionDue,
+      paidCommission,
+      count: filteredOrders.length,
+      totalStoreOrdersAmount,
+      returnableStoreAmount,
+      nonAcceptableStoreCommission,
+      grossReceivable,
+      totalReceivable,
+    };
+  }, [filteredOrders, filteredWithdrawals, fallbackStore]);
 
   // Today's Metrics (local timezone date matching)
   const todayMetrics = useMemo(() => {
@@ -284,6 +319,8 @@ export const HelperWallet: React.FC = () => {
     let earnedToday = 0;
     let collectedToday = 0;
     let commissionDueToday = 0;
+    let returnableStoreAmountToday = 0;
+    let nonAcceptableStoreCommissionToday = 0;
     const todayOrders: Order[] = [];
 
     deliveredOrders.forEach((o) => {
@@ -295,6 +332,31 @@ export const HelperWallet: React.FC = () => {
         collectedToday += baseFeeForHelper;
         commissionDueToday += platformShare;
         todayOrders.push(o);
+
+        const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
+        shopOrders.forEach((so) => {
+          const price = so.price || 0;
+          if (price <= 0) return;
+
+          const isMyself = so.shopId === 'myself';
+          const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+          const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+
+          if (canReceive) {
+            returnableStoreAmountToday += price;
+          } else {
+            let commissionRate = Number(shop?.commissionPercent);
+            if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
+              const app = Array.from(fallbackStore.storeApplications.values()).find(
+                (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+              );
+              commissionRate = Number(app?.commissionPercent) || 0;
+            }
+            if (commissionRate > 0) {
+              nonAcceptableStoreCommissionToday += Math.round(price * (commissionRate / 100));
+            }
+          }
+        });
       }
     });
 
@@ -304,19 +366,38 @@ export const HelperWallet: React.FC = () => {
       return timeB - timeA;
     });
 
-    return { earnedToday, collectedToday, commissionDueToday, countToday: todayOrders.length, todayOrders };
-  }, [deliveredOrders]);
+    const grossReceivableToday = collectedToday + returnableStoreAmountToday + nonAcceptableStoreCommissionToday;
+    const totalReceivableToday = Math.max(0, grossReceivableToday - rangeMetrics.paidCommission);
+
+    return {
+      earnedToday,
+      collectedToday,
+      commissionDueToday,
+      countToday: todayOrders.length,
+      todayOrders,
+      returnableStoreAmountToday,
+      nonAcceptableStoreCommissionToday,
+      grossReceivableToday,
+      totalReceivableToday,
+    };
+  }, [deliveredOrders, rangeMetrics.paidCommission, fallbackStore]);
 
   // Filtered commission due (for display in filtered views)
   const displayCommissionDue = activePreset === 'TODAY'
-    ? todayMetrics.commissionDueToday
+    ? Math.max(0, todayMetrics.commissionDueToday - rangeMetrics.paidCommission)
     : activePreset === 'ALL_TIME'
-    ? (wallet?.balance || 0)
+    ? (wallet?.balance !== undefined ? wallet.balance : rangeMetrics.commissionDue)
     : rangeMetrics.commissionDue;
+
+  const currentTotalPayable = activePreset === 'ALL_TIME'
+    ? (wallet?.balance !== undefined ? wallet.balance : rangeMetrics.totalReceivable)
+    : activePreset === 'TODAY'
+    ? todayMetrics.totalReceivableToday
+    : rangeMetrics.totalReceivable;
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
-  const canPayback = (wallet?.balance || 0) > 0 && !hasPendingPayback;
+  const canPayback = (currentTotalPayable > 0 || (wallet?.balance || 0) > 0) && !hasPendingPayback;
 
   const handlePaybackSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -331,10 +412,10 @@ export const HelperWallet: React.FC = () => {
     }
 
     const amt = parseFloat(withdrawAmount);
-    if (!user || isNaN(amt) || amt <= 0 || amt > (wallet?.balance || 0)) {
+    if (!user || isNaN(amt) || amt <= 0) {
       await showAlert(
         'কমিশন পরিশোধের তথ্য ভুল',
-        `অনুগ্রহ করে ১ থেকে ৳${wallet?.balance || 0} এর মধ্যে বকেয়া কমিশন পরিশোধ করুন।`,
+        `অনুগ্রহ করে সঠিক পরিমাণ কমিশন পরিশোধ করুন।`,
         'warning'
       );
       return;
@@ -357,11 +438,11 @@ export const HelperWallet: React.FC = () => {
   };
 
   const presetLabels = {
-    ALL_TIME: 'All Times',
-    TODAY: 'Today',
-    LAST_7: 'Last 7 Days',
-    THIS_MONTH: 'This Month',
-    CUSTOM: 'Custom'
+    ALL_TIME: 'সকল সময়',
+    TODAY: 'আজকে',
+    LAST_7: 'গত ৭ দিন',
+    THIS_MONTH: 'এই মাস',
+    CUSTOM: 'কাস্টম'
   };
 
   const openOrdersBreakdown = (orders: Order[], title: string) => {
@@ -497,28 +578,28 @@ export const HelperWallet: React.FC = () => {
         {/* 4 Stats Grid - Clickable to view details */}
         <div className="grid grid-cols-2 gap-2.5 mb-5 text-white/90">
           <div
-            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Total Earned Orders`)}
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} মোট অর্জিত অর্ডার`)}
             className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-                {activePreset === 'ALL_TIME' ? 'Total Income' : 'Income'}
+                {activePreset === 'ALL_TIME' ? 'মোট আয়' : 'আয়'}
               </span>
               <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
             </div>
             <span className="text-base font-black text-white block truncate">
               ৳{rangeMetrics.earned}
             </span>
-            <span className="text-[9px] text-indigo-300 font-medium block">নিট আয়</span>
+            <span className="text-[9px] text-indigo-300 font-medium block">নিট পরিমাণ</span>
           </div>
           
           <div
-            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Total Collected Orders`)}
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} মোট সংগৃহীত অর্ডার`)}
             className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-                Total Collected
+                সংগৃহীত চার্জ
               </span>
               <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
             </div>
@@ -529,31 +610,57 @@ export const HelperWallet: React.FC = () => {
           </div>
 
           <div
-            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} Platform Commission Orders`)}
+            onClick={() => openOrdersBreakdown(filteredOrders, `${presetLabels[activePreset]} প্ল্যাটফর্ম ফি বিবরণ`)}
             className="bg-white/10 hover:bg-white/15 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs cursor-pointer transition-all active:scale-98 group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-                Platform Fee
+                প্ল্যাটফর্ম ফি
               </span>
               <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
             </div>
             <span className="text-base font-black text-indigo-200 block truncate">
               ৳{rangeMetrics.commissionDue}
             </span>
-            <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম ফি</span>
+            <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম শেয়ার</span>
           </div>
 
           <div className="bg-white/10 border border-white/5 p-3 rounded-2xl space-y-1 backdrop-blur-xs">
             <span className="text-[10px] text-indigo-200/80 font-bold block leading-tight">
-              {activePreset === 'ALL_TIME' ? 'Due Commission' : `${presetLabels[activePreset]} Commission`}
+              {activePreset === 'ALL_TIME' ? 'বকেয়া কমিশন' : `${presetLabels[activePreset]} এর কমিশন`}
             </span>
             <span className="text-base font-black text-amber-300 block truncate">
               ৳{displayCommissionDue}
             </span>
             <span className="text-[9px] text-amber-300/80 font-medium block">
-              {activePreset === 'ALL_TIME' ? 'পরিশোধযোগ্য বকেয়া' : 'এই সময়ের কমিশন'}
+              বকেয়া পরিমাণ
             </span>
+          </div>
+
+          {/* Total Payable Block */}
+          <div className="bg-gradient-to-br from-indigo-900/60 to-purple-900/60 border border-indigo-400/30 p-3.5 rounded-2xl space-y-1.5 backdrop-blur-xs col-span-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-indigo-200 font-extrabold block uppercase tracking-wider">
+                মোট প্রদেয় টাকা
+              </span>
+              <span className="text-xs font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full">
+                ৳{currentTotalPayable}
+              </span>
+            </div>
+            <div className="text-[10px] text-indigo-200/90 space-y-0.5 pt-1 border-t border-indigo-500/20 font-semibold">
+              <div className="flex justify-between">
+                <span>সংগৃহীত ডেলিভারি চার্জ:</span>
+                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.collectedToday : rangeMetrics.totalCollected}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>পার্টনার স্টোর অর্ডার:</span>
+                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.returnableStoreAmountToday : rangeMetrics.returnableStoreAmount}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>নন-পার্টনার স্টোর কমিশন:</span>
+                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.nonAcceptableStoreCommissionToday : rangeMetrics.nonAcceptableStoreCommission}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -573,7 +680,7 @@ export const HelperWallet: React.FC = () => {
               );
               return;
             }
-            setWithdrawAmount(String(wallet?.balance || 0));
+            setWithdrawAmount(String(currentTotalPayable || wallet?.balance || 0));
             setShowWithdrawModal(true);
           }}
           disabled={!canPayback}
@@ -809,12 +916,11 @@ export const HelperWallet: React.FC = () => {
             <form onSubmit={handlePaybackSubmit} className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">
-                  পরিশোধের পরিমাণ (বকেয়া: ৳{wallet?.balance})
+                  পরিশোধের পরিমাণ (মোট প্রদেয়: ৳{currentTotalPayable})
                 </label>
                 <input
                   type="number"
                   min={minWithdrawal}
-                  max={wallet?.balance || 0}
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}
                   className="w-full p-3.5 rounded-2xl border border-gray-200 font-extrabold text-base focus:border-emerald-500 outline-none"

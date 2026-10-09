@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
-import { fallbackStore, db } from '@/lib/firebase';
+import { fallbackStore, db, versionOf, createChangeGate } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
@@ -250,16 +250,16 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [completedReqHasMore, setCompletedReqHasMore] = useState(true);
 
   const storeId = useMemo(() => {
-    if (user?.storeId) return user.storeId;
+    if (user?.storeId && fallbackStore.shops.has(user.storeId)) return user.storeId;
     const foundShop = Array.from(fallbackStore.shops.values()).find(
-      (s) => s.ownerUserId === user?.uid
+      (s) => s.ownerUserId === user?.uid || (s.assignedUserIds && s.assignedUserIds.includes(user?.uid || ''))
     );
-    return foundShop?.id || undefined;
+    return foundShop?.id || (user?.isStoreApproved ? user?.storeId : undefined);
   }, [user]);
 
   // If user is not an approved store or has no shop, switch back to customer mode
   useEffect(() => {
-    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store' || Boolean(user?.storeId));
+    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store');
     if (user && !isStore) {
       setActiveMode('customer');
     }
@@ -535,8 +535,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const myRequestsLoaderRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // Skip the re-filter when a snapshot touched neither collection read here.
+    const ordersChanged = createChangeGate();
     const syncOrders = () => {
       if (!user) return;
+      if (!ordersChanged(versionOf(fallbackStore.orders), versionOf(fallbackStore.shopOrders))) return;
       const all = Array.from(fallbackStore.orders.values());
 
       // Store Orders: orders that involve this shop (via selectedShopIds)

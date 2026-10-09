@@ -3,7 +3,8 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Shop, LocationData, UserProfile } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, db } from '@/lib/firebase';
+import { doc, setDoc, getDocs, deleteDoc, query, collection, where } from 'firebase/firestore';
 import { parseStoreTypes } from '@/lib/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { MapPickerModal } from './MapPickerModal';
@@ -251,9 +252,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
       setError('অনুগ্রহ করে মানচিত্রে দোকানের সঠিক অবস্থান পিন করুন।');
       return;
     }
-    const commPercent = commissionPercent ? parseFloat(commissionPercent) : 0;
-    if (!commissionPercent || isNaN(commPercent) || commPercent < 2 || commPercent > 100) {
-      setError('প্রতি অর্ডারে কমিশন শতাংশ কমপক্ষে ২% হতে হবে।');
+    const commPercent = commissionPercent !== '' ? parseFloat(commissionPercent) : 0;
+    if (commissionPercent === '' || isNaN(commPercent) || commPercent < 0 || commPercent > 100) {
+      setError('প্রতি অর্ডারে কমিশন শতাংশ ০% থেকে ১০০% এর মধ্যে হতে হবে।');
       return;
     }
 
@@ -261,9 +262,21 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
       setSubmitting(true);
       setError('');
 
+      // Build list of previous user IDs associated with this shop
+      const prevAssignedIdsSet = new Set<string>();
+      if (shopToEdit?.ownerUserId) prevAssignedIdsSet.add(shopToEdit.ownerUserId);
+      if (shopToEdit?.assignedUserIds && Array.isArray(shopToEdit.assignedUserIds)) {
+        shopToEdit.assignedUserIds.forEach((id) => {
+          if (id) prevAssignedIdsSet.add(id);
+        });
+      }
+      const prevAssignedIds = Array.from(prevAssignedIdsSet);
+
       // Primary owner = first in assignedUserIds
-      const primaryOwner = assignedUserIds.length > 0 ? fallbackStore.users.get(assignedUserIds[0]) : undefined;
-      const prevAssignedIds: string[] = shopToEdit?.assignedUserIds ?? (shopToEdit?.ownerUserId ? [shopToEdit.ownerUserId] : []);
+      let primaryOwner: UserProfile | null = null;
+      if (assignedUserIds.length > 0) {
+        primaryOwner = (await fallbackStore.getUserForUpdate(assignedUserIds[0])) || fallbackStore.users.get(assignedUserIds[0]) || null;
+      }
 
       const shopData: Shop = {
         id: shopToEdit?.id || `shop-${Date.now()}`,
@@ -292,7 +305,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
 
       // Grant store role to all newly assigned users
       for (const uid of assignedUserIds) {
-        const assignedUser = fallbackStore.users.get(uid);
+        const assignedUser = (await fallbackStore.getUserForUpdate(uid)) || fallbackStore.users.get(uid);
         if (assignedUser) {
           const updatedUser: UserProfile = {
             ...assignedUser,
@@ -302,6 +315,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
             role: 'store',
             lastActiveMode: 'store',
           };
+          fallbackStore.users.set(uid, updatedUser);
           await fallbackStore.saveUser(updatedUser);
         }
       }
@@ -309,20 +323,84 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
       // Revert users who were previously assigned but no longer in the list
       for (const prevUid of prevAssignedIds) {
         if (!assignedUserIds.includes(prevUid)) {
-          const prevUser = fallbackStore.users.get(prevUid);
-          if (prevUser && prevUser.storeId === shopData.id) {
-            const resetUser: UserProfile = {
-              ...prevUser,
-              isStore: false,
-              isStoreApproved: false,
-              storeId: undefined,
-              role: prevUser.role === 'store' ? 'customer' : prevUser.role,
-              lastActiveMode: prevUser.lastActiveMode === 'store' ? 'customer' : prevUser.lastActiveMode,
-            };
+          // Check if user is assigned to any OTHER active shop
+          const allOtherShops = Array.from(fallbackStore.shops.values()).filter((s) => s.id !== shopData.id);
+          const otherShop = allOtherShops.find(
+            (s) => s.ownerUserId === prevUid || (s.assignedUserIds && s.assignedUserIds.includes(prevUid))
+          );
+
+          const prevUser = (await fallbackStore.getUserForUpdate(prevUid)) || fallbackStore.users.get(prevUid);
+
+          if (otherShop) {
+            // User still has another shop assigned — point storeId to that shop
+            if (prevUser) {
+              const updatedUser: UserProfile = {
+                ...prevUser,
+                storeId: otherShop.id,
+                isStore: true,
+                isStoreApproved: true,
+                role: 'store',
+              };
+              fallbackStore.users.set(prevUid, updatedUser);
+              await fallbackStore.saveUser(updatedUser);
+            }
+          } else {
+            // User has no other shop — completely revoke store permissions
+            const resetUser: UserProfile = prevUser
+              ? {
+                  ...prevUser,
+                  isStore: false,
+                  isStoreApproved: false,
+                  storeId: undefined,
+                  role: prevUser.role === 'store' ? 'customer' : prevUser.role,
+                  lastActiveMode: prevUser.lastActiveMode === 'store' ? 'customer' : prevUser.lastActiveMode,
+                }
+              : {
+                  uid: prevUid,
+                  displayName: 'User',
+                  email: '',
+                  role: 'customer',
+                  isHelper: false,
+                  isStore: false,
+                  isStoreApproved: false,
+                  storeId: undefined,
+                  lastActiveMode: 'customer',
+                  createdAt: new Date().toISOString(),
+                };
+
+            fallbackStore.users.set(prevUid, resetUser);
             await fallbackStore.saveUser(resetUser);
+
+            // Directly clean Firestore document with null storeId and false flags
+            try {
+              await setDoc(
+                doc(db, 'users', prevUid),
+                {
+                  isStore: false,
+                  isStoreApproved: false,
+                  storeId: null,
+                  role: resetUser.role,
+                  lastActiveMode: resetUser.lastActiveMode,
+                },
+                { merge: true }
+              );
+            } catch (_) {}
+
+            // Clean up any lingering store applications for this user
+            try {
+              const appSnap = await getDocs(
+                query(collection(db, 'storeApplications'), where('userId', '==', prevUid))
+              );
+              appSnap.forEach((d: any) => {
+                fallbackStore.storeApplications.delete(d.id);
+                deleteDoc(doc(db, 'storeApplications', d.id)).catch(() => {});
+              });
+            } catch (_) {}
           }
         }
       }
+
+      fallbackStore.notify();
 
       if (onSaved) onSaved();
       onClose();
@@ -563,7 +641,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               <div className="relative">
                 <input
                   type="number"
-                  min="2"
+                  min="0"
                   max="100"
                   step="0.5"
                   value={commissionPercent}
@@ -574,7 +652,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                 />
                 <span className="absolute right-4 top-3.5 text-sm font-black text-gray-400">%</span>
               </div>
-              <p className="text-[10px] text-gray-400">সর্বনিম্ন ২% কমিশন প্রয়োজন।</p>
+              <p className="text-[10px] text-gray-400">০% থেকে ১০০% পর্যন্ত কমিশন নির্ধারণ করা যাবে।</p>
             </div>
 
             {/* 5b. Order Receiving Capability Toggle */}

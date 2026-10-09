@@ -53,10 +53,11 @@ export const HelperRetailerMapModal: React.FC<HelperRetailerMapModalProps> = ({
     return Array.from(cats).sort();
   }, [shops]);
 
-  // Filtered shops based on selected categories
+  // Filtered shops based on selected categories (excluding blocked shops)
   const filteredShops = useMemo(() => {
-    if (selectedCategories.length === 0) return shops;
-    return shops.filter((s) => s.type && selectedCategories.includes(s.type.trim()));
+    const activeShops = (shops || []).filter((s) => !s.isBlocked);
+    if (selectedCategories.length === 0) return activeShops;
+    return activeShops.filter((s) => s.type && selectedCategories.includes(s.type.trim()));
   }, [shops, selectedCategories]);
 
   const toggleCategory = (cat: string) => {

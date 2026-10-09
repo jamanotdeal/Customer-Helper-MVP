@@ -264,9 +264,11 @@ export function calculateEstimatedFee(
 
   let processingFee = 0;
   const procConfig = settings.feeCalculatorProcessingFee;
-  if (procConfig && procConfig > 0 && productPrice > 0) {
+  if (procConfig && procConfig > 0) {
     if (settings.feeCalculatorProcessingFeeType === 'percent') {
-      processingFee = Math.round((productPrice * procConfig) / 100);
+      if (productPrice > 0) {
+        processingFee = Math.round((productPrice * procConfig) / 100);
+      }
     } else {
       processingFee = procConfig;
     }
@@ -434,6 +436,6 @@ export function calculateDeliveryFee(estimatedValue: number, settings: PricingSe
 }
 
 export function calculateHelperCommission(deliveryFee: number, settings: PricingSettings = DEFAULT_PRICING_SETTINGS): number {
-  const percent = settings.helperCommissionPercent || 80;
+  const percent = settings.helperCommissionPercent ?? 80;
   return Math.round((deliveryFee * percent) / 100);
 }

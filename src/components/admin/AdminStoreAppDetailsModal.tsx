@@ -266,9 +266,9 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                 <div className="flex items-center gap-3">
                   <div className="flex-1">
                     <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Commission</span>
-                    <span className="text-2xl font-black text-emerald-700">{application.commissionPercent > 0 ? `${application.commissionPercent}%` : '—'}</span>
+                    <span className="text-2xl font-black text-emerald-700">{application.commissionPercent !== undefined && application.commissionPercent !== null ? `${application.commissionPercent}%` : '—'}</span>
                   </div>
-                  {application.commissionPercent > 0 && (
+                  {application.commissionPercent !== undefined && application.commissionPercent !== null && (
                     <span className="text-xs text-gray-500 font-medium">of product cost per order</span>
                   )}
                 </div>

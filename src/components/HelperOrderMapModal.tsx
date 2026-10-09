@@ -226,10 +226,10 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
     };
   }, [isOpen]);
 
-  // Determine available shops
-  const allAvailableShops: Shop[] = (shops && shops.length > 0)
+  // Determine available shops (filter out blocked stores)
+  const allAvailableShops: Shop[] = ((shops && shops.length > 0)
     ? shops
-    : Array.from(fallbackStore.shops.values());
+    : Array.from(fallbackStore.shops.values())).filter((s) => !s.isBlocked);
 
   const availableTypes = useMemo(() => {
     const configured = parseStoreTypes(fallbackStore.pricingSettings?.storeTypes);
@@ -483,6 +483,18 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
         setupMarkerHoverElevation(shopMarker);
 
         shopMarker.on('click', () => {
+          if (shop.isBlocked) {
+            if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
+              (window as any).showCustomAlert(
+                'দোকান স্থগিত',
+                'এই দোকানটি বর্তমানে স্থগিত রয়েছে। এখান থেকে অর্ডার পাঠানো সম্ভব নয়।',
+                'warning'
+              );
+            } else {
+              alert('এই দোকানটি বর্তমানে স্থগিত রয়েছে।');
+            }
+            return;
+          }
           if (isDone) {
             if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
               (window as any).showCustomAlert(
@@ -938,7 +950,10 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                         {onSelectShop && (
                           <button
                             type="button"
-                            onClick={() => onSelectShop(shop)}
+                            onClick={() => {
+                              if (shop.isBlocked) return;
+                              onSelectShop(shop);
+                            }}
                             className={`ml-auto h-9 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors active:scale-95 cursor-pointer ${
                               isRequested
                                 ? 'bg-white border border-purple-200 text-purple-700 hover:bg-purple-50'

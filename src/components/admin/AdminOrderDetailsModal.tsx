@@ -350,10 +350,19 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   const handleAdminSaveDue = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(adminDueAmountInput);
-    if (isNaN(amount) || amount <= 0) {
-      showAlert('সঠিক পরিমাণ লিখুন', 'অনুগ্রহ করে বাকি টাকার সঠিক পরিমাণ লিখুন।', 'warning');
+    if (isNaN(amount) || amount < 0) {
+      showAlert('সঠিক পরিমাণ লিখুন', 'অনুগ্রহ করে বাকি টাকার সঠিক পরিমাণ লিখুন (০ বা তার বেশি)।', 'warning');
       return;
     }
+
+    if (amount === 0) {
+      // Setting due amount to 0 removes the due payment record
+      await fallbackStore.removeOrderDuePayment(orderId);
+      setShowAdminDueModal(false);
+      showAlert('সফল', 'বাকি পেমেন্ট মুছে ফেলা হয়েছে (৳০ নির্ধারণ করায়)।', 'success');
+      return;
+    }
+
     if (!adminDueNoteInput.trim()) {
       showAlert('নোট প্রয়োজন', 'অনুগ্রহ করে কাস্টমারের জন্য বাকি পেমেন্টের কারণ লিখুন।', 'warning');
       return;
@@ -385,13 +394,9 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     );
     if (!confirmed) return;
 
-    await fallbackStore.updateOrder(orderId, (o) => {
-      const copy = { ...o };
-      delete copy.duePayment;
-      return copy;
-    });
-
+    await fallbackStore.removeOrderDuePayment(orderId);
     setShowAdminDueModal(false);
+    showAlert('সফল', 'বাকি পেমেন্ট সফলভাবে মুছে ফেলা হয়েছে।', 'success');
   };
 
   // Admin Two-Way Delivery state
@@ -1625,18 +1630,19 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               const weightKg = rawWeightKg > 0 ? Math.ceil(rawWeightKg) : 0;
               const productCost = order.productCost ?? 0;
               const isReturn = order.needDeliveryBack ?? false;
-              const est = calculateEstimatedFee(
-                { distanceKm, weightKg, isReturnRequested: isReturn, productPrice: productCost },
-                pricingSettings
-              );
               const shopPrices = fallbackStore.getShopOrdersForOrder(order.id);
               const shopTotal = shopPrices.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price ?? 0), 0);
-              const processingFeeValue = est.processingFee;
+              const effectiveProductCost = shopTotal > 0 ? shopTotal : productCost;
+              const est = calculateEstimatedFee(
+                { distanceKm, weightKg, isReturnRequested: isReturn, productPrice: effectiveProductCost },
+                pricingSettings
+              );
+              const processingFeeValue = est.processingFee || (order.processingFee || 0);
               const platformRevenueTotal = platformRevenue + processingFeeValue;
               const isFreeDeliv = !!order.isFreeDelivery;
               const effectiveCustomerDeliveryFee = isFreeDeliv ? 0 : order.deliveryFee;
               const appliedDueVal = order.appliedDuePayment?.amount || 0;
-              const totalCollectable = effectiveCustomerDeliveryFee + productCost + processingFeeValue + appliedDueVal;
+              const totalCollectable = effectiveCustomerDeliveryFee + effectiveProductCost + processingFeeValue + (est.returnFee || 0) + appliedDueVal;
               const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
                 { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
                 ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
@@ -2295,10 +2301,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <input
                   type="number"
                   step="any"
-                  min="1"
+                  min="0"
                   value={adminDueAmountInput}
                   onChange={(e) => setAdminDueAmountInput(e.target.value)}
-                  placeholder="e.g. 50"
+                  placeholder="e.g. 50 (০ দিলে বাকি মুছে যাবে)"
                   className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-600"
                   required
                   autoFocus
