@@ -45,6 +45,7 @@ interface WalletOrderBreakdownItem {
   helperPhone?: string;
   customerName?: string;
   note?: string;
+  isPaid?: boolean;
 }
 
 export const StoreWallet: React.FC = () => {
@@ -326,7 +327,7 @@ export const StoreWallet: React.FC = () => {
     combinedShopOrdersList.forEach((so) => {
       seenParentIds.add(so.parentOrderId);
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
       const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
       
       let breakdownStatus: 'DELIVERED' | 'ACTIVE' | 'CANCELED' = 'ACTIVE';
@@ -359,6 +360,7 @@ export const StoreWallet: React.FC = () => {
         helperPhone: parentOrder?.helperPhone,
         customerName: parentOrder?.customerName,
         note: so.note || so.helperNote,
+        isPaid: Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid),
       });
     });
 
@@ -367,7 +369,7 @@ export const StoreWallet: React.FC = () => {
     Array.from(fallbackStore.orders.values()).forEach((mo) => {
       const matches = mo.shopId === effectiveShopId || mo.selectedShopIds?.includes(effectiveShopId) || (storeId && mo.selectedShopIds?.includes(storeId));
       if (matches && !seenParentIds.has(mo.id)) {
-        const isCanceled = mo.status === 'CANCELED';
+        const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
         const isDelivered = mo.status === 'DELIVERED';
         
         let breakdownStatus: 'DELIVERED' | 'ACTIVE' | 'CANCELED' = 'ACTIVE';
@@ -399,6 +401,7 @@ export const StoreWallet: React.FC = () => {
           helperPhone: mo.helperPhone,
           customerName: mo.customerName,
           note: mo.additionalNote,
+          isPaid: Boolean(mo.isStorePaid || mo.isPaid),
         });
       }
     });
@@ -465,10 +468,10 @@ export const StoreWallet: React.FC = () => {
     let canceledAmount = 0;
 
     rangeOrderBreakdownItems.forEach((item) => {
-      totalGrossSales += item.grossSales;
       if (item.status === 'CANCELED') {
         canceledAmount += item.grossSales;
       } else if (item.status === 'DELIVERED') {
+        totalGrossSales += item.grossSales;
         commissionDue += item.commission;
         totalNetSales += item.netSales;
       }
@@ -708,7 +711,7 @@ export const StoreWallet: React.FC = () => {
               ৳{wallet?.balance !== undefined ? wallet.balance : unpaidBalance}
             </span>
             <span className="text-[8px] sm:text-[9px] text-emerald-300/90 font-semibold block">
-              Due for payout
+              Due payout (Not yet disbursed by Admin)
             </span>
           </div>
 
@@ -1055,6 +1058,17 @@ export const StoreWallet: React.FC = () => {
                             ? (item.rawStatus ? item.rawStatus.replace(/_/g, ' ') : 'In Progress')
                             : 'Canceled'}
                         </span>
+                        {item.status === 'DELIVERED' && (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                              item.isPaid
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : 'bg-amber-100 text-amber-800 border border-amber-300'
+                            }`}
+                          >
+                            {item.isPaid ? 'পরিশোধিত (Paid)' : 'অপরিশোধিত (Due)'}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[10px] font-bold text-gray-400">
                         {formatExactDateTime(item.createdAt)}

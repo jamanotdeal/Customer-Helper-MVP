@@ -2324,6 +2324,7 @@ class FallbackStore {
     this.saveLocalStore();
     this.notify();
     try {
+      await this.cancelShopOrdersForOrder(orderId);
       await deleteDoc(doc(db, 'orders', orderId));
     } catch (e: any) {
       console.warn('[Firestore] deleteOrder note:', e?.message || e);
@@ -3336,9 +3337,10 @@ class FallbackStore {
 
     const allShopOrders = Array.from(this.shopOrders.values());
     const validHelperShopOrders = allShopOrders.filter((so) => {
-      if (so.status === 'CANCELED') return false;
+      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+      const parentOrder = this.orders.get(so.parentOrderId);
+      if (parentOrder && (parentOrder.status === 'CANCELED' || (parentOrder.status as string) === 'CANCELLED')) return false;
       if (so.helperId === helperId || (so.parentOrderId && helperOrderIds.has(so.parentOrderId))) {
-        const parentOrder = this.orders.get(so.parentOrderId);
         return parentOrder ? (parentOrder.status === 'DELIVERED' || (parentOrder.status as string) === 'COMPLETED') : true;
       }
       return false;
@@ -3430,15 +3432,17 @@ class FallbackStore {
     storeShopOrders.forEach((so) => {
       seenParentOrderIds.add(so.parentOrderId);
       const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
       const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
       const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
 
-      totalSales += sales;
-      if (!isCanceled && isDelivered) {
-        const commission = Math.round(sales * (commissionRate / 100));
-        totalCommission += commission;
-        totalNetSales += Math.max(0, sales - commission);
+      if (!isCanceled) {
+        totalSales += sales;
+        if (isDelivered) {
+          const commission = Math.round(sales * (commissionRate / 100));
+          totalCommission += commission;
+          totalNetSales += Math.max(0, sales - commission);
+        }
       }
     });
 
@@ -3447,14 +3451,13 @@ class FallbackStore {
     allMainOrders.forEach((mo) => {
       const matchesShop = mo.shopId === effectiveShopId || mo.shopId === targetStoreId || mo.selectedShopIds?.includes(effectiveShopId) || mo.selectedShopIds?.includes(targetStoreId);
       if (matchesShop && !seenParentOrderIds.has(mo.id)) {
-        if (mo.status === 'DELIVERED' || mo.status === 'CANCELED') {
+        const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
+        if (!isCanceled && mo.status === 'DELIVERED') {
           const sales = mo.productCost || 0;
           totalSales += sales;
-          if (mo.status === 'DELIVERED') {
-            const commission = Math.round(sales * (commissionRate / 100));
-            totalCommission += commission;
-            totalNetSales += Math.max(0, sales - commission);
-          }
+          const commission = Math.round(sales * (commissionRate / 100));
+          totalCommission += commission;
+          totalNetSales += Math.max(0, sales - commission);
         }
       }
     });
@@ -3574,6 +3577,321 @@ class FallbackStore {
     }
   }
 
+  public async markStoreOrdersAsPaid(
+    shopId: string,
+    storeUserId: string,
+    amount: number,
+    disbursementId: string
+  ): Promise<string[]> {
+    const paidOrderIds: string[] = [];
+    const targetShopId = shopId;
+    const targetUserId = storeUserId || (shopId.startsWith('store-') ? shopId.replace('store-', '') : shopId);
+    const now = new Date().toISOString();
+
+    const shopDoc = this.shops.get(targetShopId) || Array.from(this.shops.values()).find(
+      (s) => s.id === targetShopId || s.ownerUserId === targetUserId || s.id === `store-${targetUserId}`
+    );
+    const effectiveShopId = shopDoc?.id || targetShopId;
+
+    let commissionRate = Number(shopDoc?.commissionPercent);
+    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined) {
+      const app = Array.from(this.storeApplications.values()).find(
+        (a) => a.userId === targetUserId || a.id === shopDoc?.applicationId
+      );
+      commissionRate = Number(app?.commissionPercent) || 0;
+    }
+
+    // 1. Gather all shop orders for this store
+    const allShopOrders = Array.from(this.shopOrders.values());
+    const storeShopOrders = allShopOrders.filter((so) => {
+      const matches = so.shopId === effectiveShopId || so.shopId === targetShopId || so.shopId === targetUserId || so.shopId === `store-${targetUserId}`;
+      if (!matches) return false;
+      const parent = this.orders.get(so.parentOrderId);
+      const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED' || so.status === 'HANDOVER';
+      return isDelivered && !so.isPaid;
+    });
+
+    // 2. Gather parent orders for this store not already covered by shop orders
+    const allOrders = Array.from(this.orders.values());
+    const storeOrders = allOrders.filter((o) => {
+      const matches = o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId || o.shopId === `store-${targetUserId}` ||
+        o.selectedShopIds?.includes(effectiveShopId) || o.selectedShopIds?.includes(targetShopId) || o.selectedShopIds?.includes(targetUserId);
+      if (!matches) return false;
+      const isDelivered = o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
+      return isDelivered && !o.isStorePaid;
+    });
+
+    const orderEntries: {
+      orderId: string;
+      shopOrder?: ShopOrder;
+      order?: Order;
+      createdAt: string;
+      netAmount: number;
+    }[] = [];
+
+    const seenOrderIds = new Set<string>();
+
+    storeShopOrders.forEach((so) => {
+      seenOrderIds.add(so.parentOrderId || so.id);
+      const parent = this.orders.get(so.parentOrderId);
+      const gross = (so.price && so.price > 0) ? so.price : (parent?.productCost || 0);
+      const comm = Math.round(gross * (commissionRate / 100));
+      const net = Math.max(0, gross - comm);
+      orderEntries.push({
+        orderId: so.parentOrderId || so.id,
+        shopOrder: so,
+        order: parent,
+        createdAt: so.createdAt || parent?.createdAt || now,
+        netAmount: net,
+      });
+    });
+
+    storeOrders.forEach((o) => {
+      if (!seenOrderIds.has(o.id)) {
+        seenOrderIds.add(o.id);
+        const gross = o.productCost || 0;
+        const comm = Math.round(gross * (commissionRate / 100));
+        const net = Math.max(0, gross - comm);
+        orderEntries.push({
+          orderId: o.id,
+          order: o,
+          createdAt: o.createdAt || now,
+          netAmount: net,
+        });
+      }
+    });
+
+    // Sort oldest first (FIFO)
+    orderEntries.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let remaining = amount;
+    const totalUnpaidNet = orderEntries.reduce((sum, e) => sum + e.netAmount, 0);
+    const markAll = amount >= totalUnpaidNet && totalUnpaidNet > 0;
+
+    for (const entry of orderEntries) {
+      if (remaining <= 0 && !markAll) break;
+
+      if (entry.shopOrder) {
+        const updatedSo: ShopOrder = {
+          ...entry.shopOrder,
+          isPaid: true,
+          paidAt: now,
+          disbursementId,
+        };
+        this.shopOrders.set(updatedSo.id, updatedSo);
+        try {
+          await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+        } catch (e) {
+          console.warn('[Firestore] markStoreOrdersAsPaid shopOrder err:', e);
+        }
+      }
+
+      const parentOrder = entry.order || this.orders.get(entry.orderId);
+      if (parentOrder) {
+        const hasHelper = Boolean(parentOrder.helperId);
+        const fullyPaid = !hasHelper || Boolean(parentOrder.isHelperPaid);
+        const updatedOrder: Order = {
+          ...parentOrder,
+          isStorePaid: true,
+          storePaidAt: now,
+          storeDisbursementId: disbursementId,
+          ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
+        };
+        this.orders.set(updatedOrder.id, updatedOrder);
+        paidOrderIds.push(updatedOrder.id);
+        try {
+          await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
+        } catch (e) {
+          console.warn('[Firestore] markStoreOrdersAsPaid order err:', e);
+        }
+      } else {
+        paidOrderIds.push(entry.orderId);
+      }
+
+      remaining -= (entry.netAmount > 0 ? entry.netAmount : 1);
+    }
+
+    this.notify();
+    return paidOrderIds;
+  }
+
+  public async markHelperOrdersAsPaid(
+    helperId: string,
+    amount: number,
+    withdrawalId: string
+  ): Promise<string[]> {
+    const paidOrderIds: string[] = [];
+    const now = new Date().toISOString();
+    const minFee = this.pricingSettings.feeCalculatorMinFee ?? 20;
+
+    const allOrders = Array.from(this.orders.values());
+    const helperOrders = allOrders.filter((o) => {
+      const isDelivered = o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
+      return o.helperId === helperId && isDelivered && !o.isHelperPaid;
+    });
+
+    // Sort oldest first (FIFO)
+    helperOrders.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const orderEntries = helperOrders.map((o) => {
+      const baseFee = o.isFreeDelivery
+        ? Math.max(o.originalDeliveryFee || 0, minFee)
+        : Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(baseFee, this.pricingSettings);
+      const platformShare = baseFee - helperShare;
+
+      let storeOwed = 0;
+      const shopOrders = this.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
+      shopOrders.forEach((so) => {
+        const price = so.price || 0;
+        if (price <= 0) return;
+        const isMyself = so.shopId === 'myself';
+        const shop = !isMyself ? this.shops.get(so.shopId) : null;
+        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+        if (canReceive) {
+          storeOwed += price;
+        } else {
+          let commRate = Number(shop?.commissionPercent);
+          if (isNaN(commRate) || shop?.commissionPercent === undefined) {
+            const app = Array.from(this.storeApplications.values()).find(
+              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+            );
+            commRate = Number(app?.commissionPercent) || 0;
+          }
+          if (commRate > 0) {
+            storeOwed += Math.round(price * (commRate / 100));
+          }
+        }
+      });
+
+      const totalOwed = platformShare + storeOwed;
+      return {
+        order: o,
+        totalOwed,
+      };
+    });
+
+    const totalUnpaidOwed = orderEntries.reduce((sum, e) => sum + e.totalOwed, 0);
+    const markAll = amount >= totalUnpaidOwed && totalUnpaidOwed > 0;
+    let remaining = amount;
+
+    for (const entry of orderEntries) {
+      if (remaining <= 0 && !markAll) break;
+
+      const o = entry.order;
+      const hasStore = Boolean(o.shopId || (o.selectedShopIds && o.selectedShopIds.length > 0));
+      const fullyPaid = !hasStore || Boolean(o.isStorePaid);
+
+      const updatedOrder: Order = {
+        ...o,
+        isHelperPaid: true,
+        helperPaidAt: now,
+        helperPaidWdId: withdrawalId,
+        ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
+      };
+
+      this.orders.set(updatedOrder.id, updatedOrder);
+      paidOrderIds.push(updatedOrder.id);
+
+      try {
+        await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
+      } catch (e) {
+        console.warn('[Firestore] markHelperOrdersAsPaid err:', e);
+      }
+
+      remaining -= (entry.totalOwed > 0 ? entry.totalOwed : 1);
+    }
+
+    this.notify();
+    return paidOrderIds;
+  }
+
+  public async unmarkOrdersPaidForWithdrawal(withdrawalId: string): Promise<void> {
+    const allOrders = Array.from(this.orders.values());
+    const allShopOrders = Array.from(this.shopOrders.values());
+
+    for (const so of allShopOrders) {
+      if (so.disbursementId === withdrawalId) {
+        const updatedSo: ShopOrder = {
+          ...so,
+          isPaid: false,
+          paidAt: undefined,
+          disbursementId: undefined,
+        };
+        this.shopOrders.set(updatedSo.id, updatedSo);
+        try {
+          await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
+        } catch (e) {}
+      }
+    }
+
+    for (const o of allOrders) {
+      let changed = false;
+      let isStorePaid = o.isStorePaid;
+      let storePaidAt = o.storePaidAt;
+      let storeDisbursementId = o.storeDisbursementId;
+      let isHelperPaid = o.isHelperPaid;
+      let helperPaidAt = o.helperPaidAt;
+      let helperPaidWdId = o.helperPaidWdId;
+
+      if (o.storeDisbursementId === withdrawalId) {
+        isStorePaid = false;
+        storePaidAt = undefined;
+        storeDisbursementId = undefined;
+        changed = true;
+      }
+      if (o.helperPaidWdId === withdrawalId) {
+        isHelperPaid = false;
+        helperPaidAt = undefined;
+        helperPaidWdId = undefined;
+        changed = true;
+      }
+
+      if (changed) {
+        const updatedOrder: Order = {
+          ...o,
+          isStorePaid,
+          storePaidAt,
+          storeDisbursementId,
+          isHelperPaid,
+          helperPaidAt,
+          helperPaidWdId,
+          isPaid: false,
+          paidAt: undefined,
+        };
+        this.orders.set(updatedOrder.id, updatedOrder);
+        try {
+          await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
+        } catch (e) {}
+      }
+    }
+
+    this.notify();
+  }
+
+  public async toggleOrderPaidStatus(orderId: string, paid?: boolean): Promise<Order | undefined> {
+    const order = this.orders.get(orderId);
+    if (!order) return undefined;
+    const now = new Date().toISOString();
+    const newPaid = paid !== undefined ? paid : !order.isPaid;
+    const updated: Order = {
+      ...order,
+      isPaid: newPaid,
+      paidAt: newPaid ? (order.paidAt || now) : undefined,
+      isStorePaid: newPaid,
+      storePaidAt: newPaid ? (order.storePaidAt || now) : undefined,
+      isHelperPaid: newPaid,
+      helperPaidAt: newPaid ? (order.helperPaidAt || now) : undefined,
+    };
+    this.orders.set(updated.id, updated);
+    this.notify();
+    try {
+      await setDoc(doc(db, 'orders', updated.id), cleanForFirestore(updated), { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] toggleOrderPaidStatus note:', e);
+    }
+    return updated;
+  }
 
   public async recordHelperPayback(helperId: string, amount: number, note: string, paymentMethod: string = 'Manual Record') {
     const txs = this.walletTransactions.get(helperId) || [];
@@ -3596,7 +3914,7 @@ class FallbackStore {
       helperName,
       amount,
       status: 'APPROVED',
-      paymentMethod: paymentMethod || 'Manual Record',
+      paymentMethod,
       accountNumber: note || 'Admin recorded payment',
       createdAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
@@ -3620,6 +3938,7 @@ class FallbackStore {
       await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+      await this.markHelperOrdersAsPaid(helperId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
@@ -3698,6 +4017,7 @@ class FallbackStore {
       }
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+      await this.markStoreOrdersAsPaid(shopId, storeUserId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordStoreDisbursement note:', e?.message || e);
     }
@@ -3726,7 +4046,6 @@ class FallbackStore {
     };
     this.withdrawals.set(req.id, req);
     this.notify();
-
     try {
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
     } catch (e: any) {
@@ -3764,6 +4083,7 @@ class FallbackStore {
       currentBalance = currentBalance + oldAmount;
       currentTotalPaid = Math.max(0, currentTotalPaid - oldAmount);
       currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn - oldAmount);
+      await this.unmarkOrdersPaidForWithdrawal(req.id);
     } else if (oldStatus !== 'APPROVED' && newStatus === 'APPROVED') {
       // Apply new approval
       currentBalance = Math.max(0, currentBalance - newAmount);
@@ -3785,12 +4105,25 @@ class FallbackStore {
       try {
         await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       } catch (e) { }
+
+      // Mark the orders from which this payment came as paid
+      if (req.userType === 'store') {
+        await this.markStoreOrdersAsPaid(req.shopId || req.helperId, req.helperId, newAmount, req.id);
+      } else {
+        await this.markHelperOrdersAsPaid(req.helperId, newAmount, req.id);
+      }
     } else if (oldStatus === 'APPROVED' && newStatus === 'APPROVED' && oldAmount !== newAmount) {
       // Amount changed while remaining approved
       const diff = newAmount - oldAmount;
       currentBalance = Math.max(0, currentBalance - diff);
       currentTotalPaid = Math.max(0, currentTotalPaid + diff);
       currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn + diff);
+
+      if (req.userType === 'store') {
+        await this.markStoreOrdersAsPaid(req.shopId || req.helperId, req.helperId, newAmount, req.id);
+      } else {
+        await this.markHelperOrdersAsPaid(req.helperId, newAmount, req.id);
+      }
     }
 
     const updatedWallet: Wallet = {

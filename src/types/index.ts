@@ -168,6 +168,16 @@ export interface Order {
   // Store request tagging
   isStoreOrder?: boolean;
   creatorRole?: string;
+
+  // Payment settlement tracking (Store Payout & Helper Commission Payback)
+  isPaid?: boolean;
+  paidAt?: string;
+  isHelperPaid?: boolean;
+  helperPaidAt?: string;
+  helperPaidWdId?: string;
+  isStorePaid?: boolean;
+  storePaidAt?: string;
+  storeDisbursementId?: string;
 }
 
 export interface OrderDuePayment {
@@ -587,6 +597,9 @@ export interface ShopOrder {
   createdAt: string;
   updatedAt: string;
   statusHistory: ShopOrderStatusHistoryItem[];
+  isPaid?: boolean;
+  paidAt?: string;
+  disbursementId?: string;
 }
 
 export interface FeeSuggestion {

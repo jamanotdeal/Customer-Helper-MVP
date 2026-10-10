@@ -1,5 +1,5 @@
 'use client';
-
+// AdminDashboard
 import React, { useEffect, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
@@ -1423,7 +1423,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       dedicatedHelperDelayMinutes: dedicatedDelayMins !== '' && !isNaN(Number(dedicatedDelayMins)) ? Number(dedicatedDelayMins) : 7,
       orderReceiverRule: receiverRule,
       allowedHelperTypes: allowedHelperTypes,
-      helperRadiusKm: helperRadiusKm !== '' && !isNaN(Number(helperRadiusKm)) ? Number(helperRadiusKm) : 3.5,
+      helperRadiusKm: helperRadiusKm !== '' && !isNaN(Number(helperRadiusKm)) ? Math.min(1000, Math.max(1, Number(helperRadiusKm))) : 3.5,
       mapLocationPreference: mapLocationPref,
       customCountryCode: customCountryCode.trim().toLowerCase() || 'bd',
       allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
@@ -1672,6 +1672,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         list = list.filter((o) => !o.helperId && o.status !== 'CANCELED' && o.status !== 'DELIVERED');
       } else if (statusFilter === 'DELIVERY_BACK') {
         list = list.filter((o) => !!o.needDeliveryBack);
+      } else if (statusFilter === 'PAID') {
+        list = list.filter((o) => o.isPaid || (o.status === 'DELIVERED' && (o.isHelperPaid || o.isStorePaid)));
+      } else if (statusFilter === 'UNPAID') {
+        list = list.filter((o) => o.status === 'DELIVERED' && !o.isPaid);
       } else {
         list = list.filter((o) => o.status === statusFilter);
       }
@@ -3885,6 +3889,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <option value="ON_THE_WAY">ON_THE_WAY</option>
                   <option value="ARRIVED">ARRIVED</option>
                   <option value="DELIVERED">DELIVERED</option>
+                  <option value="PAID">PAID (Settled Orders)</option>
+                  <option value="UNPAID">UNPAID (Pending Settlement)</option>
                   <option value="CANCELED">CANCELED</option>
                   <option value="UNASSIGNED">Unassigned Only</option>
                   <option value="DELIVERY_BACK">Return Orders Only</option>
@@ -4082,6 +4088,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[9px] font-black uppercase tracking-wide w-fit border border-indigo-200">
                                 🔁 Return
                               </span>
+                            )}
+                            {ord.status === 'DELIVERED' && (
+                              <div className="mt-0.5">
+                                {ord.isPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-wide">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Paid
+                                  </span>
+                                ) : ord.isStorePaid && !ord.isHelperPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black uppercase tracking-wide">
+                                    Store Paid
+                                  </span>
+                                ) : ord.isHelperPaid && !ord.isStorePaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-black uppercase tracking-wide">
+                                    Helper Paid
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black uppercase tracking-wide">
+                                    Unpaid
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
                         </td>
@@ -4290,6 +4317,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <option value="PRICE_LOW">Price (Low to High)</option>
                 </select>
               </div>
+
+              {/* Date Filter – Start */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Start Date</label>
+                <input
+                  type="date"
+                  value={storeOrdersStartDate}
+                  onChange={(e) => {
+                    setStoreOrdersStartDate(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                />
+              </div>
+
+              {/* Date Filter – End */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">End Date</label>
+                <input
+                  type="date"
+                  value={storeOrdersEndDate}
+                  onChange={(e) => {
+                    setStoreOrdersEndDate(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                />
+              </div>
+
+              {/* Filter by Helper */}
+              <div className="md:col-span-2">
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Filter by Helper</label>
+                <select
+                  value={storeOrdersHelperFilter}
+                  onChange={(e) => {
+                    setStoreOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Helpers</option>
+                  {Array.from(
+                    new Map(
+                      realStoreOrders
+                        .filter((so) => so.helperId && so.helperName)
+                        .map((so) => [so.helperId, { id: so.helperId, name: so.helperName! }])
+                    ).values()
+                  )
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Clear All Filters */}
+              {(storeOrdersStartDate || storeOrdersEndDate || storeOrdersHelperFilter !== 'ALL' || storeOrdersShopFilter !== 'ALL' || storeOrdersStatusFilter !== 'ALL' || storeOrdersAppliedSearchQuery) && (
+                <div className="flex items-end">
+                  <button
+                    onClick={() => {
+                      setStoreOrdersStartDate('');
+                      setStoreOrdersEndDate('');
+                      setStoreOrdersHelperFilter('ALL');
+                      setStoreOrdersShopFilter('ALL');
+                      setStoreOrdersStatusFilter('ALL');
+                      setStoreOrdersSearchQuery('');
+                      setStoreOrdersAppliedSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="w-full p-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <X className="w-3 h-3" />
+                    Clear All Filters
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Table */}
@@ -6411,8 +6516,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <input
                   type="number"
                   step="any"
-                  min={0}
-                  max={50}
+                  min={1}
+                  max={1000}
                   value={helperRadiusKm}
                   onChange={(e) => setHelperRadiusKm(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
@@ -7497,22 +7602,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           let running = 0;
           let totalSales = 0;       // all (delivered + running) for display
           let deliveredSales = 0;   // only delivered/handover — for unpaid balance
+          let todaySales = 0;
+
+          const now = new Date();
+          const todayYear = now.getFullYear();
+          const todayMonth = now.getMonth();
+          const todayDate = now.getDate();
+
+          const isSameDay = (dateStr?: string) => {
+            if (!dateStr) return false;
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return false;
+            return d.getFullYear() === todayYear && d.getMonth() === todayMonth && d.getDate() === todayDate;
+          };
 
           const seenParentIds = new Set<string>();
           allShopOrdersList.forEach((so) => {
             if (so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`) {
               seenParentIds.add(so.parentOrderId);
               const parentOrder = allOrdersList.find((o) => o.id === so.parentOrderId);
-              const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+              const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
               const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
 
               if (isCanceled) {
                 rejected++;
               } else if (isCompleted) {
                 completed++;
-                const price = so.price || parentOrder?.productCost || 0;
+                const price = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
                 totalSales += price;
                 deliveredSales += price;
+
+                if (isSameDay(parentOrder?.deliveredAt || so.updatedAt || so.createdAt)) {
+                  todaySales += price;
+                }
               } else {
                 running++;
                 totalSales += (so.price || 0);
@@ -7527,12 +7649,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               mo.selectedShopIds?.includes(targetShopId) ||
               mo.selectedShopIds?.includes(storeUserId);
             if (matches && !seenParentIds.has(mo.id)) {
-              if (mo.status === 'CANCELED') {
+              if (mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED') {
                 rejected++;
               } else if (mo.status === 'DELIVERED') {
                 completed++;
-                totalSales += (mo.productCost || 0);
-                deliveredSales += (mo.productCost || 0);
+                const price = mo.productCost || 0;
+                totalSales += price;
+                deliveredSales += price;
+
+                if (isSameDay(mo.deliveredAt || mo.createdAt)) {
+                  todaySales += price;
+                }
               } else {
                 running++;
                 totalSales += (mo.productCost || 0);
@@ -7563,6 +7690,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             rejected,
             running,
             totalSales,
+            todaySales,
             commission,
             netSales,
             totalDisbursed,
@@ -8044,6 +8172,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           rejected: 0,
                           running: 0,
                           totalSales: 0,
+                          todaySales: 0,
                           commission: 0,
                           netSales: 0,
                           totalDisbursed: 0,
@@ -8172,7 +8301,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </span>
                               </div>
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
-                                <div>Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
+                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block mb-0.5">Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong></div>
+                                <div>Total Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
                                 <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong></div>
                               </div>
                             </td>
