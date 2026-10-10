@@ -135,6 +135,8 @@ export interface ShopMetrics {
   running: number;
   /** Delivered and running sales, for display. */
   totalSales: number;
+  /** Sales delivered today (local time). */
+  todaySales: number;
   commission: number;
   netSales: number;
   totalDisbursed: number;
@@ -155,8 +157,21 @@ export function computeShopMetrics(
   shops: Shop[],
   shopOrders: ShopOrder[],
   orders: Order[],
-  withdrawals: WithdrawalRequest[]
+  withdrawals: WithdrawalRequest[],
+  now: Date = new Date()
 ): Map<string, ShopMetrics> {
+  const todayYear = now.getFullYear();
+  const todayMonth = now.getMonth();
+  const todayDate = now.getDate();
+  const isSameDay = (dateStr?: string) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    return d.getFullYear() === todayYear && d.getMonth() === todayMonth && d.getDate() === todayDate;
+  };
+  // Older documents spell it both ways.
+  const isCanceledStatus = (status?: string) => status === 'CANCELED' || status === 'CANCELLED';
+
   const orderById = new Map<string, Order>();
   const ordersByShopKey = new Map<string, number[]>();
   orders.forEach((o, position) => {
@@ -193,6 +208,7 @@ export function computeShopMetrics(
     let running = 0;
     let totalSales = 0; // all (delivered + running) for display
     let deliveredSales = 0; // only delivered/handover — for unpaid balance
+    let todaySales = 0;
 
     const seenParentIds = new Set<string>();
     mergePositions([
@@ -203,16 +219,17 @@ export function computeShopMetrics(
       const so = shopOrders[position];
       seenParentIds.add(so.parentOrderId);
       const parentOrder = orderById.get(so.parentOrderId);
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCanceled = isCanceledStatus(so.status) || isCanceledStatus(parentOrder?.status);
       const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
 
       if (isCanceled) {
         rejected++;
       } else if (isCompleted) {
         completed++;
-        const price = so.price || parentOrder?.productCost || 0;
+        const price = so.price && so.price > 0 ? so.price : parentOrder?.productCost || 0;
         totalSales += price;
         deliveredSales += price;
+        if (isSameDay(parentOrder?.deliveredAt || so.updatedAt || so.createdAt)) todaySales += price;
       } else {
         running++;
         totalSales += so.price || 0;
@@ -222,12 +239,14 @@ export function computeShopMetrics(
     mergePositions([ordersByShopKey.get(targetShopId), ordersByShopKey.get(storeUserId)]).forEach((position) => {
       const mo = orders[position];
       if (seenParentIds.has(mo.id)) return;
-      if (mo.status === 'CANCELED') {
+      if (isCanceledStatus(mo.status)) {
         rejected++;
       } else if (mo.status === 'DELIVERED') {
         completed++;
-        totalSales += mo.productCost || 0;
-        deliveredSales += mo.productCost || 0;
+        const price = mo.productCost || 0;
+        totalSales += price;
+        deliveredSales += price;
+        if (isSameDay(mo.deliveredAt || mo.createdAt)) todaySales += price;
       } else {
         running++;
         totalSales += mo.productCost || 0;
@@ -249,7 +268,7 @@ export function computeShopMetrics(
     ]).reduce((sum, position) => sum + withdrawals[position].amount, 0);
     const unpaidBalance = Math.max(0, deliveredNetSales - totalDisbursed);
 
-    metrics.set(s.id, { completed, rejected, running, totalSales, commission, netSales, totalDisbursed, unpaidBalance });
+    metrics.set(s.id, { completed, rejected, running, totalSales, todaySales, commission, netSales, totalDisbursed, unpaidBalance });
   });
   return metrics;
 }

@@ -738,7 +738,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (storeStatusFilter !== 'ALL') {
       result = result.filter((so) => {
         const parentStatus = getParentOrderStatus(so.parentOrderId);
-        const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+        const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentStatus === 'CANCELED' || (parentStatus as string) === 'CANCELLED';
         const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
         const isActive = !isCanceled && !isDelivered;
 

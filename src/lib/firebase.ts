@@ -3598,6 +3598,7 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
     try {
+      await this.cancelShopOrdersForOrder(orderId);
       await deleteDoc(doc(db, 'orders', orderId));
     } catch (e: any) {
       console.warn('[Firestore] deleteOrder note:', e?.message || e);
@@ -5083,7 +5084,7 @@ class FallbackStore {
     // Store Order amounts and commissions calculation
     const commissionRateByShop = new Map<string, number>();
     this.shopOrders.forEach((so) => {
-      if (so.status === 'CANCELED') return;
+      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return;
       const price = so.price || 0;
       if (price <= 0) return;
 
@@ -5188,15 +5189,17 @@ class FallbackStore {
     storeShopOrders.forEach((so) => {
       seenParentOrderIds.add(so.parentOrderId);
       const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
+      const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
       const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
       const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
 
-      totalSales += sales;
-      if (!isCanceled && isDelivered) {
-        const commission = Math.round(sales * (commissionRate / 100));
-        totalCommission += commission;
-        totalNetSales += Math.max(0, sales - commission);
+      if (!isCanceled) {
+        totalSales += sales;
+        if (isDelivered) {
+          const commission = Math.round(sales * (commissionRate / 100));
+          totalCommission += commission;
+          totalNetSales += Math.max(0, sales - commission);
+        }
       }
     });
 
@@ -5205,14 +5208,13 @@ class FallbackStore {
     allMainOrders.forEach((mo) => {
       const matchesShop = mo.shopId === effectiveShopId || mo.shopId === targetStoreId || mo.selectedShopIds?.includes(effectiveShopId) || mo.selectedShopIds?.includes(targetStoreId);
       if (matchesShop && !seenParentOrderIds.has(mo.id)) {
-        if (mo.status === 'DELIVERED' || mo.status === 'CANCELED') {
+        const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
+        if (!isCanceled && mo.status === 'DELIVERED') {
           const sales = mo.productCost || 0;
           totalSales += sales;
-          if (mo.status === 'DELIVERED') {
-            const commission = Math.round(sales * (commissionRate / 100));
-            totalCommission += commission;
-            totalNetSales += Math.max(0, sales - commission);
-          }
+          const commission = Math.round(sales * (commissionRate / 100));
+          totalCommission += commission;
+          totalNetSales += Math.max(0, sales - commission);
         }
       }
     });
@@ -5332,6 +5334,340 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Sends field changes for many orders / shop orders, a batch at a time.
+   *
+   * Only the named fields are written. The paid markers used to be saved by
+   * writing each document's whole cached copy back, one awaited write per
+   * document: a payout covering a few hundred orders was a few hundred round
+   * trips, and every one of them put the rest of the document back to what
+   * this device last saw — including the status of an order still on its way.
+   * Changes to the same document are combined.
+   */
+  private async commitFieldUpdates(
+    updates: { collection: 'orders' | 'shopOrders'; id: string; fields: Record<string, unknown> }[],
+    label: string
+  ): Promise<void> {
+    const byDocument = new Map<string, { collection: 'orders' | 'shopOrders'; id: string; fields: Record<string, unknown> }>();
+    updates.forEach((u) => {
+      const key = `${u.collection}/${u.id}`;
+      const existing = byDocument.get(key);
+      if (existing) Object.assign(existing.fields, u.fields);
+      else byDocument.set(key, { ...u, fields: { ...u.fields } });
+    });
+    const all = Array.from(byDocument.values());
+    for (let i = 0; i < all.length; i += 400) {
+      const chunk = all.slice(i, i + 400);
+      try {
+        const batch = writeBatch(db);
+        chunk.forEach((u) => batch.update(doc(db, u.collection, u.id), u.fields));
+        await batch.commit();
+      } catch (e: any) {
+        // A single document that no longer exists fails its whole batch, so
+        // the rest of that batch is sent one by one.
+        console.warn(`[Firestore] ${label}: batch failed, writing individually:`, e?.message || e);
+        await Promise.all(
+          chunk.map((u) =>
+            updateDoc(doc(db, u.collection, u.id), u.fields).catch((err) =>
+              console.warn(`[Firestore] ${label} ${u.collection}/${u.id}:`, err?.message || err)
+            )
+          )
+        );
+      }
+    }
+  }
+
+  public async markStoreOrdersAsPaid(
+    shopId: string,
+    storeUserId: string,
+    amount: number,
+    disbursementId: string
+  ): Promise<string[]> {
+    const paidOrderIds: string[] = [];
+    const targetShopId = shopId;
+    const targetUserId = storeUserId || (shopId.startsWith('store-') ? shopId.replace('store-', '') : shopId);
+    const now = new Date().toISOString();
+
+    const shopDoc = this.shops.get(targetShopId) || Array.from(this.shops.values()).find(
+      (s) => s.id === targetShopId || s.ownerUserId === targetUserId || s.id === `store-${targetUserId}`
+    );
+    const effectiveShopId = shopDoc?.id || targetShopId;
+
+    let commissionRate = Number(shopDoc?.commissionPercent);
+    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined) {
+      const app = Array.from(this.storeApplications.values()).find(
+        (a) => a.userId === targetUserId || a.id === shopDoc?.applicationId
+      );
+      commissionRate = Number(app?.commissionPercent) || 0;
+    }
+
+    // 1. Gather all shop orders for this store
+    const allShopOrders = Array.from(this.shopOrders.values());
+    const storeShopOrders = allShopOrders.filter((so) => {
+      const matches = so.shopId === effectiveShopId || so.shopId === targetShopId || so.shopId === targetUserId || so.shopId === `store-${targetUserId}`;
+      if (!matches) return false;
+      const parent = this.orders.get(so.parentOrderId);
+      const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED' || so.status === 'HANDOVER';
+      return isDelivered && !so.isPaid;
+    });
+
+    // 2. Gather parent orders for this store not already covered by shop orders
+    const allOrders = Array.from(this.orders.values());
+    const storeOrders = allOrders.filter((o) => {
+      const matches = o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId || o.shopId === `store-${targetUserId}` ||
+        o.selectedShopIds?.includes(effectiveShopId) || o.selectedShopIds?.includes(targetShopId) || o.selectedShopIds?.includes(targetUserId);
+      if (!matches) return false;
+      const isDelivered = o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
+      return isDelivered && !o.isStorePaid;
+    });
+
+    const orderEntries: {
+      orderId: string;
+      shopOrder?: ShopOrder;
+      order?: Order;
+      createdAt: string;
+      netAmount: number;
+    }[] = [];
+
+    const seenOrderIds = new Set<string>();
+
+    storeShopOrders.forEach((so) => {
+      seenOrderIds.add(so.parentOrderId || so.id);
+      const parent = this.orders.get(so.parentOrderId);
+      const gross = (so.price && so.price > 0) ? so.price : (parent?.productCost || 0);
+      const comm = Math.round(gross * (commissionRate / 100));
+      const net = Math.max(0, gross - comm);
+      orderEntries.push({
+        orderId: so.parentOrderId || so.id,
+        shopOrder: so,
+        order: parent,
+        createdAt: so.createdAt || parent?.createdAt || now,
+        netAmount: net,
+      });
+    });
+
+    storeOrders.forEach((o) => {
+      if (!seenOrderIds.has(o.id)) {
+        seenOrderIds.add(o.id);
+        const gross = o.productCost || 0;
+        const comm = Math.round(gross * (commissionRate / 100));
+        const net = Math.max(0, gross - comm);
+        orderEntries.push({
+          orderId: o.id,
+          order: o,
+          createdAt: o.createdAt || now,
+          netAmount: net,
+        });
+      }
+    });
+
+    // Sort oldest first (FIFO)
+    orderEntries.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let remaining = amount;
+    const totalUnpaidNet = orderEntries.reduce((sum, e) => sum + e.netAmount, 0);
+    const markAll = amount >= totalUnpaidNet && totalUnpaidNet > 0;
+
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
+    for (const entry of orderEntries) {
+      if (remaining <= 0 && !markAll) break;
+
+      if (entry.shopOrder) {
+        const paid = { isPaid: true, paidAt: now, disbursementId };
+        this.shopOrders.set(entry.shopOrder.id, { ...entry.shopOrder, ...paid });
+        writes.push({ collection: 'shopOrders', id: entry.shopOrder.id, fields: paid });
+      }
+
+      const parentOrder = entry.order || this.orders.get(entry.orderId);
+      if (parentOrder) {
+        const hasHelper = Boolean(parentOrder.helperId);
+        const fullyPaid = !hasHelper || Boolean(parentOrder.isHelperPaid);
+        const paid = {
+          isStorePaid: true,
+          storePaidAt: now,
+          storeDisbursementId: disbursementId,
+          ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
+        };
+        this.orders.set(parentOrder.id, { ...parentOrder, ...paid });
+        paidOrderIds.push(parentOrder.id);
+        writes.push({ collection: 'orders', id: parentOrder.id, fields: paid });
+      } else {
+        paidOrderIds.push(entry.orderId);
+      }
+
+      remaining -= (entry.netAmount > 0 ? entry.netAmount : 1);
+    }
+
+    this.notify();
+    await this.commitFieldUpdates(writes, 'markStoreOrdersAsPaid');
+    return paidOrderIds;
+  }
+
+  public async markHelperOrdersAsPaid(
+    helperId: string,
+    amount: number,
+    withdrawalId: string
+  ): Promise<string[]> {
+    const paidOrderIds: string[] = [];
+    const now = new Date().toISOString();
+    const minFee = this.pricingSettings.feeCalculatorMinFee ?? 20;
+
+    const allOrders = Array.from(this.orders.values());
+    const helperOrders = allOrders.filter((o) => {
+      const isDelivered = o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
+      return o.helperId === helperId && isDelivered && !o.isHelperPaid;
+    });
+
+    // Sort oldest first (FIFO)
+    helperOrders.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const orderEntries = helperOrders.map((o) => {
+      const baseFee = o.isFreeDelivery
+        ? Math.max(o.originalDeliveryFee || 0, minFee)
+        : Math.max(o.deliveryFee || 0, minFee);
+      const helperShare = calculateHelperCommission(baseFee, this.pricingSettings);
+      const platformShare = baseFee - helperShare;
+
+      let storeOwed = 0;
+      const shopOrders = this.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
+      shopOrders.forEach((so) => {
+        const price = so.price || 0;
+        if (price <= 0) return;
+        const isMyself = so.shopId === 'myself';
+        const shop = !isMyself ? this.shops.get(so.shopId) : null;
+        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+        if (canReceive) {
+          storeOwed += price;
+        } else {
+          let commRate = Number(shop?.commissionPercent);
+          if (isNaN(commRate) || shop?.commissionPercent === undefined) {
+            const app = Array.from(this.storeApplications.values()).find(
+              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+            );
+            commRate = Number(app?.commissionPercent) || 0;
+          }
+          if (commRate > 0) {
+            storeOwed += Math.round(price * (commRate / 100));
+          }
+        }
+      });
+
+      const totalOwed = platformShare + storeOwed;
+      return {
+        order: o,
+        totalOwed,
+      };
+    });
+
+    const totalUnpaidOwed = orderEntries.reduce((sum, e) => sum + e.totalOwed, 0);
+    const markAll = amount >= totalUnpaidOwed && totalUnpaidOwed > 0;
+    let remaining = amount;
+
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
+    for (const entry of orderEntries) {
+      if (remaining <= 0 && !markAll) break;
+
+      const o = entry.order;
+      const hasStore = Boolean(o.shopId || (o.selectedShopIds && o.selectedShopIds.length > 0));
+      const fullyPaid = !hasStore || Boolean(o.isStorePaid);
+
+      const paid = {
+        isHelperPaid: true,
+        helperPaidAt: now,
+        helperPaidWdId: withdrawalId,
+        ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
+      };
+
+      this.orders.set(o.id, { ...o, ...paid });
+      paidOrderIds.push(o.id);
+      writes.push({ collection: 'orders', id: o.id, fields: paid });
+
+      remaining -= (entry.totalOwed > 0 ? entry.totalOwed : 1);
+    }
+
+    this.notify();
+    await this.commitFieldUpdates(writes, 'markHelperOrdersAsPaid');
+    return paidOrderIds;
+  }
+
+  public async unmarkOrdersPaidForWithdrawal(withdrawalId: string): Promise<void> {
+    // The cleared fields are deleted on the server (deleteField). Leaving them
+    // out of a merging write, as this used to, clears nothing: the order kept
+    // its paid date and the id of the withdrawal that no longer covers it.
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
+
+    Array.from(this.shopOrders.values()).forEach((so) => {
+      if (so.disbursementId !== withdrawalId) return;
+      this.shopOrders.set(so.id, { ...so, isPaid: false, paidAt: undefined, disbursementId: undefined });
+      writes.push({
+        collection: 'shopOrders',
+        id: so.id,
+        fields: { isPaid: false, paidAt: deleteField(), disbursementId: deleteField() },
+      });
+    });
+
+    Array.from(this.orders.values()).forEach((o) => {
+      const storePart = o.storeDisbursementId === withdrawalId;
+      const helperPart = o.helperPaidWdId === withdrawalId;
+      if (!storePart && !helperPart) return;
+
+      this.orders.set(o.id, {
+        ...o,
+        ...(storePart ? { isStorePaid: false, storePaidAt: undefined, storeDisbursementId: undefined } : {}),
+        ...(helperPart ? { isHelperPaid: false, helperPaidAt: undefined, helperPaidWdId: undefined } : {}),
+        isPaid: false,
+        paidAt: undefined,
+      });
+      writes.push({
+        collection: 'orders',
+        id: o.id,
+        fields: {
+          ...(storePart ? { isStorePaid: false, storePaidAt: deleteField(), storeDisbursementId: deleteField() } : {}),
+          ...(helperPart ? { isHelperPaid: false, helperPaidAt: deleteField(), helperPaidWdId: deleteField() } : {}),
+          isPaid: false,
+          paidAt: deleteField(),
+        },
+      });
+    });
+
+    this.notify();
+    await this.commitFieldUpdates(writes, 'unmarkOrdersPaidForWithdrawal');
+  }
+
+  public async toggleOrderPaidStatus(orderId: string, paid?: boolean): Promise<Order | undefined> {
+    const order = this.orders.get(orderId);
+    if (!order) return undefined;
+    const now = new Date().toISOString();
+    const newPaid = paid !== undefined ? paid : !order.isPaid;
+    const updated: Order = {
+      ...order,
+      isPaid: newPaid,
+      paidAt: newPaid ? (order.paidAt || now) : undefined,
+      isStorePaid: newPaid,
+      storePaidAt: newPaid ? (order.storePaidAt || now) : undefined,
+      isHelperPaid: newPaid,
+      helperPaidAt: newPaid ? (order.helperPaidAt || now) : undefined,
+    };
+    this.orders.set(updated.id, updated);
+    this.notify();
+    // The six paid fields only, and a cleared date is deleted, not left behind.
+    await this.commitFieldUpdates(
+      [{
+        collection: 'orders',
+        id: updated.id,
+        fields: {
+          isPaid: newPaid,
+          paidAt: updated.paidAt ?? deleteField(),
+          isStorePaid: newPaid,
+          storePaidAt: updated.storePaidAt ?? deleteField(),
+          isHelperPaid: newPaid,
+          helperPaidAt: updated.helperPaidAt ?? deleteField(),
+        },
+      }],
+      'toggleOrderPaidStatus'
+    );
+    return updated;
+  }
 
   public async recordHelperPayback(helperId: string, amount: number, note: string, paymentMethod: string = 'Manual Record') {
     const txs = this.walletTransactions.get(helperId) || [];
@@ -5354,7 +5690,7 @@ class FallbackStore {
       helperName,
       amount,
       status: 'APPROVED',
-      paymentMethod: paymentMethod || 'Manual Record',
+      paymentMethod,
       accountNumber: note || 'Admin recorded payment',
       createdAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
@@ -5378,6 +5714,7 @@ class FallbackStore {
       await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+      await this.markHelperOrdersAsPaid(helperId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
@@ -5456,6 +5793,7 @@ class FallbackStore {
       }
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+      await this.markStoreOrdersAsPaid(shopId, storeUserId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordStoreDisbursement note:', e?.message || e);
     }
@@ -5484,7 +5822,6 @@ class FallbackStore {
     };
     this.withdrawals.set(req.id, req);
     this.notify();
-
     try {
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
     } catch (e: any) {
@@ -5522,6 +5859,7 @@ class FallbackStore {
       currentBalance = currentBalance + oldAmount;
       currentTotalPaid = Math.max(0, currentTotalPaid - oldAmount);
       currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn - oldAmount);
+      await this.unmarkOrdersPaidForWithdrawal(req.id);
     } else if (oldStatus !== 'APPROVED' && newStatus === 'APPROVED') {
       // Apply new approval
       currentBalance = Math.max(0, currentBalance - newAmount);
@@ -5543,12 +5881,29 @@ class FallbackStore {
       try {
         await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       } catch (e) { }
+
+      // Mark the orders from which this payment came as paid
+      if (req.userType === 'store') {
+        await this.markStoreOrdersAsPaid(req.shopId || req.helperId, req.helperId, newAmount, req.id);
+      } else {
+        await this.markHelperOrdersAsPaid(req.helperId, newAmount, req.id);
+      }
     } else if (oldStatus === 'APPROVED' && newStatus === 'APPROVED' && oldAmount !== newAmount) {
       // Amount changed while remaining approved
       const diff = newAmount - oldAmount;
       currentBalance = Math.max(0, currentBalance - diff);
       currentTotalPaid = Math.max(0, currentTotalPaid + diff);
       currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn + diff);
+
+      // The orders the old amount covered are released first. Marking for the
+      // new amount on top of them covered old + new worth of orders with a
+      // payment of just the new amount.
+      await this.unmarkOrdersPaidForWithdrawal(req.id);
+      if (req.userType === 'store') {
+        await this.markStoreOrdersAsPaid(req.shopId || req.helperId, req.helperId, newAmount, req.id);
+      } else {
+        await this.markHelperOrdersAsPaid(req.helperId, newAmount, req.id);
+      }
     }
 
     const updatedWallet: Wallet = {

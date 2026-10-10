@@ -827,6 +827,15 @@ export const HelperWallet: React.FC = () => {
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800">
                               Delivered
                             </span>
+                            {ord.isHelperPaid || ord.isPaid ? (
+                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                পরিশোধিত (Paid)
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+                                অপরিশোধিত (Due)
+                              </span>
+                            )}
                             {ord.isFreeDelivery && (
                               <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-blue-100 text-blue-700">
                                 Free Delivery
