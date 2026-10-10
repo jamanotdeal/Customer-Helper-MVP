@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
+import { computeShopMetrics, createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
+import type { ShopMetrics } from '@/lib/adminMetrics';
 import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
@@ -569,6 +571,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // subscriber, so copying (and re-rendering) only what actually changed is what
   // keeps a wallet or notification update from re-rendering every list here.
   const adminSyncSeenRef = useRef<Record<string, unknown>>({});
+  // Bumped whenever something the helper wallets are computed from changes in
+  // the store. Not all of it is mirrored into state here, so the memoised
+  // helper list depends on this instead.
+  const [walletInputsVersion, setWalletInputsVersion] = useState(0);
   // True while the full order history is still arriving in the background, so
   // lifetime totals and reports can say they are not final yet.
   const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
@@ -582,6 +588,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         seen[key] = current;
         return true;
       };
+
+      // Everything fallbackStore.getHelperWallets reads. (An array, so that
+      // every one of them is checked and recorded, not just the first hit.)
+      const walletInputsChanged = [
+        changed('wallet:orders', versionOf(fallbackStore.orders)),
+        changed('wallet:withdrawals', versionOf(fallbackStore.withdrawals)),
+        changed('wallet:shopOrders', versionOf(fallbackStore.shopOrders)),
+        changed('wallet:shops', versionOf(fallbackStore.shops)),
+        changed('wallet:storeApplications', versionOf(fallbackStore.storeApplications)),
+        changed('wallet:pricing', fallbackStore.pricingSettings),
+      ].some(Boolean);
+      if (walletInputsChanged) setWalletInputsVersion((v) => v + 1);
 
       if (changed('orders', versionOf(fallbackStore.orders))) {
         const freshOrders = Array.from(fallbackStore.orders.values());
@@ -1107,11 +1125,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (c) => c.status === 'PENDING'
   );
 
+  const allOrdersById = React.useMemo(() => {
+    const map = new Map<string, Order>();
+    allOrders.forEach((o) => {
+      if (!map.has(o.id)) map.set(o.id, o);
+    });
+    return map;
+  }, [allOrders]);
+
   const badFeedbacks = React.useMemo(() => {
     return feedbacks
       .filter((f) => {
         if (!f || !f.id || f.mutuallyDiscussed) return false;
-        const linkedOrder = allOrders.find((o) => o.id === f.orderId);
+        const linkedOrder = allOrdersById.get(f.orderId);
         if (linkedOrder?.mutuallyDiscussed) return false;
 
         // ONLY strictly negative feedback:
@@ -1128,7 +1154,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return false;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [feedbacks, allOrders]);
+  }, [feedbacks, allOrdersById]);
 
   const totalExceptionsCount =
     cancellingRequests.filter(o => o.cancellationRequest?.status === 'PENDING').length +
@@ -1692,19 +1718,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Sorting (Default Latest First)
-    list.sort((a, b) => {
-      if (sortBy === 'OLDEST') {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      if (sortBy === 'FEE_HIGH') {
-        return b.deliveryFee - a.deliveryFee;
-      }
-      if (sortBy === 'FEE_LOW') {
-        return a.deliveryFee - b.deliveryFee;
-      }
-      // NEWEST default
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    if (sortBy === 'FEE_HIGH') {
+      list.sort((a, b) => b.deliveryFee - a.deliveryFee);
+    } else if (sortBy === 'FEE_LOW') {
+      list.sort((a, b) => a.deliveryFee - b.deliveryFee);
+    } else {
+      list = sortByDate(list, (o) => o.createdAt, sortBy === 'OLDEST');
+    }
 
     return list;
   };
@@ -1756,50 +1776,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Sorting
-    list.sort((a, b) => {
-      if (storeOrdersSortBy === 'OLDEST') {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      if (storeOrdersSortBy === 'PRICE_HIGH') {
-        return (b.price || 0) - (a.price || 0);
-      }
-      if (storeOrdersSortBy === 'PRICE_LOW') {
-        return (a.price || 0) - (b.price || 0);
-      }
-      // NEWEST default
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    if (storeOrdersSortBy === 'PRICE_HIGH') {
+      list.sort((a, b) => (b.price || 0) - (a.price || 0));
+    } else if (storeOrdersSortBy === 'PRICE_LOW') {
+      list.sort((a, b) => (a.price || 0) - (b.price || 0));
+    } else {
+      list = sortByDate(list, (so) => so.createdAt, storeOrdersSortBy === 'OLDEST');
+    }
 
     return list;
   };
 
 
   // 2. Helper Aggregated List
-  const getProcessedHelpers = () => {
-    const helperMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        phone: string;
-        email?: string;
-        nid?: string;
-        status: string;
-        completedJobs: number;
-        activeOrders: number;
-        storeOrdersCount: number;
-        storeOrdersPercentage: number;
-        totalEarned: number;
-        balance: number;
-        totalWithdrawn: number;
-        createdAt: string;
-        avgDeliveryTimeMins?: number;
-      }
-    >();
+  //
+  // Memoised, and built in one pass over the orders. It used to be rebuilt on
+  // every render — twice, when the table view was open — and looked up each
+  // helper's wallet and each order's shop orders inside the loop over orders,
+  // both of which walk whole collections themselves: opening the Helpers tab
+  // blocked the app for ~11 s with 1,300 orders.
+  type HelperRow = {
+    id: string;
+    name: string;
+    phone: string;
+    email?: string;
+    nid?: string;
+    status: string;
+    completedJobs: number;
+    activeOrders: number;
+    storeOrdersCount: number;
+    storeOrdersPercentage: number;
+    totalEarned: number;
+    balance: number;
+    totalWithdrawn: number;
+    createdAt: string;
+    avgDeliveryTimeMins?: number;
+  };
+  const processedHelpers = React.useMemo((): HelperRow[] => {
+    if (activeTab !== 'HELPERS') return [];
+    const helperMap = new Map<string, HelperRow>();
+
+    // Every helper's wallet, and which orders have shop orders, up front.
+    const helperIds = new Set<string>();
+    applications.forEach((app) => helperIds.add(app.userId));
+    allOrders.forEach((o) => {
+      if (o.helperId) helperIds.add(o.helperId);
+    });
+    const wallets = fallbackStore.getHelperWallets(helperIds);
+    const ordersWithShopOrders = new Set<string>();
+    fallbackStore.shopOrders.forEach((so) => {
+      if (so.parentOrderId) ordersWithShopOrders.add(so.parentOrderId);
+    });
 
     // Seed from helper applications & wallets
     applications.forEach((app) => {
-      const w = fallbackStore.getHelperWallet(app.userId);
+      const w = wallets.get(app.userId)!;
       helperMap.set(app.userId, {
         id: app.userId,
         name: app.legalName || app.userName,
@@ -1822,24 +1853,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // Aggregate from orders (using allOrders for complete history)
     allOrders.forEach((o) => {
       if (!o.helperId) return;
-      const w = fallbackStore.getHelperWallet(o.helperId);
-      const existing = helperMap.get(o.helperId) || {
-        id: o.helperId,
-        name: o.helperName || 'Helper',
-        phone: 'N/A',
-        status: 'APPROVED',
-        completedJobs: 0,
-        activeOrders: 0,
-        storeOrdersCount: 0,
-        storeOrdersPercentage: 0,
-        totalEarned: w.totalEarned,
-        balance: w.balance,
-        totalWithdrawn: w.totalWithdrawn,
-        createdAt: o.createdAt,
-      };
+      let existing = helperMap.get(o.helperId);
+      if (!existing) {
+        const w = wallets.get(o.helperId)!;
+        existing = {
+          id: o.helperId,
+          name: o.helperName || 'Helper',
+          phone: 'N/A',
+          status: 'APPROVED',
+          completedJobs: 0,
+          activeOrders: 0,
+          storeOrdersCount: 0,
+          storeOrdersPercentage: 0,
+          totalEarned: w.totalEarned,
+          balance: w.balance,
+          totalWithdrawn: w.totalWithdrawn,
+          createdAt: o.createdAt,
+        };
+        helperMap.set(o.helperId, existing);
+      }
 
-      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id);
-      if ((shopOrders && shopOrders.length > 0) || (o.selectedShopIds && o.selectedShopIds.length > 0) || o.isStoreOrder) {
+      if (ordersWithShopOrders.has(o.id) || (o.selectedShopIds && o.selectedShopIds.length > 0) || o.isStoreOrder) {
         existing.storeOrdersCount += 1;
       }
 
@@ -1857,8 +1891,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       } else if (o.status !== 'CANCELED') {
         existing.activeOrders += 1;
       }
-
-      helperMap.set(o.helperId, existing);
     });
 
     // Calculate average delivery time & store orders percentage for each helper
@@ -1895,30 +1927,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
 
     return list;
-  };
+    // walletInputsVersion stands for everything the wallets are computed from
+    // inside the store (orders, withdrawals, shop orders, shops, pricing).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, applications, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion]);
 
   // 4. Unified Users List with Live Running States
-  const getProcessedUsersList = () => {
+  //
+  // Memoised, with the orders indexed once (createUserOrderStats). It used to
+  // search the whole order list four times for every user, on every render
+  // (470 users × 1,300 orders × 4 ≈ 2.8 s per tab switch).
+  const processedUsersList = React.useMemo(() => {
+    if (activeTab !== 'USERS_LIST') return [];
     const usersList = serverUsers !== null ? serverUsers : users;
     const ordersSource = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
 
-    let list = usersList.map((u) => {
-      const activeReq = ordersSource.find(
-        (o) => (o.customerId === u.uid || (u.phoneNumber && o.customerPhone === u.phoneNumber) || (u.alternativePhone && o.customerPhone === u.alternativePhone)) &&
-          o.status !== 'DELIVERED' &&
-          o.status !== 'CANCELED'
-      );
-      const activeDel = ordersSource.find(
-        (o) => o.helperId === u.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
-      );
+    const orderStatsOf = createUserOrderStats(ordersSource);
 
-      const userOrders = ordersSource.filter((o) =>
-        o.customerId === u.uid ||
-        (u.phoneNumber && o.customerPhone === u.phoneNumber) ||
-        (u.alternativePhone && o.customerPhone === u.alternativePhone)
-      );
-      const customerOrdersCount = userOrders.length;
-      const helperOrdersCount = ordersSource.filter((o) => o.helperId === u.uid).length;
+    let list = usersList.map((u) => {
+      const { activeReq, activeDel, customerOrdersCount, helperOrdersCount, lastOrderMs } = orderStatsOf(u);
 
       const registrationDate = u.createdAt ? new Date(u.createdAt) : new Date();
       const now = new Date();
@@ -1929,12 +1956,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const monthlyOrderRate = (customerOrdersCount / diffDays) * 30;
 
       let daysSinceLastOrder: number | null = null;
-      if (userOrders.length > 0) {
-        const sortedUserOrders = [...userOrders].sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-        const lastOrderDate = new Date(sortedUserOrders[0].createdAt);
-        const diffLastOrder = Math.abs(now.getTime() - lastOrderDate.getTime());
+      if (lastOrderMs !== null) {
+        const diffLastOrder = Math.abs(now.getTime() - lastOrderMs);
         daysSinceLastOrder = Math.floor(diffLastOrder / (1000 * 60 * 60 * 24));
       }
 
@@ -2115,7 +2138,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     return list;
-  };
+  }, [
+    activeTab, serverUsers, users, serverOrders, allOrders, orders,
+    usersStartDate, usersEndDate, usersAppliedSearchQuery, statusFilter, audienceFilter,
+    usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortColumn, usersSortDirection, usersSortByCoins, sortBy,
+  ]);
+
+  // The two big order lists, filtered and sorted once per change of their
+  // inputs rather than on every render of this component (which every store
+  // update, every keystroke in a search box and every open modal causes).
+  const processedOrdersForTab = React.useMemo(
+    () => (activeTab === 'ORDERS' ? getProcessedOrders(serverOrders !== null ? serverOrders : allOrders) : []),
+    // getProcessedOrders reads exactly the filters listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, serverOrders, allOrders, ordersStartDate, ordersEndDate, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy]
+  );
+  // Which order is each customer's first — for the "first order" badge.
+  const firstOrderIds = React.useMemo(
+    () => (activeTab === 'ORDERS' || activeTab === 'EXCEPTIONS' ? getFirstOrderIds(orders) : new Set<string>()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, orders]
+  );
 
   // Generic Pagination Calculator
   function paginateList<T>(items: T[], customPage?: number, customPageSize?: number, overrideTotalCount?: number) {
@@ -2127,6 +2170,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { totalPages, paginatedItems, totalItems: totalCount };
   }
 
+  const shopById = React.useMemo(() => {
+    const map = new Map<string, Shop>();
+    shops.forEach((shop) => {
+      if (!map.has(shop.id)) map.set(shop.id, shop);
+    });
+    return map;
+  }, [shops]);
+
   // Filter out custom costs and only include requests sent to registered shops that can receive orders in app
   const realStoreOrders = React.useMemo(() => {
     return shopOrders.filter((so) => {
@@ -2136,12 +2187,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return false;
       }
       // Only include orders sent to a registered store that can receive/accept orders directly in app
-      const targetShop = shops.find((s) => s.id === so.shopId) || fallbackStore.shops.get(so.shopId);
+      const targetShop = shopById.get(so.shopId) || fallbackStore.shops.get(so.shopId);
       if (!targetShop) return false;
       if (targetShop.canReceiveOrders === false) return false;
       return true;
     });
-  }, [shopOrders, shops]);
+  }, [shopOrders, shopById]);
+
+  const processedStoreOrdersForTab = React.useMemo(
+    () => (activeTab === 'STORE_ORDERS' ? getProcessedStoreOrders(realStoreOrders) : []),
+    // getProcessedStoreOrders reads exactly the filters listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, realStoreOrders, storeOrdersStartDate, storeOrdersEndDate, storeOrdersAppliedSearchQuery, storeOrdersStatusFilter, storeOrdersShopFilter, storeOrdersHelperFilter, storeOrdersSortBy]
+  );
+
+  // Sales, commission and payout figures of every shop, for the Shops tab.
+  // One pass over the shop orders, orders and withdrawals (computeShopMetrics);
+  // it used to be redone per shop, on every render, with a search of all
+  // orders for each shop order.
+  const shopMetricsMap = React.useMemo(
+    () =>
+      activeTab === 'SHOPS'
+        ? computeShopMetrics(
+          serverShops !== null ? serverShops : shops,
+          Array.from(fallbackStore.shopOrders.values()),
+          Array.from(fallbackStore.orders.values()),
+          Array.from(fallbackStore.withdrawals.values())
+        )
+        : new Map<string, ShopMetrics>(),
+    // walletInputsVersion covers the three store collections read above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, serverShops, shops, walletInputsVersion]
+  );
+
+  // Who is a store, for labelling and filtering withdrawals: looked up per
+  // withdrawal, so a set and a map rather than a search of users and shops.
+  const storeUserIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    users.forEach((u) => {
+      if (u.isStore || u.role === 'store') ids.add(u.uid);
+    });
+    return ids;
+  }, [users]);
+  const shopByOwnerId = React.useMemo(() => {
+    const map = new Map<string, Shop>();
+    shops.forEach((shop) => {
+      if (shop.ownerUserId && !map.has(shop.ownerUserId)) map.set(shop.ownerUserId, shop);
+    });
+    return map;
+  }, [shops]);
 
   const isSuperAdmin = currentUser?.isSuperAdmin;
   const isAdmin = currentUser?.isAdmin;
@@ -2953,7 +3047,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const notAccepted = getProcessedOrders(notAcceptedRequests);
         const cancelling = getProcessedOrders(cancellingRequests);
         const feeAdjustments = getProcessedOrders(feeAdjustmentsPending);
-        const firstOrderIds = getFirstOrderIds(orders);
 
         // Per-section pagination helpers
         const paginate = <T,>(list: T[], page: number, size: number) => ({
@@ -3647,8 +3740,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
                           {pwd.items.map((w) => {
-                            const shop = shops.find(s => s.ownerUserId === w.helperId);
-                            const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                            const shop = shopByOwnerId.get(w.helperId);
+                            const isStore = w.userType === 'store' || Boolean(shop) || storeUserIds.has(w.helperId);
                             const storeName = shop?.name;
                             return (
                               <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
@@ -3825,14 +3918,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 2: ALL ORDERS TAB --- */}
       {activeTab === 'ORDERS' && isTabAllowed('ORDERS') && (() => {
         // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
-        const ordersSource = serverOrders !== null ? serverOrders : allOrders;
-        const processed = getProcessedOrders(ordersSource);
+        const processed = processedOrdersForTab;
         const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL' || ordersHelperFilter !== 'ALL');
         // When no filter is active, always use the server count for total (even after serverOrders loaded,
         // exactTotalOrders is the authoritative number from getCountFromServer)
         const overrideOrdersCount = (!hasOrdersFilter && exactTotalOrders !== null && exactTotalOrders > processed.length) ? exactTotalOrders : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideOrdersCount);
-        const firstOrderIds = getFirstOrderIds(orders);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden space-y-2">
@@ -4146,7 +4237,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 2b: ALL STORE ORDERS TAB --- */}
       {activeTab === 'STORE_ORDERS' && isTabAllowed('STORE_ORDERS') && (() => {
-        const processed = getProcessedStoreOrders(realStoreOrders);
+        const processed = processedStoreOrdersForTab;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
         const totalStoreRevenue = processed
           .filter((so) => so.status !== 'CANCELED')
@@ -4500,7 +4591,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
-        const processed = getProcessedUsersList();
+        const processed = processedUsersList;
         const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null);
         const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
@@ -4978,7 +5069,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 3: HELPER STATS TAB --- */}
       {activeTab === 'HELPERS' && isTabAllowed('HELPERS') && (() => {
-        const processed = getProcessedHelpers();
+        const processed = processedHelpers;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
 
         const handleUpdateHelperType = async (userId: string, newType: 'commuter' | 'dedicated') => {
@@ -5476,7 +5567,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Helper Performance Table View Component */}
             {helperSubView === 'TABLE' && (() => {
               // Deduplicate list by id
-              const processedList = getProcessedHelpers();
+              const processedList = processedHelpers;
               const uniqueProcessedMap = new Map<string, typeof processedList[0]>();
               processedList.forEach((h) => {
                 if (!uniqueProcessedMap.has(h.id)) {
@@ -5794,7 +5885,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
         if (withdrawalTypeFilter !== 'ALL') {
           filtered = filtered.filter((w) => {
-            const isStore = w.userType === 'store' || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store')) || shops.some(s => s.ownerUserId === w.helperId);
+            const isStore = w.userType === 'store' || storeUserIds.has(w.helperId) || shopByOwnerId.has(w.helperId);
             return withdrawalTypeFilter === 'STORE' ? isStore : !isStore;
           });
         }
@@ -5884,8 +5975,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-medium">
                   {paginatedItems.map((w) => {
-                    const shop = shops.find(s => s.ownerUserId === w.helperId);
-                    const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                    const shop = shopByOwnerId.get(w.helperId);
+                    const isStore = w.userType === 'store' || Boolean(shop) || storeUserIds.has(w.helperId);
                     const storeName = shop?.name;
                     return (
                       <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
@@ -7502,98 +7593,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               (s.location?.address || '').toLowerCase().includes(q)
           );
         }
-
-        // Pre-compute metrics for sorting & display
-        const allShopOrdersList = Array.from(fallbackStore.shopOrders.values());
-        const allWithdrawalsList = Array.from(fallbackStore.withdrawals.values());
-        const allOrdersList = Array.from(fallbackStore.orders.values());
-
-        const getShopComputedMetrics = (s: Shop) => {
-          const storeUserId = s.ownerUserId || s.id;
-          const targetShopId = s.id;
-
-          let completed = 0;
-          let rejected = 0;
-          let running = 0;
-          let totalSales = 0;       // all (delivered + running) for display
-          let deliveredSales = 0;   // only delivered/handover — for unpaid balance
-
-          const seenParentIds = new Set<string>();
-          allShopOrdersList.forEach((so) => {
-            if (so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`) {
-              seenParentIds.add(so.parentOrderId);
-              const parentOrder = allOrdersList.find((o) => o.id === so.parentOrderId);
-              const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
-              const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-              if (isCanceled) {
-                rejected++;
-              } else if (isCompleted) {
-                completed++;
-                const price = so.price || parentOrder?.productCost || 0;
-                totalSales += price;
-                deliveredSales += price;
-              } else {
-                running++;
-                totalSales += (so.price || 0);
-              }
-            }
-          });
-
-          allOrdersList.forEach((mo) => {
-            const matches =
-              mo.shopId === targetShopId ||
-              mo.shopId === storeUserId ||
-              mo.selectedShopIds?.includes(targetShopId) ||
-              mo.selectedShopIds?.includes(storeUserId);
-            if (matches && !seenParentIds.has(mo.id)) {
-              if (mo.status === 'CANCELED') {
-                rejected++;
-              } else if (mo.status === 'DELIVERED') {
-                completed++;
-                totalSales += (mo.productCost || 0);
-                deliveredSales += (mo.productCost || 0);
-              } else {
-                running++;
-                totalSales += (mo.productCost || 0);
-              }
-            }
-          });
-
-          const commPercent = s.commissionPercent || 0;
-          const commission = Math.round(totalSales * (commPercent / 100));
-          const netSales = Math.max(0, totalSales - commission);
-          // Unpaid balance: only from delivered orders net of commission
-          const deliveredCommission = Math.round(deliveredSales * (commPercent / 100));
-          const deliveredNetSales = Math.max(0, deliveredSales - deliveredCommission);
-
-          const approvedWds = allWithdrawalsList.filter(
-            (w) =>
-              (w.helperId === storeUserId ||
-                w.helperId === targetShopId ||
-                w.helperId === `store-${storeUserId}` ||
-                (w.userType === 'store' && (w.helperName === s.name || w.helperId === s.id))) &&
-              w.status === 'APPROVED'
-          );
-          const totalDisbursed = approvedWds.reduce((sum, w) => sum + w.amount, 0);
-          const unpaidBalance = Math.max(0, deliveredNetSales - totalDisbursed);
-
-          return {
-            completed,
-            rejected,
-            running,
-            totalSales,
-            commission,
-            netSales,
-            totalDisbursed,
-            unpaidBalance,
-          };
-        };
-
-        const shopMetricsMap = new Map<string, ReturnType<typeof getShopComputedMetrics>>();
-        filteredShops.forEach((s) => {
-          shopMetricsMap.set(s.id, getShopComputedMetrics(s));
-        });
 
         // Sort shops by selected field & direction (default: UNPAID DESC)
         filteredShops.sort((a, b) => {

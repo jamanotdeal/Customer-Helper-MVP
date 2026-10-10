@@ -24,15 +24,18 @@ export const OutstandingCommissionsModal: React.FC<OutstandingCommissionsModalPr
       ...Array.from(fallbackStore.wallets.keys())
     ]) as Set<string>;
 
-    const allWallets = Array.from(allUsersWithActivity).map(uid => fallbackStore.getHelperWallet(uid));
+    const allWallets = Array.from(fallbackStore.getHelperWallets(allUsersWithActivity).values());
     const users = fallbackStore.users;
-    const apps = Array.from(fallbackStore.helperApplications.values());
+    const appByUserId = new Map<string, HelperApplication>();
+    fallbackStore.helperApplications.forEach((a) => {
+      if (!appByUserId.has(a.userId)) appByUserId.set(a.userId, a);
+    });
 
     return allWallets
       .filter((w) => (w.balance || 0) > 0)
       .map((w) => {
         const user = users.get(w.userId);
-        const app = apps.find((a) => a.userId === w.userId);
+        const app = appByUserId.get(w.userId);
 
         const name = user?.displayName || app?.legalName || app?.userName || `Helper (${w.userId.slice(0, 6)})`;
         const phone = user?.alternativePhone || app?.whatsapp || user?.email || 'N/A';

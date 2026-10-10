@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { UserProfile, Order, HelperApplication, LocationData, AllowedAreaPolygon } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { fetchRoadRoute } from '@/lib/routeUtils';
@@ -160,41 +160,66 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
     return () => resizeObserver.disconnect();
   }, []);
 
+  // This component re-renders every second (timerTick). The lists below are
+  // memoised so that a tick neither walks every order for every helper nor —
+  // by handing the marker effect a fresh `filteredHelpers` array each time —
+  // makes the map tear down and redraw all its markers once a second.
+
+  // Each helper's running orders, in `orders` order.
+  const runningOrdersByHelper = useMemo(() => {
+    const map = new Map<string, Order[]>();
+    orders.forEach((o) => {
+      if (!o.helperId || o.status === 'DELIVERED' || o.status === 'CANCELED') return;
+      const list = map.get(o.helperId);
+      if (list) list.push(o);
+      else map.set(o.helperId, [o]);
+    });
+    return map;
+  }, [orders]);
+
   // Aggregate helpers list from users and applications
-  const helperUsers = users.filter((u) => u.isHelper || u.role === 'helper');
-  
-  // Ensure any approved applications are also represented
-  applications.forEach((app) => {
-    if (app.status === 'APPROVED' && !helperUsers.some((u) => u.uid === app.userId)) {
-      const userObj = users.find((u) => u.uid === app.userId);
-      if (userObj) {
-        helperUsers.push({
-          ...userObj,
-          isHelper: true,
-          helperType: app.applicationType === 'dedicated' ? 'dedicated' : userObj.helperType || 'commuter',
-        });
+  const helperUsers = useMemo(() => {
+    const list = users.filter((u) => u.isHelper || u.role === 'helper');
+    const listed = new Set(list.map((u) => u.uid));
+    const userById = new Map<string, UserProfile>();
+    users.forEach((u) => {
+      if (!userById.has(u.uid)) userById.set(u.uid, u);
+    });
+
+    // Ensure any approved applications are also represented
+    applications.forEach((app) => {
+      if (app.status === 'APPROVED' && !listed.has(app.userId)) {
+        const userObj = userById.get(app.userId);
+        if (userObj) {
+          list.push({
+            ...userObj,
+            isHelper: true,
+            helperType: app.applicationType === 'dedicated' ? 'dedicated' : userObj.helperType || 'commuter',
+          });
+          listed.add(app.userId);
+        }
       }
-    }
-  });
+    });
+    return list;
+  }, [users, applications]);
 
   // Filter helper users according to selected typeFilter
-  const filteredHelpers = helperUsers.filter((h) => {
-    const hType = h.helperType || 'commuter';
-    const activeAssignedOrders = orders.filter(
-      (o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
-    );
-    if (typeFilter === 'COMMUTER') return hType === 'commuter';
-    if (typeFilter === 'DEDICATED') return hType === 'dedicated';
-    if (typeFilter === 'ON_DUTY') return activeAssignedOrders.length > 0;
-    return true;
-  });
+  const filteredHelpers = useMemo(
+    () =>
+      helperUsers.filter((h) => {
+        const hType = h.helperType || 'commuter';
+        if (typeFilter === 'COMMUTER') return hType === 'commuter';
+        if (typeFilter === 'DEDICATED') return hType === 'dedicated';
+        if (typeFilter === 'ON_DUTY') return runningOrdersByHelper.has(h.uid);
+        return true;
+      }),
+    [helperUsers, typeFilter, runningOrdersByHelper]
+  );
 
   // Stats calculation
   const commuterCount = helperUsers.filter((h) => (h.helperType || 'commuter') === 'commuter').length;
   const dedicatedCount = helperUsers.filter((h) => h.helperType === 'dedicated').length;
-  const activeDutyCount = helperUsers.filter((h) =>
-    orders.some((o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED')
-  ).length;
+  const activeDutyCount = helperUsers.filter((h) => runningOrdersByHelper.has(h.uid)).length;
 
   // Initialize Earth Leaflet Map
   useEffect(() => {
@@ -363,13 +388,13 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
         filteredHelpers,
         (h) => {
           if (typeof h.helperLocation?.lat === 'number') return h.helperLocation.lat;
-          const active = orders.filter((o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED');
+          const active = runningOrdersByHelper.get(h.uid) || [];
           if (active[0]?.deliveryLocation?.lat) return active[0].deliveryLocation.lat;
           return 23.8759 + getDeterministicOffset(h.uid, 1);
         },
         (h) => {
           if (typeof h.helperLocation?.lng === 'number') return h.helperLocation.lng;
-          const active = orders.filter((o) => o.helperId === h.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED');
+          const active = runningOrdersByHelper.get(h.uid) || [];
           if (active[0]?.deliveryLocation?.lng) return active[0].deliveryLocation.lng;
           return 90.3795 + getDeterministicOffset(h.uid, 2);
         }
@@ -504,10 +529,14 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   };
 
   const selectedHelper = users.find((u) => u.uid === selectedHelperId);
-  const selectedHelperActiveOrders = selectedHelper
-    ? orders.filter((o) => o.helperId === selectedHelper.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED')
-    : [];
-  const selectedHelperWallet = selectedHelper ? fallbackStore.getHelperWallet(selectedHelper.uid) : null;
+  const selectedHelperActiveOrders = selectedHelper ? runningOrdersByHelper.get(selectedHelper.uid) || [] : [];
+  // The wallet walks every order; once per selection or data change, not once a second.
+  const selectedHelperUid = selectedHelper?.uid;
+  const selectedHelperWallet = useMemo(
+    () => (selectedHelperUid ? fallbackStore.getHelperWallet(selectedHelperUid) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedHelperUid, orders]
+  );
 
   return (
     <div

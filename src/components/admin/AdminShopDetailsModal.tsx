@@ -82,7 +82,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
     const seenParentIds = new Set<string>();
     shopOrders.forEach((so) => {
       seenParentIds.add(so.parentOrderId);
-      const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
       const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
       const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
 

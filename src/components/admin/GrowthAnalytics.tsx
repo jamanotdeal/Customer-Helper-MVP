@@ -286,12 +286,14 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
     });
 
     // Process order embedded feedback
+    const feedbackOrderIds = new Set(feedbacks.map((f) => f.orderId));
+    const feedbackIds = new Set(feedbacks.map((f) => f.id));
     orders.forEach((o) => {
       if (o.feedback) {
         const fbTime = getTimestamp(o.feedback.createdAt || o.deliveredAt);
         const fbDateStr = fbTime ? getLocalYYYYMMDD(new Date(fbTime)) : '';
         const avgRating = (o.feedback.riderRating + o.feedback.serviceRating + o.feedback.shopRating) / 3;
-        const alreadyCounted = feedbacks.some((f) => f.orderId === o.id || f.id === o.feedback?.id);
+        const alreadyCounted = feedbackOrderIds.has(o.id) || feedbackIds.has(o.feedback.id);
 
         if (!alreadyCounted) {
           if (fbTime >= startMs && fbTime <= endMs) {
