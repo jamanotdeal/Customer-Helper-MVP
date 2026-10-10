@@ -475,6 +475,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     let returnableStoreAmount = 0;    // Acceptable (registered) stores — full amount returned to company
     let nonAcceptableStoreCommission = 0; // Non-acceptable stores — commission owed
 
+    const storeApplications = Array.from(fallbackStore.storeApplications.values());
     filteredDeliveredOrders.forEach((o) => {
       const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
       shopOrders.forEach((so) => {
@@ -491,7 +492,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
         } else {
           let commissionRate = Number(shop?.commissionPercent);
           if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
-            const app = Array.from(fallbackStore.storeApplications.values()).find(
+            const app = storeApplications.find(
               (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
             );
             commissionRate = Number(app?.commissionPercent) || 0;

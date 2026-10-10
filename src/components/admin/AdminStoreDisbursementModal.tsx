@@ -168,9 +168,14 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const normalizedStoreOrders = useMemo(() => {
     const map = new Map<string, any>();
 
+    const orderById = new Map<string, Order>();
+    allOrders.forEach((o) => {
+      if (!orderById.has(o.id)) orderById.set(o.id, o);
+    });
+
     // 1. From ShopOrders
     shopOrdersForThisStore.forEach((so) => {
-      const parent = allOrders.find((o) => o.id === so.parentOrderId);
+      const parent = orderById.get(so.parentOrderId);
       const isCanceled = so.status === 'CANCELED' || parent?.status === 'CANCELED';
       const isDelivered = parent?.status === 'DELIVERED' || so.status === 'DELIVERED';
       const isHandover = so.status === 'HANDOVER';

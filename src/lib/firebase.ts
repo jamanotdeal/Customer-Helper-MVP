@@ -454,6 +454,11 @@ function getSharedAudioCtx(): AudioContext | null {
 }
 
 /**
+ * How long a full read of a collection stands in for another — see isFullReadFresh.
+ */
+const FULL_READ_TTL_MS = 2 * 60 * 1000;
+
+/**
  * Most recent orders kept in the localStorage cache. The cache only has to make
  * a cold start look warm; the listeners refill everything else within a second.
  * Writing every order this device had ever seen made each save and each launch
@@ -630,6 +635,9 @@ class FallbackStore {
   private _allUsersPromise: Promise<void> | null = null;
   // Orders being re-read after leaving one of the admin's live queries.
   private _recheckingOrders: Set<string> = new Set();
+  // When each whole collection was last read in full for the admin's filters
+  // and paging — see isFullReadFresh().
+  private _fullReadAt: Map<string, number> = new Map();
   // Always-on pricing listener — started immediately so unauthenticated users
   // (e.g. in-app browser visitors) always see the latest admin settings.
   private _unsubPricingListener: (() => void) | null = null;
@@ -1178,6 +1186,7 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this._fullReadAt.clear();
     this._orderHistoryPromise = null;
     this.adminOrderHistoryLoading = false;
     this.adminOrderHistoryLoaded = false;
@@ -2004,6 +2013,9 @@ class FallbackStore {
   // Called once after initListenersForRole (admin). Also called by
   // refreshAdminData() when the admin clicks a "Refresh" button.
   private async _adminInitialFetch(refresh = false) {
+    // These fetchers refill the store with capped first pages, so it no longer
+    // holds any collection in full.
+    this._fullReadAt.clear();
     try {
       await Promise.all([
         this._fetchAdminUsers(),
@@ -2143,6 +2155,8 @@ class FallbackStore {
         await this._adminInitialFetch(true);
         return;
       }
+      // A capped first page is about to replace what the store holds of it.
+      this._fullReadAt.delete(target);
       switch (target) {
         case 'orders': await this.loadAdminOrderHistory(true); break;
         case 'users': await this._fetchAdminUsers(); break;
@@ -3746,10 +3760,25 @@ class FallbackStore {
     }
   }
 
+  // Shop orders grouped by their parent order, rebuilt when the collection
+  // changes. Screens ask for one order's shop orders inside loops over orders
+  // (a helper's history, their wallet breakdown), and filtering the whole
+  // collection each time made those loops orders × shop orders.
+  private _shopOrdersByParent: { version: number; index: Map<string, ShopOrder[]> } | null = null;
+
   public getShopOrdersForOrder(parentOrderId: string): ShopOrder[] {
-    return Array.from(this.shopOrders.values()).filter(
-      (so) => so.parentOrderId === parentOrderId
-    );
+    const version = versionOf(this.shopOrders);
+    if (!this._shopOrdersByParent || this._shopOrdersByParent.version !== version) {
+      const index = new Map<string, ShopOrder[]>();
+      this.shopOrders.forEach((so) => {
+        const siblings = index.get(so.parentOrderId);
+        if (siblings) siblings.push(so);
+        else index.set(so.parentOrderId, [so]);
+      });
+      this._shopOrdersByParent = { version, index };
+    }
+    const found = this._shopOrdersByParent.index.get(parentOrderId);
+    return found ? found.slice() : [];
   }
 
   public async reassignShopOrdersForOrder(parentOrderId: string, newHelperId: string, newHelperName: string) {
@@ -3911,7 +3940,8 @@ class FallbackStore {
     }
   }
 
-  public async getAllShopOrders(): Promise<ShopOrder[]> {
+  public async getAllShopOrders(force = false): Promise<ShopOrder[]> {
+    if (!force && this.isFullReadFresh('shopOrders')) return Array.from(this.shopOrders.values());
     try {
       const snap = await getDocs(query(collection(db, 'shopOrders'), orderBy('createdAt', 'desc'), limit(1000)));
       const map = new Map<string, ShopOrder>();
@@ -3922,6 +3952,7 @@ class FallbackStore {
         }
       });
       this.shopOrders = map;
+      this._fullReadAt.set('shopOrders', Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return Array.from(map.values());
@@ -3936,6 +3967,7 @@ class FallbackStore {
           }
         });
         this.shopOrders = map2;
+        this._fullReadAt.set('shopOrders', Date.now());
         this.scheduleLocalStoreSave();
         this.notify();
         return Array.from(map2.values());
@@ -4084,49 +4116,70 @@ class FallbackStore {
   }
 
   public getHelperWallet(helperId: string): Wallet {
-    const allOrders = Array.from(this.orders.values());
-    const helperOrders = allOrders.filter(
-      (o) => o.helperId === helperId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
-    );
-    const helperOrderIds = new Set(helperOrders.map((o) => o.id));
+    return this.getHelperWallets([helperId]).get(helperId)!;
+  }
 
-    // All approved withdrawals are the single source of truth for paid commission.
-    // Manual paybacks recorded by admin also create an APPROVED withdrawal record.
-    const approvedWithdrawals = Array.from(this.withdrawals.values()).filter(
-      (w) => w.helperId === helperId && w.status === 'APPROVED'
-    );
+  /**
+   * The wallets of several helpers, worked out together in one pass over the
+   * orders, withdrawals and shop orders.
+   *
+   * A wallet is computed, not stored: what a helper earned and what they owe
+   * the company is summed from their delivered orders. Doing that one helper
+   * at a time walks every order once per helper — and the admin's helper list
+   * asked once per ORDER, so opening it cost orders × orders and froze the
+   * app for ten seconds. Anything that needs more than one wallet asks here.
+   */
+  public getHelperWallets(helperIds: Iterable<string>): Map<string, Wallet> {
+    type Tally = { earned: number; platformShare: number; returnableStoreAmount: number; storeCommission: number; paid: number };
+    const tallies = new Map<string, Tally>();
+    Array.from(helperIds).forEach((id) => {
+      if (id && !tallies.has(id)) {
+        tallies.set(id, { earned: 0, platformShare: 0, returnableStoreAmount: 0, storeCommission: 0, paid: 0 });
+      }
+    });
 
-    let totalEarned = 0;
-    let totalPlatformShare = 0;
-
+    const isDelivered = (o: Order) => o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
     const minFee = this.pricingSettings.feeCalculatorMinFee ?? 20;
-    helperOrders.forEach((o) => {
+
+    // Delivered orders: the helper's share is earned, the rest is the company's.
+    const deliveredBy = new Map<string, string>(); // order id → the helper who delivered it
+    this.orders.forEach((o) => {
+      const tally = o.helperId ? tallies.get(o.helperId) : undefined;
+      if (!tally || !isDelivered(o)) return;
+      deliveredBy.set(o.id, o.helperId!);
       const baseFeeForHelper = o.isFreeDelivery
         ? Math.max(o.originalDeliveryFee || 0, minFee)
         : Math.max(o.deliveryFee || 0, minFee);
       const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
-      totalEarned += helperShare;
-      totalPlatformShare += (baseFeeForHelper - helperShare);
+      tally.earned += helperShare;
+      tally.platformShare += baseFeeForHelper - helperShare;
+    });
+
+    // All approved withdrawals are the single source of truth for paid commission.
+    // Manual paybacks recorded by admin also create an APPROVED withdrawal record.
+    this.withdrawals.forEach((w) => {
+      const tally = tallies.get(w.helperId);
+      if (tally && w.status === 'APPROVED') tally.paid += w.amount;
     });
 
     // Store Order amounts and commissions calculation
-    let returnableStoreAmount = 0;
-    let nonAcceptableStoreCommission = 0;
-
-    const allShopOrders = Array.from(this.shopOrders.values());
-    const validHelperShopOrders = allShopOrders.filter((so) => {
-      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
-      const parentOrder = this.orders.get(so.parentOrderId);
-      if (parentOrder && (parentOrder.status === 'CANCELED' || (parentOrder.status as string) === 'CANCELLED')) return false;
-      if (so.helperId === helperId || (so.parentOrderId && helperOrderIds.has(so.parentOrderId))) {
-        return parentOrder ? (parentOrder.status === 'DELIVERED' || (parentOrder.status as string) === 'COMPLETED') : true;
-      }
-      return false;
-    });
-
-    validHelperShopOrders.forEach((so) => {
+    const commissionRateByShop = new Map<string, number>();
+    this.shopOrders.forEach((so) => {
+      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return;
       const price = so.price || 0;
       if (price <= 0) return;
+
+      // It counts for the helper it is assigned to, and for the helper who
+      // delivered its parent order — usually the same one.
+      const owners: Tally[] = [];
+      const assigned = tallies.get(so.helperId);
+      if (assigned) owners.push(assigned);
+      const deliverer = so.parentOrderId ? deliveredBy.get(so.parentOrderId) : undefined;
+      if (deliverer && deliverer !== so.helperId) owners.push(tallies.get(deliverer)!);
+      if (owners.length === 0) return;
+
+      const parentOrder = this.orders.get(so.parentOrderId);
+      if (parentOrder && !isDelivered(parentOrder)) return;
 
       const isMyself = so.shopId === 'myself';
       const shop = !isMyself ? this.shops.get(so.shopId) : null;
@@ -4134,35 +4187,42 @@ class FallbackStore {
 
       if (canReceive) {
         // Registered order-acceptable store: full store order amount is returnable to company
-        returnableStoreAmount += price;
-      } else {
-        // Non-order-acceptable store: commission on store order is added to amount owed to company
-        let commissionRate = Number(shop?.commissionPercent);
+        owners.forEach((tally) => { tally.returnableStoreAmount += price; });
+        return;
+      }
+
+      // Non-order-acceptable store: commission on store order is added to amount owed to company
+      let commissionRate = commissionRateByShop.get(so.shopId);
+      if (commissionRate === undefined) {
+        commissionRate = Number(shop?.commissionPercent);
         if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
           const app = Array.from(this.storeApplications.values()).find(
             (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
           );
           commissionRate = Number(app?.commissionPercent) || 0;
         }
-        if (commissionRate > 0) {
-          const comm = Math.round(price * (commissionRate / 100));
-          nonAcceptableStoreCommission += comm;
-        }
+        commissionRateByShop.set(so.shopId, commissionRate);
+      }
+      if (commissionRate > 0) {
+        const comm = Math.round(price * (commissionRate / 100));
+        owners.forEach((tally) => { tally.storeCommission += comm; });
       }
     });
 
-    const totalPayableToCompany = totalPlatformShare + returnableStoreAmount + nonAcceptableStoreCommission;
-    const totalPaidCommission = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const balance = Math.max(0, totalPayableToCompany - totalPaidCommission);
-
-    return {
-      userId: helperId,
-      balance,
-      totalEarned,
-      totalWithdrawn: totalPaidCommission,
-      totalPaidCommission,
-      updatedAt: new Date().toISOString(),
-    };
+    const updatedAt = new Date().toISOString();
+    const wallets = new Map<string, Wallet>();
+    tallies.forEach((tally, helperId) => {
+      const totalPayableToCompany = tally.platformShare + tally.returnableStoreAmount + tally.storeCommission;
+      wallets.set(helperId, {
+        userId: helperId,
+        balance: Math.max(0, totalPayableToCompany - tally.paid),
+        totalEarned: tally.earned,
+        totalWithdrawn: tally.paid,
+        totalPaidCommission: tally.paid,
+        updatedAt,
+      });
+    });
+    return wallets;
   }
 
   public getStoreWallet(
@@ -6515,7 +6575,24 @@ class FallbackStore {
     return Array.from(this.users.values());
   }
 
-  public async getAllShops(): Promise<Shop[]> {
+  /**
+   * Whether `collection` was read in full recently enough to answer from the
+   * store instead of downloading it again.
+   *
+   * The admin's lists fetch the whole collection as soon as a filter, a search
+   * or a later page is used, and did so again on every change of any of them:
+   * typing a search, then picking a status, then turning a page downloaded
+   * every withdrawal three times. After a full read the store holds the
+   * collection, and this device's own edits keep it current, so the store is
+   * the answer for the next couple of minutes. Refresh asks again regardless.
+   */
+  private isFullReadFresh(collectionName: string): boolean {
+    const at = this._fullReadAt.get(collectionName);
+    return at !== undefined && Date.now() - at < FULL_READ_TTL_MS;
+  }
+
+  public async getAllShops(force = false): Promise<Shop[]> {
+    if (!force && this.isFullReadFresh('shops')) return Array.from(this.shops.values());
     try {
       const snap = await getDocs(collection(db, 'shops'));
       const list: Shop[] = [];
@@ -6530,6 +6607,7 @@ class FallbackStore {
         }
       });
       this.shops = map;
+      this._fullReadAt.set('shops', Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return list;
@@ -6563,7 +6641,8 @@ class FallbackStore {
     }
   }
 
-  public async getAllWithdrawals(): Promise<WithdrawalRequest[]> {
+  public async getAllWithdrawals(force = false): Promise<WithdrawalRequest[]> {
+    if (!force && this.isFullReadFresh('withdrawals')) return Array.from(this.withdrawals.values());
     try {
       const snap = await getDocs(collection(db, 'withdrawals'));
       const list: WithdrawalRequest[] = [];
@@ -6578,6 +6657,7 @@ class FallbackStore {
         }
       });
       this.withdrawals = map;
+      this._fullReadAt.set('withdrawals', Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return list;
@@ -6587,7 +6667,8 @@ class FallbackStore {
     }
   }
 
-  public async getAllOrderFeedbacks(): Promise<OrderFeedback[]> {
+  public async getAllOrderFeedbacks(force = false): Promise<OrderFeedback[]> {
+    if (!force && this.isFullReadFresh('orderFeedbacks')) return Array.from(this.orderFeedbacks.values());
     try {
       const snap = await getDocs(collection(db, 'orderFeedbacks'));
       const list: OrderFeedback[] = [];
@@ -6602,6 +6683,7 @@ class FallbackStore {
         }
       });
       this.orderFeedbacks = map;
+      this._fullReadAt.set('orderFeedbacks', Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return list;
@@ -6611,7 +6693,8 @@ class FallbackStore {
     }
   }
 
-  public async getAllCustomModals(): Promise<AdminCustomModalConfig[]> {
+  public async getAllCustomModals(force = false): Promise<AdminCustomModalConfig[]> {
+    if (!force && this.isFullReadFresh('customModals')) return Array.from(this.customModals.values());
     try {
       const snap = await getDocs(collection(db, 'customModals'));
       const list: AdminCustomModalConfig[] = [];
@@ -6626,6 +6709,7 @@ class FallbackStore {
         }
       });
       this.customModals = map;
+      this._fullReadAt.set('customModals', Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return list;

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Order, HelperApplication, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { countJobsByHelper } from '@/lib/adminMetrics';
 import { useModal } from '../CustomModal';
 import { X, Search, Bike, CheckCircle2, User, Phone } from 'lucide-react';
 import { AsyncButton } from '../ui/AsyncButton';
@@ -42,16 +43,20 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
     completedJobs: number;
   }>();
 
+  // Every helper's job counts in one pass over the orders — not four passes
+  // per helper, which is what this list used to cost each time it rendered.
+  const jobsByHelper = countJobsByHelper(fallbackStore.orders.values());
+  const helperUserById = new Map<string, UserProfile>();
+  helperUsers.forEach((u) => {
+    if (!helperUserById.has(u.uid)) helperUserById.set(u.uid, u);
+  });
+
   // First seed from approved applications
   approvedApps.forEach((app) => {
     if (!app.userId) return;
-    const matchedUser = helperUsers.find((u) => u.uid === app.userId);
-    const assignedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
-      (o) => o.helperId === app.userId && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
-    ).length;
-    const completedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
-      (o) => o.helperId === app.userId && o.status === 'DELIVERED'
-    ).length;
+    const matchedUser = helperUserById.get(app.userId);
+    const assignedOrdersCount = jobsByHelper.get(app.userId)?.active ?? 0;
+    const completedOrdersCount = jobsByHelper.get(app.userId)?.completed ?? 0;
 
     helperMap.set(app.userId, {
       userId: app.userId,
@@ -69,12 +74,8 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
   // Also include helper users who might not have a separate helper application entry
   helperUsers.forEach((u) => {
     if (!helperMap.has(u.uid)) {
-      const assignedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
-        (o) => o.helperId === u.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
-      ).length;
-      const completedOrdersCount = Array.from(fallbackStore.orders.values()).filter(
-        (o) => o.helperId === u.uid && o.status === 'DELIVERED'
-      ).length;
+      const assignedOrdersCount = jobsByHelper.get(u.uid)?.active ?? 0;
+      const completedOrdersCount = jobsByHelper.get(u.uid)?.completed ?? 0;
 
       helperMap.set(u.uid, {
         userId: u.uid,
