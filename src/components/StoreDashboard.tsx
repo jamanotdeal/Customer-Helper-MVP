@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
-import { fallbackStore, db } from '@/lib/firebase';
+import { fallbackStore, db, versionOf, createChangeGate } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
@@ -535,8 +535,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const myRequestsLoaderRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // Skip the re-filter when a snapshot touched neither collection read here.
+    const ordersChanged = createChangeGate();
     const syncOrders = () => {
       if (!user) return;
+      if (!ordersChanged(versionOf(fallbackStore.orders), versionOf(fallbackStore.shopOrders))) return;
       const all = Array.from(fallbackStore.orders.values());
 
       // Store Orders: orders that involve this shop (via selectedShopIds)

@@ -109,8 +109,8 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
   const totalPages = Math.ceil(filteredHelpers.length / pageSize) || 1;
   const paginatedHelpers = filteredHelpers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  const handleAssign = (helper: (typeof helpersList)[0]) => {
-    fallbackStore.updateOrder(order.id, (o) => {
+  const handleAssign = async (helper: (typeof helpersList)[0]) => {
+    const outcome = await fallbackStore.updateOrder(order.id, (o) => {
       const isPending = o.status === 'PENDING';
       const updatedStatus = isPending ? 'ACCEPTED' : o.status;
       return {
@@ -121,7 +121,7 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
         status: updatedStatus,
         acceptedAt: isPending ? new Date().toISOString() : o.acceptedAt,
         statusHistory: [
-          ...o.statusHistory,
+          ...(o.statusHistory || []),
           {
             id: `sh-${Date.now()}`,
             status: updatedStatus,
@@ -132,6 +132,13 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
         ],
       };
     });
+
+    // Refused: a helper took the order (or it was deleted) after this list
+    // was opened. The store has already said so; nobody was assigned.
+    if (outcome === 'conflict' || outcome === 'missing' || outcome === 'failed') {
+      onClose();
+      return;
+    }
 
     // Notify assigned helper
     fallbackStore.addNotification({

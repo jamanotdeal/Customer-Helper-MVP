@@ -6,7 +6,8 @@ import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
-import { fallbackStore } from '@/lib/firebase';
+import { fallbackStore, versionOf, createChangeGate } from '@/lib/firebase';
+import { useOlderOrders } from '@/hooks/useOlderOrders';
 import { Sparkles, Zap, HeartHandshake, CheckCircle, Shield, ChevronDown, ShoppingBag, Pill, Utensils, Shirt, Package } from 'lucide-react';
 import Link from 'next/link';
 
@@ -70,7 +71,10 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const loaderRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // Skip the re-sort when a snapshot (wallet, notification…) left orders alone.
+    const ordersChanged = createChangeGate();
     const syncOrders = () => {
+      if (!ordersChanged(versionOf(fallbackStore.orders))) return;
       if (user) {
         const all = Array.from(fallbackStore.orders.values()).filter(
           (o) => o.customerId === user.uid
@@ -130,6 +134,15 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   // Infinite Scroll logic
   const visibleOrders = filteredOrders.slice(0, visibleCount);
   const hasMore = filteredOrders.length > visibleCount;
+
+  // Past the live window (the newest 100), finished orders are paged in from
+  // the server once everything held has been shown. Active and pending orders
+  // are always inside the window.
+  const older = useOlderOrders(
+    'customerId',
+    user?.uid,
+    !hasMore && orders.length >= 100 && selectedFilter !== 'ACTIVE' && selectedFilter !== 'PENDING'
+  );
 
   useEffect(() => {
     if (!hasMore) return;
@@ -360,6 +373,12 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
                 <div ref={loaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
                   <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
                   <span>Loading more requests... ({filteredOrders.length - visibleCount} remaining)</span>
+                </div>
+              )}
+              {older.showSentinel && (
+                <div ref={older.sentinelRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Loading older requests...</span>
                 </div>
               )}
             </div>
