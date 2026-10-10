@@ -4415,6 +4415,49 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Sends field changes for many orders / shop orders, a batch at a time.
+   *
+   * Only the named fields are written. The paid markers used to be saved by
+   * writing each document's whole cached copy back, one awaited write per
+   * document: a payout covering a few hundred orders was a few hundred round
+   * trips, and every one of them put the rest of the document back to what
+   * this device last saw — including the status of an order still on its way.
+   * Changes to the same document are combined.
+   */
+  private async commitFieldUpdates(
+    updates: { collection: 'orders' | 'shopOrders'; id: string; fields: Record<string, unknown> }[],
+    label: string
+  ): Promise<void> {
+    const byDocument = new Map<string, { collection: 'orders' | 'shopOrders'; id: string; fields: Record<string, unknown> }>();
+    updates.forEach((u) => {
+      const key = `${u.collection}/${u.id}`;
+      const existing = byDocument.get(key);
+      if (existing) Object.assign(existing.fields, u.fields);
+      else byDocument.set(key, { ...u, fields: { ...u.fields } });
+    });
+    const all = Array.from(byDocument.values());
+    for (let i = 0; i < all.length; i += 400) {
+      const chunk = all.slice(i, i + 400);
+      try {
+        const batch = writeBatch(db);
+        chunk.forEach((u) => batch.update(doc(db, u.collection, u.id), u.fields));
+        await batch.commit();
+      } catch (e: any) {
+        // A single document that no longer exists fails its whole batch, so
+        // the rest of that batch is sent one by one.
+        console.warn(`[Firestore] ${label}: batch failed, writing individually:`, e?.message || e);
+        await Promise.all(
+          chunk.map((u) =>
+            updateDoc(doc(db, u.collection, u.id), u.fields).catch((err) =>
+              console.warn(`[Firestore] ${label} ${u.collection}/${u.id}:`, err?.message || err)
+            )
+          )
+        );
+      }
+    }
+  }
+
   public async markStoreOrdersAsPaid(
     shopId: string,
     storeUserId: string,
@@ -4506,42 +4549,29 @@ class FallbackStore {
     const totalUnpaidNet = orderEntries.reduce((sum, e) => sum + e.netAmount, 0);
     const markAll = amount >= totalUnpaidNet && totalUnpaidNet > 0;
 
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
     for (const entry of orderEntries) {
       if (remaining <= 0 && !markAll) break;
 
       if (entry.shopOrder) {
-        const updatedSo: ShopOrder = {
-          ...entry.shopOrder,
-          isPaid: true,
-          paidAt: now,
-          disbursementId,
-        };
-        this.shopOrders.set(updatedSo.id, updatedSo);
-        try {
-          await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
-        } catch (e) {
-          console.warn('[Firestore] markStoreOrdersAsPaid shopOrder err:', e);
-        }
+        const paid = { isPaid: true, paidAt: now, disbursementId };
+        this.shopOrders.set(entry.shopOrder.id, { ...entry.shopOrder, ...paid });
+        writes.push({ collection: 'shopOrders', id: entry.shopOrder.id, fields: paid });
       }
 
       const parentOrder = entry.order || this.orders.get(entry.orderId);
       if (parentOrder) {
         const hasHelper = Boolean(parentOrder.helperId);
         const fullyPaid = !hasHelper || Boolean(parentOrder.isHelperPaid);
-        const updatedOrder: Order = {
-          ...parentOrder,
+        const paid = {
           isStorePaid: true,
           storePaidAt: now,
           storeDisbursementId: disbursementId,
           ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
         };
-        this.orders.set(updatedOrder.id, updatedOrder);
-        paidOrderIds.push(updatedOrder.id);
-        try {
-          await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
-        } catch (e) {
-          console.warn('[Firestore] markStoreOrdersAsPaid order err:', e);
-        }
+        this.orders.set(parentOrder.id, { ...parentOrder, ...paid });
+        paidOrderIds.push(parentOrder.id);
+        writes.push({ collection: 'orders', id: parentOrder.id, fields: paid });
       } else {
         paidOrderIds.push(entry.orderId);
       }
@@ -4550,6 +4580,7 @@ class FallbackStore {
     }
 
     this.notify();
+    await this.commitFieldUpdates(writes, 'markStoreOrdersAsPaid');
     return paidOrderIds;
   }
 
@@ -4613,6 +4644,7 @@ class FallbackStore {
     const markAll = amount >= totalUnpaidOwed && totalUnpaidOwed > 0;
     let remaining = amount;
 
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
     for (const entry of orderEntries) {
       if (remaining <= 0 && !markAll) break;
 
@@ -4620,91 +4652,67 @@ class FallbackStore {
       const hasStore = Boolean(o.shopId || (o.selectedShopIds && o.selectedShopIds.length > 0));
       const fullyPaid = !hasStore || Boolean(o.isStorePaid);
 
-      const updatedOrder: Order = {
-        ...o,
+      const paid = {
         isHelperPaid: true,
         helperPaidAt: now,
         helperPaidWdId: withdrawalId,
         ...(fullyPaid ? { isPaid: true, paidAt: now } : {}),
       };
 
-      this.orders.set(updatedOrder.id, updatedOrder);
-      paidOrderIds.push(updatedOrder.id);
-
-      try {
-        await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
-      } catch (e) {
-        console.warn('[Firestore] markHelperOrdersAsPaid err:', e);
-      }
+      this.orders.set(o.id, { ...o, ...paid });
+      paidOrderIds.push(o.id);
+      writes.push({ collection: 'orders', id: o.id, fields: paid });
 
       remaining -= (entry.totalOwed > 0 ? entry.totalOwed : 1);
     }
 
     this.notify();
+    await this.commitFieldUpdates(writes, 'markHelperOrdersAsPaid');
     return paidOrderIds;
   }
 
   public async unmarkOrdersPaidForWithdrawal(withdrawalId: string): Promise<void> {
-    const allOrders = Array.from(this.orders.values());
-    const allShopOrders = Array.from(this.shopOrders.values());
+    // The cleared fields are deleted on the server (deleteField). Leaving them
+    // out of a merging write, as this used to, clears nothing: the order kept
+    // its paid date and the id of the withdrawal that no longer covers it.
+    const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
 
-    for (const so of allShopOrders) {
-      if (so.disbursementId === withdrawalId) {
-        const updatedSo: ShopOrder = {
-          ...so,
+    Array.from(this.shopOrders.values()).forEach((so) => {
+      if (so.disbursementId !== withdrawalId) return;
+      this.shopOrders.set(so.id, { ...so, isPaid: false, paidAt: undefined, disbursementId: undefined });
+      writes.push({
+        collection: 'shopOrders',
+        id: so.id,
+        fields: { isPaid: false, paidAt: deleteField(), disbursementId: deleteField() },
+      });
+    });
+
+    Array.from(this.orders.values()).forEach((o) => {
+      const storePart = o.storeDisbursementId === withdrawalId;
+      const helperPart = o.helperPaidWdId === withdrawalId;
+      if (!storePart && !helperPart) return;
+
+      this.orders.set(o.id, {
+        ...o,
+        ...(storePart ? { isStorePaid: false, storePaidAt: undefined, storeDisbursementId: undefined } : {}),
+        ...(helperPart ? { isHelperPaid: false, helperPaidAt: undefined, helperPaidWdId: undefined } : {}),
+        isPaid: false,
+        paidAt: undefined,
+      });
+      writes.push({
+        collection: 'orders',
+        id: o.id,
+        fields: {
+          ...(storePart ? { isStorePaid: false, storePaidAt: deleteField(), storeDisbursementId: deleteField() } : {}),
+          ...(helperPart ? { isHelperPaid: false, helperPaidAt: deleteField(), helperPaidWdId: deleteField() } : {}),
           isPaid: false,
-          paidAt: undefined,
-          disbursementId: undefined,
-        };
-        this.shopOrders.set(updatedSo.id, updatedSo);
-        try {
-          await setDoc(doc(db, 'shopOrders', updatedSo.id), cleanForFirestore(updatedSo), { merge: true });
-        } catch (e) {}
-      }
-    }
-
-    for (const o of allOrders) {
-      let changed = false;
-      let isStorePaid = o.isStorePaid;
-      let storePaidAt = o.storePaidAt;
-      let storeDisbursementId = o.storeDisbursementId;
-      let isHelperPaid = o.isHelperPaid;
-      let helperPaidAt = o.helperPaidAt;
-      let helperPaidWdId = o.helperPaidWdId;
-
-      if (o.storeDisbursementId === withdrawalId) {
-        isStorePaid = false;
-        storePaidAt = undefined;
-        storeDisbursementId = undefined;
-        changed = true;
-      }
-      if (o.helperPaidWdId === withdrawalId) {
-        isHelperPaid = false;
-        helperPaidAt = undefined;
-        helperPaidWdId = undefined;
-        changed = true;
-      }
-
-      if (changed) {
-        const updatedOrder: Order = {
-          ...o,
-          isStorePaid,
-          storePaidAt,
-          storeDisbursementId,
-          isHelperPaid,
-          helperPaidAt,
-          helperPaidWdId,
-          isPaid: false,
-          paidAt: undefined,
-        };
-        this.orders.set(updatedOrder.id, updatedOrder);
-        try {
-          await setDoc(doc(db, 'orders', updatedOrder.id), cleanForFirestore(updatedOrder), { merge: true });
-        } catch (e) {}
-      }
-    }
+          paidAt: deleteField(),
+        },
+      });
+    });
 
     this.notify();
+    await this.commitFieldUpdates(writes, 'unmarkOrdersPaidForWithdrawal');
   }
 
   public async toggleOrderPaidStatus(orderId: string, paid?: boolean): Promise<Order | undefined> {
@@ -4723,11 +4731,22 @@ class FallbackStore {
     };
     this.orders.set(updated.id, updated);
     this.notify();
-    try {
-      await setDoc(doc(db, 'orders', updated.id), cleanForFirestore(updated), { merge: true });
-    } catch (e) {
-      console.warn('[Firestore] toggleOrderPaidStatus note:', e);
-    }
+    // The six paid fields only, and a cleared date is deleted, not left behind.
+    await this.commitFieldUpdates(
+      [{
+        collection: 'orders',
+        id: updated.id,
+        fields: {
+          isPaid: newPaid,
+          paidAt: updated.paidAt ?? deleteField(),
+          isStorePaid: newPaid,
+          storePaidAt: updated.storePaidAt ?? deleteField(),
+          isHelperPaid: newPaid,
+          helperPaidAt: updated.helperPaidAt ?? deleteField(),
+        },
+      }],
+      'toggleOrderPaidStatus'
+    );
     return updated;
   }
 
@@ -4957,6 +4976,10 @@ class FallbackStore {
       currentTotalPaid = Math.max(0, currentTotalPaid + diff);
       currentTotalWithdrawn = Math.max(0, currentTotalWithdrawn + diff);
 
+      // The orders the old amount covered are released first. Marking for the
+      // new amount on top of them covered old + new worth of orders with a
+      // payment of just the new amount.
+      await this.unmarkOrdersPaidForWithdrawal(req.id);
       if (req.userType === 'store') {
         await this.markStoreOrdersAsPaid(req.shopId || req.helperId, req.helperId, newAmount, req.id);
       } else {
