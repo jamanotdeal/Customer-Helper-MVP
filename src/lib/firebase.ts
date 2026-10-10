@@ -25,6 +25,7 @@ import {
   deleteField,
   documentId,
   startAfter,
+  runTransaction,
 } from 'firebase/firestore';
 import type { Query, QuerySnapshot, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import {
@@ -309,6 +310,43 @@ export function cleanForFirestore<T>(data: T): T {
   return JSON.parse(JSON.stringify(data));
 }
 
+/**
+ * The top-level fields in which `after` differs from `before`, as an updateDoc
+ * payload: a changed field carries its new value, a field `after` no longer
+ * has is deleted.
+ *
+ * Order writes send only this. They used to send the device's whole copy of
+ * the order, so a copy that had fallen behind (the app was in the background,
+ * the network was slow) put every field back to what that device last saw —
+ * including the status, which is how an order a helper had just accepted went
+ * back to PENDING, or to another helper, from someone else's phone.
+ */
+function changedFields<T extends object>(before: T, after: T): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const a = before as Record<string, unknown>;
+  const b = after as Record<string, unknown>;
+  Array.from(new Set([...Object.keys(a), ...Object.keys(b)])).forEach((key) => {
+    if (b[key] === undefined) {
+      if (a[key] !== undefined) patch[key] = deleteField();
+    } else if (a[key] === undefined || JSON.stringify(a[key]) !== JSON.stringify(b[key])) {
+      patch[key] = cleanForFirestore(b[key]);
+    }
+  });
+  return patch;
+}
+
+/** Statuses of an order a helper is currently running. */
+const RUNNING_ORDER_STATUSES = ['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'];
+
+/** What became of an order write — see FallbackStore.updateOrder. */
+export type OrderWriteOutcome = 'saved' | 'queued' | 'unchanged' | 'conflict' | 'missing' | 'failed';
+
+/** Whether an order was read, is confirmed gone, or could not be checked. */
+export type OrderFetchResult =
+  | { state: 'found'; order: Order }
+  | { state: 'missing' }
+  | { state: 'unreachable' };
+
 // -------------------------------------------------------------
 // Browser Notification Helper
 // Fires a native browser popup on the CURRENT device for the given notification.
@@ -563,6 +601,15 @@ class FallbackStore {
   // Fix 1: Debounce timer for saveLocalStore — prevents blocking the main thread
   // on every Firestore event. Store is written at most every 2 seconds.
   private _saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Settles when the store is ready for a one-off read — see whenNetworkReady().
+  private _networkReady: Promise<void> = Promise.resolve();
+
+  // Order writes in flight, per order, so two changes to the same order are
+  // committed one after the other — see updateOrder().
+  private _orderWrites: Map<string, Promise<unknown>> = new Map();
+  // Order changes made without a connection that the SDK is still holding.
+  private _queuedOrderWrites: Map<string, Promise<void>> = new Map();
+  private _orderWriteIssueListeners: Set<(issue: 'conflict' | 'missing', orderId: string) => void> = new Set();
 
   // ─── Role-Scoped Listener Management ─────────────────────────────────────
   // Stores active unsubscribe callbacks; torn down on role/user switch.
@@ -619,6 +666,16 @@ class FallbackStore {
     } catch (err) {
       console.warn('[Firestore] Could not start global pricing listener:', err);
     }
+  }
+
+  /**
+   * Resolves once one-off reads and transactions can go out. The mobile build
+   * cycles the Firestore connection when the app returns from the background
+   * and holds them back until that is over; the website never does, so here
+   * this is always ready.
+   */
+  public whenNetworkReady(): Promise<void> {
+    return this._networkReady;
   }
 
   // ─── Fix 2: sessionStorage helpers for _knownNotifIds ────────────────────
@@ -1466,7 +1523,7 @@ class FallbackStore {
                   incoming.coinsDeductedAt = new Date().toISOString();
                   // Deduct coins and persist the flag on the order doc
                   this.deductCoinsForFreeDelivery(userId, coinsToDeduct, incoming.id).then(() => {
-                    setDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }, { merge: true }).catch(() => { });
+                    updateDoc(doc(db, 'orders', incoming.id), { coinsDeductedForDelivery: true, coinsDeductedAt: incoming.coinsDeductedAt }).catch(() => { });
                   }).catch(() => { });
                 }
 
@@ -1584,8 +1641,15 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                // If doc was removed from Firestore, delete it
-                this.orders.delete(change.doc.id);
+                // "Removed" from this query only means it left the newest-150
+                // window. Pending orders and this helper's own orders are each
+                // owned by a stream below, which removes them itself once they
+                // are truly gone — deleting them here dropped live requests,
+                // and running orders from the helper's own list.
+                const cached = this.orders.get(change.doc.id);
+                if (cached?.status !== 'PENDING' && cached?.helperId !== userId) {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
@@ -1597,6 +1661,7 @@ class FallbackStore {
       );
 
       // Unassigned pending requests stream (realtime, ensures all new requests are received immediately)
+      let pendingOrdersPrimed = false;
       unsubs.push(
         onSnapshot(
           query(
@@ -1604,17 +1669,89 @@ class FallbackStore {
             where('status', '==', 'PENDING'),
             limit(100)
           ),
+          // Metadata changes too, so the server confirming a first snapshot
+          // that was served from cache is reported.
+          { includeMetadataChanges: true },
           (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
+            const changes = snapshot.docChanges();
+            changes.forEach((change) => {
               if (change.type === 'removed') {
-                this.orders.delete(change.doc.id);
+                // It stopped being PENDING (accepted, cancelled) or was
+                // deleted. If another stream already delivered its new state,
+                // keep that — it is newer than what this query last saw.
+                const cached = this.orders.get(change.doc.id);
+                if (!cached || cached.status === 'PENDING') {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
             });
-            this.notify();
+            // On the server's first answer: an order cached as open that it
+            // does not list is not open any more. This query only reports
+            // removals of what it delivered in this session, so one taken or
+            // cancelled while the site was closed would otherwise sit in the
+            // New list for good. Done once, and only when the answer is the
+            // complete set.
+            let dropped = false;
+            if (!pendingOrdersPrimed && !snapshot.metadata.fromCache) {
+              pendingOrdersPrimed = true;
+              if (snapshot.size < 100) {
+                const open = new Set(snapshot.docs.map((d) => d.id));
+                Array.from(this.orders.entries()).forEach(([id, o]) => {
+                  if (o.status === 'PENDING' && !o.helperId && !open.has(id)) {
+                    this.orders.delete(id);
+                    dropped = true;
+                  }
+                });
+              }
+            }
+            if (changes.length > 0 || dropped) this.notify();
           },
           (err) => console.warn('[Firestore] Helper pending orders sync note:', err)
+        )
+      );
+
+      // The orders this helper is running — all of them, however old.
+      //
+      // The history stream below is capped, and until its index is deployed it
+      // is not even the newest 200 but 200 by (random) document id. A helper
+      // past that many orders could accept one that the stream never carried,
+      // or have a running order pushed out of it by the next one they took —
+      // and it was then deleted from this device. Running orders are few (the
+      // admin's active-order limit), so this query needs no cap.
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'orders'), where('helperId', '==', userId), where('status', 'in', RUNNING_ORDER_STATUSES)),
+          // Metadata changes too: the first snapshot is often served from what
+          // the streams above have already loaded, and the server confirming
+          // it unchanged would otherwise never be reported.
+          { includeMetadataChanges: true },
+          (snapshot) => {
+            const changes = snapshot.docChanges();
+            changes.forEach((change) => {
+              if (change.type === 'removed') {
+                // Delivered, cancelled, given to someone else or deleted — the
+                // server says which.
+                this.recheckOrder(change.doc.id);
+              } else {
+                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+              }
+            });
+            // Cached as running for this helper, but not among the server's:
+            // left over from an earlier session, where this query never
+            // delivered it and so will never report it removed.
+            if (!snapshot.metadata.fromCache) {
+              const running = new Set(snapshot.docs.map((d) => d.id));
+              this.orders.forEach((o, id) => {
+                if (o.helperId === userId && RUNNING_ORDER_STATUSES.includes(o.status) && !running.has(id)) {
+                  this.recheckOrder(id);
+                }
+              });
+            }
+            if (changes.length > 0) this.notify();
+          },
+          (err) => console.warn('[Firestore] Helper running orders sync note:', err)
         )
       );
 
@@ -1627,7 +1764,14 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
-                this.orders.delete(change.doc.id);
+                // Mostly an old order leaving the 200-order window. A running
+                // one belongs to the stream above and is never dropped here.
+                const cached = this.orders.get(change.doc.id);
+                if (cached && cached.helperId === userId && RUNNING_ORDER_STATUSES.includes(cached.status)) {
+                  this.recheckOrder(change.doc.id);
+                } else {
+                  this.orders.delete(change.doc.id);
+                }
               } else {
                 this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
               }
@@ -1962,14 +2106,16 @@ class FallbackStore {
   }
 
   /**
-   * Re-reads one order after it left an admin live query, then keeps it or
-   * drops it according to the server. Coalesces repeats, since one change can
-   * remove the same order from several queries at once.
+   * Re-reads one order after it left a live query, then keeps it or drops it
+   * according to the server. Coalesces repeats, since one change can remove
+   * the same order from several queries at once. If the server can't be
+   * reached the cached copy stays as it is.
    */
   private recheckOrder(orderId: string) {
     if (this._recheckingOrders.has(orderId)) return;
     this._recheckingOrders.add(orderId);
-    getDoc(doc(db, 'orders', orderId))
+    this.whenNetworkReady()
+      .then(() => getDoc(doc(db, 'orders', orderId)))
       .then((snap) => {
         if (snap.exists()) {
           this.orders.set(orderId, this.resolveOrderLocations(snap.data() as Order));
@@ -2474,9 +2620,11 @@ class FallbackStore {
       this.scheduleLocalStoreSave();
       this.notify();
       try {
+        // Only the two fields this changes — these are cached copies, and the
+        // rest of each may be behind the server's.
         await Promise.all(
           ordersToUpdate.slice(0, 50).map((ord) =>
-            setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true })
+            updateDoc(doc(db, 'orders', ord.id), cleanForFirestore({ helperName: ord.helperName, helperPhone: ord.helperPhone }))
           )
         );
       } catch (err) {
@@ -2596,22 +2744,39 @@ class FallbackStore {
 
 
   public async getOrder(orderId: string): Promise<Order | undefined> {
-    if (!orderId) return undefined;
-    const existing = this.orders.get(orderId);
-    if (existing) return existing;
+    const result = await this.fetchOrder(orderId, 2);
+    return result.state === 'found' ? result.order : undefined;
+  }
 
-    try {
-      const snap = await getDoc(doc(db, 'orders', orderId));
-      if (snap.exists()) {
+  /**
+   * The cached order, or failing that the server's — telling "it does not
+   * exist" apart from "couldn't ask".
+   *
+   * getOrder() answers undefined for both, and screens took that to mean the
+   * order was gone: a helper opening an order from a notification got "order
+   * not found" whenever the read happened to fail — most often because it ran
+   * during the reconnect the same tap had just set off (whenNetworkReady).
+   */
+  public async fetchOrder(orderId: string, attempts = 3): Promise<OrderFetchResult> {
+    if (!orderId) return { state: 'missing' };
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const existing = this.orders.get(orderId);
+      if (existing) return { state: 'found', order: existing };
+      await this.whenNetworkReady();
+      try {
+        // Rejects, rather than reporting "doesn't exist", while offline.
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (!snap.exists()) return { state: 'missing' };
         const order = this.resolveOrderLocations(snap.data() as Order);
         this.orders.set(orderId, order);
         this.notify();
-        return order;
+        return { state: 'found', order };
+      } catch (e: any) {
+        console.warn('[Firestore] fetchOrder note:', e?.message || e);
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
       }
-    } catch (e: any) {
-      console.warn('[Firestore] getOrder fetch fallback error:', e?.message || e);
     }
-    return undefined;
+    return { state: 'unreachable' };
   }
 
   public async addOrder(order: Order) {
@@ -2675,18 +2840,252 @@ class FallbackStore {
     }
   }
 
-  public async updateOrder(orderId: string, updater: (order: Order) => Order) {
-    let existing = this.orders.get(orderId);
-    if (!existing) {
-      existing = await this.getOrder(orderId);
-    }
-    if (!existing) return;
+  /**
+   * Subscribes to order changes that were refused: `conflict` when the order
+   * had moved on since this device last saw it, `missing` when it no longer
+   * exists. The screen has already been put back to the server's version; this
+   * is for telling the user why their tap did nothing.
+   */
+  public onOrderWriteIssue(listener: (issue: 'conflict' | 'missing', orderId: string) => void): () => void {
+    this._orderWriteIssueListeners.add(listener);
+    return () => {
+      this._orderWriteIssueListeners.delete(listener);
+    };
+  }
 
+  /**
+   * Changes an order: `updater` receives the current order and returns the
+   * new one.
+   *
+   * The change is shown on this device at once, then committed in a
+   * transaction that runs `updater` again on the server's copy and writes only
+   * the fields it changed (see changedFields). So an edit made from a copy that
+   * has fallen behind can no longer undo what happened in between — a customer
+   * editing an order a helper accepted a moment ago changes the details, not
+   * the status and the helper. `updater` must therefore be a pure function of
+   * its argument; it runs more than once.
+   *
+   * A change of status or helper made from a copy that was behind on exactly
+   * that is refused instead (isStaleOrderAction) and reported through
+   * onOrderWriteIssue.
+   *
+   * Without a connection the transaction cannot run, and the changed fields
+   * are queued for the SDK to send on reconnect, as before.
+   */
+  public async updateOrder(orderId: string, updater: (order: Order) => Order): Promise<OrderWriteOutcome> {
+    const cached = this.orders.get(orderId);
+    let optimistic: Order | undefined;
+    if (cached) {
+      optimistic = { ...this.withDeliveryFlags(cached, updater(cached)), updatedAt: new Date().toISOString() };
+      this.orders.set(orderId, optimistic);
+      this.notify();
+    }
+
+    // One at a time per order: a second change must find the first one on the
+    // server, or its own baseline would look stale.
+    const previous = this._orderWrites.get(orderId) ?? Promise.resolve();
+    const run: Promise<OrderWriteOutcome> = previous
+      .catch(() => { })
+      .then(() => this.commitOrderUpdate(orderId, updater, cached, optimistic, () => this._orderWrites.get(orderId) === run));
+    this._orderWrites.set(orderId, run);
+    run.catch(() => { }).finally(() => {
+      if (this._orderWrites.get(orderId) === run) this._orderWrites.delete(orderId);
+    });
+    return run;
+  }
+
+  /**
+   * @param cached the order as this device held it before the change
+   * @param optimistic `cached` with the change applied, already on screen
+   * @param isLatest false once a later change to the same order is waiting
+   *   behind this one — its optimistic copy is on screen and must stay there
+   */
+  private async commitOrderUpdate(
+    orderId: string,
+    updater: (order: Order) => Order,
+    cached: Order | undefined,
+    optimistic: Order | undefined,
+    isLatest: () => boolean
+  ): Promise<OrderWriteOutcome> {
+    const ref = doc(db, 'orders', orderId);
+    const now = new Date().toISOString();
+    type Commit =
+      | { kind: 'saved'; before: Order; after: Order }
+      | { kind: 'unchanged' | 'conflict'; before: Order }
+      | { kind: 'missing' };
+
+    let commit: Commit | null = null;
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+      try {
+        await this.whenNetworkReady();
+        // A change to this order queued while offline goes first, if it can
+        // be sent now: until it has landed, the server's copy is behind this
+        // device's, and that must not be mistaken for the reverse.
+        const queued = this._queuedOrderWrites.get(orderId);
+        if (queued) await Promise.race([queued, new Promise((resolve) => setTimeout(resolve, 4000))]);
+        commit = await runTransaction(db, async (tx): Promise<Commit> => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return { kind: 'missing' };
+          const stored = snap.data() as Order;
+          // An order left PENDING with a helper on it (see the self-healing in
+          // resolveOrderLocations) is read as accepted, as every screen
+          // already shows it, and is put right by this write.
+          const before: Order = stored.helperId && stored.status === 'PENDING' ? { ...stored, status: 'ACCEPTED' } : stored;
+          let after: Order;
+          try {
+            after = this.withDeliveryFlags(before, updater(before));
+          } catch (_) {
+            // The server's copy lacks what this action builds on.
+            return { kind: 'conflict', before };
+          }
+          if (this.isStaleOrderAction(cached, optimistic, before, after)) return { kind: 'conflict', before };
+          const patch = changedFields(stored, after);
+          if (Object.keys(patch).length === 0) return { kind: 'unchanged', before };
+          tx.update(ref, { ...patch, updatedAt: now });
+          return { kind: 'saved', before, after: { ...after, updatedAt: now } };
+        });
+      } catch (e: any) {
+        console.warn('[Firestore] updateOrder: server not reached, queueing the change:', e?.message || e);
+      }
+    }
+
+    if (commit?.kind === 'missing') {
+      if (this.orders.delete(orderId)) this.notify();
+      this._orderWriteIssueListeners.forEach((l) => l('missing', orderId));
+      return 'missing';
+    }
+    if (commit?.kind === 'conflict' || commit?.kind === 'unchanged') {
+      if (isLatest()) {
+        this.orders.set(orderId, this.resolveOrderLocations(commit.before));
+        this.notify();
+      }
+      if (commit.kind === 'conflict') this._orderWriteIssueListeners.forEach((l) => l('conflict', orderId));
+      return commit.kind;
+    }
+
+    let before: Order;
+    let after: Order;
+    if (commit?.kind === 'saved') {
+      ({ before, after } = commit);
+      if (isLatest()) this.orders.set(orderId, this.resolveOrderLocations(after));
+    } else {
+      if (!cached || !optimistic) return 'failed';
+      before = cached;
+      after = optimistic;
+      const patch = changedFields(before, after);
+      // Appended rather than replaced: this device's copy of a history may be
+      // missing entries others have added since.
+      (['statusHistory', 'editHistory'] as const).forEach((key) => {
+        const was: unknown[] = before[key] || [];
+        const is: unknown[] = after[key] || [];
+        if (key in patch && is.length > was.length && JSON.stringify(is.slice(0, was.length)) === JSON.stringify(was)) {
+          patch[key] = arrayUnion(...cleanForFirestore(is.slice(was.length)));
+        }
+      });
+      // Not awaited: offline, the SDK holds the write and sends it on reconnect.
+      const earlier = this._queuedOrderWrites.get(orderId) ?? Promise.resolve();
+      const sent: Promise<void> = Promise.all([
+        earlier,
+        updateDoc(ref, patch).catch((e) => console.warn('[Firestore] updateOrder queued write note:', e?.message || e)),
+      ]).then(() => {
+        if (this._queuedOrderWrites.get(orderId) === sent) this._queuedOrderWrites.delete(orderId);
+      });
+      this._queuedOrderWrites.set(orderId, sent);
+    }
+
+    try {
+      await this.runOrderSideEffects(orderId, before, after);
+    } catch (e: any) {
+      console.warn('[Firestore] updateOrder side effects note:', e?.message || e);
+    }
+    this.notify();
+    return commit ? 'saved' : 'queued';
+  }
+
+  /**
+   * Marks, on the change that delivers an order, the coin movements that go
+   * with it. They are part of that same write so that the order is never seen
+   * DELIVERED without them: the customer's own device deducts the coins itself
+   * when it sees that (see the customer orders listener), and neither movement
+   * can be repeated safely. runOrderSideEffects then moves the coins.
+   */
+  private withDeliveryFlags(existing: Order, updated: Order): Order {
+    if (updated.status !== 'DELIVERED' || existing.status === 'DELIVERED' || !updated.customerId) return updated;
+    const now = new Date().toISOString();
+    const flagged = { ...updated };
+    if ((flagged.isFreeDelivery || (flagged.coinsRedeemedForDelivery || 0) > 0) && !flagged.coinsDeductedForDelivery) {
+      flagged.coinsDeductedForDelivery = true;
+      flagged.coinsDeductedAt = now;
+    }
+    if (!flagged.coinsAwarded) {
+      flagged.coinsAwarded = getCoinsForService(flagged.service, this.pricingSettings);
+      flagged.coinsAwardedAt = now;
+    }
+    return flagged;
+  }
+
+  /**
+   * Whether a change must be refused because the device making it had fallen
+   * behind: `cached` is what it saw and `intended` what it meant to make of
+   * that; `server` is what is true and `next` what the change makes of it.
+   *
+   * Only changes of status or helper are judged — anything else is merged
+   * field by field and cannot do harm. A customer cancelling an order they
+   * still see as PENDING, or a helper moving on an order that was cancelled or
+   * given to someone else meanwhile, is acting on something that is no longer
+   * so; they are shown the real state and can decide again. An admin's status
+   * change is a deliberate override and goes through; only an assignment that
+   * would replace a helper the admin had not seen yet is held back.
+   */
+  private isStaleOrderAction(cached: Order | undefined, intended: Order | undefined, server: Order, next: Order): boolean {
+    const uid = this.currentUserId;
+    const helperOf = (o: Order) => o.helperId || '';
+    const asAdmin = Boolean(this._listenersRole?.startsWith('admin:')) || Boolean(uid && this.users.get(uid)?.isAdmin);
+
+    // A helper, on an order that is someone else's by now.
+    if (
+      !asAdmin && uid && this._listenersRole === `helper:${uid}` &&
+      server.customerId !== uid && helperOf(server) !== '' && helperOf(server) !== uid
+    ) {
+      return true;
+    }
+
+    if (!cached) return false;
+    // Judged on what the user meant as well as on what it comes to: marking
+    // an order delivered that already is, from a screen still showing it on
+    // the way, changes nothing on the server but was a status change to them.
+    const changesHelper =
+      helperOf(next) !== helperOf(server) || Boolean(intended && helperOf(intended) !== helperOf(cached));
+    const changesStatus = next.status !== server.status || Boolean(intended && intended.status !== cached.status);
+    const staleHelper = helperOf(cached) !== helperOf(server);
+    const staleStatus = cached.status !== server.status;
+    if (asAdmin) return changesHelper && staleHelper;
+    return (changesStatus || changesHelper) && (staleStatus || staleHelper);
+  }
+
+  /**
+   * Everything that follows from an order having changed from `existing` to
+   * `updated`: notifications, shop orders, the helper's wallet, coins.
+   */
+  private async runOrderSideEffects(orderId: string, existing: Order, updated: Order) {
     const previousStatus = existing.status;
     const previousHelperId = existing.helperId;
-    const updated = updater(existing);
-    updated.updatedAt = new Date().toISOString();
-    this.orders.set(orderId, updated);
+
+    // The helper it was taken from is told. Their order used to just vanish
+    // from the Running list.
+    if (previousHelperId && updated.helperId !== previousHelperId && updated.status !== 'CANCELED') {
+      this.addNotification({
+        id: `notif-unassign-${Date.now()}-${updated.id}`,
+        userId: previousHelperId,
+        title: 'অর্ডারটি আপনার কাছ থেকে সরানো হয়েছে',
+        body: `অর্ডার #${updated.id} এডমিন কর্তৃক ${updated.helperId ? 'অন্য একজন হেলপারকে দেওয়া হয়েছে' : 'আপনার কাছ থেকে সরিয়ে নেওয়া হয়েছে'}।`,
+        orderId: updated.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        targetRole: 'helper',
+        type: 'order_update',
+      });
+    }
 
     // If helper changed (e.g. reassigned or assigned to a new helper), reassign existing shopOrders to the new helper
     if (updated.helperId && updated.helperId !== previousHelperId) {
@@ -3078,12 +3477,11 @@ class FallbackStore {
       updated.status === 'DELIVERED' &&
       previousStatus !== 'DELIVERED' &&
       updated.customerId &&
-      (updated.isFreeDelivery || (updated.coinsRedeemedForDelivery || 0) > 0) &&
-      !updated.coinsDeductedForDelivery
+      updated.coinsDeductedForDelivery &&
+      !existing.coinsDeductedForDelivery
     ) {
+      // Flagged by withDeliveryFlags in the write that delivered the order.
       const coinsToDeduct = updated.coinsRedeemedForDelivery || this.pricingSettings.freeDeliveryRequiredCoins || 50;
-      updated.coinsDeductedForDelivery = true;
-      updated.coinsDeductedAt = new Date().toISOString();
       await this.deductCoinsForFreeDelivery(updated.customerId, coinsToDeduct, updated.id);
 
       this.addNotification({
@@ -3100,10 +3498,8 @@ class FallbackStore {
     }
 
     // Award customer gamification coins on order completion
-    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.customerId && !updated.coinsAwarded) {
-      const earnedCoins = getCoinsForService(updated.service, this.pricingSettings);
-      updated.coinsAwarded = earnedCoins;
-      updated.coinsAwardedAt = new Date().toISOString();
+    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED' && updated.customerId && updated.coinsAwarded && !existing.coinsAwarded) {
+      const earnedCoins = updated.coinsAwarded;
 
       await this.awardCoinsToCustomer(updated.customerId, earnedCoins, updated.id);
 
@@ -3137,30 +3533,12 @@ class FallbackStore {
             updatedAt: new Date().toISOString(),
           };
           this.orders.set(srcId, updatedSrc);
-          try {
-            setDoc(doc(db, 'orders', srcId), cleanForFirestore(updatedSrc), { merge: true }).catch(() => { });
-          } catch (e) {
-            console.warn('[Firestore] error updating source due payment status:', e);
-          }
+          updateDoc(doc(db, 'orders', srcId), {
+            duePayment: cleanForFirestore(updatedSrc.duePayment),
+            updatedAt: updatedSrc.updatedAt,
+          }).catch((e) => console.warn('[Firestore] error updating source due payment status:', e?.message || e));
         }
       }
-    }
-
-    this.notify();
-
-    try {
-      if (db) {
-        if (existing.duePayment && !updated.duePayment) {
-          try {
-            await updateDoc(doc(db, 'orders', orderId), {
-              duePayment: deleteField(),
-            });
-          } catch (_) { }
-        }
-        await setDoc(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
-      }
-    } catch (e: any) {
-      console.warn('[Firestore] updateOrder note (saved locally):', e?.message || e);
     }
   }
 
@@ -4245,12 +4623,12 @@ class FallbackStore {
 
     // 2. Orders
     this.orders.forEach((o) => {
-      let changed = false;
-      if (o.customerId === oldUid) { o.customerId = newUid; changed = true; }
-      if (o.helperId === oldUid) { o.helperId = newUid; changed = true; }
-      if (changed) {
+      const moved: { customerId?: string; helperId?: string } = {};
+      if (o.customerId === oldUid) { o.customerId = newUid; moved.customerId = newUid; }
+      if (o.helperId === oldUid) { o.helperId = newUid; moved.helperId = newUid; }
+      if (moved.customerId || moved.helperId) {
         this.orders.set(o.id, o);
-        try { setDoc(doc(db, 'orders', o.id), cleanForFirestore(o), { merge: true }); } catch (_) { }
+        updateDoc(doc(db, 'orders', o.id), moved).catch(() => { });
       }
     });
 
@@ -5095,7 +5473,7 @@ class FallbackStore {
       ord.feedback = feedback;
       this.orders.set(ord.id, ord);
       try {
-        await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+        await updateDoc(doc(db, 'orders', ord.id), { feedback: cleanForFirestore(feedback) });
       } catch (e) {
         console.warn(e);
       }
@@ -5121,10 +5499,8 @@ class FallbackStore {
         this.orders.set(ord.id, ord);
         try {
           await updateDoc(doc(db, 'orders', ord.id), { feedback: deleteField() });
-        } catch (_) {
-          try {
-            await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord));
-          } catch (_) { }
+        } catch (e: any) {
+          console.warn('[Firestore] deleteOrderFeedback order update note:', e?.message || e);
         }
       }
     }
@@ -5196,7 +5572,10 @@ class FallbackStore {
         }
         this.orders.set(ord.id, ord);
         try {
-          await setDoc(doc(db, 'orders', ord.id), cleanForFirestore(ord), { merge: true });
+          await updateDoc(
+            doc(db, 'orders', ord.id),
+            cleanForFirestore({ mutuallyDiscussed, ...(ord.feedback ? { feedback: ord.feedback } : {}) })
+          );
         } catch (e: any) {
           console.warn('[Firestore] updateOrderFeedbackMutuallyDiscussed order update note:', e?.message || e);
         }
@@ -6040,7 +6419,10 @@ class FallbackStore {
         };
         this.orders.set(orderId, newOrd);
         orderPromises.push(
-          setDoc(doc(db, 'orders', orderId), cleanForFirestore(newOrd), { merge: true }).then(() => { }).catch(() => { })
+          updateDoc(
+            doc(db, 'orders', orderId),
+            cleanForFirestore({ deliveryLocation: newDeliv, ...(newPickup ? { pickupLocation: newPickup } : {}), updatedAt: newOrd.updatedAt })
+          ).then(() => { }).catch(() => { })
         );
       }
     });
