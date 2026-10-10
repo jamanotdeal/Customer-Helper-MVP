@@ -82,6 +82,24 @@ export default function PageClient() {
     }
   }, [user?.isBlocked, hasPromptedBlockedUser]);
 
+  // An order change that was refused because the order had moved on (or been
+  // deleted) since this device last saw it. The store has already put the
+  // screen back to the real state; this says why the tap did nothing.
+  useEffect(() => {
+    return fallbackStore.onOrderWriteIssue((issue) => {
+      if (issue === 'missing') {
+        showAlert('অর্ডারটি আর নেই', 'এই অর্ডারটি মুছে ফেলা হয়েছে, তাই পরিবর্তনটি সংরক্ষণ করা যায়নি।', 'warning');
+      } else {
+        showAlert(
+          'অর্ডারটি পরিবর্তিত হয়েছে',
+          'আপনি শেষবার দেখার পর এই অর্ডারের অবস্থা বদলে গেছে, তাই আপনার পরিবর্তনটি প্রয়োগ করা হয়নি। সর্বশেষ অবস্থা দেখে প্রয়োজনে আবার চেষ্টা করুন।',
+          'warning'
+        );
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-mark all notifications as read when a customer visits or refreshes the page.
   // This clears the red badge on the bell without requiring the user to open the drawer.
   // Only applies in customer mode (not helper / store / admin).

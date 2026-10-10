@@ -43,76 +43,96 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   // holds the newest 200; at that size there may be older ones on the server.
   const [ownOrderCount, setOwnOrderCount] = useState(0);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [loadingSelectedOrder, setLoadingSelectedOrder] = useState(false);
+  // Where the lookup of a selected order this device does not hold has got to.
+  // `missing` is the server saying it does not exist; `unreachable` is not
+  // having been able to ask — the two used to share one "not found" screen.
+  const [selectedOrderLookup, setSelectedOrderLookup] = useState<'idle' | 'loading' | 'missing' | 'unreachable'>('idle');
+  const [lookupAttempt, setLookupAttempt] = useState(0);
+  // Bumped on every change to the cached orders, so that a selected order
+  // arriving in (or leaving) the cache re-renders this screen.
+  const [, setOrdersVersion] = useState(0);
+  // An order opened from outside (popup, notification) whose tab is still to
+  // be chosen, because it had not loaded yet when it was opened.
+  const tabPendingForOrderRef = useRef<string | null>(null);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
 
+  const tabForOrder = (order: Order) => {
+    // A still-open order reaches here from the popup's "View" button — the
+    // popup itself is raised by HelperOrderAlerts, on any screen.
+    if (order.status === 'PENDING') {
+      setActiveTab('NEW');
+    } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
+      setActiveTab('ACTIVE');
+    } else if (order.status === 'DELIVERED') {
+      setActiveTab('COMPLETED');
+    }
+  };
+
   useEffect(() => {
-    let isCancelled = false;
-    if (initialSelectedOrderId) {
-      const handleInitialOrder = async () => {
-        let order = fallbackStore.orders.get(initialSelectedOrderId);
-        if (!order) {
-          setLoadingSelectedOrder(true);
-          try {
-            order = await fallbackStore.getOrder(initialSelectedOrderId);
-          } finally {
-            if (!isCancelled) {
-              setLoadingSelectedOrder(false);
-            }
-          }
-        }
-        if (isCancelled) return;
-
-        if (order) {
-          if (order.helperId && order.helperId !== user?.uid && order.customerId !== user?.uid && !user?.isAdmin) {
-            showAlert(
-              'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
-              'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
-              'warning'
-            );
-            if (onClearInitialOrder) {
-              onClearInitialOrder();
-            }
-            return;
-          }
-
-          // A still-open order reaches here from the popup's "View" button —
-          // the popup itself is raised by HelperOrderAlerts, on any screen.
-          if (order.status === 'PENDING') {
-            setActiveTab('NEW');
-          } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
-            setActiveTab('ACTIVE');
-          } else if (order.status === 'DELIVERED') {
-            setActiveTab('COMPLETED');
-          }
-        }
-        setSelectedOrderId(initialSelectedOrderId);
+    if (!initialSelectedOrderId) return;
+    const order = fallbackStore.orders.get(initialSelectedOrderId);
+    if (order) {
+      if (order.helperId && order.helperId !== user?.uid && order.customerId !== user?.uid && !user?.isAdmin) {
+        showAlert(
+          'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
+          'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',
+          'warning'
+        );
         if (onClearInitialOrder) {
           onClearInitialOrder();
         }
-      };
-
-      handleInitialOrder();
+        return;
+      }
+      tabForOrder(order);
+    } else {
+      // Not held here: open it anyway, so the loading screen shows while the
+      // lookup below fetches it, and pick the tab once it has arrived.
+      tabPendingForOrderRef.current = initialSelectedOrderId;
     }
-    return () => {
-      isCancelled = true;
-    };
+    setSelectedOrderId(initialSelectedOrderId);
+    if (onClearInitialOrder) {
+      onClearInitialOrder();
+    }
   }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
+  const selectedOrderCached = selectedOrderId ? fallbackStore.orders.has(selectedOrderId) : false;
+
   useEffect(() => {
-    let isCancelled = false;
-    if (selectedOrderId && !fallbackStore.orders.get(selectedOrderId)) {
-      setLoadingSelectedOrder(true);
-      fallbackStore.getOrder(selectedOrderId).finally(() => {
-        if (!isCancelled) {
-          setLoadingSelectedOrder(false);
-        }
-      });
+    if (!selectedOrderId || selectedOrderCached) {
+      setSelectedOrderLookup('idle');
+      if (selectedOrderId && tabPendingForOrderRef.current === selectedOrderId) {
+        tabPendingForOrderRef.current = null;
+        const order = fallbackStore.orders.get(selectedOrderId);
+        if (order) tabForOrder(order);
+      }
+      return;
     }
+    // Also reached when an open order leaves the cache (another helper took
+    // it): the server then says what became of it.
+    let isCancelled = false;
+    setSelectedOrderLookup('loading');
+    fallbackStore.fetchOrder(selectedOrderId).then((result) => {
+      if (!isCancelled) setSelectedOrderLookup(result.state === 'found' ? 'idle' : result.state);
+    });
     return () => {
       isCancelled = true;
     };
-  }, [selectedOrderId]);
+  }, [selectedOrderId, selectedOrderCached, lookupAttempt]);
+
+  // A lookup that could not reach the server is tried again by itself as soon
+  // as there is reason to think it can: back online, or back on screen.
+  useEffect(() => {
+    if (selectedOrderLookup !== 'unreachable') return;
+    const retry = () => setLookupAttempt((n) => n + 1);
+    window.addEventListener('online', retry);
+    const unsubscribeVisibility = subscribeAppVisibility((visible) => {
+      if (visible) retry();
+    });
+    return () => {
+      window.removeEventListener('online', retry);
+      unsubscribeVisibility();
+    };
+  }, [selectedOrderLookup]);
 
   useEffect(() => {
     if (!user) {
@@ -286,6 +306,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     const ordersChanged = createChangeGate();
     const syncOrders = () => {
       if (!ordersChanged(versionOf(fallbackStore.orders), fallbackStore.pricingSettings)) return;
+      setOrdersVersion(versionOf(fallbackStore.orders));
       if (user) {
         const all = Array.from(fallbackStore.orders.values());
 
@@ -656,7 +677,34 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       );
     }
 
-    if (loadingSelectedOrder) {
+    // Couldn't ask the server. The order may well exist — say so, and offer
+    // to try again, rather than calling it deleted.
+    if (selectedOrderLookup === 'unreachable') {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-gray-100 shadow-sm my-4">
+          <AlertCircle className="w-12 h-12 text-amber-400" />
+          <h3 className="font-extrabold text-gray-700 text-base">অর্ডারটি লোড করা যায়নি</h3>
+          <p className="text-sm text-gray-500 max-w-xs">ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedOrderId(null)}
+              className="px-5 py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-extrabold transition-all active:scale-95"
+            >
+              ফিরে যান
+            </button>
+            <button
+              onClick={() => setLookupAttempt((n) => n + 1)}
+              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-sm transition-all active:scale-95"
+            >
+              আবার চেষ্টা করুন
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Still looking (or about to: the lookup starts just after this render).
+    if (selectedOrderLookup !== 'missing') {
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-gray-100 shadow-sm my-4">
           <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
@@ -666,8 +714,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       );
     }
 
-    // Order genuinely not found — show a simple fallback instead of silently
-    // collapsing back to the dashboard with selectedOrderId still set.
+    // The server confirmed it does not exist — show a simple fallback instead
+    // of silently collapsing back to the dashboard with selectedOrderId still set.
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4 p-8 text-center">
         <Package className="w-12 h-12 text-gray-300" />
