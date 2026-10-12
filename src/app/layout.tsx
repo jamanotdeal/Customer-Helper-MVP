@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
 import { ModalProvider } from '@/components/CustomModal';
+import { CartProvider } from '@/context/CartContext';
 import { Suspense } from 'react';
 import AnalyticsTracker from '@/components/AnalyticsTracker';
 
@@ -56,7 +57,9 @@ export default function RootLayout({
 
         <AuthProvider>
           <ModalProvider>
-            {children}
+            <CartProvider>
+              {children}
+            </CartProvider>
           </ModalProvider>
         </AuthProvider>
 

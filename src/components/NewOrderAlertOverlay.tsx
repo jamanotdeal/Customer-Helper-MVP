@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { OrderItem } from '@/types';
 import {
   Bell,
   X,
@@ -16,8 +17,8 @@ import {
   CheckCircle2,
   VolumeX,
   Clock,
-  Zap,
   Store,
+  Sparkles,
 } from 'lucide-react';
 import { isOrderFromStore } from '@/utils/orderUtils';
 
@@ -99,6 +100,11 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   const itemsSummary = order.items?.length
     ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
     : null;
+
+  // Categorise items: store-connected vs custom/closed-store
+  const itemsWithStore = (order.items || []).filter((i: OrderItem) => i.storeId && !i.isCustom);
+  const customOrClosedItems = (order.items || []).filter((i: OrderItem) => i.isCustom || !i.storeId);
+  const hasSpecialItems = customOrClosedItems.length > 0;
 
   const progressPercent = Math.max(0, Math.min(100, (countdown / autoDismissSeconds) * 100));
 
@@ -217,8 +223,122 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
               </div>
             </div>
 
-            {/* Items */}
-            {itemsSummary && (
+            {/* Items — rich card style (matching CartSummaryDrawer) */}
+            {order.items && order.items.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">আইটেমসমূহ</p>
+
+                {/* Store-grouped items */}
+                {itemsWithStore.length > 0 && (() => {
+                  const byStore: Record<string, OrderItem[]> = {};
+                  itemsWithStore.forEach((it: OrderItem) => {
+                    const key = it.storeId!;
+                    if (!byStore[key]) byStore[key] = [];
+                    byStore[key].push(it);
+                  });
+                  return Object.entries(byStore).map(([storeId, storeItems]) => {
+                    const sn = storeItems[0].storeName || storeId;
+                    const shopData = fallbackStore.shops.get(storeId);
+                    const storeAddress = shopData?.location?.address;
+                    return (
+                      <div key={storeId} className="rounded-xl bg-purple-50 border border-purple-200 px-2 py-1.5 space-y-1">
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1">
+                            <Store className="w-3 h-3 text-purple-600" />
+                            <span className="text-[10px] font-black text-purple-800 uppercase tracking-wide">{sn}</span>
+                          </div>
+                          {storeAddress && (
+                            <div className="flex items-start gap-1 pl-0.5">
+                              <MapPin className="w-2.5 h-2.5 text-purple-400 shrink-0 mt-0.5" />
+                              <span className="text-[9px] text-purple-600 font-medium leading-tight line-clamp-1">{storeAddress}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          {storeItems.map((it: OrderItem) => (
+                            <div key={it.id} className="flex items-center gap-2 bg-white rounded-lg px-2 py-1.5 border border-purple-100">
+                              {/* Item image / icon */}
+                              <div className="w-8 h-8 rounded-lg bg-white border border-gray-200 shrink-0 overflow-hidden flex items-center justify-center">
+                                {it.photoUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={it.photoUrl} alt={it.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-600">
+                                    <Package className="w-3.5 h-3.5" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11px] font-black text-gray-900 truncate">{it.name}</p>
+                                <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
+                                  {it.unit && <span>{it.unit}</span>}
+                                  {it.qty && Number(it.qty) > 1 && <span className="font-bold">×{it.qty}</span>}
+                                  {it.price !== undefined && (
+                                    <span className="font-extrabold text-emerald-700">৳{it.price}</span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+
+                {/* Custom / closed-store items */}
+                {customOrClosedItems.length > 0 && (
+                  <div className="rounded-xl bg-amber-50 border border-amber-200 px-2 py-1.5 space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-amber-600" />
+                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wide">Custom / Any Store</span>
+                    </div>
+                    <div className="space-y-1">
+                      {customOrClosedItems.map((it: OrderItem) => (
+                        <div key={it.id} className="flex items-center gap-2 bg-white rounded-lg px-2 py-1.5 border border-amber-100">
+                          {/* Item image / icon */}
+                          <div className="w-8 h-8 rounded-lg bg-white border border-gray-200 shrink-0 overflow-hidden flex items-center justify-center">
+                            {it.photoUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={it.photoUrl} alt={it.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full bg-amber-50 flex items-center justify-center text-amber-600">
+                                <Sparkles className="w-3.5 h-3.5" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-black text-gray-900 truncate">{it.name}</p>
+                            <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
+                              {it.unit && <span>{it.unit}</span>}
+                              {it.qty && <span className="font-bold">{it.qty}</span>}
+                              {it.buyFrom && (
+                                <span className="text-amber-700 font-semibold">({it.buyFrom})</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Fallback plain summary if no structured store data */}
+                {itemsWithStore.length === 0 && customOrClosedItems.length === 0 && itemsSummary && (
+                  <div className="flex items-start space-x-2.5">
+                    <div className="p-2 rounded-xl bg-amber-50 text-amber-600 shrink-0 mt-0.5">
+                      <Package className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm text-gray-800 font-semibold leading-snug line-clamp-2">{itemsSummary}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fallback: no structured items but has summary text */}
+            {(!order.items || order.items.length === 0) && itemsSummary && (
               <div className="flex items-start space-x-2.5">
                 <div className="p-2 rounded-xl bg-amber-50 text-amber-600 shrink-0 mt-0.5">
                   <Package className="w-4 h-4" />
@@ -230,20 +350,7 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
               </div>
             )}
 
-            {/* Pickup location */}
-            {order.pickupLocation?.address && (
-              <div className="flex items-start space-x-2.5">
-                <div className="p-2 rounded-xl bg-orange-50 text-orange-500 shrink-0 mt-0.5">
-                  <MapPin className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">পিকআপ লোকেশন</p>
-                  <p className="text-sm text-gray-800 font-semibold leading-snug line-clamp-2">
-                    {order.pickupLocation.address}
-                  </p>
-                </div>
-              </div>
-            )}
+
 
             {/* Delivery location */}
             <div className="flex items-start space-x-2.5">

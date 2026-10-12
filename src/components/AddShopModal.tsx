@@ -299,6 +299,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         photoUrl: photoUrl.trim() || undefined,
         commissionPercent: commPercent,
         canReceiveOrders,
+        isOpen: shopToEdit?.isOpen !== undefined ? shopToEdit.isOpen : true,
+        openingTime: shopToEdit?.openingTime,
+        closingTime: shopToEdit?.closingTime,
       };
 
       await fallbackStore.saveShop(shopData);

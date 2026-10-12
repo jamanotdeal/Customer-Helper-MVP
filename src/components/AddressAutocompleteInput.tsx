@@ -378,6 +378,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
           placeholder={placeholder}
           maxLength={maxLength}
           autoComplete="off"
+          style={{ WebkitUserSelect: 'text', userSelect: 'text', touchAction: 'manipulation' } as React.CSSProperties}
           className={`w-full ${icon ? 'pl-10' : 'pl-4'} pr-10 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-all ${error
               ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
               : 'border-gray-200 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10'

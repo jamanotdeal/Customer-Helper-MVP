@@ -36,6 +36,7 @@ export const getStatusBadgeInfo = (status: OrderStatus) => {
     case 'DELIVERED':
       return { label: 'Completed', color: 'bg-gray-100 text-gray-700 border-gray-200', icon: CheckCircle2 };
     case 'CANCELED':
+    case 'CANCELLED' as any:
       return { label: 'Cancelled', color: 'bg-red-100 text-red-700 border-red-200', icon: XCircle };
     default:
       return { label: status, color: 'bg-gray-100 text-gray-800', icon: Clock };
@@ -88,6 +89,7 @@ const getCardAccent = (status: OrderStatus) => {
         locationBg: 'bg-gray-50/70 border-gray-100',
       };
     case 'CANCELED':
+    case 'CANCELLED' as any:
       return {
         border: 'border-red-200',
         bar: 'bg-red-400',
@@ -114,15 +116,26 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   helperActiveView = false,
 }) => {
   const order = fallbackStore.resolveOrderLocations(rawOrder);
-  const badge = getStatusBadgeInfo(order.status);
-  const accent = getCardAccent(order.status);
+  const isCanceledOrder =
+    order.status === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED' ||
+    order.cancellationRequest?.status === 'APPROVED';
+  const badge = isCanceledOrder
+    ? { label: 'Cancelled', color: 'bg-red-100 text-red-700 border-red-200', icon: XCircle }
+    : getStatusBadgeInfo(order.status);
+  const accent = isCanceledOrder
+    ? {
+        border: 'border-red-200',
+        bar: 'bg-red-400',
+        bg: 'bg-gradient-to-br from-white to-red-50/30',
+        locationBg: 'bg-red-50/50 border-red-100',
+      }
+    : getCardAccent(order.status);
   const BadgeIcon = badge.icon;
   const isDone =
     order.status === 'DELIVERED' ||
     (order.status as string) === 'COMPLETED' ||
-    order.status === 'CANCELED' ||
-    (order.status as string) === 'CANCELLED' ||
-    order.cancellationRequest?.status === 'APPROVED';
+    isCanceledOrder;
   const urgency = getHelperUrgencyBgClass(order, isDone);
 
   const [elapsed, setElapsed] = useState(() =>
@@ -301,7 +314,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           <div className="flex items-start justify-between mb-3">
             <div className="min-w-0 flex-1 pr-3">
               <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-2">
-                {order.title || 'Request'}
+                {order.service || order.title || 'Service Needed'}
               </h3>
               <p className="text-[11px] font-semibold text-gray-400 mt-1.5 flex items-center space-x-1">
                 <Clock className="w-3.5 h-3.5 text-gray-400" />
@@ -309,7 +322,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </p>
             </div>
 
-            {order.status !== 'PENDING' && (
+            {(order.status !== 'PENDING' || isCanceledOrder) && (
               <div className="shrink-0">
                 <span
                   className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${badge.color}`}

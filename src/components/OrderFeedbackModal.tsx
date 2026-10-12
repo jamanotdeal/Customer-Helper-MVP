@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Order, OrderFeedback } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { Check, X, ThumbsUp, ThumbsDown, MessageSquare } from 'lucide-react';
+import { Check, X, ThumbsUp, ThumbsDown, MessageSquare, AlertCircle, Bike, ShoppingBag } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
 
 interface OrderFeedbackModalProps {
@@ -19,6 +19,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
   onSubmitted,
 }) => {
   const [thumbsUp, setThumbsUp] = useState<boolean | null>(null);
+  const [badAspects, setBadAspects] = useState<('rider' | 'product')[]>([]);
   const [improvementComment, setImprovementComment] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
 
@@ -27,11 +28,41 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
     return null;
   }
 
+  const toggleBadAspect = (aspect: 'rider' | 'product') => {
+    setBadAspects((prev) =>
+      prev.includes(aspect)
+        ? prev.filter((a) => a !== aspect)
+        : [...prev, aspect]
+    );
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (thumbsUp === null) return; // must pick one
+    if (thumbsUp === false && badAspects.length === 0) return; // must pick what was bad
+
     try {
       setSubmitting(true);
+
+      const targetShopId =
+        order.shopId ||
+        (order.selectedShopIds && order.selectedShopIds[0]) ||
+        order.items?.find((i) => i.storeId)?.storeId;
+      const targetShopName =
+        (targetShopId ? fallbackStore.shops.get(targetShopId)?.name : null) ||
+        order.items?.find((i) => i.storeName)?.storeName;
+
+      let badReason: 'RIDER' | 'PRODUCT' | 'BOTH' | undefined = undefined;
+      if (thumbsUp === false) {
+        if (badAspects.includes('rider') && badAspects.includes('product')) {
+          badReason = 'BOTH';
+        } else if (badAspects.includes('rider')) {
+          badReason = 'RIDER';
+        } else if (badAspects.includes('product')) {
+          badReason = 'PRODUCT';
+        }
+      }
+
       const feedbackData: OrderFeedback = {
         id: `fb-${order.id}-${Date.now()}`,
         orderId: order.id,
@@ -39,10 +70,14 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
         customerName: order.customerName,
         helperId: order.helperId,
         helperName: order.helperName,
-        riderRating: thumbsUp ? 5 : 1,
+        shopId: targetShopId || undefined,
+        shopName: targetShopName || undefined,
+        riderRating: thumbsUp ? 5 : (badAspects.includes('rider') ? 1 : 5),
         serviceRating: thumbsUp ? 5 : 1,
-        shopRating: thumbsUp ? 5 : 1,
+        shopRating: thumbsUp ? 5 : (badAspects.includes('product') ? 1 : 5),
         thumbsUp,
+        badAspects: thumbsUp === false ? badAspects : undefined,
+        badReason,
         improvementComment: improvementComment.trim() || undefined,
         createdAt: new Date().toISOString(),
       };
@@ -211,24 +246,83 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
             </button>
           </div>
 
-          {/* Negative feedback textarea — slides in only when thumbs-down selected */}
+          {/* Negative feedback section — slides in only when thumbs-down selected */}
           {isNegative && (
-            <div className="textarea-slide overflow-hidden">
-              <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 space-y-2.5">
-                <div className="flex items-start gap-2">
-                  <MessageSquare className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                  <p className="text-[11px] font-bold text-red-800 leading-relaxed">
-                    আপনার Feedback-ই একমাত্র মাধ্যম, যার মাধ্যমে আমরা বুঝতে পারি আমাদের Service কোথায় Improve করা উচিত।
+            <div className="textarea-slide overflow-hidden space-y-3">
+              {/* Bad Selection: Rider or Product */}
+              <div className="p-3.5 rounded-2xl bg-red-50/90 border border-red-200 space-y-2.5">
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                  <p className="text-xs font-black text-red-900">
+                    কীসে সমস্যা ছিল? (রাইডার নাকি প্রোডাক্ট)
                   </p>
                 </div>
-                <textarea
-                  value={improvementComment}
-                  onChange={(e) => setImprovementComment(e.target.value)}
-                  placeholder="কোথায় সমস্যা হয়েছে? আমাদের জানান..."
-                  rows={3}
-                  autoFocus
-                  className="w-full p-3 rounded-xl border border-red-200 focus:border-red-400 bg-white outline-none text-xs font-medium text-gray-900 placeholder:text-gray-400 resize-none transition-colors"
-                />
+                <p className="text-[11px] text-red-700 font-semibold">
+                  নির্বাচন করুন কোনটি খারাপ লেগেছে:
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  {/* Rider Option */}
+                  <button
+                    type="button"
+                    onClick={() => toggleBadAspect('rider')}
+                    className={`p-2.5 rounded-xl border-2 font-extrabold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      badAspects.includes('rider')
+                        ? 'bg-red-600 text-white border-red-600 shadow-md shadow-red-600/30 scale-[1.02]'
+                        : 'bg-white text-gray-700 border-red-200 hover:border-red-300 hover:bg-red-50/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Bike className="w-4 h-4" />
+                      <span>রাইডার</span>
+                    </div>
+                    <span className={`text-[10px] font-semibold ${badAspects.includes('rider') ? 'text-red-100' : 'text-gray-400'}`}>
+                      (Rider / ডেলিভারি)
+                    </span>
+                  </button>
+
+                  {/* Product Option */}
+                  <button
+                    type="button"
+                    onClick={() => toggleBadAspect('product')}
+                    className={`p-2.5 rounded-xl border-2 font-extrabold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      badAspects.includes('product')
+                        ? 'bg-red-600 text-white border-red-600 shadow-md shadow-red-600/30 scale-[1.02]'
+                        : 'bg-white text-gray-700 border-red-200 hover:border-red-300 hover:bg-red-50/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>প্রোডাক্ট</span>
+                    </div>
+                    <span className={`text-[10px] font-semibold ${badAspects.includes('product') ? 'text-red-100' : 'text-gray-400'}`}>
+                      (Product / পণ্য)
+                    </span>
+                  </button>
+                </div>
+
+                {badAspects.length === 0 && (
+                  <p className="text-[10px] text-red-600 font-bold bg-white/80 px-2 py-1 rounded-lg border border-red-200/60 animate-pulse text-center">
+                    ⚠️ অনুগ্রহ করে রাইডার বা প্রোডাক্ট বেছে নিন
+                  </p>
+                )}
+
+                {/* Feedback Note & Textarea */}
+                <div className="pt-2 border-t border-red-200/60 space-y-2">
+                  <div className="flex items-start gap-1.5">
+                    <MessageSquare className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-[10px] font-bold text-red-800 leading-relaxed">
+                      আপনার Feedback-ই একমাত্র মাধ্যম, যার মাধ্যমে আমরা বুঝতে পারি কোথায় Improve করা উচিত।
+                    </p>
+                  </div>
+                  <textarea
+                    value={improvementComment}
+                    onChange={(e) => setImprovementComment(e.target.value)}
+                    placeholder="কোথায় সমস্যা হয়েছে? আমাদের জানান..."
+                    rows={2}
+                    className="w-full p-2.5 rounded-xl border border-red-200 focus:border-red-400 bg-white outline-none text-xs font-medium text-gray-900 placeholder:text-gray-400 resize-none transition-colors"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -257,7 +351,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
             </button>
             <AsyncButton
               type="submit"
-              disabled={thumbsUp === null}
+              disabled={thumbsUp === null || (thumbsUp === false && badAspects.length === 0)}
               isLoading={submitting}
               icon={<Check className="w-4 h-4" />}
               className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center space-x-1.5 disabled:opacity-40 disabled:cursor-not-allowed"

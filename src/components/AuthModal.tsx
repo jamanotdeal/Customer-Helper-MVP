@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { fallbackStore } from '@/lib/firebase';
 import { X, Mail, Lock, User, LogIn, UserPlus, AlertCircle } from 'lucide-react';
@@ -22,18 +22,35 @@ export const AuthModal: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Read pricingSettings dynamically from fallbackStore
-  const manualAuthEnabled = fallbackStore.pricingSettings?.manualAuthEnabled === true;
+  // Read pricingSettings dynamically from fallbackStore with real-time reactivity
+  const [manualAuthEnabled, setManualAuthEnabled] = useState<boolean>(() => {
+    return fallbackStore.pricingSettings?.manualAuthEnabled === true;
+  });
 
-  if (!isAuthModalOpen || !manualAuthEnabled) return null;
+  useEffect(() => {
+    const sync = () => {
+      setManualAuthEnabled(fallbackStore.pricingSettings?.manualAuthEnabled === true);
+    };
+    sync();
+    const unsub = fallbackStore.subscribe(sync);
+    return () => unsub();
+  }, []);
+
+  if (!isAuthModalOpen) return null;
 
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
+    setIsSubmitting(true);
     try {
       await loginWithGoogle();
       closeAuthModal();
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Google লগইন করতে ব্যর্থ হয়েছে।');
+      console.warn('[AuthModal] Google Sign In error:', err);
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        setErrorMessage(err?.message || 'Google লগইন করতে ব্যর্থ হয়েছে।');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -87,8 +104,14 @@ export const AuthModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 transform transition-all duration-200">
+    <div
+      className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+      onClick={closeAuthModal}
+    >
+      <div
+        className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 transform transition-all duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="relative bg-gradient-to-r from-emerald-600 to-teal-700 p-6 text-white text-center">

@@ -7,18 +7,25 @@ import { useModal } from './CustomModal';
 import { OrderItem, LocationData, Order, ServerAddress } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore, saveCustomerPickupAddressToFirestore, initFcmMessaging } from '@/lib/firebase';
 import { DEFAULT_INPUT_PLACEHOLDERS, DEFAULT_SERVICES, getServiceDescriptionHint, isOrderTimingOpen, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
-import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getServiceDeliveryLocation, saveServiceDeliveryLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress, getSavedPickupAddresses, addSavedPickupAddress } from '@/lib/storage';
-import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Check, Clock, AlertTriangle, AlertCircle, Coins, Sparkles, Gift, X } from 'lucide-react';
+import { saveAltPhone, saveDefaultDeliveryLocation, getSavedAltPhone, getSavedDefaultDeliveryLocation, getServicePickupLocation, saveServicePickupLocation, getServiceDeliveryLocation, saveServiceDeliveryLocation, getSavedDeliveryAddresses, addSavedDeliveryAddress, getSavedPickupAddresses, addSavedPickupAddress, getPreviousCustomerContact } from '@/lib/storage';
+import { MapPin, Navigation, Phone, ArrowRight, ChevronDown, Check, Clock, AlertTriangle, AlertCircle, Coins, Sparkles, Gift, X, Receipt, Plus, ShoppingBag } from 'lucide-react';
 import { updateSEOMetadataClient } from '@/lib/seo';
 import { formatShortAddress } from '@/utils/mapMarkerUtils';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
+import { StoreOffWarningModal } from './StoreOffWarningModal';
+import { isShopOpenNow } from './StoreGrid';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
+  selectedItems?: OrderItem[];
+  onAddItem?: (item: OrderItem) => void;
+  onRemoveItem?: (itemId: string) => void;
+  onOpenCustomItemModal?: () => void;
 }
+
 
 /**
  * Whether `text` still names the place whose coordinates were picked for
@@ -37,16 +44,33 @@ function describesSamePlace(source: string, text: string): boolean {
   return kept / from.length >= 0.6;
 }
 
-export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
+export const RequestComposer: React.FC<RequestComposerProps> = ({
+  onOrderCreated,
+  selectedItems,
+  onAddItem,
+  onRemoveItem,
+  onOpenCustomItemModal,
+}) => {
   const { user, openAuthModal, updateCustomerPreferences, activeMode } = useAuth();
   const { showAlert, showConfirm } = useModal();
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [showStoreOffModal, setShowStoreOffModal] = useState(false);
+  const [closedStoreNames, setClosedStoreNames] = useState<string[]>([]);
+  const isStoreWarningAcceptedRef = useRef(false);
+
+  // Auto-expand when items are added from store or custom item
+  useEffect(() => {
+    if (selectedItems && selectedItems.length > 0 && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [selectedItems, isExpanded]);
 
   // Main description ("Ki korte hobe?")
   const [description, setDescription] = useState('');
+
 
   // Optional pickup / source location
   const [pickupNote, setPickupNote] = useState('');
@@ -231,10 +255,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   useEffect(() => {
     if (user?.uid && userInitRef.current !== user.uid) {
       userInitRef.current = user.uid;
-      const savedPhone = getSavedAltPhone() || user.alternativePhone || '';
-      if (savedPhone) setAltPhone(savedPhone);
+      const contact = getPreviousCustomerContact(
+        user,
+        Array.from(fallbackStore.orders.values())
+      );
+      if (contact.phone) setAltPhone(contact.phone);
 
-      const rawDefaultLoc = getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
+      const rawDefaultLoc = contact.location || getSavedDefaultDeliveryLocation() || user.defaultDeliveryLocation;
       const savedLoc = fallbackStore.resolveLocation(rawDefaultLoc);
       if (savedLoc?.address) {
         setDeliveryAddress(savedLoc.address.trim());
@@ -391,14 +418,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       return;
     }
 
+    const activeItems = (selectedItems && selectedItems.length > 0) ? selectedItems : [];
+    const effectiveService = service || (activeItems.length > 0 ? 'বাজার-সদাই করে দিন' : '');
+
     const newErrors: typeof errors = {};
 
-    if (!service || !service.trim()) {
+    if (!effectiveService || !effectiveService.trim()) {
       newErrors.service = 'সার্ভিস সিলেক্ট করা বাধ্যতামূলক';
     }
 
-    if (!description.trim()) {
-      newErrors.description = 'কী করতে হবে তার বিবরণ লিখুন';
+    if (!description.trim() && activeItems.length === 0) {
+      newErrors.description = 'কী করতে হবে তার বিবরণ লিখুন অথবা পণ্য যোগ করুন';
     }
 
     if (!deliveryAddress.trim()) {
@@ -416,6 +446,27 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       return;
     }
 
+    // Requirement 3: Check if any item belongs to a store that is off/closed
+    if (!isStoreWarningAcceptedRef.current && activeItems.length > 0) {
+      const closedStores: string[] = [];
+      for (const it of activeItems) {
+        if (it.storeId) {
+          const sh = fallbackStore.shops.get(it.storeId);
+          if (sh && !isShopOpenNow(sh)) {
+            if (!closedStores.includes(sh.name)) {
+              closedStores.push(sh.name);
+            }
+          }
+        }
+      }
+      if (closedStores.length > 0) {
+        setClosedStoreNames(closedStores);
+        setShowStoreOffModal(true);
+        return;
+      }
+    }
+    isStoreWarningAcceptedRef.current = false;
+
     setErrors({});
 
     const isConfirmed = await showConfirm(
@@ -428,6 +479,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
     if (!isConfirmed) {
       return;
     }
+
 
     setSubmitting(true);
 
@@ -508,12 +560,20 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         }
       }
 
-      // Build a single-item list from the description
-      const singleItem: OrderItem = {
-        id: 'item-1',
-        name: description.trim(),
-        qty: '1',
-      };
+      // Build final items from selected items or description
+      const finalItems: OrderItem[] = activeItems.length > 0
+        ? activeItems
+        : [{
+            id: 'item-1',
+            name: description.trim(),
+            qty: '1',
+          }];
+
+      const targetShopIds = Array.from(new Set(finalItems.map((it) => it.storeId).filter(Boolean))) as string[];
+      const pricedTotal = finalItems.reduce(
+        (acc, it) => acc + (it.price ? it.price * (parseInt(it.qty || '1', 10) || 1) : 0),
+        0
+      );
 
       // Calculate initial estimated delivery fee
       const distKm = (orderPickupLat && orderPickupLng && orderDeliveryLat && orderDeliveryLng)
@@ -523,7 +583,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         distanceKm: Math.ceil(distKm),
         weightKg: 0,
         isReturnRequested: false,
-        productPrice: 0,
+        productPrice: pricedTotal,
       }, fallbackStore.pricingSettings).totalFee;
       const initialFee = Math.max(estdFee, fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
 
@@ -552,14 +612,18 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         customerName: user.displayName || 'Customer',
         customerPhone: altPhone,
         alternativePhone: altPhone,
-        title: service,
-        service: service,
-        items: [singleItem],
+        title: effectiveService || (finalItems.length === 1 ? finalItems[0].name : `${finalItems[0].name} ইত্যাদি`),
+        service: effectiveService,
+        items: finalItems,
+        productCost: pricedTotal > 0 ? pricedTotal : undefined,
+        shopId: targetShopIds[0] || undefined,
+        selectedShopIds: targetShopIds.length > 0 ? targetShopIds : undefined,
         missingItemPreference: undefined,
         pickupLocation: pickupLoc,
         deliveryLocation: finalDelivLoc,
         additionalNote: undefined,
         status: 'PENDING',
+
         deliveryFee: finalDeliveryFee,
         originalDeliveryFee: initialFee,
         isFreeDelivery: isFree,
@@ -725,8 +789,90 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                   )}
                 </div>
 
+                {/* Selected Items Card (Store Products & Custom Items) */}
+                {selectedItems && selectedItems.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-emerald-200/90 p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs text-gray-900 flex items-center gap-1.5">
+                        <ShoppingBag className="w-4 h-4 text-emerald-600" />
+                        <span>নির্বাচিত পণ্যসমূহ ({selectedItems.length})</span>
+                      </span>
+                      {onOpenCustomItemModal && (
+                        <button
+                          type="button"
+                          onClick={onOpenCustomItemModal}
+                          className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100"
+                        >
+                          <Sparkles className="w-3 h-3 text-emerald-600" />
+                          <span>+ কাস্টম আইটেম যোগ করুন</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {selectedItems.map((it) => (
+                        <div
+                          key={it.id}
+                          className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs"
+                        >
+                          <div className="flex-1 min-w-0 pr-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-gray-900 truncate">
+                                {it.name}
+                              </span>
+                              {it.qty && (
+                                <span className="text-[10px] bg-gray-200/80 text-gray-700 px-1.5 py-0.2 rounded font-bold">
+                                  {it.qty}
+                                </span>
+                              )}
+                              {it.isCustom && (
+                                <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-extrabold">
+                                  Custom Item
+                                </span>
+                              )}
+                            </div>
+                            {it.buyFrom && (
+                              <p className="text-[10px] text-gray-500 truncate mt-0.5">
+                                কোথা থেকে: {it.buyFrom}
+                              </p>
+                            )}
+                            {it.storeName && (
+                              <p className="text-[10px] text-emerald-700 font-medium truncate mt-0.5">
+                                দোকান: {it.storeName}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center space-x-2 shrink-0">
+                            {it.isCustom ? (
+                              <span className="font-extrabold text-amber-800 font-mono bg-amber-100 px-2 py-0.5 rounded-md text-[11px]">
+                                N/A
+                              </span>
+                            ) : it.price !== undefined ? (
+                              <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-md border border-gray-200 text-xs">
+                                ৳{it.price}
+                              </span>
+                            ) : null}
+                            {onRemoveItem && (
+                              <button
+                                type="button"
+                                onClick={() => onRemoveItem(it.id)}
+                                className="p-1 text-gray-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                                title="বাদ দিন"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Description box */}
                 <div className="relative">
+
                   <textarea
                     value={description}
                     onChange={(e) => {
@@ -925,6 +1071,96 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
                     </p>
                   </div>
                 )}
+
+                {/* Floating/Quick Custom Item Shortcut (Requirement 2: before order submit screen) */}
+                {onOpenCustomItemModal && (
+                  <button
+                    type="button"
+                    onClick={onOpenCustomItemModal}
+                    className="w-full py-2.5 px-3 rounded-2xl border-2 border-dashed border-emerald-400 bg-emerald-50/60 hover:bg-emerald-50 active:scale-98 text-emerald-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs"
+                  >
+                    <Plus className="w-4 h-4 text-emerald-600" />
+                    <span>খুঁজে পাচ্ছেন না? কাস্টম আইটেম যোগ করুন (Add Custom Item)</span>
+                  </button>
+                )}
+
+                {/* Cost Summary Breakdown Card (Requirement 2: Custom item cost summary should be N/A) */}
+                {(selectedItems && selectedItems.length > 0) && (() => {
+                  const summaryItems = selectedItems;
+                  const pricedTotal = summaryItems.reduce((acc: number, it: OrderItem) => {
+                    if (!it.isCustom && typeof it.price === 'number' && it.price > 0) {
+                      return acc + (it.price * (it.quantity || 1));
+                    }
+                    return acc;
+                  }, 0);
+                  const hasCustom = summaryItems.some((it: OrderItem) => it.isCustom || !it.price);
+                  const estDelivery = useFreeDelivery ? 0 : (fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20);
+                  const dueAmount = unpaidDue?.totalAmount || 0;
+
+                  return (
+                    <div className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200 space-y-2 text-xs text-gray-700">
+                      <div className="flex items-center justify-between pb-1.5 border-b border-gray-200">
+                        <span className="font-extrabold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                          <Receipt className="w-4 h-4 text-emerald-600" />
+                          <span>খরচের বিবরণী (Cost Summary)</span>
+                        </span>
+                        <span className="text-[11px] text-gray-500 font-semibold">{summaryItems.length} টি আইটেম</span>
+                      </div>
+
+                      <div className="space-y-1.5 pt-0.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">পণ্যের আনুমানিক মূল্য:</span>
+                          <span className="font-bold text-gray-900">
+                            {hasCustom ? (
+                              pricedTotal > 0 ? (
+                                <span>৳{pricedTotal} <span className="text-amber-600 font-extrabold">+ N/A</span></span>
+                              ) : (
+                                <span className="text-amber-600 font-extrabold px-1.5 py-0.5 rounded bg-amber-100">N/A</span>
+                              )
+                            ) : (
+                              <span>৳{pricedTotal}</span>
+                            )}
+                          </span>
+                        </div>
+
+                        {hasCustom && (
+                          <p className="text-[10px] text-amber-700 bg-amber-50 p-1.5 rounded-lg border border-amber-200/60 leading-tight">
+                            * কাস্টম আইটেম কেনার পর দোকানের রসিদ অনুযায়ী সঠিক মূল্য নির্ধারণ হবে (Custom item cost is N/A until purchased).
+                          </p>
+                        )}
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">ডেলিভারি চার্জ:</span>
+                          <span className="font-bold text-gray-900">
+                            {useFreeDelivery ? (
+                              <span className="text-emerald-600 font-extrabold">০ ৳ (ফ্রি)</span>
+                            ) : (
+                              <span>৳{estDelivery}</span>
+                            )}
+                          </span>
+                        </div>
+
+                        {dueAmount > 0 && (
+                          <div className="flex items-center justify-between text-amber-900">
+                            <span>পূর্বের বাকি পেমেন্ট:</span>
+                            <span className="font-bold text-red-600">+৳{dueAmount}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-gray-200 flex items-center justify-between font-extrabold text-sm text-gray-950">
+                        <span>সম্ভাব্য মোট বিল:</span>
+                        <span className="text-emerald-700 text-base font-black">
+                          {hasCustom ? (
+                            <span>৳{pricedTotal + estDelivery + dueAmount} <span className="text-amber-600 text-xs font-semibold">+ N/A</span></span>
+                          ) : (
+                            <span>৳{pricedTotal + estDelivery + dueAmount}</span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -1075,6 +1311,24 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
         <BlockedUserModal
           onClose={() => setShowBlockedModal(false)}
           targetRole="customer"
+        />
+      )}
+
+      {/* Store Off Warning Modal */}
+      {showStoreOffModal && (
+        <StoreOffWarningModal
+          isOpen={showStoreOffModal}
+          closedStoreNames={closedStoreNames}
+          onConfirm={() => {
+            setShowStoreOffModal(false);
+            isStoreWarningAcceptedRef.current = true;
+            const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
+            handleSubmit(fakeEvent);
+          }}
+          onCancel={() => {
+            setShowStoreOffModal(false);
+            isStoreWarningAcceptedRef.current = false;
+          }}
         />
       )}
     </div>

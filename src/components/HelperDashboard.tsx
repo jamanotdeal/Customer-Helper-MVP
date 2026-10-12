@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore, versionOf, createChangeGate } from '@/lib/firebase';
@@ -158,8 +159,14 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const [activeOrderLimit, setActiveOrderLimit] = useState<number>(
     fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5
   );
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   const [showCustomRange, setShowCustomRange] = useState<boolean>(false);
 
   const [locationPermissionDenied, setLocationPermissionDenied] = useState<boolean>(false);
@@ -1560,6 +1567,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           )}
         </div>
       )}
+
+
 
       {/* Premium New Order Alert Overlay */}
       {isAlarmPlaying && newOrderIds.size > 0 && (

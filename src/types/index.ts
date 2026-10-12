@@ -20,7 +20,15 @@ export interface OrderItem {
   price?: number;
   quantity?: number;
   purchased?: boolean;
+  isCustom?: boolean;
+  buyFrom?: string;
+  storeId?: string;
+  storeName?: string;
+  photoUrl?: string;
+  unit?: string;
+  discountRate?: number;
 }
+
 
 export interface LocationData {
   address: string;
@@ -167,6 +175,7 @@ export interface Order {
 
   // Store request tagging
   isStoreOrder?: boolean;
+  isStoreClosedAtOrder?: boolean; // true if the store was closed when the order was placed
   creatorRole?: string;
 
   // Payment settlement tracking (Store Payout & Helper Commission Payback)
@@ -289,12 +298,34 @@ export interface Shop {
   commissionNote?: string;    // Optional description of commission deal
   status?: 'Approved' | 'Pending' | 'Rejected' | 'APPROVED' | 'PENDING' | 'REJECTED';
   canReceiveOrders?: boolean; // If false, store cannot receive/accept order requests directly in app; helper enters note, price & status manually. Default is true.
+  isOpen?: boolean;           // Store online / offline availability switch (default: true)
+  isActive?: boolean;         // Store active / inactive status switch (default: true)
   isBlocked?: boolean;
   blockedReason?: string;
   adminBlockNote?: string;
   blockedAt?: string;
   blockedBy?: string;
+  openingTime?: string;       // e.g. "9:00 AM"
+  closingTime?: string;       // e.g. "10:00 PM"
+  category?: string;          // e.g. "Grocery", "Pharmacy", "Restaurant"
 }
+
+export interface StoreProduct {
+  id: string;
+  storeId: string;
+  storeName?: string;
+  name: string;
+  photoUrl?: string;
+  price: number;
+  unit: string;               // e.g. "১ কেজি", "১ লিটার", "১ প্যাকেট", "১ পিস"
+  discountRate?: number;      // discount percentage e.g. 5 means 5%
+  inStock: boolean;           // stock switch status (true = in stock, false = out of stock)
+  category?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 
 export interface OrderFeedback {
   id: string;
@@ -309,6 +340,8 @@ export interface OrderFeedback {
   serviceRating: number;
   shopRating: number;
   thumbsUp?: boolean;          // true = positive, false = negative (new thumbs system)
+  badAspects?: ('rider' | 'product')[]; // Options selected if review was bad (rider, product, or both)
+  badReason?: 'RIDER' | 'PRODUCT' | 'BOTH' | string; // Normalized bad reason
   improvementComment?: string;
   createdAt: string;
   mutuallyDiscussed?: boolean;
@@ -561,6 +594,22 @@ export interface PricingSettings {
   blockedUserModalMessage?: string;
   blockedUserModalButtonText?: string;
   blockedUserModalContactUrl?: string;
+
+  // Home page hero / banner slides (admin-controlled)
+  homeSlides?: Array<{
+    id?: string;
+    title?: string;
+    subtitle?: string;
+    imageUrl?: string;   // banner image URL or base64 data
+    hint?: string;       // service hint passed to custom request modal
+    link?: string;       // optional redirect link when slide is clicked
+  }>;
+
+  // Custom search not found message (admin-controlled)
+  searchNotFoundMessage?: string;
+
+  // Custom service category to store type mapping (admin-controlled)
+  serviceStoreTypeMap?: Record<string, string[]>;
 }
 
 export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';
@@ -576,6 +625,8 @@ export interface ShopOrderItemPrice {
   name: string;
   unit?: string;
   price?: number;
+  itemId?: string;
+  originalId?: string;
 }
 
 export interface ShopOrder {

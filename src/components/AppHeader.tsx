@@ -176,8 +176,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
               </>
             ) : (
               <button
+                type="button"
                 onClick={() => openAuthModal()}
-                className="flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs px-3 py-2 rounded-xl border border-gray-300 shadow-sm transition-all active:scale-95"
+                className="flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs px-3 py-2 rounded-xl border border-gray-300 shadow-sm transition-all active:scale-95 cursor-pointer"
               >
                 {/* Official Google multicolour G logo */}
                 <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">

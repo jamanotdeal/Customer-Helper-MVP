@@ -19,6 +19,7 @@ import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
 
 
+
 // Helper to suppress "বাজার-সদাই করে দিন" service label in Store Mode
 const formatServiceName = (name?: string) => {
   if (!name) return '';
@@ -143,6 +144,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
 
+
   // Permission prompts on store load (Notification, Location, Display Over)
   useEffect(() => {
     if (!user) return;
@@ -265,11 +267,32 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
   }, [user, setActiveMode]);
 
+  const currentShop = storeId ? fallbackStore.shops.get(storeId) : undefined;
+  const isStoreOpen = currentShop ? currentShop.isOpen !== false : true;
+
+  const handleToggleStoreOpen = async () => {
+    if (!storeId) return;
+    const targetStatus = !isStoreOpen;
+    try {
+      await fallbackStore.toggleShopOpenStatus(storeId, targetStatus);
+      showAlert(
+        targetStatus ? 'দোকান অনলাইন করা হয়েছে' : 'দোকান অফলাইন করা হয়েছে',
+        targetStatus
+          ? 'আপনার দোকানটি এখন খোলা। সরাসরি নতুন অর্ডার গ্রহণ করতে পারবেন।'
+          : 'আপনার দোকানটি এখন বন্ধ রাখা হয়েছে। কাস্টমার অর্ডার করলে হেলপার অন্য দোকান থেকে আইটেম সংগ্রহ করবে।',
+        targetStatus ? 'success' : 'info'
+      );
+    } catch (e) {
+      console.error('Failed to toggle store open status:', e);
+    }
+  };
+
   const isStoreBlocked = Boolean(
     user?.isBlocked ||
     (storeId ? fallbackStore.shops.get(storeId)?.isBlocked : false)
   );
   const [showBlockedModal, setShowBlockedModal] = useState(false);
+
 
   // Track viewed shop order IDs in local state and sync with fallbackStore
   const [unviewedShopOrderIds, setUnviewedShopOrderIds] = useState<Set<string>>(new Set());
@@ -972,7 +995,69 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           </div>
         )}
 
+        {/* ─── Store Open / Off Status & Info Card ─────────────────────────────── */}
+        <div className="bg-white rounded-3xl p-4 border border-gray-100 shadow-soft flex items-center justify-between gap-3">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 font-bold transition-all ${
+              isStoreOpen
+                ? 'bg-emerald-100 text-emerald-700 shadow-xs'
+                : 'bg-rose-100 text-rose-700 shadow-xs'
+            }`}>
+              <Store className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="font-extrabold text-gray-900 text-sm sm:text-base truncate">
+                  {currentShop?.name || 'আপনার দোকান'}
+                </h3>
+                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border transition-all ${
+                  isStoreOpen
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                }`}>
+                  {isStoreOpen ? '🟢 খোলা (Online)' : '🔴 বন্ধ (Offline)'}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                {isStoreOpen
+                  ? 'সরাসরি রিকোয়েস্ট ও অর্ডার গ্রহণ করা হচ্ছে'
+                  : 'দোকান বন্ধ রাখা হয়েছে (হেলপার অন্য দোকান থেকে কিনবে)'}
+              </p>
+            </div>
+          </div>
+
+          {/* Availability Toggle Switch */}
+          <div className="flex flex-col items-end shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleStoreOpen}
+              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                isStoreOpen ? 'bg-emerald-600' : 'bg-gray-300'
+              }`}
+              aria-label="Store Availability Toggle"
+            >
+              <span
+                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                  isStoreOpen ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+            <span className="text-[10px] font-bold text-gray-400 mt-1">
+              {isStoreOpen ? 'অনলাইন' : 'অফলাইন'}
+            </span>
+          </div>
+        </div>
+
+        {/* ─── Offline Info Banner ─────────────────────────────────────────────── */}
+        {!isStoreOpen && (
+          <div className="bg-gray-100 border border-gray-200 rounded-2xl px-4 py-2.5 flex items-center gap-2 animate-in fade-in duration-200">
+            <span className="text-gray-400 text-lg">🔴</span>
+            <p className="text-xs text-gray-500 font-semibold">দোকান অফলাইনে আছে। অনলাইন করতে উপরের সুইচটি চালু করুন।</p>
+          </div>
+        )}
+
         {/* ─── Tab Bar in Emerald Green ──────────────────────────────────────────────────────── */}
+        <div className={`transition-all duration-300 space-y-5 ${!isStoreOpen ? 'opacity-50 grayscale' : ''}`}>
         <div className="flex space-x-1.5 bg-gray-100 p-1.5 rounded-2xl">
           <button
             onClick={() => { setLocalActiveTab('ORDERS'); }}
@@ -982,7 +1067,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
               }`}
           >
             <Package className="w-3.5 h-3.5" />
-            <span>Incoming Orders{storeShopOrders.length > 0 && ` (${storeShopOrders.length})`}</span>
+            <span>Orders{storeShopOrders.length > 0 && ` (${storeShopOrders.length})`}</span>
           </button>
 
           <button
@@ -996,6 +1081,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             <span>My Requests{myRequests.length > 0 && ` (${myRequests.length})`}</span>
           </button>
         </div>
+
 
         {/* ─── Running Orders Reminder Alert ─────────────────────────────────────────── */}
         {(() => {
@@ -1307,8 +1393,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           </div>
         )}
 
+
+
+
         {/* ─── MY REQUESTS TAB ──────────────────────────────────────────────── */}
         {localActiveTab === 'MY_REQUESTS' && (
+
           <div className="space-y-3">
             {/* Create Request Button inside My Request Tab */}
             <button
@@ -1403,6 +1493,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             )}
           </div>
         )}
+        </div>{/* end offline gray-out wrapper */}
       </div>
     );
   };

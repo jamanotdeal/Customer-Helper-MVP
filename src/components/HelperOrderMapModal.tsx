@@ -66,13 +66,13 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
     if (!mapInstanceRef.current) return;
     const timers = [
       setTimeout(() => {
-        try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
+        try { mapInstanceRef.current?.invalidateSize(); } catch (_) { }
       }, 50),
       setTimeout(() => {
-        try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
+        try { mapInstanceRef.current?.invalidateSize(); } catch (_) { }
       }, 150),
       setTimeout(() => {
-        try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
+        try { mapInstanceRef.current?.invalidateSize(); } catch (_) { }
       }, 350),
     ];
     return () => timers.forEach(clearTimeout);
@@ -112,7 +112,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       if (mapInstanceRef.current) {
         try {
           mapInstanceRef.current.invalidateSize();
-        } catch (_) {}
+        } catch (_) { }
       }
     });
     observer.observe(container);
@@ -179,7 +179,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
         if (mapInstanceRef.current) {
           try {
             mapInstanceRef.current.remove();
-          } catch (_) {}
+          } catch (_) { }
           mapInstanceRef.current = null;
         }
 
@@ -202,7 +202,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
 
         // Invalidate size immediately once initialized
         setTimeout(() => {
-          try { map.invalidateSize(); } catch (_) {}
+          try { map.invalidateSize(); } catch (_) { }
         }, 100);
       } catch (err) {
         console.error('[HelperOrderMapModal] Init error:', err);
@@ -220,7 +220,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       if (mapInstanceRef.current) {
         try {
           mapInstanceRef.current.remove();
-        } catch (_) {}
+        } catch (_) { }
         mapInstanceRef.current = null;
       }
     };
@@ -278,7 +278,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
       if (!map) return;
       try {
         map.invalidateSize();
-      } catch (_) {}
+      } catch (_) { }
       const lat = shop.location?.lat;
       const lng = shop.location?.lng;
       if (lat && lng) {
@@ -314,7 +314,7 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
     layersRef.current.forEach((layer) => {
       try {
         map.removeLayer(layer);
-      } catch (_) {}
+      } catch (_) { }
     });
     layersRef.current = [];
 
@@ -580,19 +580,17 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-xs transition-all ${
-        isFullscreen ? 'p-0' : 'p-2 sm:p-4'
-      }`}
+      className={`fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-xs transition-all ${isFullscreen ? 'p-0' : 'p-2 sm:p-4'
+        }`}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className={`relative flex flex-col bg-white shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${
-          isFullscreen
+        className={`relative flex flex-col bg-white shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${isFullscreen
             ? 'w-screen h-screen max-w-none max-h-none rounded-none'
             : 'w-full h-[88dvh] sm:h-[90dvh] sm:max-h-[880px] sm:max-w-[850px] rounded-3xl'
-        }`}
+          }`}
       >
         {/* Header with List / Map View Switcher. On a phone the title, tabs and
             buttons don't fit one row — the tab labels wrapped and the
@@ -611,14 +609,13 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
               onClick={() => {
                 setViewMode('map');
                 setTimeout(() => {
-                  try { mapInstanceRef.current?.invalidateSize(); } catch (_) {}
+                  try { mapInstanceRef.current?.invalidateSize(); } catch (_) { }
                 }, 60);
               }}
-              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                viewMode === 'map'
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${viewMode === 'map'
                   ? 'bg-emerald-600 text-white shadow-xs'
                   : 'text-gray-600 hover:text-gray-900'
-              }`}
+                }`}
             >
               <Map className="w-3.5 h-3.5" />
               <span>Map View</span>
@@ -626,11 +623,10 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('list')}
-              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                viewMode === 'list'
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${viewMode === 'list'
                   ? 'bg-purple-600 text-white shadow-xs'
                   : 'text-gray-600 hover:text-gray-900'
-              }`}
+                }`}
             >
               <List className="w-3.5 h-3.5" />
               <span>List View ({displayedShops.length})</span>
@@ -733,9 +729,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
         <div className="flex-1 overflow-hidden min-h-0 relative bg-gray-50">
           {/* 1. MAP VIEW (Leaflet Satellite & Road View) */}
           <div
-            className={`absolute inset-0 z-10 bg-slate-900 transition-opacity duration-150 ${
-              viewMode === 'map' ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'
-            }`}
+            className={`absolute inset-0 z-10 bg-slate-900 transition-opacity duration-150 ${viewMode === 'map' ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'
+              }`}
           >
             {mapError ? (
               <div className="p-8 text-center bg-amber-50 flex flex-col items-center justify-center space-y-3 h-full">
@@ -776,9 +771,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
 
           {/* 2. LIST VIEW (Clean, Organized Store Cards) */}
           <div
-            className={`absolute inset-0 z-20 overflow-y-auto p-3 sm:p-4 space-y-3 bg-gray-50 transition-opacity duration-150 ${
-              viewMode === 'list' ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'
-            }`}
+            className={`absolute inset-0 z-20 overflow-y-auto p-3 sm:p-4 space-y-3 bg-gray-50 transition-opacity duration-150 ${viewMode === 'list' ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'
+              }`}
           >
             {displayedShops.length === 0 ? (
               <div className="p-8 text-center bg-white rounded-3xl border border-gray-200 flex flex-col items-center justify-center space-y-3 my-4">
@@ -828,8 +822,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
 
                   const waUrl = shop.whatsapp
                     ? `https://wa.me/${shop.whatsapp.replace(/[^0-9]/g, '').startsWith('88')
-                        ? shop.whatsapp.replace(/[^0-9]/g, '')
-                        : '88' + shop.whatsapp.replace(/[^0-9]/g, '')}`
+                      ? shop.whatsapp.replace(/[^0-9]/g, '')
+                      : '88' + shop.whatsapp.replace(/[^0-9]/g, '')}`
                     : null;
 
                   // "GROCERY — মুদিখানা" reads as a label, not a shout: keep the
@@ -848,9 +842,8 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                   return (
                     <div
                       key={shop.id}
-                      className={`bg-white rounded-2xl border p-4 flex flex-col gap-3 transition-colors ${
-                        isRequested ? 'border-emerald-300' : 'border-gray-200 hover:border-gray-300'
-                      }`}
+                      className={`bg-white rounded-2xl border p-4 flex flex-col gap-3 transition-colors ${isRequested ? 'border-emerald-300' : 'border-gray-200 hover:border-gray-300'
+                        }`}
                     >
                       {/* Name, type and distance */}
                       <div className="flex items-start gap-3">
@@ -954,11 +947,10 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                               if (shop.isBlocked) return;
                               onSelectShop(shop);
                             }}
-                            className={`ml-auto h-9 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors active:scale-95 cursor-pointer ${
-                              isRequested
+                            className={`ml-auto h-9 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors active:scale-95 cursor-pointer ${isRequested
                                 ? 'bg-white border border-purple-200 text-purple-700 hover:bg-purple-50'
                                 : 'bg-purple-600 hover:bg-purple-700 text-white'
-                            }`}
+                              }`}
                           >
                             <span>{isRequested ? 'পুনরায় অনুরোধ' : 'অর্ডার পাঠান'}</span>
                             <ArrowRight className="w-3.5 h-3.5" />

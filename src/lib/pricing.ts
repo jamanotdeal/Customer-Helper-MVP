@@ -1,4 +1,4 @@
-import { PricingSettings } from '@/types';
+import { PricingSettings, Shop } from '@/types';
 
 export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
   'বাজার-সদাই করে দিতে হবে (গ্যাস, চাল-ডাল, মাছ-মাংস, শাকসবজি)?',
@@ -108,6 +108,122 @@ export const parseStoreTypes = (rawTypes?: string[] | string | null): string[] =
 
   return parsed.length > 0 ? parsed : DEFAULT_STORE_TYPES;
 };
+
+/**
+ * Returns connected store types for a given service category.
+ * Supports custom admin mapping or smart keyword fallback.
+ */
+export function getStoreTypesForService(
+  serviceName: string,
+  customMapping?: Record<string, string[]>
+): string[] {
+  if (!serviceName) return DEFAULT_STORE_TYPES;
+
+  // 1. Check custom admin mapping if provided
+  if (customMapping && customMapping[serviceName] && customMapping[serviceName].length > 0) {
+    return customMapping[serviceName];
+  }
+
+  const s = serviceName.toLowerCase().trim();
+
+  // All / general options
+  if (s === 'all' || s.includes('সকল') || s.includes('সব দোকান') || s.includes('mix') || s.includes('onno') || s.includes('অন্যান্য')) {
+    return DEFAULT_STORE_TYPES;
+  }
+
+  // Bazar / Grocery
+  if (s.includes('bazar') || s.includes('বাজার') || s.includes('সদাই') || s.includes('sodai') || s.includes('grocery')) {
+    return [
+      'মুদিখানা ও সুপারশপ',
+      'ফল ও সবজির দোকান',
+      'মাংস ও মাছ বাজার',
+      'মুদিখানা',
+      'সুপারশপ',
+      'Grocery',
+      'Supermarket',
+      'Bazar',
+      'Market',
+    ];
+  }
+
+  // Food / Restaurant
+  if (s.includes('khabar') || s.includes('খাবার') || s.includes('food') || s.includes('restaurant') || s.includes('রেস্টুরেন্ট')) {
+    return [
+      'রেস্টুরেন্ট ও ফাস্টফুড',
+      'রেস্টুরেন্ট',
+      'Restaurant',
+      'Fast Food',
+      'Food',
+      'Cafe',
+    ];
+  }
+
+  // Medicine / Pharmacy
+  if (s.includes('medicine') || s.includes('ওষুধ') || s.includes('ঔষধ') || s.includes('pharmacy') || s.includes('ফার্মেসি')) {
+    return [
+      'ফার্মেসি ও ওষুধ',
+      'ফার্মেসি',
+      'ওষুধ',
+      'Pharmacy',
+      'Medicine',
+    ];
+  }
+
+  // Shoes / Shoe repair / Laundry / Tailor
+  if (s.includes('zuta') || s.includes('জুতা') || s.includes('laundry') || s.includes('লন্ড্রি') || s.includes('সেলাই')) {
+    return [
+      'লন্ড্রি ও ড্রাই ক্লিনিং',
+      'পোশাক ও ফ্যাশন',
+      'Laundry',
+      'অন্যান্য',
+    ];
+  }
+
+  // Parcel / Document
+  if (s.includes('parcel') || s.includes('পার্সেল') || s.includes('ডকুমেন্ট') || s.includes('চিঠি')) {
+    return [
+      'স্টেশনারি ও বই',
+      'অন্যান্য',
+    ];
+  }
+
+  // Default: return serviceName as connected store type keyword
+  return [serviceName];
+}
+
+/**
+ * Checks whether a given shop belongs to the connected store types of a service.
+ */
+export function isShopMatchingService(
+  shop: Shop,
+  serviceName: string,
+  customMapping?: Record<string, string[]>
+): boolean {
+  if (!serviceName) return true;
+  const s = serviceName.toLowerCase().trim();
+  if (s === 'all' || s.includes('সকল') || s.includes('সব দোকান') || s.includes('mix')) {
+    return true;
+  }
+
+  const connectedTypes = getStoreTypesForService(serviceName, customMapping);
+  const shopType = (shop.type || '').trim().toLowerCase();
+  const shopCategory = (shop.category || '').trim().toLowerCase();
+  const shopName = (shop.name || '').trim().toLowerCase();
+  const shopDesc = (shop.description || '').trim().toLowerCase();
+
+  return connectedTypes.some((t) => {
+    const target = t.trim().toLowerCase();
+    if (!target) return false;
+    return (
+      shopType.includes(target) ||
+      target.includes(shopType) ||
+      (shopCategory && (shopCategory.includes(target) || target.includes(shopCategory))) ||
+      shopName.includes(target) ||
+      shopDesc.includes(target)
+    );
+  });
+}
+
 
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   rules: [

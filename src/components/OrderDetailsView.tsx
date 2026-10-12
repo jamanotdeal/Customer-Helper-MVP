@@ -15,8 +15,8 @@ import {
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
-import { MapPickerModal } from './MapPickerModal';
 import { OrderFeedbackModal } from './OrderFeedbackModal';
+import { EditOrderDetailsModal } from './EditOrderDetailsModal';
 
 interface OrderDetailsViewProps {
   orderId: string;
@@ -41,38 +41,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editService, setEditService] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editPickup, setEditPickup] = useState('');
-  const [editPickupLat, setEditPickupLat] = useState<number | undefined>(undefined);
-  const [editPickupLng, setEditPickupLng] = useState<number | undefined>(undefined);
-  const [editPickupAddressId, setEditPickupAddressId] = useState<string | undefined>(undefined);
-  const [editAddress, setEditAddress] = useState('');
-  const [editDeliveryLat, setEditDeliveryLat] = useState<number | undefined>(undefined);
-  const [editDeliveryLng, setEditDeliveryLng] = useState<number | undefined>(undefined);
-  const [editDeliveryAddressId, setEditDeliveryAddressId] = useState<string | undefined>(undefined);
-  const [editPhone, setEditPhone] = useState('');
-  const [editError, setEditError] = useState('');
 
-  // Map Picker Modal States
-  const [showPickupMapPicker, setShowPickupMapPicker] = useState(false);
-  const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
-  const [mapHasError, setMapHasError] = useState(false);
-
-  // Services list synced from admin panel
-  const [editServices, setEditServices] = useState<string[]>(
-    fallbackStore.pricingSettings.services || DEFAULT_SERVICES
-  );
-
-  useEffect(() => {
-    const sync = () => {
-      const s = fallbackStore.pricingSettings.services;
-      if (s && s.length > 0) setEditServices(s);
-    };
-    sync();
-    const unsub = fallbackStore.subscribe(sync);
-    return () => unsub();
-  }, []);
 
   // Cancellation modal state
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -295,37 +264,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     );
   }
 
-  if (order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
-        <button
-          onClick={onBack}
-          className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors py-2 font-bold text-sm"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          <span>ফিরে যান (Back)</span>
-        </button>
+  const isCanceled =
+    (order.status as string) === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED' ||
+    order.cancellationRequest?.status === 'APPROVED';
 
-        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-red-100 shadow-sm my-4">
-          <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-inner">
-            <XCircle className="w-10 h-10" />
-          </div>
-          <h3 className="font-extrabold text-gray-900 text-lg">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h3>
-          <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
-            এই অর্ডারটি কাস্টমার অথবা অ্যাডমিন দ্বারা বাতিল করা হয়েছে। আপনি এই অর্ডারের বিবরণ দেখতে পারবেন না।
-          </p>
-          <button
-            onClick={onBack}
-            className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
-          >
-            ফিরে যান
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const badge = getStatusBadgeInfo(order.status);
+  const badge = isCanceled
+    ? { label: 'Cancelled', color: 'bg-red-100 text-red-700 border-red-200', icon: XCircle }
+    : getStatusBadgeInfo(order.status);
   const BadgeIcon = badge.icon;
 
   // Helper contact info
@@ -360,8 +306,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   ];
 
   const getStepState = (stepStatus: OrderStatus) => {
-    if (order.status === 'CANCELED') return 'CANCELED';
-    
+    if (isCanceled) return 'CANCELED';
+
     // When admin accepted (but order status is still PENDING without helper assigned), step ACCEPTED is active current step
     if (showAdminAccepted && order.status === 'PENDING') {
       if (stepStatus === 'PENDING') return 'COMPLETED';
@@ -413,149 +359,35 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     setShowCancelModal(false);
   };
 
-  // Open edit modal pre-filled with current order data
+  // Open edit modal
   const openEditModal = () => {
     if (!canEdit) return;
-    if (order.status === 'ON_THE_WAY' || order.status === 'ARRIVED' || order.status === 'DELIVERED' || (order.status as string) === 'CANCELED') return;
-    const resolvedOrder = fallbackStore.resolveOrderLocations(order);
-    setEditService(resolvedOrder.service || resolvedOrder.title || '');
-    // The description is stored in items[0].name (single-item format used by the order form)
-    setEditDescription(resolvedOrder.items[0]?.name || '');
-    setEditPickup(resolvedOrder.pickupLocation?.address || '');
-    setEditPickupLat(resolvedOrder.pickupLocation?.lat);
-    setEditPickupLng(resolvedOrder.pickupLocation?.lng);
-    setEditPickupAddressId(resolvedOrder.pickupLocation?.addressId);
-    setEditAddress(resolvedOrder.deliveryLocation.address);
-    setEditDeliveryLat(resolvedOrder.deliveryLocation.lat);
-    setEditDeliveryLng(resolvedOrder.deliveryLocation.lng);
-    setEditDeliveryAddressId(resolvedOrder.deliveryLocation.addressId);
-    setEditPhone(resolvedOrder.alternativePhone || resolvedOrder.customerPhone || '');
-    setEditError('');
+    if (
+      order.status === 'ON_THE_WAY' ||
+      order.status === 'ARRIVED' ||
+      order.status === 'DELIVERED' ||
+      (order.status as string) === 'CANCELED'
+    )
+      return;
     setShowEditModal(true);
   };
 
-  const handleSaveEdit = async () => {
-    if (!editService.trim()) { setEditError('অনুগ্রহ করে একটি সার্ভিস সিলেক্ট করুন।'); return; }
-    if (!editDescription.trim()) { setEditError('অনুগ্রহ করে কী করতে হবে তা লিখুন।'); return; }
-    if (!editAddress.trim()) { setEditError('ডেলিভারি ঠিকানা খালি রাখা যাবে না।'); return; }
-    if (!editPhone.trim()) { setEditError('অনুগ্রহ করে হোয়াটসঅ্যাপ নম্বর দিন।'); return; }
-    if (!/^01[3-9]\d{8}$/.test(editPhone.trim())) {
-      setEditError('অনুগ্রহ করে ১১ ডিজিটের সঠিক মোবাইল নম্বর দিন (যেমন: 01712345678)।');
-      return;
-    }
-
-    // Record / upsert delivery address in server addresses catalog
-    let effDelivId = editDeliveryAddressId || order.deliveryLocation?.addressId;
-    let finalDeliveryAddressText = editAddress.trim();
-    if (finalDeliveryAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
-          lat: editDeliveryLat,
-          lng: editDeliveryLng,
-        });
-        if (sa?.id) {
-          effDelivId = sa.id;
-          finalDeliveryAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
-
-    // Record / upsert pickup address in server addresses catalog
-    let effPickupId = editPickupAddressId || order.pickupLocation?.addressId;
-    let finalPickupAddressText = editPickup.trim();
-    if (finalPickupAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
-          lat: editPickupLat,
-          lng: editPickupLng,
-        });
-        if (sa?.id) {
-          effPickupId = sa.id;
-          finalPickupAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
-
-    // Compute diffs
-    const diffs: OrderEditChange[] = [];
-    const oldService = order.service || order.title || '';
-    if (oldService !== editService.trim()) {
-      diffs.push({ field: 'Service', oldValue: oldService, newValue: editService.trim() });
-    }
-    const oldDesc = order.items[0]?.name || '';
-    if (oldDesc !== editDescription.trim()) {
-      diffs.push({ field: 'Details / Items', oldValue: oldDesc, newValue: editDescription.trim() });
-    }
-    const oldPickup = order.pickupLocation?.address || '';
-    if (oldPickup !== finalPickupAddressText) {
-      diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: finalPickupAddressText || 'None' });
-    }
-    const oldDelivery = order.deliveryLocation?.address || '';
-    if (oldDelivery !== finalDeliveryAddressText) {
-      diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: finalDeliveryAddressText });
-    }
-    const oldPhone = order.alternativePhone || order.customerPhone || '';
-    if (oldPhone !== editPhone.trim()) {
-      diffs.push({ field: 'Contact Phone', oldValue: oldPhone, newValue: editPhone.trim() });
-    }
-
-    const nowIso = new Date().toISOString();
-    const editItem: OrderEditHistoryItem = {
-      id: `ed-${Date.now()}`,
-      timestamp: nowIso,
-      editedBy: 'customer',
-      editedByName: order.customerName || 'Customer',
-      changes: diffs.length > 0 ? diffs : [{ field: 'Details', oldValue: 'Previous Details', newValue: 'Updated Details' }],
-    };
-
-    fallbackStore.updateOrder(order.id, (o) => ({
-      ...o,
-      service: editService.trim(),
-      title: editService.trim(),
-      items: [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
-      pickupLocation: finalPickupAddressText
-        ? { address: finalPickupAddressText, lat: editPickupLat, lng: editPickupLng, addressId: effPickupId }
-        : undefined,
-      deliveryLocation: {
-        ...o.deliveryLocation,
-        address: finalDeliveryAddressText,
-        lat: editDeliveryLat,
-        lng: editDeliveryLng,
-        addressId: effDelivId,
-      },
-      alternativePhone: editPhone.trim(),
-      customerPhone: editPhone.trim(),
-      updatedByCustomer: true,
-      lastEditedAt: nowIso,
-      lastEditedBy: 'customer',
-      editHistory: [...(o.editHistory || []), editItem],
-      updatedAt: nowIso,
-      statusHistory: [
-        ...(o.statusHistory || []),
-        {
-          id: `sh-${Date.now()}`,
-          status: o.status,
-          timestamp: nowIso,
-          actor: 'Customer',
-          note: `Order details updated by customer (${diffs.map((d) => d.field).join(', ') || 'Updated'})`,
-        },
-      ],
-    }));
-    setShowEditModal(false);
-  };
-
-  const canCancel = Boolean(user && (order.status === 'PENDING' || order.status === 'ACCEPTED') && user.uid === order.customerId);
+  const canCancel = Boolean(
+    user &&
+    (order.status === 'PENDING' || order.status === 'ACCEPTED') &&
+    user.uid === order.customerId &&
+    !isCanceled
+  );
   const canEdit = Boolean(
     user &&
     (isOwnerCustomer || isAdminUser) &&
     order.status !== 'ON_THE_WAY' &&
     order.status !== 'ARRIVED' &&
     order.status !== 'DELIVERED' &&
-    (order.status as string) !== 'CANCELED'
+    !isCanceled
   );
   const isDelivered = order.status === 'DELIVERED';
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
-  const isCanceled = (order.status as string) === 'CANCELED';
 
   const effectiveDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
   const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
@@ -592,29 +424,34 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       <div className="w-full mx-auto px-4 pt-5 space-y-4">
 
         {/* ── HERO STATUS CARD ── */}
-        <div className={`rounded-3xl p-5 text-white shadow-lg ${
-          isDelivered
+        <div className={`rounded-3xl p-5 text-white shadow-lg ${isDelivered
             ? 'bg-gradient-to-br from-emerald-600 to-teal-700'
             : isCanceled
-            ? 'bg-gradient-to-br from-red-600 to-red-700'
-            : 'bg-gradient-to-br from-gray-900 to-gray-800'
-        }`}>
+              ? 'bg-gradient-to-br from-red-600 to-red-700'
+              : 'bg-gradient-to-br from-gray-900 to-gray-800'
+          }`}>
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Your Order</span>
-            {order.status !== 'PENDING' && (
-              <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center space-x-1 ${
-                isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
-              }`}>
+            {(order.status !== 'PENDING' || isCanceled) && (
+              <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center space-x-1 ${isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
+                }`}>
                 <BadgeIcon className="w-3 h-3" />
                 <span>{badge.label}</span>
               </span>
             )}
           </div>
-          <h2 className="text-xl font-black mb-1">Order-#{order.id}</h2>
-          <p className="text-xs text-white/60 flex items-center space-x-1">
-            <Clock className="w-3 h-3" />
-            <span>Placed: {formatPlacedDateTime(order.createdAt)}</span>
-          </p>
+          <h2 className="text-xl font-black mb-1">
+            {order.service || order.title || `Order-#${order.id}`}
+          </h2>
+          <div className="flex items-center gap-2 text-xs text-white/70">
+            <span className="font-mono bg-white/20 px-2 py-0.5 rounded-md text-white font-bold text-[11px]">
+              #{order.id}
+            </span>
+            <span className="flex items-center space-x-1">
+              <Clock className="w-3 h-3 text-white/60" />
+              <span>Placed: {formatPlacedDateTime(order.createdAt)}</span>
+            </span>
+          </div>
 
           {/* Quick cost summary */}
           {(effectiveProductCost > 0 || order.deliveryFee > 0 || order.isFreeDelivery) && (
@@ -698,11 +535,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
         {isCanceled && (
-          <div className="p-4 rounded-3xl bg-red-50 border border-red-200 flex items-center space-x-3">
-            <XCircle className="w-8 h-8 text-red-500 shrink-0" />
-            <div>
+          <div className="p-4 rounded-3xl bg-red-50 border border-red-200 flex items-start space-x-3">
+            <XCircle className="w-7 h-7 text-red-500 shrink-0 mt-0.5" />
+            <div className="flex-1">
               <p className="font-extrabold text-red-900 text-sm">Order Cancelled</p>
               <p className="text-xs text-red-600 font-medium mt-0.5">This order has been cancelled.</p>
+              {(order.cancellationReason || order.cancellationRequest?.reason) && (
+                <div className="mt-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200/80 text-xs text-red-800">
+                  <span className="font-bold">Reason: </span>
+                  <span>{order.cancellationReason || order.cancellationRequest?.reason}</span>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -721,13 +564,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 if (showHelperDetails) {
                   return (
                     <div key={step.status} className="flex items-center space-x-3">
-                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
-                        state === 'COMPLETED'
+                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${state === 'COMPLETED'
                           ? 'bg-emerald-600 text-white shadow-sm'
                           : state === 'CURRENT'
-                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                          : 'bg-gray-100 text-gray-300'
-                      }`}>
+                            ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                            : 'bg-gray-100 text-gray-300'
+                        }`}>
                         {state === 'COMPLETED'
                           ? <Check className="w-4 h-4" />
                           : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
@@ -792,22 +634,20 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 return (
                   <div key={step.status} className="space-y-2">
                     <div className="flex items-center space-x-3">
-                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
-                        state === 'COMPLETED'
+                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${state === 'COMPLETED'
                           ? 'bg-emerald-600 text-white shadow-sm'
                           : state === 'CURRENT'
-                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                          : 'bg-gray-100 text-gray-300'
-                      }`}>
+                            ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
+                            : 'bg-gray-100 text-gray-300'
+                        }`}>
                         {state === 'COMPLETED'
                           ? <Check className="w-4 h-4" />
                           : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
                         }
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className={`text-xs font-bold leading-tight ${
-                          state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-900' : 'text-gray-300'
-                        }`}>
+                        <p className={`text-xs font-bold leading-tight ${state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-900' : 'text-gray-300'
+                          }`}>
                           {step.label}
                         </p>
                         {state === 'CURRENT' && (
@@ -878,17 +718,46 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
                   return (
                     <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
-                      <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
-                        {it.name}
-                      </span>
-                      {itemPricing?.price !== undefined && (
-                        <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
-                          ৳{itemPricing.price}
+                      <div className="flex-1 pr-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-gray-800 break-words">
+                            {it.name}
+                          </span>
+                          {it.qty && (
+                            <span className="text-[10px] bg-gray-200/80 text-gray-700 px-1.5 py-0.5 rounded font-bold">
+                              {it.qty}
+                            </span>
+                          )}
+                          {it.isCustom && (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-extrabold">
+                              Custom Item
+                            </span>
+                          )}
+                        </div>
+                        {it.buyFrom && (
+                          <p className="text-[10px] text-gray-500 mt-0.5">
+                            কোথা থেকে: {it.buyFrom}
+                          </p>
+                        )}
+                        {it.storeName && (
+                          <p className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                            দোকান: {it.storeName}
+                          </p>
+                        )}
+                      </div>
+                      {it.isCustom ? (
+                        <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 shadow-2xs shrink-0 text-[11px]">
+                          N/A
                         </span>
-                      )}
+                      ) : (it.price !== undefined || itemPricing?.price !== undefined) ? (
+                        <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
+                          ৳{it.price !== undefined ? it.price : itemPricing?.price}
+                        </span>
+                      ) : null}
                     </div>
                   );
                 })}
+
               </div>
             );
           })()}
@@ -914,16 +783,20 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
           <div>
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-              <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</p>
+            <div className="flex items-center space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100 min-w-0">
+              <Store className="w-4 h-4 text-gray-500 shrink-0" />
+              <p className="text-sm font-bold text-gray-900 truncate flex-1 min-w-0" title={order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}>
+                {order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}
+              </p>
             </div>
           </div>
           <div>
             <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-              <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
+            <div className="flex items-center space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100 min-w-0">
+              <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+              <p className="text-sm font-bold text-gray-900 truncate flex-1 min-w-0" title={order.deliveryLocation?.address || 'N/A'}>
+                {order.deliveryLocation?.address || 'N/A'}
+              </p>
             </div>
           </div>
           {(order.alternativePhone || order.customerPhone) && (
@@ -1222,10 +1095,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         )}
 
                         <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                          <p className="text-gray-800 font-semibold leading-relaxed">
-                            {order.items && order.items.length > 0
-                              ? order.items.map((it) => it.name).join(', ')
-                              : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                          <p className="text-gray-700 font-semibold leading-relaxed">
+                            {effectiveProductCost > 0
+                              ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
+                              : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
                           </p>
                         </div>
                       </div>
@@ -1257,10 +1130,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       </div>
 
                       <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                        <p className="text-gray-800 font-semibold leading-relaxed">
-                          {order.items && order.items.length > 0
-                            ? order.items.map((it) => it.name).join(', ')
-                            : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                        <p className="text-gray-700 font-semibold leading-relaxed">
+                          {effectiveProductCost > 0
+                            ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
+                            : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
                         </p>
                       </div>
                     </div>
@@ -1309,20 +1182,41 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
             {order.feedback ? (
               <div className="bg-amber-50/60 p-3 rounded-2xl border border-amber-100/80 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600 font-semibold">Helper Rating:</span>
-                  <div className="flex items-center space-x-1 font-bold text-amber-700">
-                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                    <span>{order.feedback.riderRating} / 5</span>
+                {order.feedback.thumbsUp === true ? (
+                  <div className="flex items-center gap-1.5 text-emerald-800 font-extrabold pb-1">
+                    <span className="text-sm">👍</span>
+                    <span>ভালো ছিল!</span>
                   </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600 font-semibold">Overall Service:</span>
-                  <div className="flex items-center space-x-1 font-bold text-amber-700">
-                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                    <span>{order.feedback.serviceRating} / 5</span>
+                ) : order.feedback.thumbsUp === false ? (
+                  <div className="space-y-1 pb-1">
+                    <div className="flex items-center gap-1.5 text-red-800 font-extrabold">
+                      <span className="text-sm">👎</span>
+                      <span>ভালো না</span>
+                    </div>
+                    {order.feedback.badReason && (
+                      <div className="text-[11px] font-black text-red-700 bg-red-100/80 px-2 py-0.5 rounded-md w-fit">
+                        সমস্যা: {order.feedback.badReason === 'RIDER' ? '🚴 রাইডার' : order.feedback.badReason === 'PRODUCT' ? '🛍️ প্রোডাক্ট' : '🚴 রাইডার + 🛍️ প্রোডাক্ট'}
+                      </div>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600 font-semibold">Helper Rating:</span>
+                      <div className="flex items-center space-x-1 font-bold text-amber-700">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                        <span>{order.feedback.riderRating} / 5</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600 font-semibold">Overall Service:</span>
+                      <div className="flex items-center space-x-1 font-bold text-amber-700">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                        <span>{order.feedback.serviceRating} / 5</span>
+                      </div>
+                    </div>
+                  </>
+                )}
                 {order.feedback.improvementComment && (
                   <div className="pt-1.5 border-t border-amber-200/60">
                     <p className="text-[11px] text-amber-900 font-medium italic">
@@ -1372,151 +1266,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         )}
       </div>
 
-      {/* ── EDIT ORDER MODAL ── */}
-      {showEditModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-emerald-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
-              <div>
-                <h3 className="font-black text-base text-gray-900">Edit Order</h3>
-                <p className="text-[11px] text-gray-500 font-medium mt-0.5">Changes saved before helper picks up</p>
-              </div>
-              <button
-                onClick={() => setShowEditModal(false)}
-                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
-
-              {/* Service Selection */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">সার্ভিস *</label>
-                <div className="relative">
-                  <select
-                    value={editService}
-                    onChange={(e) => { setEditService(e.target.value); setEditError(''); }}
-                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
-                  >
-                    <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
-                    {editServices.map((srv) => (
-                      <option key={srv} value={srv}>{srv}</option>
-                    ))}
-                  </select>
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                    <ChevronDown className="w-4 h-4" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Details</label>
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => { setEditDescription(e.target.value); setEditError(''); }}
-                  placeholder={getServiceDescriptionHint(editService, fallbackStore.pricingSettings)}
-                  className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
-                />
-              </div>
-
-              {/* Pickup / Source Location (optional) */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">কোথা থেকে নিতে হবে?</label>
-                <div className="relative group">
-                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={editPickup}
-                    onChange={(e) => setEditPickup(e.target.value)}
-                    onClick={() => {
-                      if (!mapHasError) setShowPickupMapPicker(true);
-                    }}
-                    placeholder="কোথা থেকে নিতে হবে? (ম্যাপ সিলেক্ট করতে ক্লিক করুন)"
-                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPickupMapPicker(true)}
-                    title="ম্যাপ থেকে স্থান নির্বাচন করুন"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                  >
-                    <MapPin className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Delivery Address */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">ডেলিভারি ঠিকানা *</label>
-                <div className="relative group">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={editAddress}
-                    onChange={(e) => { setEditAddress(e.target.value); setEditError(''); }}
-                    onClick={() => {
-                      if (!mapHasError) setShowDeliveryMapPicker(true);
-                    }}
-                    placeholder="ডেলিভারি ঠিকানা (ম্যাপ সিলেক্ট করতে ক্লিক করুন) *"
-                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowDeliveryMapPicker(true)}
-                    title="ম্যাপ থেকে ঠিকানা নির্বাচন করুন"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                  >
-                    <MapPin className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* WhatsApp Number */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">হোয়াটসঅ্যাপ নম্বর *</label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="tel"
-                    value={editPhone}
-                    onChange={(e) => { setEditPhone(e.target.value); setEditError(''); }}
-                    placeholder="হোয়াটসঅ্যাপ নম্বর *"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                  />
-                </div>
-              </div>
-
-              {editError && (
-                <p className="text-[11px] text-red-600 font-bold bg-red-50 px-3 py-2 rounded-xl border border-red-100">
-                  {editError}
-                </p>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
-              <button
-                type="button"
-                onClick={() => setShowEditModal(false)}
-                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveEdit}
-                className="flex-1 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-600/25 transition-all"
-              >
-                Save Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ── EDIT ORDER DETAILS MODAL ── */}
+      <EditOrderDetailsModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        order={order}
+        onOrderUpdated={(updated) => {
+          setOrder(updated);
+        }}
+      />
 
       {/* ── CANCELLATION REASON MODAL ── */}
       {showCancelModal && (
@@ -1587,44 +1345,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         </div>
       )}
 
-      {/* Map Picker Modals */}
-      <MapPickerModal
-        isOpen={showPickupMapPicker}
-        onClose={() => setShowPickupMapPicker(false)}
-        title="কোথা থেকে আনতে হবে বা করতে হবে?"
-        initialLocation={{
-          address: editPickup,
-          lat: editPickupLat,
-          lng: editPickupLng,
-        }}
-        addressLabel="Name of Store, Market or Area"
-        addressPlaceholder="Name of Store, Market or Area"
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          setEditPickup(loc.address);
-          if (loc.lat) setEditPickupLat(loc.lat);
-          if (loc.lng) setEditPickupLng(loc.lng);
-        }}
-      />
-
-      <MapPickerModal
-        isOpen={showDeliveryMapPicker}
-        onClose={() => setShowDeliveryMapPicker(false)}
-        title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
-        initialLocation={{
-          address: editAddress,
-          lat: editDeliveryLat,
-          lng: editDeliveryLng,
-        }}
-        addressLabel="Your Building name & flat no"
-        addressPlaceholder="Your Building name & flat no"
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          setEditAddress(loc.address);
-          if (loc.lat) setEditDeliveryLat(loc.lat);
-          if (loc.lng) setEditDeliveryLng(loc.lng);
-        }}
-      />
 
 
       {showFeedbackModal && (

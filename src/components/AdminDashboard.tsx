@@ -18,6 +18,7 @@ import {
   Check,
   X,
   Layers,
+  Power,
   ArrowUpRight,
   ArrowRight,
   Sparkles,
@@ -61,6 +62,7 @@ import {
   Send,
   Compass,
   ExternalLink,
+  Package,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -87,11 +89,13 @@ import { AdminStoreDisbursementModal } from './admin/AdminStoreDisbursementModal
 import { AdminNotificationHistory } from './admin/AdminNotificationHistory';
 import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AdminAddressesManager } from './admin/AdminAddressesManager';
+import { StoreProductManager } from './StoreProductManager';
+import { AdminStoreItemsModal } from './admin/AdminStoreItemsModal';
 import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AdminBlockModal } from './admin/AdminBlockModal';
 import { BlockedUserModal } from './BlockedUserModal';
 import { AsyncButton } from './ui/AsyncButton';
-import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
+import { DEFAULT_SERVICES, DEFAULT_STORE_TYPES, parseStoreTypes, getStoreTypesForService } from '@/lib/pricing';
 import {
   exportUsersToCSV,
   exportUsersToPDF,
@@ -119,12 +123,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
-  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS'>('TABLE');
+  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS' | 'ITEMS'>('TABLE');
   const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE'>('UNPAID');
   const [shopsSortDirection, setShopsSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
   const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
   const [disbursingShop, setDisbursingShop] = useState<Shop | null>(null);
+  const [managingItemsShop, setManagingItemsShop] = useState<Shop | null>(null);
+  const [selectedShopForItems, setSelectedShopForItems] = useState<string>('ALL');
+  const [allStoreProducts, setAllStoreProducts] = useState<import('@/types').StoreProduct[]>([]);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -165,6 +172,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [showAddShopModal, setShowAddShopModal] = useState<boolean>(false);
   const [editingShop, setEditingShop] = useState<Shop | null>(null);
+  const [adminProductShop, setAdminProductShop] = useState<Shop | null>(null);
 
   const [showCustomModalForm, setShowCustomModalForm] = useState<boolean>(false);
   const [editingCustomModal, setEditingCustomModal] = useState<AdminCustomModalConfig | null>(null);
@@ -196,6 +204,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [bankInstructions, setBankInstructions] = useState<string>('');
   const [cashInstructions, setCashInstructions] = useState<string>('');
   const [storeTypesText, setStoreTypesText] = useState<string>('');
+  const [serviceStoreTypeMap, setServiceStoreTypeMap] = useState<Record<string, string[]>>({});
   // Store application form placeholders (admin configurable)
   const [storeFormPh, setStoreFormPh] = useState<{
     storeName: string;
@@ -261,6 +270,90 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [helperCenterNote, setHelperCenterNote] = useState<string>('');
   const [googleAnalyticsId, setGoogleAnalyticsId] = useState<string>('');
   const [microsoftClarityId, setMicrosoftClarityId] = useState<string>('');
+
+  // Home Banner Slider & Search Not Found Message Admin States
+  const [adminSlides, setAdminSlides] = useState<Array<{
+    id?: string;
+    title?: string;
+    subtitle?: string;
+    imageUrl?: string;
+    hint?: string;
+    link?: string;
+  }>>([]);
+  const [newSlideTitle, setNewSlideTitle] = useState<string>('');
+  const [newSlideSubtitle, setNewSlideSubtitle] = useState<string>('');
+  const [newSlideImageUrl, setNewSlideImageUrl] = useState<string>('');
+  const [newSlideLink, setNewSlideLink] = useState<string>('');
+  const [isUploadingSlideImage, setIsUploadingSlideImage] = useState<boolean>(false);
+  const [searchNotFoundMsg, setSearchNotFoundMsg] = useState<string>('');
+
+  const handleSlideImageFileChange = (file: File) => {
+    setIsUploadingSlideImage(true);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = document.createElement('img');
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 600;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width = Math.round((width * MAX_HEIGHT) / height);
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setNewSlideImageUrl(dataUrl);
+        } else {
+          setNewSlideImageUrl(e.target?.result as string);
+        }
+        setIsUploadingSlideImage(false);
+      };
+      img.onerror = () => {
+        setIsUploadingSlideImage(false);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => {
+      setIsUploadingSlideImage(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddSlide = () => {
+    if (!newSlideImageUrl.trim()) {
+      showAlert('ছবি প্রয়োজন', 'অনুগ্রহ করে ব্যানার ছবি আপলোড করুন বা ছবির URL প্রদান করুন।', 'error');
+      return;
+    }
+    const newSlide = {
+      id: `slide_${Date.now()}`,
+      title: newSlideTitle.trim() || undefined,
+      subtitle: newSlideSubtitle.trim() || undefined,
+      imageUrl: newSlideImageUrl.trim(),
+      link: newSlideLink.trim() || undefined,
+    };
+    setAdminSlides((prev) => [...prev, newSlide]);
+    setNewSlideTitle('');
+    setNewSlideSubtitle('');
+    setNewSlideImageUrl('');
+    setNewSlideLink('');
+  };
+
+  const handleDeleteSlide = (index: number) => {
+    setAdminSlides((prev) => prev.filter((_, idx) => idx !== index));
+  };
 
   // Fee Details Calculator & Policy Admin States
   const [feeCalculatorBasePrice, setFeeCalculatorBasePrice] = useState<number | string>(20);
@@ -488,6 +581,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [shopsCategoryFilter, setShopsCategoryFilter] = useState<string>('ALL');
+  const [shopsActiveFilter, setShopsActiveFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [shopsApprovalFilter, setShopsApprovalFilter] = useState<'ALL' | 'Approved' | 'Pending' | 'Rejected'>('ALL');
   const [usersCoinsFilter, setUsersCoinsFilter] = useState<string>('ALL');
   const [usersMinCoins, setUsersMinCoins] = useState<string>('');
   const [usersMaxCoins, setUsersMaxCoins] = useState<string>('');
@@ -659,6 +754,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setCustomModals(Array.from(fallbackStore.customModals.values()));
       }
 
+      if (changed('storeProducts', versionOf(fallbackStore.storeProducts))) {
+        setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
+      }
+
       if (changed('feeSuggestions', versionOf(fallbackStore.feeSuggestions))) {
         setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
       }
@@ -722,6 +821,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setBankInstructions(settings.bankInstructions || '');
       setCashInstructions(settings.cashInstructions || '');
       setStoreTypesText(parseStoreTypes(settings.storeTypes).join('\n'));
+      setServiceStoreTypeMap(settings.serviceStoreTypeMap || {});
 
       // Store form placeholders sync
       const sfp = settings.storeFormPlaceholders || {};
@@ -778,6 +878,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setFeeCalculatorMaxLimit(settings.feeCalculatorMaxLimit ?? 70);
       setFeeCalculatorMaxLimitMessage(settings.feeCalculatorMaxLimitMessage || '');
       setFeeCalculatorCompanyDetails(settings.feeCalculatorCompanyDetails || '');
+
+      // Home Banner Slides & Search Not Found Message sync
+      setAdminSlides(settings.homeSlides || []);
+      setSearchNotFoundMsg(settings.searchNotFoundMessage || '');
     };
 
     if (currentUser?.uid) {
@@ -859,6 +963,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     fetchShops();
   }, [activeTab, shopsAppliedSearchQuery, shopsCategoryFilter, statusFilter, currentPage, pageSize, shops.length]);
+
+  useEffect(() => {
+    if (activeTab === 'SHOPS') {
+      fallbackStore.loadStoreProducts();
+      setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const fetchWithdrawals = async () => {
@@ -1453,6 +1564,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       bankInstructions: bankInstructions.trim() || undefined,
       cashInstructions: cashInstructions.trim() || undefined,
       storeTypes: parseStoreTypes(storeTypesText),
+      serviceStoreTypeMap: Object.keys(serviceStoreTypeMap).length > 0 ? serviceStoreTypeMap : undefined,
       // Blocked user custom notice & modal settings
       blockedUserModalTitle: blockedUserModalTitle.trim() || undefined,
       blockedUserModalSubtitle: blockedUserModalSubtitle.trim() || undefined,
@@ -1507,6 +1619,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       feeCalculatorMaxLimitMessage: feeCalculatorMaxLimitMessage.trim() || undefined,
       feeCalculatorCompanyDetails: feeCalculatorCompanyDetails.trim() || undefined,
       allowedAdminTabs: allowedAdminTabs,
+      homeSlides: adminSlides.length > 0 ? adminSlides : undefined,
+      searchNotFoundMessage: searchNotFoundMsg.trim() || undefined,
     };
 
     await fallbackStore.savePricingSettings(updatedPricing);
@@ -3390,9 +3504,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </td>
                               <td className="py-3.5 px-5">
                                 {fb.thumbsUp === false ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-extrabold text-[10px]">
-                                    <ThumbsDown className="w-3 h-3" /> খারাপ লেগেছে
-                                  </span>
+                                  <div className="space-y-1">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-extrabold text-[10px]">
+                                      <ThumbsDown className="w-3 h-3" /> খারাপ লেগেছে
+                                    </span>
+                                    {fb.badReason && (
+                                      <span className="block text-[10px] font-black text-red-700 bg-red-50 px-2 py-0.5 rounded border border-red-200 w-fit">
+                                        {fb.badReason === 'RIDER' ? '🚴 রাইডার' : fb.badReason === 'PRODUCT' ? '🛍️ প্রোডাক্ট' : '🚴 রাইডার + 🛍️ প্রোডাক্ট'}
+                                      </span>
+                                    )}
+                                  </div>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 text-red-600 font-extrabold text-xs">
                                     <Star className="w-3.5 h-3.5 fill-red-400 text-red-400" />
@@ -7160,6 +7281,189 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </p>
           </div>
 
+          {/* ── Home Page Hero / Banner Slider Management ── */}
+          <div className="border border-purple-200 rounded-2xl p-5 bg-purple-50/20 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-extrabold text-sm text-purple-950 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-purple-700" />
+                <span>হোম পেজ ব্যানার স্লাইডার (Hero Banner Slides)</span>
+              </h4>
+              <span className="text-xs bg-purple-100 text-purple-800 font-extrabold px-2.5 py-1 rounded-full">
+                {adminSlides.length}টি স্লাইড
+              </span>
+            </div>
+            <p className="text-xs text-gray-500">
+              হোম পেজের শীর্ষ স্লাইডারে ব্যানার ছবি প্রদর্শন করুন। প্রতিটি ব্যানারে ঐচ্ছিক রিডাইরেক্ট লিংক যোগ করতে পারেন (লিংক সেট করলে ক্লিক করলে রিডাইরেক্ট হবে, খালি রাখলে কোনো অ্যাকশন হবে না)।
+            </p>
+
+            {/* List of current slides */}
+            {adminSlides.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                {adminSlides.map((slide, idx) => (
+                  <div
+                    key={slide.id || idx}
+                    className="relative border border-gray-200 rounded-2xl p-3 bg-white flex flex-col justify-between shadow-xs hover:border-purple-300 transition-colors"
+                  >
+                    <div className="space-y-2">
+                      {slide.imageUrl && (
+                        <div className="w-full h-28 rounded-xl overflow-hidden bg-gray-100 border border-gray-100">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={slide.imageUrl}
+                            alt={slide.title || `Slide ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-gray-900">
+                            {slide.title || `ব্যানার #${idx + 1}`}
+                          </span>
+                          <span className="text-[10px] bg-purple-50 text-purple-700 font-semibold px-2 py-0.5 rounded-full">
+                            স্লাইড {idx + 1}
+                          </span>
+                        </div>
+                        {slide.link ? (
+                          <p className="text-[11px] text-purple-700 font-medium truncate flex items-center gap-1 mt-1">
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                            <span>{slide.link}</span>
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-gray-400 mt-1 italic">
+                            কোনো লিংক সংযুক্ত নেই (ক্লিকে কিছু হবে না)
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-2 border-t border-gray-100 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSlide(idx)}
+                        className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>মুছে ফেলুন</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Form to add a new slide */}
+            <div className="p-4 bg-white rounded-2xl border border-dashed border-purple-200 space-y-3">
+              <h5 className="text-xs font-extrabold text-purple-900 flex items-center gap-1.5">
+                <Plus className="w-4 h-4 text-purple-600" />
+                <span>নতুন ব্যানার স্লাইড যোগ করুন</span>
+              </h5>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    ব্যানার ইমেজ আপলোড (ফাইল সিলেক্ট করুন):
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleSlideImageFileChange(file);
+                    }}
+                    className="w-full text-xs text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-purple-100 file:text-purple-800 hover:file:bg-purple-200 cursor-pointer"
+                  />
+                  {isUploadingSlideImage && (
+                    <p className="text-[11px] text-purple-600 font-medium mt-1">ছবি প্রসেস হচ্ছে...</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    অথবা ছবির সরাসরি URL (ঐচ্ছিক):
+                  </label>
+                  <input
+                    type="url"
+                    value={newSlideImageUrl}
+                    onChange={(e) => setNewSlideImageUrl(e.target.value)}
+                    placeholder="https://example.com/banner.jpg"
+                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                  />
+                </div>
+              </div>
+
+              {newSlideImageUrl && (
+                <div className="w-full max-w-xs h-24 rounded-xl overflow-hidden bg-gray-100 border border-gray-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={newSlideImageUrl}
+                    alt="Preview"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    ব্যানারের শিরোনাম (ঐচ্ছিক):
+                  </label>
+                  <input
+                    type="text"
+                    value={newSlideTitle}
+                    onChange={(e) => setNewSlideTitle(e.target.value)}
+                    placeholder="যেমন: বিশেষ অফার বা ছাড়"
+                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    ক্লিক রিডাইরেক্ট লিংক (ঐচ্ছিক):
+                  </label>
+                  <input
+                    type="text"
+                    value={newSlideLink}
+                    onChange={(e) => setNewSlideLink(e.target.value)}
+                    placeholder="যেমন: https://wa.me/... অথবা খালি রাখুন"
+                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    খালি রাখলে গ্রাহক ব্যানারে ক্লিক করলে কোনো রিডাইরেক্ট হবে না।
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleAddSlide}
+                  disabled={!newSlideImageUrl.trim() || isUploadingSlideImage}
+                  className="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>স্লাইড যোগ করুন</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Search Not Found Notice Message ── */}
+          <div className="border border-emerald-100 rounded-2xl p-4 bg-emerald-50/20 space-y-2">
+            <label className="text-xs font-bold text-gray-800 block">
+              সার্চ রেজাল্ট না পাওয়া গেলে নোটিশ বার্তা (Search Not Found Message):
+            </label>
+            <textarea
+              value={searchNotFoundMsg}
+              onChange={(e) => setSearchNotFoundMsg(e.target.value)}
+              placeholder="যেমন: দুঃখিত, আপনার খোঁজা পণ্য বা সেবাটি খুঁজে পাওয়া যায়নি। তবে কোনো সমস্যা নেই! কাস্টম রিকোয়েস্ট তৈরি করুন, আমরা ব্যবস্থা করে দেবো।"
+              rows={3}
+              className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 leading-relaxed font-sans"
+            />
+            <p className="text-[11px] text-gray-500">
+              গ্রাহক হোম পেজের সার্চ বক্সে কোনো পণ্য বা সেবা খুঁজে না পেলে এই বার্তাটি দেখাবে এবং নিচে কাস্টম রিকোয়েস্ট বাটন থাকবে। খালি রাখলে ডিফল্ট বার্তা প্রদর্শিত হবে।
+            </p>
+          </div>
+
           {/* Dynamic Store / Shop Types */}
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1.5">
@@ -7175,6 +7479,166 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <p className="text-[11px] text-gray-500 mt-1.5">
               হেলপার যখন নতুন দোকান যোগ করবে তখন ড্রপডাউনে এই অপশনগুলো আসবে।
             </p>
+          </div>
+
+          {/* ── Connect Store Types with Service Types ── */}
+          <div className="border border-purple-200/80 rounded-2xl p-5 bg-gradient-to-br from-purple-50/50 via-white to-indigo-50/30 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-purple-100">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-600/10 flex items-center justify-center text-purple-700 shrink-0 mt-0.5">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-gray-900 flex items-center gap-2">
+                    সার্ভিসের সাথে দোকানের ধরন সংযোগ (Connect Store Types to Services)
+                  </h4>
+                  <p className="text-[11px] text-gray-600 mt-0.5 leading-relaxed">
+                    গ্রাহক যখন হোম পেজে বা স্টোর গ্রিডে একটি সার্ভিস সিলেক্ট করবেন, তখন কোন কোন ধরনের দোকান (Store Types) প্রদর্শিত হবে তা নির্ধারণ করুন।
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
+                  const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
+                  const newMap: Record<string, string[]> = {};
+                  svcs.forEach((svc) => {
+                    newMap[svc] = getStoreTypesForService(svc);
+                  });
+                  setServiceStoreTypeMap(newMap);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-bold transition-all shrink-0 active:scale-95 cursor-pointer self-start sm:self-auto"
+                title="স্বয়ংক্রিয়ভাবে বুদ্ধিমত্তা অনুযায়ী ডিফল্ট সংযোগ সেট করুন"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                ডিফল্ট সংযোগ রিস্টোর করুন
+              </button>
+            </div>
+
+            {(() => {
+              const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
+              const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
+              const allStoreTypes = parseStoreTypes(storeTypesText);
+
+              if (svcs.length === 0) {
+                return (
+                  <p className="text-xs text-gray-400 italic py-2">
+                    কোনো সার্ভিস পাওয়া যায়নি। উপরে সার্ভিস ড্রপডাউন অপশনে সার্ভিস যুক্ত করুন।
+                  </p>
+                );
+              }
+
+              return (
+                <div className="space-y-3.5">
+                  {svcs.map((svcName) => {
+                    const selectedTypes = serviceStoreTypeMap[svcName] || [];
+                    const isAllSelected = allStoreTypes.length > 0 && selectedTypes.length === allStoreTypes.length;
+
+                    return (
+                      <div
+                        key={svcName}
+                        className="p-4 rounded-xl border border-gray-200/90 bg-white/90 shadow-xs hover:border-purple-300 transition-all space-y-2.5"
+                      >
+                        {/* Service Header Row */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-xs text-gray-900">
+                              {svcName}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                selectedTypes.length > 0
+                                  ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}
+                            >
+                              {selectedTypes.length > 0
+                                ? `${selectedTypes.length}টি ধরন সংযুক্ত`
+                                : 'ডিফল্ট ম্যাচিং'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setServiceStoreTypeMap((prev) => ({
+                                  ...prev,
+                                  [svcName]: isAllSelected ? [] : [...allStoreTypes],
+                                }));
+                              }}
+                              className="text-[11px] font-semibold text-purple-700 hover:text-purple-900 px-2 py-0.5 rounded-lg hover:bg-purple-50 transition-colors cursor-pointer"
+                            >
+                              {isAllSelected ? 'সব বাতিল' : 'সব নির্বাচন'}
+                            </button>
+                            {selectedTypes.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setServiceStoreTypeMap((prev) => {
+                                    const next = { ...prev };
+                                    delete next[svcName];
+                                    return next;
+                                  });
+                                }}
+                                className="text-[11px] font-semibold text-gray-500 hover:text-rose-600 px-1.5 py-0.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                              >
+                                রিসেট
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Store Types Badges / Chips */}
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {allStoreTypes.map((type) => {
+                            const isSelected = selectedTypes.includes(type);
+                            return (
+                              <button
+                                key={type}
+                                type="button"
+                                onClick={() => {
+                                  setServiceStoreTypeMap((prev) => {
+                                    const curr = prev[svcName] || [];
+                                    const exists = curr.includes(type);
+                                    const nextList = exists
+                                      ? curr.filter((t) => t !== type)
+                                      : [...curr, type];
+                                    return {
+                                      ...prev,
+                                      [svcName]: nextList,
+                                    };
+                                  });
+                                }}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer font-medium active:scale-95 ${
+                                  isSelected
+                                    ? 'bg-purple-600 text-white shadow-xs font-semibold'
+                                    : 'bg-gray-100 hover:bg-gray-200/80 text-gray-700 border border-gray-200'
+                                }`}
+                              >
+                                {isSelected ? (
+                                  <Check className="w-3 h-3 text-white shrink-0" />
+                                ) : (
+                                  <Plus className="w-3 h-3 text-gray-400 shrink-0" />
+                                )}
+                                <span>{type}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedTypes.length === 0 && (
+                          <p className="text-[10px] text-amber-700 bg-amber-50/80 px-2.5 py-1 rounded-md border border-amber-200/50 inline-block font-medium">
+                            💡 কোনো ধরন নির্বাচন না থাকলে নামের মিল অনুযায়ী স্বয়ংক্রিয় ডিফল্ট ফিল্টার কার্যকর থাকবে।
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* ── Store Application Form Placeholders ── */}
@@ -7596,6 +8060,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (shopsCategoryFilter !== 'ALL') {
           filteredShops = filteredShops.filter((s) => (s.type || '').trim() === shopsCategoryFilter.trim());
         }
+        if (shopsActiveFilter !== 'ALL') {
+          filteredShops = filteredShops.filter((s) => {
+            const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
+            return shopsActiveFilter === 'ACTIVE' ? isStoreActive : !isStoreActive;
+          });
+        }
+        if (shopsApprovalFilter !== 'ALL') {
+          filteredShops = filteredShops.filter((s) => {
+            const sStatus = s.status === 'Pending' || s.status === 'PENDING'
+              ? 'Pending'
+              : s.status === 'Rejected' || s.status === 'REJECTED'
+              ? 'Rejected'
+              : 'Approved';
+            return sStatus === shopsApprovalFilter;
+          });
+        }
         if (shopsAppliedSearchQuery.trim()) {
           const q = shopsAppliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
@@ -7811,10 +8291,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                 </div>
 
-                {shopsCategoryFilter !== 'ALL' && (
+                {/* Active / Inactive Status Dropdown Filter */}
+                <div className="flex items-center space-x-1.5 bg-gray-100 border border-gray-200 rounded-2xl px-3 py-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                  <span className="text-gray-500 text-[11px] font-bold">Active:</span>
+                  <select
+                    value={shopsActiveFilter}
+                    onChange={(e) => {
+                      setShopsActiveFilter(e.target.value as 'ALL' | 'ACTIVE' | 'INACTIVE');
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer"
+                  >
+                    <option value="ALL">All ({shopsSource.length})</option>
+                    <option value="ACTIVE">
+                      🟢 Active / খোলা ({shopsSource.filter(s => (s.isActive !== undefined ? s.isActive : (s.isOpen !== false))).length})
+                    </option>
+                    <option value="INACTIVE">
+                      🔴 Inactive / বন্ধ ({shopsSource.filter(s => !(s.isActive !== undefined ? s.isActive : (s.isOpen !== false))).length})
+                    </option>
+                  </select>
+                </div>
+
+                {/* Approval Status Dropdown Filter */}
+                <div className="flex items-center space-x-1.5 bg-gray-100 border border-gray-200 rounded-2xl px-3 py-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                  <span className="text-gray-500 text-[11px] font-bold">Approval:</span>
+                  <select
+                    value={shopsApprovalFilter}
+                    onChange={(e) => {
+                      setShopsApprovalFilter(e.target.value as 'ALL' | 'Approved' | 'Pending' | 'Rejected');
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer"
+                  >
+                    <option value="ALL">All Approvals</option>
+                    <option value="Approved">✓ Approved ({shopsSource.filter(s => s.status !== 'Pending' && s.status !== 'PENDING' && s.status !== 'Rejected' && s.status !== 'REJECTED').length})</option>
+                    <option value="Pending">⏳ Pending ({shopsSource.filter(s => s.status === 'Pending' || s.status === 'PENDING').length})</option>
+                    <option value="Rejected">✕ Rejected ({shopsSource.filter(s => s.status === 'Rejected' || s.status === 'REJECTED').length})</option>
+                  </select>
+                </div>
+
+                {(shopsCategoryFilter !== 'ALL' || shopsActiveFilter !== 'ALL' || shopsApprovalFilter !== 'ALL') && (
                   <button
                     onClick={() => {
                       setShopsCategoryFilter('ALL');
+                      setShopsActiveFilter('ALL');
+                      setShopsApprovalFilter('ALL');
                       setCurrentPage(1);
                     }}
                     className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 text-xs font-bold transition-all"
@@ -7848,6 +8371,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <Layers className="w-3.5 h-3.5" />
                     <span>Table View</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShopSubView('ITEMS')}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
+                      shopSubView === 'ITEMS'
+                        ? 'bg-purple-900 text-white shadow-md'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span>Store Items</span>
                   </button>
 
                   <button
@@ -8108,10 +8644,250 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setShowAddShopModal(true);
                 }}
               />
+            ) : shopSubView === 'ITEMS' ? (
+              /* ── Store Items Catalog Management Sub-View ── */
+              (() => {
+                const targetShop = shopsSource.find(s => s.id === selectedShopForItems) || shops.find(s => s.id === selectedShopForItems);
+
+                return (
+                  <div className="space-y-4">
+                    {/* Store Selector & Overview Header */}
+                    <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-soft space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center space-x-2.5">
+                          <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">
+                            <Package className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h3 className="font-extrabold text-base text-gray-900">
+                              স্টোর পণ্য ও ক্যাটালগ ব্যবস্থাপনা (Store Items)
+                            </h3>
+                            <p className="text-xs text-gray-500 font-medium">
+                              দোকান নির্বাচন করে পণ্য যোগ করুন, মূল্য ও ছাড় পরিবর্তন করুন এবং স্টক নিয়ন্ত্রণ করুন
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Store Selection Dropdown */}
+                        <div className="flex items-center space-x-2 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl p-1.5 px-3">
+                          <Store className="w-4 h-4 text-indigo-700 shrink-0" />
+                          <span className="text-[11px] font-bold text-indigo-900 shrink-0">দোকান নির্বাচন:</span>
+                          <select
+                            value={selectedShopForItems}
+                            onChange={(e) => setSelectedShopForItems(e.target.value)}
+                            className="bg-transparent font-extrabold text-xs text-indigo-950 focus:outline-none cursor-pointer max-w-[260px] truncate"
+                          >
+                            <option value="ALL">🌐 সকল দোকান ({allStoreProducts.length} টি পণ্য)</option>
+                            {shopsSource.map((s) => {
+                              const pCount = allStoreProducts.filter(
+                                (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
+                              ).length;
+                              return (
+                                <option key={s.id} value={s.id}>
+                                  🏪 {s.name} ({s.type}) — {pCount} টি পণ্য
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Quick Metric Pills */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
+                        <div className="bg-gray-50 rounded-2xl p-3 border border-gray-100">
+                          <span className="text-[10px] text-gray-400 font-bold uppercase block">মোট পণ্য (Total Items)</span>
+                          <span className="text-lg font-black text-gray-900">{allStoreProducts.length}</span>
+                        </div>
+                        <div className="bg-emerald-50/60 rounded-2xl p-3 border border-emerald-100">
+                          <span className="text-[10px] text-emerald-700 font-bold uppercase block">স্টকে আছে (In Stock)</span>
+                          <span className="text-lg font-black text-emerald-800">
+                            {allStoreProducts.filter(p => p.inStock).length}
+                          </span>
+                        </div>
+                        <div className="bg-rose-50/60 rounded-2xl p-3 border border-rose-100">
+                          <span className="text-[10px] text-rose-700 font-bold uppercase block">স্টক শেষ (Out of Stock)</span>
+                          <span className="text-lg font-black text-rose-800">
+                            {allStoreProducts.filter(p => !p.inStock).length}
+                          </span>
+                        </div>
+                        <div className="bg-purple-50/60 rounded-2xl p-3 border border-purple-100">
+                          <span className="text-[10px] text-purple-700 font-bold uppercase block">পণ্যযুক্ত দোকান</span>
+                          <span className="text-lg font-black text-purple-800">
+                            {new Set(allStoreProducts.map(p => p.storeId)).size} টি দোকান
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Specific Store Selected -> StoreProductManager */}
+                    {selectedShopForItems !== 'ALL' && targetShop ? (
+                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-soft space-y-4">
+                        <div className="flex items-center justify-between pb-3 border-b border-gray-100 flex-wrap gap-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="px-2.5 py-1 rounded-full bg-purple-100 text-purple-900 font-extrabold text-xs">
+                              {targetShop.type}
+                            </span>
+                            <span className="text-xs text-gray-500 font-medium">
+                              {targetShop.location?.address}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            {/* Target shop Active / Inactive direct toggle */}
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const isStoreActive = targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false);
+                                const nextVal = !isStoreActive;
+                                await fallbackStore.toggleShopActiveStatus(targetShop.id, nextVal);
+                                setShops(Array.from(fallbackStore.shops.values()));
+                                if (serverShops) {
+                                  setServerShops((prev) =>
+                                    prev ? prev.map((item) => (item.id === targetShop.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
+                                  );
+                                }
+                                showAlert(
+                                  'স্টোর স্ট্যাটাস আপডেট',
+                                  `"${targetShop.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
+                                  'success'
+                                );
+                              }}
+                              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors flex items-center space-x-1.5 border cursor-pointer ${
+                                (targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false))
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                                  : 'bg-rose-50 text-rose-850 border-rose-300 hover:bg-rose-100'
+                              }`}
+                              title="Click to toggle store active/inactive"
+                            >
+                              <span className={`w-2 h-2 rounded-full ${(targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false)) ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                              <span>{(targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false)) ? '🟢 Store Active (খোলা)' : '🔴 Store Inactive (বন্ধ)'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedShopDetails(targetShop)}
+                              className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-xs transition-colors flex items-center space-x-1 cursor-pointer"
+                            >
+                              <Store className="w-3.5 h-3.5" />
+                              <span>Store Details</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedShopForItems('ALL')}
+                              className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors cursor-pointer"
+                            >
+                              Show All Stores
+                            </button>
+                          </div>
+                        </div>
+
+                        <StoreProductManager
+                          storeId={targetShop.id}
+                          storeName={targetShop.name}
+                          hideFloatingFab={false}
+                        />
+                      </div>
+                    ) : (
+                      /* "ALL" Stores Catalog Grid / List */
+                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-soft space-y-4">
+                        <div className="flex items-center justify-between flex-wrap gap-3">
+                          <div>
+                            <h4 className="font-extrabold text-sm text-gray-900">
+                              সকল দোকানের পণ্য তালিকা ও ব্যবস্থাপনা
+                            </h4>
+                            <p className="text-[11px] text-gray-500">
+                              নির্দিষ্ট দোকানের পণ্য ম্যানেজ করতে নিচে কোনো দোকানের কার্ডে ক্লিক করুন অথবা ড্রপডাউন থেকে সিলেক্ট করুন
+                            </p>
+                          </div>
+                          {shopsSource.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (shopsSource[0]) setSelectedShopForItems(shopsSource[0].id);
+                              }}
+                              className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer active:scale-95"
+                            >
+                              <Plus className="w-4 h-4" />
+                              <span>দোকানে পণ্য যোগ করুন</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Stores quick cards grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                          {shopsSource.map((s) => {
+                            const pList = allStoreProducts.filter(
+                              (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
+                            );
+                            const inStock = pList.filter(p => p.inStock).length;
+                            return (
+                              <div
+                                key={s.id}
+                                onClick={() => setSelectedShopForItems(s.id)}
+                                className="p-4 rounded-2xl border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50/20 bg-gray-50/60 transition-all cursor-pointer group flex flex-col justify-between"
+                              >
+                                <div>
+                                  <div className="flex items-start justify-between gap-1 mb-1">
+                                    <h5 className="font-extrabold text-sm text-gray-900 group-hover:text-indigo-900 truncate">
+                                      {s.name}
+                                    </h5>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <span
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
+                                          const nextVal = !isStoreActive;
+                                          await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                          setShops(Array.from(fallbackStore.shops.values()));
+                                          if (serverShops) {
+                                            setServerShops((prev) =>
+                                              prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
+                                            );
+                                          }
+                                        }}
+                                        title="Click to toggle store active/inactive"
+                                        className={`px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
+                                          (s.isActive !== undefined ? s.isActive : (s.isOpen !== false))
+                                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                                            : 'bg-rose-100 text-rose-850 border-rose-300 hover:bg-rose-200'
+                                        }`}
+                                      >
+                                        {(s.isActive !== undefined ? s.isActive : (s.isOpen !== false)) ? '🟢 Active' : '🔴 Inactive'}
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 text-[10px] font-bold">
+                                        {s.type}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <p className="text-[11px] text-gray-500 truncate">{s.location?.address || '—'}</p>
+                                </div>
+                                <div className="mt-3 pt-2.5 border-t border-gray-200/70 flex items-center justify-between">
+                                  <span className="text-xs font-black text-indigo-700">
+                                    {pList.length} টি পণ্য ({inStock} স্টকে)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setManagingItemsShop(s);
+                                    }}
+                                    className="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] shadow-2xs transition-all cursor-pointer"
+                                  >
+                                    ম্যানেজ করুন →
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[1050px]">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[1100px]">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
                       <tr>
                         <th
@@ -8119,7 +8895,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => toggleShopSort('NAME')}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Store Name & Status</span>
+                            <span>Store Name</span>
                             {shopsSortField === 'NAME' ? (
                               shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
                             ) : (
@@ -8138,6 +8914,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             ) : (
                               <ArrowUpDown className="w-3 h-3 text-gray-300" />
                             )}
+                          </div>
+                        </th>
+                        <th className="py-3.5 px-4 min-w-[185px]">
+                          <div className="flex items-center space-x-1.5 text-gray-800 font-black">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Store Status (স্ট্যাটাস)</span>
                           </div>
                         </th>
                         <th
@@ -8205,6 +8987,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ? 'Rejected'
                           : 'Approved';
 
+                        const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
+
                         return (
                           <tr
                             key={s.id}
@@ -8231,47 +9015,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </p>
                               )}
                               <div className="mt-1 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                                <select
-                                  value={sStatus}
-                                  onChange={async (e) => {
-                                    const newStatus = e.target.value as 'Approved' | 'Pending' | 'Rejected';
-                                    await fallbackStore.updateShopStatus(s.id, newStatus);
-                                    setShops(Array.from(fallbackStore.shops.values()));
-                                    showAlert('সফল', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
-                                  }}
-                                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase border cursor-pointer outline-none ${
-                                    sStatus === 'Approved'
-                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                      : sStatus === 'Pending'
-                                      ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                      : 'bg-red-100 text-red-800 border-red-300'
-                                  }`}
-                                >
-                                  <option value="Approved">Approved</option>
-                                  <option value="Pending">Pending</option>
-                                  <option value="Rejected">Rejected</option>
-                                </select>
                                 <button
                                   type="button"
-                                  onClick={async () => {
-                                    const currentVal = s.canReceiveOrders !== undefined ? s.canReceiveOrders : true;
-                                    const updated = { ...s, canReceiveOrders: !currentVal };
-                                    await fallbackStore.saveShop(updated);
-                                    setShops(Array.from(fallbackStore.shops.values()));
-                                    showAlert(
-                                      'Order Receive Status Updated',
-                                      `"${s.name}" এর জন্য Order Receive স্ট্যাটাস ${!currentVal ? 'সক্রিয় (Can Receive)' : 'নিষ্ক্রিয় (Manual Status/Price Only)'} করা হয়েছে।`,
-                                      'success'
-                                    );
-                                  }}
-                                  title="Click to toggle whether this store can accept order requests directly"
-                                  className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
-                                    (s.canReceiveOrders !== false)
-                                      ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200'
-                                      : 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200'
-                                  }`}
+                                  onClick={() => setManagingItemsShop(s)}
+                                  className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200 transition-all flex items-center space-x-1 cursor-pointer"
+                                  title="Click to manage store items"
                                 >
-                                  {(s.canReceiveOrders !== false) ? '⚡ Accepts Orders' : '🚫 Admin Manual Only'}
+                                  <Package className="w-2.5 h-2.5 text-indigo-600" />
+                                  <span>
+                                    {allStoreProducts.filter(
+                                      (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
+                                    ).length} Items
+                                  </span>
                                 </button>
                               </div>
                             </td>
@@ -8279,6 +9034,109 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
                                 {s.type}
                               </span>
+                            </td>
+                            {/* DEDICATED STORE STATUS CELL */}
+                            <td className="py-4 px-4 min-w-[185px]" onClick={(e) => e.stopPropagation()}>
+                              <div className="space-y-1.5">
+                                {/* 1. Active / Inactive Toggle Switch */}
+                                <div
+                                  onClick={async () => {
+                                    const nextVal = !isStoreActive;
+                                    await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    if (serverShops) {
+                                      setServerShops((prev) =>
+                                        prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
+                                      );
+                                    }
+                                    showAlert(
+                                      'স্টোর স্ট্যাটাস পরিবর্তন',
+                                      `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
+                                      'success'
+                                    );
+                                  }}
+                                  title={isStoreActive ? 'Click to make Inactive (দোকান বন্ধ করুন)' : 'Click to make Active (দোকান চালু করুন)'}
+                                  className={`flex items-center justify-between gap-2 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all ${
+                                    isStoreActive
+                                      ? 'bg-emerald-50 hover:bg-emerald-100/90 border-emerald-300 text-emerald-900 shadow-2xs'
+                                      : 'bg-rose-50 hover:bg-rose-100/90 border-rose-300 text-rose-900 shadow-2xs'
+                                  }`}
+                                >
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className={`w-2 h-2 rounded-full ${isStoreActive ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
+                                    <span className="text-[11px] font-black uppercase tracking-wider">
+                                      {isStoreActive ? 'Active (খোলা)' : 'Inactive (বন্ধ)'}
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`w-8 h-4 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
+                                      isStoreActive ? 'bg-emerald-600' : 'bg-gray-300'
+                                    }`}
+                                  >
+                                    <div
+                                      className={`bg-white w-3 h-3 rounded-full shadow transform transition-transform duration-200 ${
+                                        isStoreActive ? 'translate-x-4' : 'translate-x-0'
+                                      }`}
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* 2. Approval Status Selector */}
+                                <div className="flex items-center">
+                                  <select
+                                    value={sStatus}
+                                    onChange={async (e) => {
+                                      const newStatus = e.target.value as 'Approved' | 'Pending' | 'Rejected';
+                                      await fallbackStore.updateShopStatus(s.id, newStatus);
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      if (serverShops) {
+                                        setServerShops((prev) =>
+                                          prev ? prev.map((item) => (item.id === s.id ? { ...item, status: newStatus } : item)) : null
+                                        );
+                                      }
+                                      showAlert('স্ট্যাটাস আপডেট', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
+                                    }}
+                                    className={`w-full px-2 py-1 rounded-xl text-[10px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
+                                      sStatus === 'Approved'
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                                        : sStatus === 'Pending'
+                                        ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                        : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
+                                    }`}
+                                  >
+                                    <option value="Approved">✓ Approved (অনুমোদিত)</option>
+                                    <option value="Pending">⏳ Pending (অপেক্ষমাণ)</option>
+                                    <option value="Rejected">✕ Rejected (বাতিল)</option>
+                                  </select>
+                                </div>
+
+                                {/* 3. Can Receive Orders Toggle */}
+                                <div>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const currentVal = s.canReceiveOrders !== undefined ? s.canReceiveOrders : true;
+                                      const nextVal = !currentVal;
+                                      const updated = { ...s, canReceiveOrders: nextVal };
+                                      await fallbackStore.saveShop(updated);
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      showAlert(
+                                        'Order Receive Status Updated',
+                                        `"${s.name}" এর জন্য Order Receive স্ট্যাটাস ${nextVal ? 'সক্রিয় (Can Receive)' : 'নিষ্ক্রিয় (Manual Status/Price Only)'} করা হয়েছে।`,
+                                        'success'
+                                      );
+                                    }}
+                                    title="Click to toggle whether this store can accept order requests directly"
+                                    className={`w-full px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all text-center ${
+                                      (s.canReceiveOrders !== false)
+                                        ? 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
+                                        : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
+                                    }`}
+                                  >
+                                    {(s.canReceiveOrders !== false) ? '⚡ Accepts Orders' : '🚫 Admin Manual Only'}
+                                  </button>
+                                </div>
+                              </div>
                             </td>
                             <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
                               {metrics.unpaidBalance > 0 ? (
@@ -8385,6 +9243,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     <Ban className="w-4 h-4" />
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const nextVal = !isStoreActive;
+                                    await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                    setShops(Array.from(fallbackStore.shops.values()));
+                                    if (serverShops) {
+                                      setServerShops((prev) =>
+                                        prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
+                                      );
+                                    }
+                                    showAlert(
+                                      'স্টোর স্ট্যাটাস পরিবর্তন',
+                                      `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
+                                      'success'
+                                    );
+                                  }}
+                                  className={`p-1.5 rounded-xl font-bold text-xs transition-colors cursor-pointer ${
+                                    isStoreActive
+                                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
+                                  }`}
+                                  title={isStoreActive ? 'Deactivate Store (দোকান বন্ধ করুন)' : 'Activate Store (দোকান চালু করুন)'}
+                                >
+                                  <Power className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setManagingItemsShop(s)}
+                                  className="p-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs cursor-pointer"
+                                  title="Manage Store Items (পণ্য ব্যবস্থাপনা)"
+                                >
+                                  <Package className="w-4 h-4" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => setSelectedShopDetails(s)}
@@ -8822,6 +9714,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-[11px]">
                                   <ThumbsDown className="w-3.5 h-3.5" /> ভালো না
                                 </span>
+                                {fb.badReason && (
+                                  <span className="block text-[10px] font-black text-red-700 bg-red-50 px-2 py-0.5 rounded border border-red-200 w-fit">
+                                    {fb.badReason === 'RIDER' ? '🚴 রাইডার' : fb.badReason === 'PRODUCT' ? '🛍️ প্রোডাক্ট' : '🚴 রাইডার + 🛍️ প্রোডাক্ট'}
+                                  </span>
+                                )}
                                 {fb.mutuallyDiscussed && (
                                   <span className="block text-[9px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
                                     ✓ Discussed
@@ -9725,6 +10622,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             setShops(Array.from(fallbackStore.shops.values()));
             setSelectedShopDetails(null);
           }}
+        />
+      )}
+
+      {managingItemsShop && (
+        <AdminStoreItemsModal
+          shop={managingItemsShop}
+          onClose={() => setManagingItemsShop(null)}
         />
       )}
 

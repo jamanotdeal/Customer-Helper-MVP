@@ -56,7 +56,9 @@ import {
   CoinTransaction,
   ServerAddress,
   LocationData,
+  StoreProduct,
 } from '@/types';
+
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isHelperEligibleForOrder } from './geofenceUtils';
 
@@ -564,6 +566,11 @@ class FallbackStore {
   public get shops(): Map<string, Shop> { return this._shops; }
   public set shops(m: Map<string, Shop>) { this._shops = VersionedMap.adopt(m); }
 
+  private _storeProducts = new VersionedMap<string, StoreProduct>();
+  public get storeProducts(): Map<string, StoreProduct> { return this._storeProducts; }
+  public set storeProducts(m: Map<string, StoreProduct>) { this._storeProducts = VersionedMap.adopt(m); }
+
+
   private _shopOrders = new VersionedMap<string, ShopOrder>();
   public get shopOrders(): Map<string, ShopOrder> { return this._shopOrders; }
   public set shopOrders(m: Map<string, ShopOrder>) { this._shopOrders = VersionedMap.adopt(m); }
@@ -641,6 +648,9 @@ class FallbackStore {
     // Start a lightweight always-on pricing listener so admin settings are
     // always live even for unauthenticated / pre-login users.
     this._startPricingListener();
+    if (typeof window !== 'undefined') {
+      this.loadShops();
+    }
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
   }
@@ -874,6 +884,14 @@ class FallbackStore {
         });
       }
 
+      const parsedStoreProducts = this.safeParse<[string, StoreProduct][]>('jamanot_store_products_store');
+      if (parsedStoreProducts && Array.isArray(parsedStoreProducts)) {
+        parsedStoreProducts.forEach(([id, p]) => {
+          if (id && p) this.storeProducts.set(id, p);
+        });
+      }
+
+
       const parsedShopOrders = this.safeParse<[string, ShopOrder][]>('jamanot_shop_orders_store');
       if (parsedShopOrders && Array.isArray(parsedShopOrders)) {
         parsedShopOrders.forEach(([id, so]) => {
@@ -986,6 +1004,8 @@ class FallbackStore {
       localStorage.setItem('jamanot_admin_notifs_history_store', JSON.stringify(Array.from(this.adminNotificationsHistory.entries())));
       localStorage.setItem('jamanot_scheduled_notifs_store', JSON.stringify(Array.from(this.scheduledNotifications.entries())));
       localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
+      localStorage.setItem('jamanot_store_products_store', JSON.stringify(Array.from(this.storeProducts.entries())));
+
       localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(isAdmin ? [] : Array.from(this.shopOrders.entries())));
       localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
       localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
@@ -1118,7 +1138,7 @@ class FallbackStore {
   }
 
   // ─── Shops: one-time read with 30-minute localStorage cache ───────────────
-  private _loadShopsCached() {
+  public loadShops() {
     const CACHE_TTL = 30 * 60 * 1000;
     if (Date.now() - this._shopsCachedAt < CACHE_TTL && this.shops.size > 0) return;
     getDocs(collection(db, 'shops'))
@@ -1128,10 +1148,33 @@ class FallbackStore {
           this.shops.set(docSnap.id, docSnap.data() as Shop);
         });
         this._shopsCachedAt = Date.now();
+        this.scheduleLocalStoreSave();
         this.notify();
       })
       .catch((err) => console.warn('[Firestore] Shops getDocs note:', err));
   }
+
+  private _loadShopsCached() {
+    this.loadShops();
+  }
+
+  // ─── Store Products: cached read with localStorage backup ─────────────────
+  private _storeProductsCachedAt = 0;
+  public loadStoreProducts() {
+    const CACHE_TTL = 5 * 60 * 1000;
+    if (Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
+    getDocs(collection(db, 'store_products'))
+      .then((snapshot) => {
+        snapshot.forEach((docSnap) => {
+          this.storeProducts.set(docSnap.id, docSnap.data() as StoreProduct);
+        });
+        this._storeProductsCachedAt = Date.now();
+        this.scheduleLocalStoreSave();
+        this.notify();
+      })
+      .catch((err) => console.warn('[Firestore] Store products getDocs note:', err));
+  }
+
 
   // ─── Custom modals: one-time read with 30-minute localStorage cache ────────
   private _loadModalsCached() {
@@ -1277,6 +1320,49 @@ class FallbackStore {
         (err) => console.warn('[Firestore] ServerAddresses realtime sync note:', err)
       )
     );
+
+    // ── Store Products: realtime sync across all users ──
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'store_products'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') {
+              this.storeProducts.delete(change.doc.id);
+            } else {
+              const p = change.doc.data() as StoreProduct;
+              const id = p.id || change.doc.id;
+              this.storeProducts.set(id, { ...p, id });
+            }
+          });
+          this.scheduleLocalStoreSave();
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] store_products realtime sync note:', err)
+      )
+    );
+
+    // ── Shops: realtime sync across all users ──
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'shops'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') {
+              this.shops.delete(change.doc.id);
+            } else {
+              const s = change.doc.data() as Shop;
+              const id = s.id || change.doc.id;
+              this.shops.set(id, { ...s, id });
+            }
+          });
+          this.scheduleLocalStoreSave();
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] shops realtime sync note:', err)
+      )
+    );
+
 
     // ── STORE role ────────────────────────────────────────────────────────────
     if (role === 'store') {
@@ -5612,9 +5698,11 @@ class FallbackStore {
     const shopToSave: Shop = {
       ...shop,
       status: shop.status || 'Approved',
+      isOpen: shop.isOpen !== undefined ? shop.isOpen : true,
       canReceiveOrders: shop.canReceiveOrders !== undefined ? shop.canReceiveOrders : true,
     };
     this.shops.set(shopToSave.id, shopToSave);
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'shops', shopToSave.id), cleanForFirestore(shopToSave), { merge: true });
@@ -5622,6 +5710,80 @@ class FallbackStore {
       console.warn('[Firestore] saveShop note (saved locally):', e?.message || e);
     }
   }
+
+  public async updateShop(shopId: string, updates: Partial<Shop>) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const updated: Shop = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] updateShop note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async toggleShopOpenStatus(shopId: string, isOpen: boolean) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const updated: Shop = { ...existing, isOpen, isActive: isOpen, updatedAt: new Date().toISOString() };
+    this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), { isOpen, isActive: isOpen, updatedAt: updated.updatedAt }, { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] toggleShopOpenStatus note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async toggleShopActiveStatus(shopId: string, isActive: boolean) {
+    return this.toggleShopOpenStatus(shopId, isActive);
+  }
+
+  public async saveStoreProduct(product: StoreProduct) {
+    this.storeProducts.set(product.id, product);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'store_products', product.id), cleanForFirestore(product), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveStoreProduct note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async deleteStoreProduct(productId: string) {
+    this.storeProducts.delete(productId);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await deleteDoc(doc(db, 'store_products', productId));
+    } catch (e: any) {
+      console.warn('[Firestore] deleteStoreProduct note (saved locally):', e?.message || e);
+    }
+  }
+
+  public async toggleProductStock(productId: string, inStock?: boolean) {
+    const existing = this.storeProducts.get(productId);
+    if (!existing) return;
+    const newStock = inStock !== undefined ? inStock : !existing.inStock;
+    const updated: StoreProduct = {
+      ...existing,
+      inStock: newStock,
+      updatedAt: new Date().toISOString(),
+    };
+    this.storeProducts.set(productId, updated);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'store_products', productId), { inStock: newStock, updatedAt: updated.updatedAt }, { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] toggleProductStock note (saved locally):', e?.message || e);
+    }
+  }
+
 
   public async updateShopStatus(shopId: string, status: 'Approved' | 'Pending' | 'Rejected') {
     const existing = this.shops.get(shopId);
