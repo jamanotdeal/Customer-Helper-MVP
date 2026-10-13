@@ -266,6 +266,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackStore.saveUser(profile);
     } else {
       let needsSave = false;
+      // A profile rebuilt from a partial user document has no uid. Without it
+      // isUserAuthenticated() fails, so the app shows a signed-in drawer but
+      // asks for login on every action; saving it also repairs the document.
+      if (profile.uid !== fbUser.uid) {
+        profile = { ...profile, uid: fbUser.uid };
+        needsSave = true;
+      }
       if (!profile.displayName || profile.displayName === '?' || !profile.displayName.trim()) {
         profile = { ...profile, displayName: fallbackDisplayName };
         needsSave = true;
@@ -358,8 +365,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cachedUid = localStorage.getItem('jamanot_active_user_uid');
       if (cachedUid) {
         const cachedProfile = fallbackStore.users.get(cachedUid);
-        if (cachedProfile) {
-          setUser(cachedProfile);
+        // Only a complete profile: one with no name and email would render as
+        // signed in while failing every isUserAuthenticated() check. Leaving it
+        // out just keeps the loading state until Firebase auth answers.
+        if (cachedProfile && isUserAuthenticated(cachedProfile)) {
           applyProfile(cachedProfile, savedMode);
         }
       }

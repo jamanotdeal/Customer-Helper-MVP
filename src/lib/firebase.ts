@@ -1190,7 +1190,9 @@ class FallbackStore {
       const parsedUsers = this.safeParse<[string, UserProfile][]>('jamanot_users_store');
       if (parsedUsers && Array.isArray(parsedUsers)) {
         parsedUsers.forEach(([id, u]) => {
-          if (id && u) this.users.set(id, u);
+          // The cache outlives app updates, so it can still hold a profile an
+          // older build saved without its uid. The key is the uid.
+          if (id && u) this.users.set(id, u.uid === id ? u : { ...u, uid: id });
         });
       }
 
@@ -1842,8 +1844,13 @@ class FallbackStore {
           doc(db, 'users', userId),
           (docSnap) => {
             if (docSnap.exists()) {
+              // Merged, not replaced: a user document can hold only the fields
+              // partial writes put there (fcmToken, helperLocation, coins), and
+              // replacing the profile with it drops uid, name and email.
               const u = docSnap.data() as UserProfile;
-              this.users.set(userId, u);
+              const current = this.users.get(userId);
+              const merged = this.mergeUserProfile(userId, u);
+              if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
               this.notify();
             }
           },
