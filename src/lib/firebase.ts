@@ -3731,8 +3731,20 @@ class FallbackStore {
     updater: (so: ShopOrder) => ShopOrder,
     actorRole?: 'helper' | 'store'
   ): Promise<void> {
-    const existing = this.shopOrders.get(shopOrderId);
-    if (!existing) return;
+    let existing = this.shopOrders.get(shopOrderId);
+    if (!existing) {
+      try {
+        const snap = await getDoc(doc(db, 'shopOrders', shopOrderId));
+        if (snap.exists()) {
+          existing = snap.data() as ShopOrder;
+          this.shopOrders.set(shopOrderId, existing);
+        } else {
+          return;
+        }
+      } catch (e) {
+        return;
+      }
+    }
     const updated = updater(existing);
     updated.updatedAt = new Date().toISOString();
     this.shopOrders.set(shopOrderId, updated);

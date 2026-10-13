@@ -561,13 +561,23 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       }
 
       // Build final items from selected items or description
-      const finalItems: OrderItem[] = activeItems.length > 0
+      const rawFinalItems: OrderItem[] = activeItems.length > 0
         ? activeItems
         : [{
             id: 'item-1',
             name: description.trim(),
             qty: '1',
           }];
+
+      const finalItems: OrderItem[] = rawFinalItems.map(it => {
+        if (it.storeId) {
+          const s = fallbackStore.shops.get(it.storeId);
+          if (s && (s.isOpen === false || s.isBlocked === true)) {
+            return { ...it, isCustom: true };
+          }
+        }
+        return it;
+      });
 
       const targetShopIds = Array.from(new Set(finalItems.map((it) => it.storeId).filter(Boolean))) as string[];
       const pricedTotal = finalItems.reduce(

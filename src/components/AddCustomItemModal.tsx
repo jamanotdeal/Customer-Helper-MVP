@@ -20,7 +20,10 @@ interface AddCustomItemModalProps {
   defaultBuyFrom?: string;
   defaultDescription?: string;
   defaultQuantity?: string;
+  defaultPrice?: string;
   isEditing?: boolean;
+  /** If true, shows the price / estimated cost input. Only helpers should pass true. */
+  allowCostInput?: boolean;
 }
 
 export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
@@ -31,11 +34,14 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
   defaultBuyFrom,
   defaultDescription,
   defaultQuantity,
+  defaultPrice,
   isEditing = false,
+  allowCostInput = false,
 }) => {
   const [description, setDescription] = useState(defaultDescription || '');
   const [buyFrom, setBuyFrom] = useState(defaultBuyFrom || '');
   const [quantity, setQuantity] = useState(defaultQuantity || '১টি');
+  const [price, setPrice] = useState(defaultPrice || '');
   const [error, setError] = useState('');
 
   React.useEffect(() => {
@@ -43,9 +49,10 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
       setBuyFrom(defaultBuyFrom || '');
       setDescription(defaultDescription || '');
       setQuantity(defaultQuantity || '১টি');
+      setPrice(defaultPrice || '');
       setError('');
     }
-  }, [defaultBuyFrom, defaultDescription, defaultQuantity, isOpen]);
+  }, [defaultBuyFrom, defaultDescription, defaultQuantity, defaultPrice, isOpen]);
 
   // Real-time parsed items preview
   const parsedItems = useMemo(() => {
@@ -65,13 +72,18 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
       return;
     }
 
+    const parsedQty = parseInt(quantity, 10);
+    const numQty = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+    const parsedPrice = allowCostInput && price.trim() ? parseFloat(price) : undefined;
+
     const createdItems: OrderItem[] = parsedItems.map((name, idx) => ({
       id: `custom-item-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
       name,
       qty: quantity.trim() || '১টি',
+      quantity: numQty,
       isCustom: true,
       buyFrom: buyFrom.trim(),
-      price: undefined, // "N/A" in cost summary
+      price: parsedPrice && !isNaN(parsedPrice) ? parsedPrice : undefined,
     }));
 
     if (onAddItems) {
@@ -83,6 +95,7 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
     setDescription('');
     setBuyFrom('');
     setQuantity('১টি');
+    setPrice('');
     setError('');
     onClose();
   };
@@ -203,37 +216,47 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
             </div>
           </div>
 
-          {/* Quantity / Scope Input */}
-          <div>
-            <label className="block text-[11px] font-bold text-gray-700 mb-1">
-              পরিমাণ বা কাজের পরিধি
-            </label>
-            <input
-              type="text"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="যেমন: ১টি, ৫০০ গ্রাম, ১টি পার্সেল, ইত্যাদি"
-              className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
-            />
-            {parsedItems.length > 1 && (
-              <p className="text-[10px] text-gray-400 mt-1">
-                * যদি পণ্যের নামের সাথেই পরিমাণ লেখা থাকে, হেলপার সেই অনুযায়ী সংগ্রহ করবে।
-              </p>
-            )}
-          </div>
 
-          {/* Note about N/A Price */}
-          <div className="p-3 rounded-2xl bg-amber-50/70 border border-amber-200/70 text-amber-900 space-y-1">
-            <div className="flex items-center justify-between font-bold text-[11px]">
-              <span>আনুমানিক পণ্য/সার্ভিস খরচ:</span>
-              <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 font-extrabold text-[10px]">
-                N/A
-              </span>
-            </div>
-            <p className="text-[10px] text-amber-800 leading-relaxed">
-              * হেলপার উল্লেখিত স্থান থেকে কাজ সম্পন্ন বা আসল মেমো সহ প্রকৃত খরচ যাচাই করে আপডেট করবে।
-            </p>
-          </div>
+          {/* Price / Estimated Cost — only shown when helper is adding/editing */}
+          {allowCostInput && (
+            <>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-bold text-gray-700">
+                    আনুমানিক বা বাজেট মূল্য (টাকা, ঐচ্ছিক)
+                  </label>
+                  <span className="text-[10px] text-gray-400 font-medium">
+                    জানা না থাকলে খালি রাখুন
+                  </span>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 font-extrabold text-xs">৳</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder="যেমন: ৫০, ১৫০, ৫০০..."
+                    className="w-full pl-8 pr-3.5 py-2.5 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Note about Price */}
+              <div className="p-3 rounded-2xl bg-amber-50/70 border border-amber-200/70 text-amber-900 space-y-1">
+                <div className="flex items-center justify-between font-bold text-[11px]">
+                  <span>আনুমানিক পণ্য/সার্ভিস খরচ:</span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 font-extrabold text-[10px]">
+                    {price.trim() && !isNaN(Number(price)) ? `৳${price.trim()}` : 'N/A'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-amber-800 leading-relaxed">
+                  * হেলপার উল্লেখিত স্থান থেকে কাজ সম্পন্ন বা আসল মেমো সহ প্রকৃত খরচ যাচাই করে চূড়ান্ত করবে।
+                </p>
+              </div>
+            </>
+          )}
 
           {/* Actions */}
           <div className="pt-2 flex items-center space-x-2">

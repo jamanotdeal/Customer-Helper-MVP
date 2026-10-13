@@ -3,10 +3,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useModal } from './CustomModal';
 import { fallbackStore } from '@/lib/firebase';
-import { Order, OrderItem, LocationData, OrderEditChange, OrderEditHistoryItem } from '@/types';
+import { Order, OrderItem, LocationData, OrderEditChange, OrderEditHistoryItem, ShopOrder } from '@/types';
 import { calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
 import { fetchRoadDistanceKm } from '@/lib/routeUtils';
 import { hapticFeedback } from '@/lib/native';
+import { calculateOrderProductCost, isItemInProcess, getItemUnitPrice, getItemQuantityNum, normalizeItemName } from '@/lib/itemUtils';
 import { AddCustomItemModal } from './AddCustomItemModal';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { MapPickerModal } from './MapPickerModal';
@@ -26,6 +27,7 @@ import {
   Navigation,
   Send,
   Edit2,
+  Lock,
 } from 'lucide-react';
 
 interface EditOrderDetailsModalProps {
@@ -33,6 +35,7 @@ interface EditOrderDetailsModalProps {
   onClose: () => void;
   order: Order;
   onOrderUpdated?: (updatedOrder: Order) => void;
+  editorRole?: 'customer' | 'helper';
 }
 
 export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
@@ -40,6 +43,7 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
   onClose,
   order,
   onOrderUpdated,
+  editorRole = 'customer',
 }) => {
   const { showAlert, showConfirm } = useModal();
 
@@ -50,7 +54,16 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
 
   // Form states initialized with order data
   const [items, setItems] = useState<OrderItem[]>(() => {
-    return (order.items || []).map((it) => ({ ...it }));
+    return (order.items || []).map((it) => {
+      const q = typeof it.quantity === 'number' && it.quantity > 0
+        ? it.quantity
+        : (it.qty && !isNaN(Number(it.qty)) && Number(it.qty) > 0 ? Number(it.qty) : 1);
+      return {
+        ...it,
+        quantity: q,
+        qty: it.qty || String(q),
+      };
+    });
   });
   const [deliveryAddress, setDeliveryAddress] = useState(
     resolvedOrder.deliveryLocation?.address || ''
@@ -97,9 +110,17 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
   const wasOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
-      // Modal just opened — initialise form from the latest order snapshot
       const res = fallbackStore.resolveOrderLocations(order);
-      setItems((res.items || []).map((it) => ({ ...it })));
+      setItems((res.items || []).map((it) => {
+        const q = typeof it.quantity === 'number' && it.quantity > 0
+          ? it.quantity
+          : (it.qty && !isNaN(Number(it.qty)) && Number(it.qty) > 0 ? Number(it.qty) : 1);
+        return {
+          ...it,
+          quantity: q,
+          qty: it.qty || String(q),
+        };
+      }));
       setDeliveryAddress(res.deliveryLocation?.address || '');
       setDeliveryLat(res.deliveryLocation?.lat);
       setDeliveryLng(res.deliveryLocation?.lng);
@@ -124,15 +145,29 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
     return undefined;
   }, [order.shopId]);
 
-  // Calculate items subtotal
+  // Active ShopOrders for this order
+  const [shopOrders, setShopOrders] = useState<ShopOrder[]>(() => {
+    return order?.id ? fallbackStore.getShopOrdersForOrder(order.id) : [];
+  });
+
+  useEffect(() => {
+    if (!order?.id) return;
+    const sync = () => {
+      setShopOrders(fallbackStore.getShopOrdersForOrder(order.id));
+    };
+    sync();
+    return fallbackStore.subscribe(sync);
+  }, [order?.id]);
+
+  // Check if item is already in process (sent to store or cost added)
+  const checkItemInProcess = (it: OrderItem) => {
+    return isItemInProcess(it, shopOrders);
+  };
+
+  // Calculate items subtotal accurately using calculateOrderProductCost
   const subtotal = useMemo(() => {
-    return items.reduce((sum, item) => {
-      if (item.price !== undefined) {
-        return sum + item.price * (item.quantity || 1);
-      }
-      return sum;
-    }, 0);
-  }, [items]);
+    return calculateOrderProductCost({ ...order, items }, shopOrders);
+  }, [order, items, shopOrders]);
 
   const totalItemCount = useMemo(() => {
     return items.reduce((sum, item) => sum + (item.quantity || 1), 0);
@@ -226,14 +261,29 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
 
   // Quantity updates
   const handleUpdateQuantity = (itemId: string, delta: number) => {
+    const target = items.find((i) => i.id === itemId);
+    if (editorRole === 'customer' && target && checkItemInProcess(target)) {
+      showAlert(
+        'পণ্যটি প্রক্রিয়াধীন',
+        'এই পণ্যটি ইতিমধ্যে দোকানে পাঠানো হয়েছে বা খরচ যুক্ত করা হয়েছে, তাই এর পরিমাণ পরিবর্তন করা যাবে না।',
+        'warning'
+      );
+      return;
+    }
     setItems((prev) =>
       prev
         .map((it) => {
           if (it.id === itemId) {
-            const currentQty = it.quantity || 1;
+            const currentQty = typeof it.quantity === 'number' && it.quantity > 0
+              ? it.quantity
+              : (it.qty && !isNaN(Number(it.qty)) && Number(it.qty) > 0 ? Number(it.qty) : 1);
             const newQty = currentQty + delta;
             if (newQty <= 0) return null;
-            return { ...it, quantity: newQty };
+            return {
+              ...it,
+              quantity: newQty,
+              qty: String(newQty),
+            };
           }
           return it;
         })
@@ -242,6 +292,15 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
   };
 
   const handleRemoveItem = (itemId: string) => {
+    const target = items.find((i) => i.id === itemId);
+    if (editorRole === 'customer' && target && checkItemInProcess(target)) {
+      showAlert(
+        'পণ্যটি প্রক্রিয়াধীন',
+        'এই পণ্যটি ইতিমধ্যে দোকানে পাঠানো হয়েছে বা খরচ যুক্ত করা হয়েছে, তাই এটি মুছে ফেলা যাবে না।',
+        'warning'
+      );
+      return;
+    }
     setItems((prev) => prev.filter((it) => it.id !== itemId));
   };
 
@@ -251,20 +310,66 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
   };
 
   const handleOpenEditCustomModal = (index: number) => {
+    const target = items[index];
+    if (editorRole === 'customer' && target && checkItemInProcess(target)) {
+      showAlert(
+        'পণ্যটি প্রক্রিয়াধীন',
+        'এই পণ্যটির প্রক্রিয়াকরণ ইতিমধ্যে শুরু হয়েছে, তাই এর বিবরণ পরিবর্তন করা যাবে না।',
+        'warning'
+      );
+      return;
+    }
     setEditingCustomIndex(index);
     setShowAddCustomModal(true);
   };
 
   const handleSaveCustomItems = (newItems: OrderItem[]) => {
     if (newItems.length === 0) return;
+
+    if (editorRole === 'customer') {
+      if (editingCustomIndex !== null && editingCustomIndex >= 0 && editingCustomIndex < items.length) {
+        if (checkItemInProcess(items[editingCustomIndex])) {
+          showAlert(
+            'পণ্যটি প্রক্রিয়াধীন',
+            'এই পণ্যটির প্রক্রিয়াকরণ ইতিমধ্যে শুরু হয়েছে, তাই এর বিবরণ পরিবর্তন করা যাবে না।',
+            'warning'
+          );
+          return;
+        }
+      } else {
+        const duplicateInProcess = newItems.find((ni) => {
+          const niNorm = (ni.name || '').trim().toLowerCase();
+          return items.some((it) => (it.name || '').trim().toLowerCase() === niNorm && checkItemInProcess(it));
+        });
+        if (duplicateInProcess) {
+          showAlert(
+            'পণ্যটি ইতিমধ্যে প্রক্রিয়াধীন',
+            `"${duplicateInProcess.name}" পণ্যটি ইতিমধ্যে অর্ডারে প্রক্রিয়াধীন রয়েছে, তাই এটি পুনরায় যুক্ত করা যাবে না।`,
+            'warning'
+          );
+          return;
+        }
+      }
+    }
+
+    const normalized = newItems.map(it => {
+      const q = typeof it.quantity === 'number' && it.quantity > 0
+        ? it.quantity
+        : (it.qty && !isNaN(Number(it.qty)) && Number(it.qty) > 0 ? Number(it.qty) : 1);
+      return {
+        ...it,
+        quantity: q,
+        qty: it.qty || String(q),
+      };
+    });
     if (editingCustomIndex !== null && editingCustomIndex >= 0 && editingCustomIndex < items.length) {
       setItems((prev) => {
         const copy = [...prev];
-        copy.splice(editingCustomIndex, 1, ...newItems);
+        copy.splice(editingCustomIndex, 1, ...normalized);
         return copy;
       });
     } else {
-      setItems((prev) => [...prev, ...newItems]);
+      setItems((prev) => [...prev, ...normalized]);
     }
     setEditingCustomIndex(null);
     setShowAddCustomModal(false);
@@ -342,17 +447,31 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
       const diffs: OrderEditChange[] = [];
 
       // Diff items
-      const oldItemNames = (order.items || [])
-        .map((i) => `${i.name} (x${i.quantity || i.qty || 1})`)
-        .join(', ');
-      const newItemNames = items
-        .map((i) => `${i.name} (x${i.quantity || i.qty || 1})`)
-        .join(', ');
+      const formatItemDiff = (i: OrderItem) => {
+        const q = typeof i.quantity === 'number' && i.quantity > 0
+          ? i.quantity
+          : (i.qty && !isNaN(Number(i.qty)) ? Number(i.qty) : 1);
+        const p = i.price !== undefined ? ` @ ৳${i.price}` : '';
+        return `${i.name} (x${q}${p})`;
+      };
+      const oldItemNames = (order.items || []).map(formatItemDiff).join(', ');
+      const newItemNames = items.map(formatItemDiff).join(', ');
       if (oldItemNames !== newItemNames) {
         diffs.push({
           field: 'Items',
           oldValue: oldItemNames || 'None',
           newValue: newItemNames || 'None',
+        });
+      }
+
+      // Diff product cost
+      const oldCost = order.productCost !== undefined ? `৳${order.productCost}` : 'None';
+      const newCost = subtotal > 0 ? `৳${subtotal}` : 'None';
+      if (oldCost !== newCost) {
+        diffs.push({
+          field: 'Product Cost',
+          oldValue: oldCost,
+          newValue: newCost,
         });
       }
 
@@ -397,11 +516,14 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
       }
 
       const nowIso = new Date().toISOString();
+      const isHelper = editorRole === 'helper';
+      const actorName = isHelper ? (order.helperName || 'Helper') : (order.customerName || 'Customer');
+
       const editItem: OrderEditHistoryItem = {
         id: `ed-${Date.now()}`,
         timestamp: nowIso,
-        editedBy: 'customer',
-        editedByName: order.customerName || 'Customer',
+        editedBy: isHelper ? 'helper' : 'customer',
+        editedByName: actorName,
         changes:
           diffs.length > 0
             ? diffs
@@ -411,13 +533,25 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
       const updatedDeliveryFee = order.isFreeDelivery ? 0 : feeEst.deliverySubtotal;
       const updatedProcessingFee = feeEst.processingFee;
 
+      const finalItems: OrderItem[] = items.map((it) => {
+        const resolvedUnitPrice = getItemUnitPrice(it, shopOrders);
+        return {
+          ...it,
+          price: (typeof it.price === 'number' && !isNaN(it.price) && it.price > 0)
+            ? it.price
+            : (resolvedUnitPrice !== undefined ? resolvedUnitPrice : it.price),
+        };
+      });
+
+      const finalSubtotal = calculateOrderProductCost({ ...order, items: finalItems }, shopOrders);
+
       let finalUpdatedOrder: Order | undefined;
 
       fallbackStore.updateOrder(order.id, (o) => {
         const updated: Order = {
           ...o,
-          items,
-          productCost: subtotal > 0 ? subtotal : undefined,
+          items: finalItems,
+          productCost: finalSubtotal > 0 ? finalSubtotal : undefined,
           deliveryFee: updatedDeliveryFee,
           originalDeliveryFee: updatedDeliveryFee,
           processingFee: updatedProcessingFee > 0 ? updatedProcessingFee : undefined,
@@ -440,9 +574,9 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
           customerPhone: customerPhone.trim(),
           alternativePhone: customerPhone.trim(),
           additionalNote: orderNotes.trim() || undefined,
-          updatedByCustomer: true,
+          updatedByCustomer: isHelper ? false : true,
           lastEditedAt: nowIso,
-          lastEditedBy: 'customer',
+          lastEditedBy: isHelper ? 'helper' : 'customer',
           editHistory: [...(o.editHistory || []), editItem],
           updatedAt: nowIso,
           statusHistory: [
@@ -451,14 +585,39 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
               id: `sh-${Date.now()}`,
               status: o.status,
               timestamp: nowIso,
-              actor: 'Customer',
-              note: `Order details updated by customer (${diffs.map((d) => d.field).join(', ') || 'Updated'})`,
+              actor: isHelper ? `Helper (${actorName})` : 'Customer',
+              note: `Order details updated by ${isHelper ? 'helper' : 'customer'} (${diffs.map((d) => d.field).join(', ') || 'Updated'})`,
             },
           ],
         };
         finalUpdatedOrder = updated;
         return updated;
       });
+
+      // Sync myself shop orders total price if quantities or prices changed
+      try {
+        const relatedShopOrders = fallbackStore.getShopOrdersForOrder(order.id);
+        for (const so of relatedShopOrders) {
+          if (so.shopId === 'myself' && so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+            let updatedSoPrice = 0;
+            for (const ip of so.itemsWithPrice) {
+              const matchedItem = finalItems.find((it) =>
+                (ip.itemId && it.id === ip.itemId) ||
+                (ip.originalId && it.id === ip.originalId) ||
+                normalizeItemName(it.name) === normalizeItemName(ip.name || '')
+              );
+              const q = matchedItem ? getItemQuantityNum(matchedItem) : 1;
+              updatedSoPrice += (Number(ip.price) || 0) * q;
+            }
+            if (updatedSoPrice > 0 && updatedSoPrice !== so.price) {
+              fallbackStore.updateShopOrder(so.id, (prev) => ({
+                ...prev,
+                price: updatedSoPrice,
+              }));
+            }
+          }
+        }
+      } catch (_) { }
 
       hapticFeedback('medium');
       showAlert('অর্ডার আপডেট সম্পন্ন!', 'আপনার অর্ডারের তথ্য সফলভাবে আপডেট করা হয়েছে।', 'success');
@@ -517,7 +676,7 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
               </div>
               <div>
                 <h2 className="font-extrabold text-sm sm:text-base text-gray-900 leading-tight">
-                  Edit order details
+                  {editorRole === 'helper' ? 'Edit order details (Helper)' : 'Edit order details'}
                 </h2>
                 <p className="text-[11px] text-gray-500 font-medium">
                   {shopOrOrderName} • {totalItemCount}টি পণ্য
@@ -553,6 +712,23 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
+                      const inProcessItems = items.filter((it) => checkItemInProcess(it));
+                      if (editorRole === 'customer' && inProcessItems.length > 0) {
+                        if (inProcessItems.length === items.length) {
+                          showAlert('পণ্য মোছা সম্ভব নয়', 'সকল পণ্যই ইতিমধ্যে প্রক্রিয়াকরণাধীন রয়েছে, তাই মুছে ফেলা সম্ভব নয়।', 'warning');
+                          return;
+                        }
+                        const confirmed = await showConfirm(
+                          'অন্যান্য পণ্য মুছুন',
+                          'যে পণ্যগুলো এখনো প্রক্রিয়াকরণ শুরু হয়নি শুধুমাত্র সেগুলো মুছে ফেলা হবে। আপনি কি নিশ্চিত?',
+                          'হ্যাঁ, মুছুন',
+                          'বাতিল'
+                        );
+                        if (confirmed) {
+                          setItems((prev) => prev.filter((it) => checkItemInProcess(it)));
+                        }
+                        return;
+                      }
                       const confirmed = await showConfirm(
                         'সব পণ্য মুছুন',
                         'আপনি কি অর্ডারের সকল পণ্য মুছে ফেলতে চান?',
@@ -581,107 +757,126 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {items.map((item, idx) => (
-                    <div
-                      key={item.id || `item-${idx}`}
-                      className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100"
-                    >
-                      {/* Item image or icon on left */}
-                      <div className="w-12 h-12 rounded-xl bg-white border border-gray-200/80 shrink-0 overflow-hidden flex items-center justify-center shadow-2xs">
-                        {item.photoUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={item.photoUrl}
-                            alt={item.name}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : item.isCustom ? (
-                          <div className="w-full h-full bg-amber-50 flex items-center justify-center text-amber-600">
-                            <Sparkles className="w-5 h-5" />
-                          </div>
-                        ) : (
-                          <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-600">
-                            <Package className="w-5 h-5" />
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-black text-xs text-gray-900 truncate">
-                            {item.name}
-                          </span>
-                          {item.isCustom && (
-                            <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full">
-                              কাস্টম
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-gray-500 flex items-center gap-2 mt-0.5">
-                          {item.unit && <span>{item.unit}</span>}
-                          {item.price !== undefined ? (
-                            <span className="font-extrabold text-emerald-700">
-                              ৳{item.price} × {item.quantity || 1} = ৳
-                              {(item.price || 0) * (item.quantity || 1)}
-                            </span>
+                  {items.map((item, idx) => {
+                    const isLocked = editorRole === 'customer' && checkItemInProcess(item);
+                    return (
+                      <div
+                        key={item.id || `item-${idx}`}
+                        className={`flex items-center justify-between gap-3 p-3 rounded-2xl border ${
+                          isLocked ? 'bg-amber-50/40 border-amber-200/70' : 'bg-gray-50 border-gray-100'
+                        }`}
+                      >
+                        {/* Item image or icon on left */}
+                        <div className="w-12 h-12 rounded-xl bg-white border border-gray-200/80 shrink-0 overflow-hidden flex items-center justify-center shadow-2xs">
+                          {item.photoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={item.photoUrl}
+                              alt={item.name}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : item.isCustom ? (
+                            <div className="w-full h-full bg-amber-50 flex items-center justify-center text-amber-600">
+                              <Sparkles className="w-5 h-5" />
+                            </div>
                           ) : (
-                            <span className="text-amber-700 font-semibold">
-                              {item.qty} • মূল্য হেলপার যাচাই করবে
-                            </span>
+                            <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-600">
+                              <Package className="w-5 h-5" />
+                            </div>
                           )}
                         </div>
 
-                      </div>
-
-                      {/* Quantity Counter, Custom Edit, or Delete */}
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {!item.isCustom ? (
-                          <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-0.5">
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateQuantity(item.id, -1)}
-                              className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center transition-all cursor-pointer"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <span className="text-xs font-black px-1 text-gray-800">
-                              {item.quantity || 1}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-xs text-gray-900 truncate">
+                              {item.name}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateQuantity(item.id, 1)}
-                              className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center transition-all cursor-pointer"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
+                            {item.isCustom && (
+                              <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                কাস্টম
+                              </span>
+                            )}
+                            {isLocked && (
+                              <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-900 border border-amber-200/80 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                                <Lock className="w-2.5 h-2.5 text-amber-700" />
+                                <span>প্রক্রিয়াধীন</span>
+                              </span>
+                            )}
                           </div>
-                        ) : (
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs font-bold text-gray-600 bg-white border border-gray-200 px-2 py-1 rounded-xl">
-                              {item.qty}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditCustomModal(idx)}
-                              className="p-1 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors cursor-pointer"
-                              title="কাস্টম তথ্য পরিবর্তন করুন"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="text-[10px] text-gray-500 flex items-center gap-2 mt-0.5">
+                            {item.unit && <span>{item.unit}</span>}
+                            {item.price !== undefined ? (
+                              <span className="font-extrabold text-emerald-700">
+                                ৳{item.price} × {item.quantity || 1} = ৳
+                                {(item.price || 0) * (item.quantity || 1)}
+                              </span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">
+                                {item.qty} • মূল্য হেলপার যাচাই করবে
+                              </span>
+                            )}
                           </div>
-                        )}
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(item.id)}
-                          className="p-1.5 rounded-xl text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          aria-label="Remove item"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {/* Quantity Counter, Custom Edit, or Delete */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isLocked ? (
+                            <div
+                              className="flex items-center gap-1.5 bg-gray-100/90 border border-gray-200/80 rounded-xl px-2.5 py-1 text-gray-500 cursor-not-allowed select-none"
+                              title="পণ্যটি ইতিমধ্যে দোকানে পাঠানো হয়েছে বা খরচ যুক্ত হয়েছে"
+                            >
+                              <Lock className="w-3 h-3 text-amber-600" />
+                              <span className="text-xs font-black text-gray-700">
+                                {item.quantity || 1}
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateQuantity(item.id, -1)}
+                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center transition-all cursor-pointer"
+                                >
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <span className="text-xs font-black px-1 text-gray-800">
+                                  {item.quantity || 1}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateQuantity(item.id, 1)}
+                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center transition-all cursor-pointer"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
+
+                              {item.isCustom && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditCustomModal(idx)}
+                                  className="p-1 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  title="কাস্টম তথ্য ও মূল্য পরিবর্তন করুন"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(item.id)}
+                                className="p-1.5 rounded-xl text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                aria-label="Remove item"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -895,7 +1090,9 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
           customItemToEdit?.buyFrom || orderShop?.name || pickupAddress || undefined
         }
         defaultDescription={customItemToEdit?.name || undefined}
-        defaultQuantity={customItemToEdit?.qty}
+        defaultQuantity={customItemToEdit?.qty || (customItemToEdit?.quantity ? String(customItemToEdit.quantity) : undefined)}
+        defaultPrice={customItemToEdit?.price !== undefined ? String(customItemToEdit.price) : undefined}
+        allowCostInput={editorRole === 'helper'}
         onAddItems={handleSaveCustomItems}
         onAddItem={(item) => handleSaveCustomItems([item])}
       />

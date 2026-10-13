@@ -71,7 +71,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store')
+    user && (
+      user.isStoreApproved ||
+      user.role === 'store' ||
+      user.isStore ||
+      Boolean(user.storeId) ||
+      activeMode === 'store'
+    )
   );
 
   const isHelperUser = Boolean(

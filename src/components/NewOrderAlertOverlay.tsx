@@ -98,7 +98,18 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
   if (!order || !isStillValidPending) return null;
 
   const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ').replace(/\r?\n/g, ', ')
+    ? order.items
+      .map((i) => {
+        const qNum = typeof i.quantity === 'number' && i.quantity > 0
+          ? i.quantity
+          : (i.qty && !isNaN(Number(i.qty)) ? Number(i.qty) : undefined);
+        const qStr = qNum && qNum > 1
+          ? ` ×${qNum}`
+          : (i.qty && isNaN(Number(i.qty)) && i.qty.trim() !== '১' && i.qty.trim() !== '১টি' && i.qty.trim() !== '1' ? ` (${i.qty})` : '');
+        return `${i.name}${qStr}`;
+      })
+      .join(', ')
+      .replace(/\r?\n/g, ', ')
     : null;
 
   // Categorise items: store-connected vs custom/closed-store
@@ -272,10 +283,24 @@ export const NewOrderAlertOverlay: React.FC<NewOrderAlertOverlayProps> = ({
                                 <p className="text-[11px] font-black text-gray-900 truncate">{it.name}</p>
                                 <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
                                   {it.unit && <span>{it.unit}</span>}
-                                  {it.qty && Number(it.qty) > 1 && <span className="font-bold">×{it.qty}</span>}
-                                  {it.price !== undefined && (
-                                    <span className="font-extrabold text-emerald-700">৳{it.price}</span>
-                                  )}
+                                  {(() => {
+                                    const q = typeof it.quantity === 'number' && it.quantity > 0
+                                      ? it.quantity
+                                      : (it.qty && !isNaN(Number(it.qty)) ? Number(it.qty) : 1);
+                                    const qStr = q > 1 ? `×${q}` : (it.qty && isNaN(Number(it.qty)) && it.qty.trim() !== '১' && it.qty.trim() !== '১টি' ? `(${it.qty})` : '');
+                                    return qStr ? <span className="font-bold">{qStr}</span> : null;
+                                  })()}
+                                  {it.price !== undefined && (() => {
+                                    const q = typeof it.quantity === 'number' && it.quantity > 0
+                                      ? it.quantity
+                                      : (it.qty && !isNaN(Number(it.qty)) ? Number(it.qty) : 1);
+                                    const totalP = it.price * q;
+                                    return (
+                                      <span className="font-extrabold text-emerald-700">
+                                        ৳{totalP}{q > 1 ? ` (৳${it.price}×${q})` : ''}
+                                      </span>
+                                    );
+                                  })()}
                                 </p>
                               </div>
                             </div>

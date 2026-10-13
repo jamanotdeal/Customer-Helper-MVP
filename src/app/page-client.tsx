@@ -33,6 +33,7 @@ import { InAppBrowserModal } from '@/components/InAppBrowserModal';
 import { BlockedUserModal } from '@/components/BlockedUserModal';
 import { CustomerOrdersPage } from '@/components/CustomerOrdersPage';
 import { StoreProductManager } from '@/components/StoreProductManager';
+import { StoreWallet } from '@/components/StoreWallet';
 import { CartSummaryDrawer } from '@/components/CartSummaryDrawer';
 import { FloatingCartBar } from '@/components/FloatingCartBar';
 
@@ -346,11 +347,17 @@ export default function PageClient() {
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store')
+    user && (
+      user.isStoreApproved ||
+      user.role === 'store' ||
+      user.isStore ||
+      Boolean(user.storeId) ||
+      activeMode === 'store'
+    )
   );
 
   const isHelperUser = Boolean(
-    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
+    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper') && !isStoreUser
   );
 
   // Auto-switch away from store mode if user lost store access
@@ -360,32 +367,38 @@ export default function PageClient() {
     }
   }, [user, activeMode, isStoreUser, setActiveMode]);
 
-  // Sync activeTab when user or activeMode changes
+  const prevModeRef = useRef<string | undefined>(undefined);
+  const prevUidRef = useRef<string | undefined>(undefined);
+
+  // Sync initial default activeTab ONLY when activeMode or logged-in user session actually changes
   useEffect(() => {
+    const isNewUser = prevUidRef.current !== user?.uid;
+    const isNewMode = prevModeRef.current !== activeMode;
+    prevUidRef.current = user?.uid;
+    prevModeRef.current = activeMode;
+
+    if (!isNewUser && !isNewMode) {
+      // User profile background update / re-render: do NOT reset or override activeTab
+      return;
+    }
+
     if (!user) {
       setInitialSelectedOrderId(null);
-      if (!['request', 'fee_details', 'helper_center'].includes(activeTab)) {
-        setActiveTab('request');
-      }
+      setActiveTab('request');
       return;
     }
 
     if (isAdminView) {
       setActiveTab('admin_panel');
     } else if (isStoreUser) {
-      if (activeTab !== 'wallet' && activeTab !== 'store_products') {
-        setActiveTab('request');
-      }
+      // When switching to store mode, set initial tab to request/orders
+      setActiveTab('request');
     } else if (isHelperUser) {
-      if (activeTab === 'request' || activeTab === 'admin_panel' || activeTab === 'helper_center') {
-        setActiveTab('helper_tasks');
-      }
+      setActiveTab('helper_tasks');
     } else {
-      if (!['request', 'my_orders', 'fee_details', 'helper_center'].includes(activeTab)) {
-        setActiveTab('request');
-      }
+      setActiveTab('request');
     }
-  }, [user, activeMode, isAdminView, isStoreUser, isHelperUser]);
+  }, [user?.uid, activeMode, isAdminView, isStoreUser, isHelperUser]);
 
   // Strict role view guarding
   const renderCurrentView = () => {
@@ -412,11 +425,17 @@ export default function PageClient() {
 
     // 3. Store view check: Store type users ONLY see Store views
     if (isStoreUser) {
+      // Wallet page
+      if (activeTab === 'wallet') {
+        return <StoreWallet />;
+      }
       // Products page — accessible even when store is offline
       if (activeTab === 'store_products') {
-        const storeId = Array.from(fallbackStore.shops.values()).find(
-          (s) => s.ownerUserId === user.uid || (s.assignedUserIds && s.assignedUserIds.includes(user.uid))
-        )?.id || user.storeId || '';
+        const storeId =
+          (user.storeId && fallbackStore.shops.has(user.storeId) ? user.storeId : undefined) ||
+          Array.from(fallbackStore.shops.values()).find(
+            (s) => s.ownerUserId === user.uid || (s.assignedUserIds && s.assignedUserIds.includes(user.uid)) || s.id === `store-${user.uid}`
+          )?.id || user.storeId || `store-${user.uid}`;
         const shopName = storeId ? fallbackStore.shops.get(storeId)?.name || '' : '';
         return (
           <StoreProductManager

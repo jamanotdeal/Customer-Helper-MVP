@@ -151,7 +151,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       const updated = [...prev];
-      updated[idx] = { ...current, quantity: newQty };
+      updated[idx] = { ...current, quantity: newQty, qty: String(newQty) };
       return updated;
     });
   }, []);

@@ -17,6 +17,7 @@ import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
+import { getShopItemPriceDisplay } from '@/lib/itemUtils';
 
 
 
@@ -261,7 +262,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // If user is not an approved store or has no shop, switch back to customer mode
   useEffect(() => {
-    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store');
+    const isStore = Boolean(user?.isStoreApproved || user?.isStore || user?.role === 'store' || Boolean(user?.storeId));
     if (user && !isStore) {
       setActiveMode('customer');
     }
@@ -386,33 +387,37 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
         // Sound: store high double chime tone
         if (audioCtx) {
-          try {
-            if (audioCtx.state === 'suspended') {
-              audioCtx.resume();
+          (async () => {
+            try {
+              if (audioCtx!.state === 'closed') return;
+              if (audioCtx!.state === 'suspended') {
+                await audioCtx!.resume();
+              }
+              if (!active || (audioCtx!.state as string) === 'closed') return;
+              const osc1 = audioCtx!.createOscillator();
+              const osc2 = audioCtx!.createOscillator();
+              const gain = audioCtx!.createGain();
+
+              osc1.type = 'sine';
+              osc1.frequency.setValueAtTime(1046.5, audioCtx!.currentTime); // C6
+              osc2.type = 'triangle';
+              osc2.frequency.setValueAtTime(523.25, audioCtx!.currentTime); // C5
+
+              gain.gain.setValueAtTime(0.5, audioCtx!.currentTime);
+              gain.gain.exponentialRampToValueAtTime(0.01, audioCtx!.currentTime + 0.9);
+
+              osc1.connect(gain);
+              osc2.connect(gain);
+              gain.connect(audioCtx!.destination);
+
+              osc1.start();
+              osc2.start();
+              osc1.stop(audioCtx!.currentTime + 0.9);
+              osc2.stop(audioCtx!.currentTime + 0.9);
+            } catch (e) {
+              console.warn('Oscillator failed:', e);
             }
-            const osc1 = audioCtx.createOscillator();
-            const osc2 = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc1.type = 'sine';
-            osc1.frequency.setValueAtTime(1046.5, audioCtx.currentTime); // C6
-            osc2.type = 'triangle';
-            osc2.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
-
-            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.9);
-
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc1.start();
-            osc2.start();
-            osc1.stop(audioCtx.currentTime + 0.9);
-            osc2.stop(audioCtx.currentTime + 0.9);
-          } catch (e) {
-            console.warn('Oscillator failed:', e);
-          }
+          })();
         }
       };
 
@@ -587,8 +592,24 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       setMyRequests(myReqs);
 
       // Helper Shop Orders placed specifically to this store (fallback if onSnapshot not triggered)
-      if (storeId && fallbackStore.getShopOrdersForStore(storeId).length > 0) {
-        setStoreShopOrders((prev) => prev.length > 0 ? prev : fallbackStore.getShopOrdersForStore(storeId));
+      if (storeId) {
+        const localSOs = fallbackStore.getShopOrdersForStore(storeId);
+        // Always update storeShopOrders so accepted/rejected status shows immediately
+        setStoreShopOrders(localSOs);
+        // Recompute unviewed set from scratch — don't just merge, so accepted/rejected orders
+        // are removed immediately without waiting for the Firestore onSnapshot round-trip.
+        const unviewed = new Set<string>();
+        localSOs.forEach((so) => {
+          if (so.status === 'PENDING' && !so.viewedByStore) {
+            unviewed.add(so.id);
+          }
+        });
+        setUnviewedShopOrderIds((prev) => {
+          // Only update if something changed to avoid unnecessary re-renders
+          const prevArr = Array.from(prev).sort().join(',');
+          const nextArr = Array.from(unviewed).sort().join(',');
+          return prevArr === nextArr ? prev : unviewed;
+        });
       }
     };
     syncOrders();
@@ -739,10 +760,11 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   }, [storeShopOrders, completedShopOrders, completedParentOrders]);
 
   // Combine and deduplicate storeShopOrders and completedShopOrders
+  // completedShopOrders must be set first so storeShopOrders (real-time latest updates) always overrides
   const allAvailableShopOrders = useMemo(() => {
     const map = new Map<string, ShopOrder>();
-    storeShopOrders.forEach((so) => map.set(so.id, so));
     completedShopOrders.forEach((so) => map.set(so.id, so));
+    storeShopOrders.forEach((so) => map.set(so.id, so));
     return Array.from(map.values());
   }, [storeShopOrders, completedShopOrders]);
 
@@ -880,17 +902,52 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (!confirmed) return;
 
     fallbackStore.markShopOrderViewed(soId);
+
+    // Optimistic immediate UI update
+    const acceptedStatusEntry = {
+      status: 'ACCEPTED' as const,
+      timestamp: new Date().toISOString(),
+      actor: user?.displayName || 'Store',
+      note: 'Store confirmed the order.',
+    };
+    setStoreShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === soId
+          ? {
+              ...so,
+              status: 'ACCEPTED',
+              statusHistory: [...(so.statusHistory || []), acceptedStatusEntry],
+            }
+          : so
+      )
+    );
+    setCompletedShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === soId
+          ? {
+              ...so,
+              status: 'ACCEPTED',
+              statusHistory: [...(so.statusHistory || []), acceptedStatusEntry],
+            }
+          : so
+      )
+    );
+    const existingInStore = fallbackStore.shopOrders.get(soId);
+    if (existingInStore) {
+      fallbackStore.shopOrders.set(soId, {
+        ...existingInStore,
+        status: 'ACCEPTED',
+        statusHistory: [...(existingInStore.statusHistory || []), acceptedStatusEntry],
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     await fallbackStore.updateShopOrder(soId, (prev) => ({
       ...prev,
       status: 'ACCEPTED',
       statusHistory: [
-        ...prev.statusHistory,
-        {
-          status: 'ACCEPTED',
-          timestamp: new Date().toISOString(),
-          actor: user?.displayName || 'Store',
-          note: 'Store confirmed the order.',
-        },
+        ...(prev.statusHistory || []),
+        acceptedStatusEntry,
       ],
     }), 'store');
   };
@@ -913,18 +970,60 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
     if (cancelTargetId) {
       fallbackStore.markShopOrderViewed(cancelTargetId);
+      const cancelReasonText = storeCancelReason.trim();
+      const cancelStatusEntry = {
+        status: 'CANCELED' as const,
+        timestamp: new Date().toISOString(),
+        actor: user?.displayName || 'Store',
+        note: cancelReasonText,
+      };
+
+      // 1. Immediately update local state optimistically
+      setStoreShopOrders((prev) =>
+        prev.map((so) =>
+          so.id === cancelTargetId
+            ? {
+                ...so,
+                status: 'CANCELED',
+                note: cancelReasonText,
+                statusHistory: [...(so.statusHistory || []), cancelStatusEntry],
+              }
+            : so
+        )
+      );
+      setCompletedShopOrders((prev) =>
+        prev.map((so) =>
+          so.id === cancelTargetId
+            ? {
+                ...so,
+                status: 'CANCELED',
+                note: cancelReasonText,
+                statusHistory: [...(so.statusHistory || []), cancelStatusEntry],
+              }
+            : so
+        )
+      );
+
+      // 2. Also update fallbackStore memory cache immediately
+      const existingInStore = fallbackStore.shopOrders.get(cancelTargetId);
+      if (existingInStore) {
+        fallbackStore.shopOrders.set(cancelTargetId, {
+          ...existingInStore,
+          status: 'CANCELED',
+          note: cancelReasonText,
+          statusHistory: [...(existingInStore.statusHistory || []), cancelStatusEntry],
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // 3. Persist update in background
       await fallbackStore.updateShopOrder(cancelTargetId, (prev) => ({
         ...prev,
         status: 'CANCELED',
-        note: storeCancelReason.trim(),
+        note: cancelReasonText,
         statusHistory: [
-          ...prev.statusHistory,
-          {
-            status: 'CANCELED',
-            timestamp: new Date().toISOString(),
-            actor: user?.displayName || 'Store',
-            note: storeCancelReason.trim(),
-          },
+          ...(prev.statusHistory || []),
+          cancelStatusEntry,
         ],
       }), 'store');
     }
@@ -1190,12 +1289,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     const parsedItems = parseShopOrderItems(so);
                     const helperPhone = getParentOrderHelperPhone(so.parentOrderId);
 
-                    // Card color coding: Active (soft greenish), Finished (gray), Canceled (red)
-                    let cardContainerStyle = 'bg-emerald-50/40 border-emerald-200/90 shadow-xs';
+                    // Card color coding: Solid color background with clear status borders (not soft)
+                    let cardContainerStyle = 'bg-white border-2 border-emerald-500/80 shadow-md';
                     if (isDelivered) {
-                      cardContainerStyle = 'bg-gray-50/70 border-gray-200 shadow-xs';
+                      cardContainerStyle = 'bg-white border border-gray-200 shadow-xs opacity-90';
                     } else if (isCanceled) {
-                      cardContainerStyle = 'bg-rose-50/50 border-rose-200 shadow-xs';
+                      cardContainerStyle = 'bg-white border border-rose-300 shadow-xs';
+                    } else if (so.status === 'PENDING') {
+                      cardContainerStyle = 'bg-white border-2 border-amber-400 shadow-md ring-2 ring-amber-100';
                     }
 
                     return (
@@ -1204,7 +1305,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         className={`rounded-2xl border p-3.5 sm:p-4 space-y-3 transition-all ${cardContainerStyle}`}
                       >
                         {/* Header: ID | Time | Timer | Status Badge */}
-                        <div className="flex items-center justify-between gap-2 border-b border-black/5 pb-2.5">
+                        <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-2.5">
                           <div className="flex items-center space-x-2 flex-wrap text-xs">
                             <span className="font-mono text-emerald-900 font-extrabold">
                               #{so.parentOrderId.slice(-6).toUpperCase()}
@@ -1242,50 +1343,80 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         </div>
 
                         {/* Minimalist Items Box */}
-                        <div className="bg-white/90 rounded-xl p-2.5 border border-black/5 space-y-1.5">
-                          <div className="flex items-center justify-between text-[11px] font-extrabold text-gray-500 pb-1 border-b border-gray-100">
+                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-extrabold text-gray-500 pb-1.5 border-b border-gray-200/70">
                             <span>ITEMS</span>
-                            {(() => {
-                              const shopForCard = fallbackStore.shops.get(so.shopId);
-                              const commPct = shopForCard?.commissionPercent;
-                              const total = so.price || 0;
-                              if (commPct && commPct > 0 && total > 0) {
-                                const commAmt = Math.round(total * (commPct / 100));
-                                const payable = Math.max(0, total - commAmt);
-                                return (
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-gray-400 line-through font-semibold">৳{total}</span>
-                                    <span className="text-emerald-700 font-black">৳{payable}</span>
-                                    <span className="text-[9px] text-emerald-600 font-bold bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5">-{commPct}%</span>
-                                  </div>
-                                );
-                              }
-                              return <span className="text-emerald-700 font-bold">Total: ৳{total}</span>;
-                            })()}
+                            <span className="text-[10px] text-gray-400 font-bold">
+                              {parsedItems.length > 0 ? `${parsedItems.length} item${parsedItems.length > 1 ? 's' : ''}` : ''}
+                            </span>
                           </div>
 
                           {parsedItems.length > 0 ? (
-                            <div className="space-y-1">
-                              {parsedItems.map((item, idx) => (
-                                <div key={idx} className="flex items-center justify-between text-xs py-0.5">
-                                  <div className="flex items-center space-x-1.5 min-w-0 pr-2">
-                                    <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
-                                    <span className="font-bold text-gray-800 break-words">{item.name}</span>
-                                    {item.unit && <span className="text-[10px] text-gray-400 font-medium">({item.unit})</span>}
+                            <div className="space-y-1 py-1">
+                              {parsedItems.map((item, idx) => {
+                                const priceInfo = getShopItemPriceDisplay(item, so.price);
+                                return (
+                                  <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-gray-100/60 last:border-b-0">
+                                    <div className="flex items-center space-x-1.5 min-w-0 pr-2">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                                      <span className="font-bold text-gray-800 break-words">{item.name}</span>
+                                      {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
+                                    </div>
+                                    {item.price ? (
+                                      <div className="text-right shrink-0">
+                                        {priceInfo.isMultiQty ? (
+                                          <div className="flex items-center gap-1.5 justify-end">
+                                            <span className="text-[10px] text-gray-400 font-mono">
+                                              ({priceInfo.breakdownText})
+                                            </span>
+                                            <span className="font-extrabold font-mono text-gray-900 text-xs">
+                                              ৳{priceInfo.lineTotal}
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span className="font-extrabold font-mono text-gray-900 text-xs">
+                                            ৳{priceInfo.lineTotal}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 font-semibold shrink-0">
+                                        মূল্য বাকি
+                                      </span>
+                                    )}
                                   </div>
-                                  {item.price && (
-                                    <span className="font-extrabold font-mono text-gray-900 text-xs shrink-0">
-                                      ৳{item.price}
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           ) : (
-                            <p className="text-xs text-gray-800 font-medium whitespace-pre-wrap py-0.5">
+                            <p className="text-xs text-gray-800 font-medium whitespace-pre-wrap py-1">
                               {itemsText || so.requestText}
                             </p>
                           )}
+
+                          {/* Requirement 3: Total amount on the bottom right side */}
+                          <div className="flex items-center justify-between pt-2 border-t border-gray-200/70 text-xs">
+                            <span className="text-[11px] font-bold text-gray-500">মোট মূল্য (Total)</span>
+                            <div className="text-right">
+                              {(() => {
+                                const shopForCard = fallbackStore.shops.get(so.shopId);
+                                const commPct = shopForCard?.commissionPercent;
+                                const total = so.price || 0;
+                                if (commPct && commPct > 0 && total > 0) {
+                                  const commAmt = Math.round(total * (commPct / 100));
+                                  const payable = Math.max(0, total - commAmt);
+                                  return (
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <span className="text-gray-400 line-through font-semibold text-xs">৳{total}</span>
+                                      <span className="text-emerald-700 font-black text-sm font-mono">৳{payable}</span>
+                                      <span className="text-[9px] text-emerald-700 font-bold bg-emerald-100 border border-emerald-200 rounded-full px-1.5 py-0.5">-{commPct}%</span>
+                                    </div>
+                                  );
+                                }
+                                return <span className="text-emerald-700 font-black text-sm font-mono">৳{total}</span>;
+                              })()}
+                            </div>
+                          </div>
                         </div>
 
                         {/* Helper's Note (if any) */}
@@ -1300,7 +1431,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         )}
 
                         {/* Helper Contact Bar */}
-                        <div className="flex items-center justify-between bg-white/70 px-3 py-2 rounded-xl border border-black/5 gap-2">
+                        <div className="flex items-center justify-between bg-gray-50/90 px-3 py-2 rounded-xl border border-gray-100 gap-2">
                           <div className="flex items-center space-x-2 min-w-0">
                             <div className="w-6 h-6 rounded-lg bg-emerald-700 text-white flex items-center justify-center font-extrabold text-[10px] shrink-0">
                               {so.helperName ? so.helperName.charAt(0).toUpperCase() : 'H'}
@@ -1737,14 +1868,29 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
                     <p className="text-[10px] text-gray-500 font-extrabold uppercase tracking-wide">অর্ডার আইটেম ও মূল্য</p>
                     {parsedItems.length > 0 ? (
                       <div className="divide-y divide-gray-100">
-                        {parsedItems.map((it, idx) => (
-                          <div key={idx} className="py-1.5 flex items-center justify-between text-xs">
-                            <span className="font-extrabold text-gray-800">{it.name}</span>
-                            {it.price ? (
-                              <span className="font-mono font-bold text-emerald-700">৳{it.price}</span>
-                            ) : null}
-                          </div>
-                        ))}
+                        {parsedItems.map((it, idx) => {
+                          const priceInfo = getShopItemPriceDisplay(it, shopOrder.price);
+                          return (
+                            <div key={idx} className="py-1.5 flex items-center justify-between text-xs">
+                              <span className="font-extrabold text-gray-800">
+                                {it.name}
+                                {it.unit ? <span className="ml-1 text-[10px] text-purple-600 font-bold bg-purple-50 px-1 py-0.5 rounded">({it.unit})</span> : null}
+                              </span>
+                              {it.price ? (
+                                <div className="text-right shrink-0">
+                                  {priceInfo.isMultiQty ? (
+                                    <div className="flex items-center gap-1 justify-end">
+                                      <span className="text-[10px] text-gray-400 font-mono">({priceInfo.breakdownText})</span>
+                                      <span className="font-mono font-bold text-emerald-700">৳{priceInfo.lineTotal}</span>
+                                    </div>
+                                  ) : (
+                                    <span className="font-mono font-bold text-emerald-700">৳{priceInfo.lineTotal}</span>
+                                  )}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-xs text-gray-900 font-bold leading-relaxed whitespace-pre-wrap">
@@ -1795,26 +1941,40 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
               );
             })()}
 
-            {/* Helper Info with Phone Number */}
-            <div className="flex items-center space-x-3 bg-gray-50 p-3 rounded-2xl border border-gray-100">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-base shadow-sm shrink-0">
-                {shopOrder.helperName ? shopOrder.helperName.charAt(0).toUpperCase() : 'H'}
+            {/* Helper Info with WhatsApp + Call buttons */}
+            <div className="bg-gray-50 p-3 rounded-2xl border border-gray-100 space-y-2">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-extrabold text-base shadow-sm shrink-0">
+                  {shopOrder.helperName ? shopOrder.helperName.charAt(0).toUpperCase() : 'H'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] text-emerald-700 font-extrabold uppercase tracking-wide">Helper Details</p>
+                  <p className="text-xs font-black text-gray-900 truncate">{shopOrder.helperName}</p>
+                  {helperPhone && (
+                    <p className="text-[10px] text-gray-500 font-semibold mt-0.5">{helperPhone}</p>
+                  )}
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] text-emerald-700 font-extrabold uppercase tracking-wide">Helper Details</p>
-                <p className="text-xs font-black text-gray-900 truncate">{shopOrder.helperName}</p>
-                {helperPhone && (
-                  <div className="flex items-center space-x-2 mt-1">
-                    <a
-                      href={`tel:${helperPhone}`}
-                      className="text-xs font-bold text-emerald-700 flex items-center space-x-1 hover:underline"
-                    >
-                      <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
-                      <span>{helperPhone}</span>
-                    </a>
-                  </div>
-                )}
-              </div>
+              {helperPhone && (
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`https://wa.me/${helperPhone.replace(/[^0-9]/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white text-[11px] font-black transition-all active:scale-95 shadow-sm"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>WhatsApp</span>
+                  </a>
+                  <a
+                    href={`tel:${helperPhone}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black transition-all active:scale-95 shadow-sm"
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                    <span>Call</span>
+                  </a>
+                </div>
+              )}
             </div>
 
             {/* Timing */}
@@ -1861,24 +2021,24 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
             </div>
           )}
 
-          {/* Action buttons (Two Buttons: Yes & No with confirmation) */}
+          {/* Action buttons: Accept & Reject */}
           <div className="px-5 pb-5 pt-2">
             <div className="flex space-x-2 w-full">
               <button
                 onClick={handleAcceptClick}
                 disabled={processing}
-                className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs shadow-lg shadow-emerald-600/20 transition-all active:scale-[0.98] disabled:opacity-60 text-center flex items-center justify-center space-x-1.5"
+                className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-emerald-600/20 transition-all active:scale-[0.98] disabled:opacity-60 text-center flex items-center justify-center space-x-1.5"
               >
                 <Check className="w-4 h-4" />
-                <span>{processing ? 'Processing...' : 'Yes (হ্যাঁ)'}</span>
+                <span>{processing ? 'Processing...' : 'Accept'}</span>
               </button>
               <button
                 onClick={handleCancelClick}
                 disabled={processing}
-                className="flex-1 py-3.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-2xl font-extrabold text-xs transition-all active:scale-[0.98] text-center flex items-center justify-center space-x-1.5"
+                className="flex-1 py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-sm transition-all active:scale-[0.98] text-center flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/20"
               >
                 <X className="w-4 h-4" />
-                <span>No (না)</span>
+                <span>Reject</span>
               </button>
             </div>
           </div>

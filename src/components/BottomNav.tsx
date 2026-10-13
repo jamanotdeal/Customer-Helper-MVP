@@ -80,20 +80,27 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
   const isAdmin = Boolean(user.isAdmin || user.role === 'admin' || activeMode === 'admin');
   if (isAdmin) return null;
 
-  const isStore = Boolean(user.isStoreApproved || user.role === 'store');
+  const isStore = Boolean(
+    user.isStoreApproved ||
+    user.role === 'store' ||
+    user.isStore ||
+    Boolean(user.storeId) ||
+    activeMode === 'store'
+  );
   const isHelper = Boolean((user.isHelper || user.role === 'helper' || activeMode === 'helper') && !isStore);
   const isDedicatedHelper = isHelper && user.helperType === 'dedicated';
   const isCustomer = !isStore && !isHelper;
 
   const handleTabChange = (tab: string) => {
-    if (tab === activeTab) return;
     hapticFeedback('selection');
-    setActiveTab(tab);
+    if (tab !== activeTab) {
+      setActiveTab(tab);
+    }
   };
 
   const tabClass = (isActive: boolean, color: 'emerald' | 'purple' = 'emerald') =>
     [
-      'relative flex flex-col items-center space-y-1 py-1 px-3 rounded-2xl transition-all duration-200 tap-spring',
+      'relative flex flex-col items-center space-y-1 py-1 px-3 rounded-2xl transition-all duration-200 tap-spring cursor-pointer touch-manipulation select-none',
       'min-w-[48px]',
       isActive
         ? color === 'purple'
@@ -113,20 +120,38 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
           {/* ── STORE NAVIGATION ── */}
           {isStore && (
             <>
-              <button id="nav-tab-store-orders" onClick={() => handleTabChange('request')} className={tabClass(activeTab === 'request')} aria-label="Store Orders">
-                <ShoppingBag className="w-5 h-5" />
-                <span className="text-[11px]">Orders</span>
-                {activeTab === 'request' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
+              <button
+                id="nav-tab-store-orders"
+                type="button"
+                onClick={() => handleTabChange('request')}
+                className={tabClass(activeTab === 'request')}
+                aria-label="Store Orders"
+              >
+                <ShoppingBag className="w-5 h-5 pointer-events-none" />
+                <span className="text-[11px] pointer-events-none">Orders</span>
+                {activeTab === 'request' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600 pointer-events-none" />}
               </button>
-              <button id="nav-tab-store-products" onClick={() => handleTabChange('store_products')} className={tabClass(activeTab === 'store_products')} aria-label="Products">
-                <Tag className="w-5 h-5" />
-                <span className="text-[11px]">Products</span>
-                {activeTab === 'store_products' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
+              <button
+                id="nav-tab-store-products"
+                type="button"
+                onClick={() => handleTabChange('store_products')}
+                className={tabClass(activeTab === 'store_products')}
+                aria-label="Products"
+              >
+                <Tag className="w-5 h-5 pointer-events-none" />
+                <span className="text-[11px] pointer-events-none">Products</span>
+                {activeTab === 'store_products' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600 pointer-events-none" />}
               </button>
-              <button id="nav-tab-store-wallet" onClick={() => handleTabChange('wallet')} className={tabClass(activeTab === 'wallet')} aria-label="Store Wallet">
-                <Wallet className="w-5 h-5" />
-                <span className="text-[11px]">Wallet</span>
-                {activeTab === 'wallet' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
+              <button
+                id="nav-tab-store-wallet"
+                type="button"
+                onClick={() => handleTabChange('wallet')}
+                className={tabClass(activeTab === 'wallet')}
+                aria-label="Store Wallet"
+              >
+                <Wallet className="w-5 h-5 pointer-events-none" />
+                <span className="text-[11px] pointer-events-none">Wallet</span>
+                {activeTab === 'wallet' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600 pointer-events-none" />}
               </button>
             </>
           )}
@@ -184,7 +209,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
                 <div className="relative">
                   <ClipboardList className="w-5 h-5" />
                   {runningOrdersCount > 0 && (
-                    <span className="absolute -top-1.5 -right-2.5 bg-emerald-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse ring-2 ring-white">
+                    <span className="absolute -top-1.5 -right-2.5 bg-yellow-400 text-yellow-950 text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse ring-2 ring-white">
                       {runningOrdersCount > 99 ? '99+' : runningOrdersCount}
                     </span>
                   )}

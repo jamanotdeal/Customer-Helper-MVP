@@ -308,6 +308,18 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         : '';
       const finalNote = [closedStoreNote, baseNote].filter(Boolean).join('\n');
 
+      const finalItems = (cartItems || []).map(item => {
+        const itemShop = item.storeId ? fallbackStore.shops.get(item.storeId) : cartShop;
+        const isShopClosed = itemShop ? (itemShop.isOpen === false || itemShop.isBlocked === true) : false;
+        if (isShopClosed || isStoreCurrentlyClosed) {
+          return {
+            ...item,
+            isCustom: true,
+          };
+        }
+        return item;
+      });
+
       const newOrder: Order = {
         id: `${orderNum}`,
         customerId: user.uid,
@@ -320,7 +332,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         selectedShopIds: cartShop?.id ? [cartShop.id] : [],
         isStoreOrder: true,
         isStoreClosedAtOrder: isStoreCurrentlyClosed || undefined,
-        items: cartItems,
+        items: finalItems,
         pickupLocation: pickupLoc,
         deliveryLocation: delivLoc,
         additionalNote: finalNote || undefined,

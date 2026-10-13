@@ -105,10 +105,10 @@ export const StoreWallet: React.FC = () => {
 
   const getTodayStr = () => getLocalYYYYMMDD(new Date());
 
-  // Date Range Filtering State (Default: TODAY)
-  const [startDate, setStartDate] = useState<string>(() => getTodayStr());
-  const [endDate, setEndDate] = useState<string>(() => getTodayStr());
-  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
+  // Date Range Filtering State (Default: ALL_TIME so 1st block is Today's and 2nd is Total)
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const getDaysAgoStr = (days: number) => {
     const d = new Date();
@@ -684,7 +684,7 @@ export const StoreWallet: React.FC = () => {
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-emerald-200 font-semibold">
-                  {activePreset === 'ALL_TIME' ? 'Total Sales' : `${presetLabels[activePreset]} Sales`}
+                  {activePreset === 'ALL_TIME' ? 'Total Sales' : `Total Sales (${presetLabels[activePreset]})`}
                 </span>
                 <ArrowRight className="w-3.5 h-3.5 text-emerald-300 group-hover:translate-x-0.5 transition-transform" />
               </div>
