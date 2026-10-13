@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { fallbackStore } from '@/lib/firebase';
 import {
   MapPin,
@@ -265,10 +266,7 @@ export const HelperCenterPage: React.FC<HelperCenterPageProps> = ({ onBack }) =>
           </>
         )}
 
-        {/* Footer note */}
-        <p className="text-center text-[11px] text-gray-400 font-medium pb-4">
-          © {new Date().getFullYear()} Jamanot — Ask. Relax. Done.
-        </p>
+
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Order, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Order, OrderItem, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
 import { collection, doc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
@@ -10,13 +10,15 @@ import {
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
-  ShoppingBag, Store,
+  ShoppingBag, Store, AlertCircle,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
-import { MapPickerModal } from './MapPickerModal';
 import { OrderFeedbackModal } from './OrderFeedbackModal';
+import { EditOrderDetailsModal } from './EditOrderDetailsModal';
+import { CustomerOrderItemModal } from './CustomerOrderItemModal';
+import { formatItemQuantityUnit, calculateOrderProductCost, getItemUnitPrice } from '@/lib/itemUtils';
 
 interface OrderDetailsViewProps {
   orderId: string;
@@ -41,43 +43,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editService, setEditService] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editPickup, setEditPickup] = useState('');
-  const [editPickupLat, setEditPickupLat] = useState<number | undefined>(undefined);
-  const [editPickupLng, setEditPickupLng] = useState<number | undefined>(undefined);
-  const [editPickupAddressId, setEditPickupAddressId] = useState<string | undefined>(undefined);
-  const [editAddress, setEditAddress] = useState('');
-  const [editDeliveryLat, setEditDeliveryLat] = useState<number | undefined>(undefined);
-  const [editDeliveryLng, setEditDeliveryLng] = useState<number | undefined>(undefined);
-  const [editDeliveryAddressId, setEditDeliveryAddressId] = useState<string | undefined>(undefined);
-  const [editPhone, setEditPhone] = useState('');
-  const [editError, setEditError] = useState('');
 
-  // Map Picker Modal States
-  const [showPickupMapPicker, setShowPickupMapPicker] = useState(false);
-  const [showDeliveryMapPicker, setShowDeliveryMapPicker] = useState(false);
-  const [mapHasError, setMapHasError] = useState(false);
-
-  // Services list synced from admin panel
-  const [editServices, setEditServices] = useState<string[]>(
-    fallbackStore.pricingSettings.services || DEFAULT_SERVICES
-  );
-
-  useEffect(() => {
-    const sync = () => {
-      const s = fallbackStore.pricingSettings.services;
-      if (s && s.length > 0) setEditServices(s);
-    };
-    sync();
-    const unsub = fallbackStore.subscribe(sync);
-    return () => unsub();
-  }, []);
+  // Edit history accordion (collapsed by default)
+  const [showEditHistory, setShowEditHistory] = useState(false);
 
   // Cancellation modal state
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelError, setCancelError] = useState('');
+
+  // Item details modal state (customer can click an item to see cost, store name & phone numbers)
+  const [selectedItemForModal, setSelectedItemForModal] = useState<OrderItem | null>(null);
 
 
 
@@ -150,7 +126,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
     const unsubStore = fallbackStore.subscribe(sync);
 
-    // Preload shops if not yet cached
+    // Preload store products and shops if not yet cached
+    if (fallbackStore.storeProducts.size === 0) {
+      fallbackStore.loadStoreProducts();
+    }
     if (fallbackStore.shops.size === 0 && db) {
       getDocs(collection(db, 'shops'))
         .then((snap) => {
@@ -197,9 +176,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
     : 0;
 
-  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED');
-  const totalShopOrdersCost = validShopOrders.reduce((sum, so) => sum + (so.price || 0), 0);
-  const effectiveProductCost = totalShopOrdersCost > 0 ? totalShopOrdersCost : (order?.productCost || 0);
+  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
+  const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
+  const unpricedItems = useMemo(() => {
+    if (!order?.items) return [];
+    return order.items.filter((it) => {
+      const p = getItemUnitPrice(it, validShopOrders);
+      return p === undefined || p <= 0;
+    });
+  }, [order?.items, validShopOrders]);
 
   const estdPricing = order ? calculateEstimatedFee({
     distanceKm: Math.ceil(distanceKm),
@@ -207,6 +192,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
     productPrice: effectiveProductCost,
   }, fallbackStore.pricingSettings) : null;
+
+  // Auto-sync productCost in the database if item prices or quantities updated
+  useEffect(() => {
+    if (!order?.id || effectiveProductCost <= 0) return;
+    if (order.productCost !== effectiveProductCost) {
+      fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        productCost: effectiveProductCost,
+      }));
+    }
+  }, [order?.id, order?.productCost, effectiveProductCost]);
 
   // Timer: check every 30s if the customer should see "Admin Accepted" banner
   useEffect(() => {
@@ -295,37 +291,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     );
   }
 
-  if (order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
-        <button
-          onClick={onBack}
-          className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors py-2 font-bold text-sm"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          <span>ফিরে যান (Back)</span>
-        </button>
+  const isCanceled =
+    (order.status as string) === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED' ||
+    order.cancellationRequest?.status === 'APPROVED';
 
-        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-red-100 shadow-sm my-4">
-          <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shadow-inner">
-            <XCircle className="w-10 h-10" />
-          </div>
-          <h3 className="font-extrabold text-gray-900 text-lg">অর্ডারটি বাতিল করা হয়েছে (Order Cancelled)</h3>
-          <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
-            এই অর্ডারটি কাস্টমার অথবা অ্যাডমিন দ্বারা বাতিল করা হয়েছে। আপনি এই অর্ডারের বিবরণ দেখতে পারবেন না।
-          </p>
-          <button
-            onClick={onBack}
-            className="mt-4 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow-md transition-all active:scale-95"
-          >
-            ফিরে যান
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const badge = getStatusBadgeInfo(order.status);
+  const badge = isCanceled
+    ? { label: 'Cancelled', color: 'bg-red-100 text-red-700 border-red-200', icon: XCircle }
+    : getStatusBadgeInfo(order.status);
   const BadgeIcon = badge.icon;
 
   // Helper contact info
@@ -353,15 +326,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       icon: UserCheck,
       desc: showAdminAccepted ? 'Admin finding helper for you...' : 'Helper is heading to pickup'
     },
-    { status: 'PURCHASED_EXECUTED', label: 'Proccessing...', icon: Package, desc: 'Items collected from shop' },
+    { status: 'PURCHASED_EXECUTED', label: 'Processing', icon: Package, desc: 'Items collected from shop' },
     { status: 'ON_THE_WAY', label: 'On The Way', icon: Truck, desc: 'Coming to your location' },
     { status: 'ARRIVED', label: 'Arrived', icon: Navigation, desc: 'Helper is at your door' },
     { status: 'DELIVERED', label: 'Delivered!', icon: CheckCircle2, desc: 'All done. Enjoy!' },
   ];
 
   const getStepState = (stepStatus: OrderStatus) => {
-    if (order.status === 'CANCELED') return 'CANCELED';
-    
+    if (isCanceled) return 'CANCELED';
+
     // When admin accepted (but order status is still PENDING without helper assigned), step ACCEPTED is active current step
     if (showAdminAccepted && order.status === 'PENDING') {
       if (stepStatus === 'PENDING') return 'COMPLETED';
@@ -389,173 +362,80 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       setCancelError('অর্ডারটি বাতিল করার কারণ অনুগ্রহ করে উল্লেখ করুন।');
       return;
     }
+    const reasonText = cancelReason.trim();
+    const cancelHistoryEntry = {
+      id: `sh-${Date.now()}`,
+      status: 'CANCELED' as const,
+      timestamp: new Date().toISOString(),
+      actor: user?.role === 'store' || user?.isStoreApproved ? 'Store' : 'Customer',
+      note: `Cancelled. Reason: ${reasonText}`,
+    };
+
+    // Optimistically update view state immediately
+    setOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: 'CANCELED',
+            cancelledAt: new Date().toISOString(),
+            cancellationRequest: {
+              requestedBy: 'customer',
+              reason: reasonText,
+              status: 'APPROVED',
+              createdAt: new Date().toISOString(),
+            },
+            statusHistory: [...(prev.statusHistory || []), cancelHistoryEntry],
+          }
+        : null
+    );
+
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       status: 'CANCELED',
       cancelledAt: new Date().toISOString(),
       cancellationRequest: {
         requestedBy: 'customer',
-        reason: cancelReason.trim(),
+        reason: reasonText,
         status: 'APPROVED',
         createdAt: new Date().toISOString(),
       },
       statusHistory: [
         ...(o.statusHistory || []),
-        {
-          id: `sh-${Date.now()}`,
-          status: 'CANCELED',
-          timestamp: new Date().toISOString(),
-          actor: 'Customer',
-          note: `Cancelled by customer. Reason: ${cancelReason.trim()}`,
-        },
+        cancelHistoryEntry,
       ],
     }));
     setShowCancelModal(false);
   };
 
-  // Open edit modal pre-filled with current order data
+  // Open edit modal
   const openEditModal = () => {
     if (!canEdit) return;
-    if (order.status === 'ON_THE_WAY' || order.status === 'ARRIVED' || order.status === 'DELIVERED' || (order.status as string) === 'CANCELED') return;
-    const resolvedOrder = fallbackStore.resolveOrderLocations(order);
-    setEditService(resolvedOrder.service || resolvedOrder.title || '');
-    // The description is stored in items[0].name (single-item format used by the order form)
-    setEditDescription(resolvedOrder.items[0]?.name || '');
-    setEditPickup(resolvedOrder.pickupLocation?.address || '');
-    setEditPickupLat(resolvedOrder.pickupLocation?.lat);
-    setEditPickupLng(resolvedOrder.pickupLocation?.lng);
-    setEditPickupAddressId(resolvedOrder.pickupLocation?.addressId);
-    setEditAddress(resolvedOrder.deliveryLocation.address);
-    setEditDeliveryLat(resolvedOrder.deliveryLocation.lat);
-    setEditDeliveryLng(resolvedOrder.deliveryLocation.lng);
-    setEditDeliveryAddressId(resolvedOrder.deliveryLocation.addressId);
-    setEditPhone(resolvedOrder.alternativePhone || resolvedOrder.customerPhone || '');
-    setEditError('');
+    if (
+      order.status === 'ON_THE_WAY' ||
+      order.status === 'ARRIVED' ||
+      order.status === 'DELIVERED' ||
+      (order.status as string) === 'CANCELED'
+    )
+      return;
     setShowEditModal(true);
   };
 
-  const handleSaveEdit = async () => {
-    if (!editService.trim()) { setEditError('অনুগ্রহ করে একটি সার্ভিস সিলেক্ট করুন।'); return; }
-    if (!editDescription.trim()) { setEditError('অনুগ্রহ করে কী করতে হবে তা লিখুন।'); return; }
-    if (!editAddress.trim()) { setEditError('ডেলিভারি ঠিকানা খালি রাখা যাবে না।'); return; }
-    if (!editPhone.trim()) { setEditError('অনুগ্রহ করে হোয়াটসঅ্যাপ নম্বর দিন।'); return; }
-    if (!/^01[3-9]\d{8}$/.test(editPhone.trim())) {
-      setEditError('অনুগ্রহ করে ১১ ডিজিটের সঠিক মোবাইল নম্বর দিন (যেমন: 01712345678)।');
-      return;
-    }
-
-    // Record / upsert delivery address in server addresses catalog
-    let effDelivId = editDeliveryAddressId || order.deliveryLocation?.addressId;
-    let finalDeliveryAddressText = editAddress.trim();
-    if (finalDeliveryAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, {
-          lat: editDeliveryLat,
-          lng: editDeliveryLng,
-        });
-        if (sa?.id) {
-          effDelivId = sa.id;
-          finalDeliveryAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
-
-    // Record / upsert pickup address in server addresses catalog
-    let effPickupId = editPickupAddressId || order.pickupLocation?.addressId;
-    let finalPickupAddressText = editPickup.trim();
-    if (finalPickupAddressText) {
-      try {
-        const sa = await fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, {
-          lat: editPickupLat,
-          lng: editPickupLng,
-        });
-        if (sa?.id) {
-          effPickupId = sa.id;
-          finalPickupAddressText = sa.address;
-        }
-      } catch (_) {}
-    }
-
-    // Compute diffs
-    const diffs: OrderEditChange[] = [];
-    const oldService = order.service || order.title || '';
-    if (oldService !== editService.trim()) {
-      diffs.push({ field: 'Service', oldValue: oldService, newValue: editService.trim() });
-    }
-    const oldDesc = order.items[0]?.name || '';
-    if (oldDesc !== editDescription.trim()) {
-      diffs.push({ field: 'Details / Items', oldValue: oldDesc, newValue: editDescription.trim() });
-    }
-    const oldPickup = order.pickupLocation?.address || '';
-    if (oldPickup !== finalPickupAddressText) {
-      diffs.push({ field: 'Pickup Location', oldValue: oldPickup || 'None', newValue: finalPickupAddressText || 'None' });
-    }
-    const oldDelivery = order.deliveryLocation?.address || '';
-    if (oldDelivery !== finalDeliveryAddressText) {
-      diffs.push({ field: 'Delivery Address', oldValue: oldDelivery, newValue: finalDeliveryAddressText });
-    }
-    const oldPhone = order.alternativePhone || order.customerPhone || '';
-    if (oldPhone !== editPhone.trim()) {
-      diffs.push({ field: 'Contact Phone', oldValue: oldPhone, newValue: editPhone.trim() });
-    }
-
-    const nowIso = new Date().toISOString();
-    const editItem: OrderEditHistoryItem = {
-      id: `ed-${Date.now()}`,
-      timestamp: nowIso,
-      editedBy: 'customer',
-      editedByName: order.customerName || 'Customer',
-      changes: diffs.length > 0 ? diffs : [{ field: 'Details', oldValue: 'Previous Details', newValue: 'Updated Details' }],
-    };
-
-    fallbackStore.updateOrder(order.id, (o) => ({
-      ...o,
-      service: editService.trim(),
-      title: editService.trim(),
-      items: [{ id: o.items[0]?.id || 'item-1', name: editDescription.trim(), qty: '1' }],
-      pickupLocation: finalPickupAddressText
-        ? { address: finalPickupAddressText, lat: editPickupLat, lng: editPickupLng, addressId: effPickupId }
-        : undefined,
-      deliveryLocation: {
-        ...o.deliveryLocation,
-        address: finalDeliveryAddressText,
-        lat: editDeliveryLat,
-        lng: editDeliveryLng,
-        addressId: effDelivId,
-      },
-      alternativePhone: editPhone.trim(),
-      customerPhone: editPhone.trim(),
-      updatedByCustomer: true,
-      lastEditedAt: nowIso,
-      lastEditedBy: 'customer',
-      editHistory: [...(o.editHistory || []), editItem],
-      updatedAt: nowIso,
-      statusHistory: [
-        ...(o.statusHistory || []),
-        {
-          id: `sh-${Date.now()}`,
-          status: o.status,
-          timestamp: nowIso,
-          actor: 'Customer',
-          note: `Order details updated by customer (${diffs.map((d) => d.field).join(', ') || 'Updated'})`,
-        },
-      ],
-    }));
-    setShowEditModal(false);
-  };
-
-  const canCancel = Boolean(user && (order.status === 'PENDING' || order.status === 'ACCEPTED') && user.uid === order.customerId);
+  const canCancel = Boolean(
+    user &&
+    (order.status === 'PENDING' || order.status === 'ACCEPTED') &&
+    user.uid === order.customerId &&
+    !isCanceled
+  );
   const canEdit = Boolean(
     user &&
     (isOwnerCustomer || isAdminUser) &&
     order.status !== 'ON_THE_WAY' &&
     order.status !== 'ARRIVED' &&
     order.status !== 'DELIVERED' &&
-    (order.status as string) !== 'CANCELED'
+    !isCanceled
   );
   const isDelivered = order.status === 'DELIVERED';
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
-  const isCanceled = (order.status as string) === 'CANCELED';
 
   const effectiveDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
   const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
@@ -592,29 +472,28 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       <div className="w-full mx-auto px-4 pt-5 space-y-4">
 
         {/* ── HERO STATUS CARD ── */}
-        <div className={`rounded-3xl p-5 text-white shadow-lg ${
-          isDelivered
+        <div className={`rounded-3xl p-5 text-white shadow-lg ${isDelivered
             ? 'bg-gradient-to-br from-emerald-600 to-teal-700'
             : isCanceled
-            ? 'bg-gradient-to-br from-red-600 to-red-700'
-            : 'bg-gradient-to-br from-gray-900 to-gray-800'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Your Order</span>
-            {order.status !== 'PENDING' && (
-              <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center space-x-1 ${
-                isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
-              }`}>
-                <BadgeIcon className="w-3 h-3" />
+              ? 'bg-gradient-to-br from-red-600 to-red-700'
+              : 'bg-gradient-to-br from-gray-900 to-gray-800'
+          }`}>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-lg font-black">{order.service || order.title || 'Your Order'}</h2>
+            {(order.status !== 'PENDING' || isCanceled) && (
+              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center space-x-1 ${isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
+                }`}>
+                <BadgeIcon className="w-2.5 h-2.5" />
                 <span>{badge.label}</span>
               </span>
             )}
           </div>
-          <h2 className="text-xl font-black mb-1">Order-#{order.id}</h2>
-          <p className="text-xs text-white/60 flex items-center space-x-1">
-            <Clock className="w-3 h-3" />
-            <span>Placed: {formatPlacedDateTime(order.createdAt)}</span>
-          </p>
+          <div className="flex items-center gap-2 text-xs text-white/70 mb-3">
+            <span className="flex items-center space-x-1">
+              <Clock className="w-3 h-3 text-white/60" />
+              <span>Placed: {formatPlacedDateTime(order.createdAt)}</span>
+            </span>
+          </div>
 
           {/* Quick cost summary */}
           {(effectiveProductCost > 0 || order.deliveryFee > 0 || order.isFreeDelivery) && (
@@ -660,177 +539,230 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
         {/* ── CUSTOMER EDIT ALERT BANNER (HELPER / ADMIN ONLY - MINIMALIST YELLOW THEME) ── */}
         {order.updatedByCustomer && (user?.role === 'helper' || user?.lastActiveMode === 'helper' || user?.isAdmin) && (
-          <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-950 shadow-sm space-y-2 animate-in slide-in-from-top duration-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-1.5">
-                <Edit2 className="w-4 h-4 text-amber-600 shrink-0" />
-                <span className="font-extrabold text-xs text-amber-950">গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
-              </div>
+          <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-950 shadow-sm flex items-center justify-between gap-2 animate-in slide-in-from-top duration-200">
+            <div className="flex items-center space-x-1.5 min-w-0">
+              <Edit2 className="w-4 h-4 text-amber-600 shrink-0" />
+              <span className="font-extrabold text-xs text-amber-950 truncate">গ্রাহক অর্ডার তথ্য আপডেট করেছেন</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {order.editHistory && order.editHistory.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowEditHistory((v) => !v)}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-amber-200/60 hover:bg-amber-200 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/60 transition-all active:scale-95 cursor-pointer"
+                >
+                  <span>{showEditHistory ? 'লুকান' : 'বিবরণ'}</span>
+                  <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showEditHistory ? 'rotate-180' : ''}`} />
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => {
                   fallbackStore.updateOrder(order.id, (o) => ({ ...o, updatedByCustomer: false }));
                 }}
-                className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/80 transition-all active:scale-95 shrink-0"
+                className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/80 transition-all active:scale-95 cursor-pointer"
               >
-                ঠিক আছে (Dismiss)
+                Dismiss
               </button>
             </div>
+          </div>
+        )}
 
-            {order.editHistory && order.editHistory.length > 0 && (
-              <div className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
-                {order.editHistory[order.editHistory.length - 1].changes.map((c, idx) => (
-                  <div key={idx} className="text-left space-y-1 text-[11px]">
-                    {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
-                      <span className="font-bold text-amber-900 block">{c.field}:</span>
-                    )}
-                    <div className="text-left flex flex-wrap items-center gap-2">
-                      {c.oldValue && c.oldValue !== 'None' && (
-                        <span className="line-through text-amber-700/60 text-[10px]">{c.oldValue}</span>
+        {isCanceled && (
+          <div className="p-4 rounded-3xl bg-red-50 border border-red-200 flex items-start space-x-3">
+            <XCircle className="w-7 h-7 text-red-500 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="font-extrabold text-red-900 text-sm">Order Cancelled</p>
+              <p className="text-xs text-red-600 font-medium mt-0.5">This order has been cancelled.</p>
+              {(order.cancellationReason || order.cancellationRequest?.reason) && (
+                <div className="mt-2.5 p-2.5 rounded-xl bg-red-100/70 border border-red-200/80 text-xs text-red-800">
+                  <span className="font-bold">Reason: </span>
+                  <span>{order.cancellationReason || order.cancellationRequest?.reason}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── PROGRESS TRACKER (not shown for cancelled) ── */}
+        {!isCanceled && (() => {
+          const helperStepState = getStepState('ACCEPTED');
+          const showHelperDetails = (helperStepState === 'CURRENT' || helperStepState === 'COMPLETED') && Boolean(order.helperId || order.helperName || showAdminAccepted);
+
+          return (
+            <div className="bg-white rounded-3xl border border-gray-100 px-2.5 sm:px-4 py-3 shadow-soft">
+              {/* Inline step bar */}
+              <div className="flex items-start justify-between relative">
+                {steps.map((step, idx) => {
+                  const state = getStepState(step.status);
+                  const StepIcon = step.icon;
+                  const isLast = idx === steps.length - 1;
+                  return (
+                    <div key={step.status} className="flex-1 flex flex-col items-center relative min-w-0">
+                      {/* Connector line behind status icons */}
+                      {!isLast && (
+                        <div className={`absolute top-[13px] left-[50%] w-full h-[2px] transition-all ${
+                          state === 'COMPLETED'
+                            ? 'bg-emerald-500'
+                            : 'bg-gray-200'
+                        }`} />
                       )}
-                      <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
-                        {c.newValue}
-                      </span>
+
+                      {/* Step circle */}
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center relative z-10 ring-2 ring-white transition-all ${
+                        state === 'COMPLETED'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : state === 'CURRENT'
+                            ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 shadow-md'
+                            : 'bg-gray-100 text-gray-400 border border-gray-200'
+                      }`}>
+                        {state === 'COMPLETED'
+                          ? <Check className="w-3.5 h-3.5" />
+                          : <StepIcon className={`w-3.5 h-3.5 ${state === 'CURRENT' ? 'animate-pulse' : ''}`} />
+                        }
+                      </div>
+
+                      {/* Step label */}
+                      <p className={`text-[8.5px] sm:text-[9px] font-bold mt-1.5 text-center leading-tight break-normal w-full px-0.5 ${
+                        state === 'CURRENT' ? 'text-emerald-600' : state === 'COMPLETED' ? 'text-gray-700' : 'text-gray-400'
+                      }`}>
+                        {step.label}
+                      </p>
+
+                      {/* Indicator pointing towards helper info */}
+                      {step.status === 'ACCEPTED' && showHelperDetails && (
+                        <div className="flex items-center justify-center mt-0.5 text-emerald-600">
+                          <ChevronDown className="w-3 h-3" />
+                        </div>
+                      )}
                     </div>
+                  );
+                })}
+              </div>
+
+              {/* Helper detail card (shown when helper assigned) */}
+              {showHelperDetails && (
+                <div className="mt-2.5 relative">
+                  {/* Indicator caret pointing to Helper Assigned step */}
+                  <div className="absolute -top-1.5 left-[25%] -translate-x-1/2 w-3 h-3 bg-gray-50 border-t border-l border-gray-200/80 rotate-45 z-10" />
+
+                  <div className="flex-1 min-w-0 p-2.5 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-between gap-2.5 relative z-0 animate-in fade-in duration-150">
+                    <div className="flex items-center space-x-2.5 min-w-0">
+                      {order.helperId && helperInfo?.photoURL ? (
+                        <img
+                          src={helperInfo.photoURL}
+                          alt={helperName}
+                          className="w-8 h-8 rounded-full object-cover shrink-0 border border-emerald-200 shadow-2xs"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs shrink-0">
+                          {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider leading-none mb-1">
+                          Your Helper
+                        </p>
+                        <p className="font-extrabold text-xs text-gray-900 truncate leading-tight">
+                          {order.helperId ? helperName : 'Jamanot Admin'}
+                        </p>
+                        {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
+                          <p className="text-[11px] text-gray-500 truncate font-medium">
+                            {order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <a
+                          href={`tel:${order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}`}
+                          aria-label="Call"
+                          className="p-2 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 active:scale-95 transition-all shadow-2xs flex items-center justify-center"
+                          title="Call"
+                        >
+                          <Phone className="w-3.5 h-3.5 text-gray-700" />
+                        </a>
+                        <a
+                          href={getWhatsAppUrl(order.helperId ? helperPhone! : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || ''))}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="WhatsApp"
+                          className="p-2 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] active:scale-95 transition-all shadow-2xs flex items-center justify-center"
+                          title="WhatsApp"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ── ORDER EDIT HISTORY ACCORDION (CUSTOMER & HELPER GENERAL) ── */}
+        {order.editHistory && order.editHistory.length > 0 && (
+          <div className="rounded-2xl bg-amber-50/90 border border-amber-200 text-amber-950 shadow-2xs overflow-hidden transition-all">
+            <button
+              type="button"
+              onClick={() => setShowEditHistory((v) => !v)}
+              className="w-full p-3 flex items-center justify-between text-left hover:bg-amber-100/60 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center space-x-2 min-w-0">
+                <Edit2 className="w-4 h-4 text-amber-700 shrink-0" />
+                <span className="font-extrabold text-xs text-amber-950 truncate">
+                  অর্ডারের পরিবর্তনের ইতিহাস ({order.editHistory.length})
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 bg-amber-200/60 hover:bg-amber-200 text-amber-950 rounded-xl text-[10px] font-extrabold border border-amber-300/60 transition-all">
+                <span>{showEditHistory ? 'লুকান' : 'বিবরণ'}</span>
+                <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showEditHistory ? 'rotate-180' : ''}`} />
+              </div>
+            </button>
+
+            {showEditHistory && (
+              <div className="p-3 pt-0 border-t border-amber-200/60 space-y-2 animate-in slide-in-from-top-2 duration-150">
+                {[...order.editHistory].reverse().map((item, hIdx) => (
+                  <div key={hIdx} className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
+                    <div className="flex items-center justify-between border-b border-amber-200/60 pb-1 text-[10px] text-amber-800 font-bold">
+                      <span>আপডেট #{order.editHistory!.length - hIdx}</span>
+                      {item.timestamp && <span>{formatPlacedDateTime(item.timestamp)}</span>}
+                    </div>
+                    {item.changes.map((c, idx) => (
+                      <div key={idx} className="text-left space-y-1 text-[11px]">
+                        {c.field && c.field !== 'Items / Details' && c.field !== 'Details / Items' && (
+                          <span className="font-bold text-amber-900 block">{c.field}:</span>
+                        )}
+                        <div className="text-left flex flex-wrap items-center gap-2">
+                          {c.oldValue && c.oldValue !== 'None' && (
+                            <span className="line-through text-amber-700/60 text-[10px]">{c.oldValue}</span>
+                          )}
+                          <span className="text-amber-950 font-black bg-white border border-amber-300 px-2 py-0.5 rounded-md inline-block">
+                            {c.newValue}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
             )}
           </div>
         )}
-        {isCanceled && (
-          <div className="p-4 rounded-3xl bg-red-50 border border-red-200 flex items-center space-x-3">
-            <XCircle className="w-8 h-8 text-red-500 shrink-0" />
-            <div>
-              <p className="font-extrabold text-red-900 text-sm">Order Cancelled</p>
-              <p className="text-xs text-red-600 font-medium mt-0.5">This order has been cancelled.</p>
-            </div>
-          </div>
-        )}
-
-        {/* ── PROGRESS TRACKER (not shown for cancelled) ── */}
-        {!isCanceled && (
-          <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-soft">
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4">Order Progress</h3>
-            <div className="space-y-3">
-              {steps.map((step) => {
-                const state = getStepState(step.status);
-                const StepIcon = step.icon;
-                const isHelperStep = step.status === 'ACCEPTED';
-                const showHelperDetails = isHelperStep && (order.helperId || order.helperName || showAdminAccepted);
-
-                if (showHelperDetails) {
-                  return (
-                    <div key={step.status} className="flex items-center space-x-3">
-                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
-                        state === 'COMPLETED'
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : state === 'CURRENT'
-                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                          : 'bg-gray-100 text-gray-300'
-                      }`}>
-                        {state === 'COMPLETED'
-                          ? <Check className="w-4 h-4" />
-                          : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
-                        }
-                      </div>
-
-                      <div className="flex-1 min-w-0 p-2.5 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-between gap-2.5 animate-in fade-in duration-150">
-                        <div className="flex items-center space-x-2.5 min-w-0">
-                          {order.helperId && helperInfo?.photoURL ? (
-                            <img
-                              src={helperInfo.photoURL}
-                              alt={helperName}
-                              className="w-8 h-8 rounded-full object-cover shrink-0 border border-emerald-200 shadow-2xs"
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs shrink-0">
-                              {order.helperId ? helperName.charAt(0).toUpperCase() : 'A'}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider leading-none mb-1">
-                              Your Helper
-                            </p>
-                            <p className="font-extrabold text-xs text-gray-900 truncate leading-tight">
-                              {order.helperId ? helperName : 'Jamanot Admin'}
-                            </p>
-                            {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
-                              <p className="text-[11px] text-gray-500 truncate font-medium">
-                                {order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        {(helperPhone || (!order.helperId && (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2))) && (
-                          <div className="flex items-center space-x-1.5 shrink-0">
-                            <a
-                              href={`tel:${order.helperId ? helperPhone : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2)}`}
-                              aria-label="Call"
-                              className="p-2 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 active:scale-95 transition-all shadow-2xs flex items-center justify-center"
-                              title="Call"
-                            >
-                              <Phone className="w-3.5 h-3.5 text-gray-700" />
-                            </a>
-                            <a
-                              href={getWhatsAppUrl(order.helperId ? helperPhone! : (fallbackStore.pricingSettings.helperCenterPhone1 || fallbackStore.pricingSettings.helperCenterPhone2 || ''))}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              aria-label="WhatsApp"
-                              className="p-2 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] active:scale-95 transition-all shadow-2xs flex items-center justify-center"
-                              title="WhatsApp"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5" />
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={step.status} className="space-y-2">
-                    <div className="flex items-center space-x-3">
-                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 transition-all ${
-                        state === 'COMPLETED'
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : state === 'CURRENT'
-                          ? 'bg-emerald-500 text-white ring-4 ring-emerald-100 shadow-md'
-                          : 'bg-gray-100 text-gray-300'
-                      }`}>
-                        {state === 'COMPLETED'
-                          ? <Check className="w-4 h-4" />
-                          : <StepIcon className={`w-4 h-4 ${state === 'CURRENT' ? 'animate-bounce' : ''}`} />
-                        }
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-xs font-bold leading-tight ${
-                          state === 'CURRENT' ? 'text-emerald-700' : state === 'COMPLETED' ? 'text-gray-900' : 'text-gray-300'
-                        }`}>
-                          {step.label}
-                        </p>
-                        {state === 'CURRENT' && (
-                          <p className="text-[11px] text-emerald-600 font-medium mt-0.5">{step.desc}</p>
-                        )}
-                      </div>
-                      {state === 'CURRENT' && (
-                        <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* ── ORDER ITEMS ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
-              Items Ordered ({(order.items || []).length})
-            </h3>
+            <div>
+              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider">
+                Items Ordered ({(order.items || []).length})
+              </h3>
+              <p className="text-[10px] text-gray-400 font-medium">
+                পণ্যের দাম ও দোকানের তথ্য দেখতে আইটেমে ক্লিক করুন
+              </p>
+            </div>
             {canEdit && (
               <button
                 onClick={openEditModal}
@@ -842,56 +774,147 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             )}
           </div>
 
-          {/* Previous item description line-through if edited */}
-          {(() => {
-            const previousDesc = order.editHistory
-              ?.flatMap((h) => h.changes)
-              ?.filter((c) => c.field === 'Details / Items' || c.field === 'Items / Details' || c.field === 'Details' || c.field === 'Items')
-              ?.slice(-1)[0]?.oldValue;
+          <div className="space-y-2">
+            {(order.items || []).map((it) => {
+                  const unitPrice = getItemUnitPrice(it, validShopOrders);
+                  const isCalculatedInTotal = unitPrice !== undefined && unitPrice > 0;
 
-            return (
-              <div className="space-y-2">
-                {previousDesc && previousDesc !== 'None' && previousDesc !== (order.items?.[0]?.name) && (
-                  <div className="p-3 rounded-2xl bg-amber-50/50 border border-dashed border-amber-200/80 text-xs">
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-900/70 block mb-0.5">
-                      Previous Description (পূর্বের বিবরণ):
-                    </span>
-                    <p className="line-through text-gray-400 font-medium break-words leading-relaxed">
-                      {previousDesc}
-                    </p>
-                  </div>
-                )}
-
-                {(order.items || []).map((it) => {
-                  const itemPricing = (() => {
-                    const cleanName = it.name.toLowerCase().trim();
-                    for (const so of validShopOrders) {
-                      if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
-                        const found = so.itemsWithPrice.find(
-                          (p) => p.name.toLowerCase().trim() === cleanName || cleanName.includes(p.name.toLowerCase().trim()) || p.name.toLowerCase().trim().includes(cleanName)
-                        );
-                        if (found && found.price !== undefined) return { price: found.price, unit: found.unit };
-                      }
+                  const itemPhoto = (() => {
+                    if (it.photoUrl) return it.photoUrl;
+                    if (it.id) {
+                      const p = fallbackStore.storeProducts.get(it.id);
+                      if (p?.photoUrl) return p.photoUrl;
                     }
-                    return undefined;
+                    const clean = (it.name || '').toLowerCase().trim();
+                    const allProds = Array.from(fallbackStore.storeProducts.values());
+                    const found = allProds.find((p) => {
+                      if (!p.photoUrl) return false;
+                      if ((p.name || '').toLowerCase().trim() === clean) {
+                        return !it.storeId || p.storeId === it.storeId;
+                      }
+                      return false;
+                    });
+                    return found?.photoUrl;
                   })();
 
+                  const costBreakdown = (() => {
+                    if (!isCalculatedInTotal || unitPrice === undefined) return null;
+
+                    let qtyNum = 1;
+                    if (typeof it.quantity === 'number' && it.quantity > 0) {
+                      qtyNum = it.quantity;
+                    } else if (it.qty) {
+                      const parsed = parseFloat(String(it.qty).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
+                      if (!isNaN(parsed) && parsed > 0) {
+                        qtyNum = parsed;
+                      }
+                    }
+
+                    const totalPrice = Math.round((unitPrice * qtyNum) * 100) / 100;
+                    const unitDisplay = formatItemQuantityUnit(qtyNum, it.unit, it.qty);
+
+                    return {
+                      unitPrice,
+                      qtyNum,
+                      unitDisplay,
+                      totalPrice,
+                    };
+                  })();
+
+                  const isUnpriced = !isCalculatedInTotal;
+
                   return (
-                    <div key={it.id} className="flex items-center justify-between p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs">
-                      <span className="font-semibold text-gray-800 break-words flex-1 pr-2">
-                        {it.name}
-                      </span>
-                      {itemPricing?.price !== undefined && (
-                        <span className="font-bold text-gray-900 font-mono bg-white px-2 py-0.5 rounded-lg border border-gray-200 shadow-2xs shrink-0">
-                          ৳{itemPricing.price}
-                        </span>
-                      )}
+                    <div
+                      key={it.id}
+                      onClick={() => setSelectedItemForModal({ ...it, photoUrl: itemPhoto || it.photoUrl })}
+                      className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all active:scale-[0.99] group shadow-2xs gap-3 border ${
+                        isUnpriced
+                          ? 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200 hover:border-rose-300 ring-1 ring-rose-200/60'
+                          : 'bg-gray-50 hover:bg-emerald-50/50 hover:border-emerald-200/80 border-gray-100'
+                      }`}
+                      title="আইটেমের দাম ও দোকানের তথ্য দেখতে ক্লিক করুন"
+                    >
+                      {/* Product Image Thumbnail */}
+                      <div className={`w-12 h-12 rounded-xl bg-white border shrink-0 overflow-hidden flex items-center justify-center shadow-2xs transition-colors ${
+                        isUnpriced
+                          ? 'border-rose-200 group-hover:border-rose-300'
+                          : 'border-gray-200/90 group-hover:border-emerald-300'
+                      }`}>
+                        {itemPhoto ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={itemPhoto}
+                            alt={it.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className={`w-full h-full flex items-center justify-center ${
+                            isUnpriced ? 'bg-rose-100/60 text-rose-500' : 'bg-emerald-50/70 text-emerald-600'
+                          }`}>
+                            <Package className="w-5 h-5 opacity-80" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 pr-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`font-semibold transition-colors break-words ${
+                            isUnpriced ? 'text-rose-950 group-hover:text-rose-900' : 'text-gray-800 group-hover:text-emerald-950'
+                          }`}>
+                            {it.name}
+                          </span>
+                          {isUnpriced && it.qty && (
+                            <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold">
+                              {it.qty}
+                            </span>
+                          )}
+                          {!isUnpriced && it.qty && (
+                            <span className="text-[10px] bg-gray-200/80 group-hover:bg-emerald-100 group-hover:text-emerald-800 text-gray-700 px-1.5 py-0.5 rounded font-bold transition-colors">
+                              {it.qty}
+                            </span>
+                          )}
+                          {it.isCustom && (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-extrabold">
+                              Custom Item
+                            </span>
+                          )}
+                        </div>
+                        {costBreakdown && (
+                          <p className="text-[11px] font-mono text-gray-500 font-semibold mt-0.5">
+                            {costBreakdown.unitDisplay} × ৳{costBreakdown.unitPrice}
+                          </p>
+                        )}
+
+                        {it.storeName && (
+                          <p className={`text-[10px] font-medium mt-0.5 ${isUnpriced ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            দোকান: {it.storeName}
+                          </p>
+                        )}
+
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {costBreakdown ? (
+                          <div className="text-right">
+                            <span className="font-mono font-black text-gray-900 group-hover:text-emerald-700 transition-colors text-sm sm:text-base">
+                              ৳{costBreakdown.totalPrice}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="font-bold text-rose-700 text-[10px] sm:text-[11px] bg-white px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs shrink-0 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 text-rose-500" />
+                            <span>মূল্য বাকি</span>
+                          </span>
+                        )}
+                        <ChevronRight className={`w-3.5 h-3.5 transition-colors ${
+                          isUnpriced ? 'text-rose-400 group-hover:text-rose-600' : 'text-gray-400 group-hover:text-emerald-600'
+                        }`} />
+                      </div>
                     </div>
                   );
                 })}
-              </div>
-            );
-          })()}
+
+          </div>
 
           {order.additionalNote && (
             <div className="mt-3 p-3 rounded-2xl bg-amber-50/70 border border-amber-100 text-xs text-amber-900">
@@ -910,55 +933,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           )}
         </div>
 
-        {/* ── ADDRESSES & LOCATION ── */}
-        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
-          <div>
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Pickup Location</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-              <MapPin className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}</p>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Delivery Address</h3>
-            <div className="flex items-start space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-              <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <p className="text-sm font-bold text-gray-900">{order.deliveryLocation?.address || 'N/A'}</p>
-            </div>
-          </div>
-          {(order.alternativePhone || order.customerPhone) && (
-            <div>
-              <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-2">Contact Info</h3>
-              <div className="p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs text-gray-700 flex items-center justify-between">
-                <div className="flex items-center space-x-2 min-w-0">
-                  <Phone className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                  <span className="font-semibold truncate">
-                    Contact: <span className="font-bold text-gray-900 font-mono">{order.alternativePhone || order.customerPhone}</span>
-                  </span>
-                </div>
-                <div className="flex items-center space-x-1.5 shrink-0">
-                  <a
-                    href={`tel:${order.alternativePhone || order.customerPhone}`}
-                    className="p-1.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs flex items-center justify-center"
-                    title="Call"
-                  >
-                    <Phone className="w-3 h-3 text-gray-700" />
-                  </a>
-                  <a
-                    href={getWhatsAppUrl(order.alternativePhone || order.customerPhone || '')}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-1.5 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] transition-colors shadow-2xs flex items-center justify-center"
-                    title="WhatsApp"
-                  >
-                    <MessageSquare className="w-3 h-3" />
-                  </a>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* ── CALCULATION SUMMARY ── */}
         {estdPricing && (
           <div ref={calculationSummaryRef} className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3 animate-in fade-in duration-200">
@@ -967,8 +941,27 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <span>Calculation Summary</span>
             </h3>
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700">
+              {unpricedItems.length > 0 && (
+                <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-950 space-y-1">
+                  <div className="flex items-center gap-1.5 font-extrabold text-amber-900">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>{unpricedItems.length} টি পণ্যের মূল্য এখনো অন্তর্ভুক্ত করা হয়নি</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    হেলপার দোকান থেকে কেনার সময় এই পণ্যগুলোর ({unpricedItems.map((i: OrderItem) => i.name).slice(0, 3).join(', ')}{unpricedItems.length > 3 ? '...' : ''}) সঠিক মূল্য যোগ করবেন। বর্তমান মোট বিলে এগুলোর দাম এখনো ধরা হয়নি।
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Product cost</span>
+                <div>
+                  <span className="text-gray-500 font-bold">Product cost</span>
+                  {unpricedItems.length > 0 && (
+                    <span className="block text-[10px] text-amber-700 font-bold">
+                      ({(order.items || []).length - unpricedItems.length}/{(order.items || []).length} items priced)
+                    </span>
+                  )}
+                </div>
                 <span className="text-sm font-black text-gray-900">
                   ৳{effectiveProductCost}
                 </span>
@@ -990,6 +983,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   <span className="font-bold text-gray-900">৳{effectiveProcessingFee}</span>
                 </div>
               )}
+
 
               {estdPricing.returnFee > 0 && (
                 <div className="flex items-center justify-between">
@@ -1033,7 +1027,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
 
               <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-1.5 mt-1 rounded-b-2xl">
-                <span className="font-bold text-gray-900 text-sm">Total Payable Amount (মোট বিল)</span>
+                <div>
+                  <span className="font-bold text-gray-900 text-sm block">Total Payable Amount (মোট বিল)</span>
+                  {unpricedItems.length > 0 && (
+                    <span className="text-[10px] text-amber-800 font-semibold block">
+                      * বাকি {unpricedItems.length} টি পণ্যের মূল্য ডেলিভারির সময় যোগ হবে
+                    </span>
+                  )}
+                </div>
                 <span className="text-base font-black text-emerald-800">
                   ৳{grandTotalPayable}
                 </span>
@@ -1041,6 +1042,57 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             </div>
           </div>
         )}
+
+
+        {/* ── ADDRESSES & LOCATION ── */}
+        <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
+          <div>
+            <div className="flex items-center space-x-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-100 min-w-0">
+              <Store className="w-4 h-4 text-gray-500 shrink-0" />
+              <p className="text-sm font-bold text-gray-900 truncate flex-1 min-w-0" title={order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}>
+                {order.pickupLocation?.address || 'Local Helper Area (No specific pickup set)'}
+              </p>
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center space-x-2.5 p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100 min-w-0">
+              <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+              <p className="text-sm font-bold text-gray-900 truncate flex-1 min-w-0" title={order.deliveryLocation?.address || 'N/A'}>
+                {order.deliveryLocation?.address || 'N/A'}
+              </p>
+            </div>
+          </div>
+          {(order.alternativePhone || order.customerPhone) && (
+            <div>
+              <div className="p-3 rounded-2xl bg-gray-50 border border-gray-100 text-xs text-gray-700 flex items-center justify-between">
+                <div className="flex items-center space-x-2 min-w-0">
+                  <Phone className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                  <span className="font-semibold truncate">
+                    Contact: <span className="font-bold text-gray-900 font-mono">{order.alternativePhone || order.customerPhone}</span>
+                  </span>
+                </div>
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <a
+                    href={`tel:${order.alternativePhone || order.customerPhone}`}
+                    className="p-1.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs flex items-center justify-center"
+                    title="Call"
+                  >
+                    <Phone className="w-3 h-3 text-gray-700" />
+                  </a>
+                  <a
+                    href={getWhatsAppUrl(order.alternativePhone || order.customerPhone || '')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 rounded-xl bg-[#25D366] text-white hover:bg-[#1ebe5d] transition-colors shadow-2xs flex items-center justify-center"
+                    title="WhatsApp"
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* ── PURCHASED ITEMS & STORE COST DETAILS (FROM ARRIVED STATUS ONWARDS) ── */}
         {isArrivedOrDelivered && (validShopOrders.length > 0 || effectiveProductCost > 0 || (order.selectedShopIds && order.selectedShopIds.length > 0)) && (
@@ -1141,12 +1193,105 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       {/* Item Details */}
                       {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
                         <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs space-y-1.5">
-                          {so.itemsWithPrice.map((it, iIdx) => (
-                            <div key={iIdx} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-b-0">
-                              <span className="text-gray-800 font-semibold">{it.name}</span>
-                              <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
-                            </div>
-                          ))}
+                          {so.itemsWithPrice.map((it, iIdx) => {
+                            const soItemPhoto = (() => {
+                              if (it.itemId) {
+                                const prod = fallbackStore.storeProducts.get(it.itemId);
+                                if (prod?.photoUrl) return prod.photoUrl;
+                              }
+                              const clean = (it.name || '').toLowerCase().trim();
+                              const allProds = Array.from(fallbackStore.storeProducts.values());
+                              const found = allProds.find((p) => p.photoUrl && (p.name || '').toLowerCase().trim() === clean);
+                              return found?.photoUrl;
+                            })();
+
+                            const matchingOrderItem = (order.items || []).find((oi) => {
+                              if (it.itemId && oi.id === it.itemId) return true;
+                              if (it.originalId && oi.id === it.originalId) return true;
+                              const n1 = (oi.name || '').toLowerCase().replace(/\s*[×x]\s*\d+/g, '').trim();
+                              const n2 = (it.name || '').toLowerCase().replace(/\s*[×x]\s*\d+/g, '').trim();
+                              return n1 === n2 || n1.includes(n2) || n2.includes(n1);
+                            });
+
+                            const soCostInfo = (() => {
+                              if (it.price === undefined || isNaN(Number(it.price))) return null;
+                              const unitPrice = Number(it.price);
+                              let qtyNum = 1;
+                              let unitSuffix = '';
+
+                              if (matchingOrderItem) {
+                                if (typeof matchingOrderItem.quantity === 'number' && matchingOrderItem.quantity > 0) {
+                                  qtyNum = matchingOrderItem.quantity;
+                                } else if (matchingOrderItem.qty) {
+                                  const parsed = parseFloat(String(matchingOrderItem.qty).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
+                                  if (!isNaN(parsed) && parsed > 0) qtyNum = parsed;
+                                }
+                              } else if (it.unit) {
+                                const parsed = parseFloat(String(it.unit).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
+                                if (!isNaN(parsed) && parsed > 0) qtyNum = parsed;
+                              }
+
+                              const unitDisplay = formatItemQuantityUnit(
+                                qtyNum,
+                                matchingOrderItem?.unit || it.unit,
+                                matchingOrderItem?.qty || it.unit
+                              );
+                              const totalPrice = Math.round((unitPrice * qtyNum) * 100) / 100;
+                              return { unitPrice, qtyNum, unitDisplay, totalPrice };
+                            })();
+
+                            return (
+                              <div
+                                key={iIdx}
+                                onClick={() => {
+                                  setSelectedItemForModal(matchingOrderItem || {
+                                    id: it.itemId || it.originalId || `so-it-${iIdx}`,
+                                    name: it.name,
+                                    qty: it.unit || '1',
+                                    price: it.price,
+                                    photoUrl: soItemPhoto,
+                                    storeId: so.shopId !== 'myself' ? so.shopId : undefined,
+                                    storeName: so.shopId !== 'myself' ? so.shopName : so.sellerName,
+                                  });
+                                }}
+                                className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-purple-50/70 cursor-pointer border-b border-gray-100 last:border-b-0 transition-colors group gap-2"
+                                title="আইটেমের বিস্তারিত দেখতে ক্লিক করুন"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {soItemPhoto ? (
+                                    <div className="w-7 h-7 rounded-lg overflow-hidden bg-white border border-gray-200 shrink-0">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={soItemPhoto} alt={it.name} className="w-full h-full object-cover" />
+                                    </div>
+                                  ) : (
+                                    <div className="w-7 h-7 rounded-lg bg-gray-100 text-gray-500 flex items-center justify-center shrink-0">
+                                      <Package className="w-3.5 h-3.5" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <span className="text-gray-800 font-semibold group-hover:text-purple-900 transition-colors truncate block">
+                                      {it.name}
+                                    </span>
+                                    {soCostInfo && (
+                                      <p className="text-[10px] font-mono text-gray-500 font-medium">
+                                        {soCostInfo.unitDisplay} × ৳{soCostInfo.unitPrice}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {soCostInfo ? (
+                                    <span className="font-mono font-black text-gray-900 group-hover:text-purple-950 transition-colors text-xs">
+                                      ৳{soCostInfo.totalPrice}
+                                    </span>
+                                  ) : (
+                                    <span className="font-mono font-bold text-gray-900 text-xs">৳{it.price ?? 0}</span>
+                                  )}
+                                  <ChevronRight className="w-3 h-3 text-gray-400 group-hover:text-purple-600 transition-colors" />
+                                </div>
+                              </div>
+                            );
+                          })}
                           <div className="flex items-center justify-between pt-1 font-black text-xs text-gray-900 border-t border-gray-200">
                             <span>মোট পণ্যের দাম (Total):</span>
                             <span className="font-mono text-emerald-800">৳{so.price ?? 0}</span>
@@ -1222,10 +1367,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         )}
 
                         <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                          <p className="text-gray-800 font-semibold leading-relaxed">
-                            {order.items && order.items.length > 0
-                              ? order.items.map((it) => it.name).join(', ')
-                              : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                          <p className="text-gray-700 font-semibold leading-relaxed">
+                            {effectiveProductCost > 0
+                              ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
+                              : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
                           </p>
                         </div>
                       </div>
@@ -1257,10 +1402,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       </div>
 
                       <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                        <p className="text-gray-800 font-semibold leading-relaxed">
-                          {order.items && order.items.length > 0
-                            ? order.items.map((it) => it.name).join(', ')
-                            : (order.additionalNote || 'ক্রয়কৃত পণ্যের মোট বিল')}
+                        <p className="text-gray-700 font-semibold leading-relaxed">
+                          {effectiveProductCost > 0
+                            ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
+                            : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
                         </p>
                       </div>
                     </div>
@@ -1309,20 +1454,41 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
             {order.feedback ? (
               <div className="bg-amber-50/60 p-3 rounded-2xl border border-amber-100/80 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600 font-semibold">Helper Rating:</span>
-                  <div className="flex items-center space-x-1 font-bold text-amber-700">
-                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                    <span>{order.feedback.riderRating} / 5</span>
+                {order.feedback.thumbsUp === true ? (
+                  <div className="flex items-center gap-1.5 text-emerald-800 font-extrabold pb-1">
+                    <span className="text-sm">👍</span>
+                    <span>ভালো ছিল!</span>
                   </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600 font-semibold">Overall Service:</span>
-                  <div className="flex items-center space-x-1 font-bold text-amber-700">
-                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                    <span>{order.feedback.serviceRating} / 5</span>
+                ) : order.feedback.thumbsUp === false ? (
+                  <div className="space-y-1 pb-1">
+                    <div className="flex items-center gap-1.5 text-red-800 font-extrabold">
+                      <span className="text-sm">👎</span>
+                      <span>ভালো না</span>
+                    </div>
+                    {order.feedback.badReason && (
+                      <div className="text-[11px] font-black text-red-700 bg-red-100/80 px-2 py-0.5 rounded-md w-fit">
+                        সমস্যা: {order.feedback.badReason === 'RIDER' ? '🚴 রাইডার' : order.feedback.badReason === 'PRODUCT' ? '🛍️ প্রোডাক্ট' : '🚴 রাইডার + 🛍️ প্রোডাক্ট'}
+                      </div>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600 font-semibold">Helper Rating:</span>
+                      <div className="flex items-center space-x-1 font-bold text-amber-700">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                        <span>{order.feedback.riderRating} / 5</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600 font-semibold">Overall Service:</span>
+                      <div className="flex items-center space-x-1 font-bold text-amber-700">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                        <span>{order.feedback.serviceRating} / 5</span>
+                      </div>
+                    </div>
+                  </>
+                )}
                 {order.feedback.improvementComment && (
                   <div className="pt-1.5 border-t border-amber-200/60">
                     <p className="text-[11px] text-amber-900 font-medium italic">
@@ -1372,151 +1538,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         )}
       </div>
 
-      {/* ── EDIT ORDER MODAL ── */}
-      {showEditModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-emerald-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
-              <div>
-                <h3 className="font-black text-base text-gray-900">Edit Order</h3>
-                <p className="text-[11px] text-gray-500 font-medium mt-0.5">Changes saved before helper picks up</p>
-              </div>
-              <button
-                onClick={() => setShowEditModal(false)}
-                className="p-2 rounded-full bg-rose-50 text-rose-500 hover:text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
-
-              {/* Service Selection */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">সার্ভিস *</label>
-                <div className="relative">
-                  <select
-                    value={editService}
-                    onChange={(e) => { setEditService(e.target.value); setEditError(''); }}
-                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 appearance-none pr-10 font-semibold"
-                  >
-                    <option value="" disabled>সার্ভিস সিলেক্ট করুন *</option>
-                    {editServices.map((srv) => (
-                      <option key={srv} value={srv}>{srv}</option>
-                    ))}
-                  </select>
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                    <ChevronDown className="w-4 h-4" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">Details</label>
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => { setEditDescription(e.target.value); setEditError(''); }}
-                  placeholder={getServiceDescriptionHint(editService, fallbackStore.pricingSettings)}
-                  className="w-full px-4 py-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 focus:border-emerald-500 outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400"
-                />
-              </div>
-
-              {/* Pickup / Source Location (optional) */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">কোথা থেকে নিতে হবে?</label>
-                <div className="relative group">
-                  <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={editPickup}
-                    onChange={(e) => setEditPickup(e.target.value)}
-                    onClick={() => {
-                      if (!mapHasError) setShowPickupMapPicker(true);
-                    }}
-                    placeholder="কোথা থেকে নিতে হবে? (ম্যাপ সিলেক্ট করতে ক্লিক করুন)"
-                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPickupMapPicker(true)}
-                    title="ম্যাপ থেকে স্থান নির্বাচন করুন"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                  >
-                    <MapPin className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Delivery Address */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">ডেলিভারি ঠিকানা *</label>
-                <div className="relative group">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-600 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={editAddress}
-                    onChange={(e) => { setEditAddress(e.target.value); setEditError(''); }}
-                    onClick={() => {
-                      if (!mapHasError) setShowDeliveryMapPicker(true);
-                    }}
-                    placeholder="ডেলিভারি ঠিকানা (ম্যাপ সিলেক্ট করতে ক্লিক করুন) *"
-                    className="w-full pl-10 pr-10 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400 font-medium transition-colors cursor-pointer"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowDeliveryMapPicker(true)}
-                    title="ম্যাপ থেকে ঠিকানা নির্বাচন করুন"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-emerald-600 hover:bg-emerald-50 active:scale-95 transition-all"
-                  >
-                    <MapPin className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* WhatsApp Number */}
-              <div>
-                <label className="text-xs font-extrabold text-gray-700 uppercase tracking-wider block mb-2">হোয়াটসঅ্যাপ নম্বর *</label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="tel"
-                    value={editPhone}
-                    onChange={(e) => { setEditPhone(e.target.value); setEditError(''); }}
-                    placeholder="হোয়াটসঅ্যাপ নম্বর *"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-gray-200 bg-white focus:border-emerald-500 outline-none text-sm text-gray-900 placeholder-gray-400"
-                  />
-                </div>
-              </div>
-
-              {editError && (
-                <p className="text-[11px] text-red-600 font-bold bg-red-50 px-3 py-2 rounded-xl border border-red-100">
-                  {editError}
-                </p>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
-              <button
-                type="button"
-                onClick={() => setShowEditModal(false)}
-                className="flex-1 py-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-bold text-xs transition-all"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveEdit}
-                className="flex-1 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-600/25 transition-all"
-              >
-                Save Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ── EDIT ORDER DETAILS MODAL ── */}
+      <EditOrderDetailsModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        order={order}
+        onOrderUpdated={(updated) => {
+          setOrder(updated);
+        }}
+      />
 
       {/* ── CANCELLATION REASON MODAL ── */}
       {showCancelModal && (
@@ -1587,44 +1617,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         </div>
       )}
 
-      {/* Map Picker Modals */}
-      <MapPickerModal
-        isOpen={showPickupMapPicker}
-        onClose={() => setShowPickupMapPicker(false)}
-        title="কোথা থেকে আনতে হবে বা করতে হবে?"
-        initialLocation={{
-          address: editPickup,
-          lat: editPickupLat,
-          lng: editPickupLng,
-        }}
-        addressLabel="Name of Store, Market or Area"
-        addressPlaceholder="Name of Store, Market or Area"
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          setEditPickup(loc.address);
-          if (loc.lat) setEditPickupLat(loc.lat);
-          if (loc.lng) setEditPickupLng(loc.lng);
-        }}
-      />
-
-      <MapPickerModal
-        isOpen={showDeliveryMapPicker}
-        onClose={() => setShowDeliveryMapPicker(false)}
-        title="ডেলিভারি ঠিকানা সিলেক্ট করুন"
-        initialLocation={{
-          address: editAddress,
-          lat: editDeliveryLat,
-          lng: editDeliveryLng,
-        }}
-        addressLabel="Your Building name & flat no"
-        addressPlaceholder="Your Building name & flat no"
-        onMapError={() => setMapHasError(true)}
-        onSelectLocation={(loc) => {
-          setEditAddress(loc.address);
-          if (loc.lat) setEditDeliveryLat(loc.lat);
-          if (loc.lng) setEditDeliveryLng(loc.lng);
-        }}
-      />
 
 
       {showFeedbackModal && (
@@ -1632,6 +1624,16 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           order={order}
           onClose={() => setShowFeedbackModal(false)}
           onSubmitted={() => setShowFeedbackModal(false)}
+        />
+      )}
+
+      {selectedItemForModal && (
+        <CustomerOrderItemModal
+          isOpen={!!selectedItemForModal}
+          onClose={() => setSelectedItemForModal(null)}
+          item={selectedItemForModal}
+          order={order}
+          validShopOrders={validShopOrders}
         />
       )}
     </div>

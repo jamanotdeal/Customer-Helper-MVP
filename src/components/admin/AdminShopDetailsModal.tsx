@@ -19,7 +19,9 @@ import {
   ShieldAlert,
   Send,
   DollarSign,
+  Package,
 } from 'lucide-react';
+import { StoreProductManager } from '../StoreProductManager';
 import { AdminBlockModal } from './AdminBlockModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 
@@ -49,6 +51,24 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
       ? 'Rejected'
       : 'Approved'
   );
+  const [activeTab, setActiveTab] = React.useState<'details' | 'items'>('details');
+  const [storeProductsCount, setStoreProductsCount] = React.useState<number>(() => {
+    return Array.from(fallbackStore.storeProducts.values()).filter(
+      (p) => p.storeId === shop.id || (shop.ownerUserId && p.storeId === shop.ownerUserId)
+    ).length;
+  });
+
+  React.useEffect(() => {
+    const updateCount = () => {
+      const cnt = Array.from(fallbackStore.storeProducts.values()).filter(
+        (p) => p.storeId === shop.id || (shop.ownerUserId && p.storeId === shop.ownerUserId)
+      ).length;
+      setStoreProductsCount(cnt);
+    };
+    const unsub = fallbackStore.subscribe(updateCount);
+    fallbackStore.loadStoreProducts();
+    return () => unsub();
+  }, [shop.id, shop.ownerUserId]);
 
   const formattedWhatsApp = shop.whatsapp
     ? shop.whatsapp.replace(/[^0-9]/g, '')
@@ -161,6 +181,21 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
     if (onShopUpdated) onShopUpdated();
   };
 
+  const isStoreActive = currentShop.isActive !== undefined ? currentShop.isActive : (currentShop.isOpen !== false);
+
+  const handleToggleActiveStatus = async () => {
+    const newActive = !isStoreActive;
+    await fallbackStore.toggleShopActiveStatus(shop.id, newActive);
+    const updated = { ...currentShop, isOpen: newActive, isActive: newActive };
+    setCurrentShop(updated);
+    showAlert(
+      newActive ? 'দোকান সক্রিয় (Active) করা হয়েছে' : 'দোকান নিষ্ক্রিয় (Inactive) করা হয়েছে',
+      `"${shop.name}" স্টোরটি এখন ${newActive ? 'সক্রিয় (Active) এবং গ্রাহকদের জন্য খোলা' : 'নিষ্ক্রিয় (Inactive / Offline) করা হয়েছে'}।`,
+      newActive ? 'success' : 'info'
+    );
+    if (onShopUpdated) onShopUpdated();
+  };
+
   const handleDelete = async () => {
     const confirmed = await showConfirm(
       'দোকান ডিলিট নিশ্চিতকরণ',
@@ -186,15 +221,15 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+      <div className={`w-full ${activeTab === 'items' ? 'max-w-3xl' : 'max-w-lg'} bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh] transition-all`}>
 
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-900 via-purple-800 to-indigo-900 text-white p-6 relative shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-rose-500/80 hover:bg-rose-600 text-white transition-all shadow-sm"
+            className="absolute top-4 right-4 p-2 rounded-full bg-rose-500/80 hover:bg-rose-600 text-white transition-all shadow-sm cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -229,6 +264,19 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
                   <option value="Pending" className="bg-white text-gray-900 font-bold">Pending</option>
                   <option value="Rejected" className="bg-white text-gray-900 font-bold">Rejected</option>
                 </select>
+                <button
+                  type="button"
+                  onClick={handleToggleActiveStatus}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border cursor-pointer transition-all flex items-center space-x-1 shadow-xs ${
+                    isStoreActive
+                      ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-400'
+                      : 'bg-rose-500 hover:bg-rose-600 text-white border-rose-400'
+                  }`}
+                  title="Click to toggle store Active / Inactive status"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${isStoreActive ? 'bg-white animate-pulse' : 'bg-white'}`} />
+                  <span>{isStoreActive ? 'Active (খোলা)' : 'Inactive (বন্ধ)'}</span>
+                </button>
               </div>
               <h3 className="text-xl font-black text-white leading-tight">{shop.name}</h3>
               <p className="text-xs text-purple-200 font-medium mt-0.5">
@@ -238,21 +286,60 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           </div>
         </div>
 
-        {/* Shop Photo */}
-        {shop.photoUrl && (
-          <div className="w-full h-40 overflow-hidden relative shrink-0">
-            <img
-              src={shop.photoUrl}
-              alt={shop.name}
-              className="w-full h-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none'; }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
-          </div>
-        )}
+        {/* Tab Switcher */}
+        <div className="bg-gray-100 p-1 flex border-b border-gray-200 shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveTab('details')}
+            className={`flex-1 py-2 px-3 rounded-xl font-black text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+              activeTab === 'details'
+                ? 'bg-white text-purple-950 shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Store className="w-3.5 h-3.5 text-purple-700" />
+            <span>দোকানের বিবরণ (Details)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('items')}
+            className={`flex-1 py-2 px-3 rounded-xl font-black text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+              activeTab === 'items'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Package className="w-3.5 h-3.5" />
+            <span>পণ্য ব্যবস্থাপনা ({storeProductsCount} Items)</span>
+          </button>
+        </div>
 
-        {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        {/* Items Management Body */}
+        {activeTab === 'items' ? (
+          <div className="flex-1 overflow-y-auto p-4 sm:p-5 overscroll-contain">
+            <StoreProductManager
+              storeId={shop.id}
+              storeName={shop.name}
+              hideFloatingFab={true}
+            />
+          </div>
+        ) : (
+          <>
+            {/* Shop Photo */}
+            {shop.photoUrl && (
+              <div className="w-full h-40 overflow-hidden relative shrink-0">
+                <img
+                  src={shop.photoUrl}
+                  alt={shop.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none'; }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
+              </div>
+            )}
+
+            {/* Content Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
 
           {/* Block Warning Banner if store is blocked */}
           {currentShop.isBlocked && (
@@ -443,6 +530,34 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             </button>
           </div>
 
+          {/* Store Active / Inactive Status Switch */}
+          <div className="bg-emerald-50/60 rounded-2xl p-4 border border-emerald-200/80 flex items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center space-x-1.5">
+                <span className={`w-2 h-2 rounded-full ${isStoreActive ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                <h4 className="text-xs font-black text-gray-900 uppercase tracking-wider">
+                  Store Active / Inactive Status (দোকান সক্রিয়/নিষ্ক্রিয়)
+                </h4>
+              </div>
+              <p className="text-[11px] text-gray-600 font-semibold mt-0.5">
+                {isStoreActive
+                  ? 'দোকানটি বর্তমানে সক্রিয় (Active / Open) — গ্রাহক ও হেলপাররা অর্ডার করতে পারবেন।'
+                  : 'দোকানটি বর্তমানে নিষ্ক্রিয় (Inactive / Closed) — কাস্টমারদের কাছে দোকানটি বন্ধ দেখাবে।'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleActiveStatus}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border shadow-sm transition-all cursor-pointer flex items-center space-x-1.5 ${
+                isStoreActive
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500'
+                  : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-500'
+              }`}
+            >
+              <span>{isStoreActive ? 'Active (ON)' : 'Inactive (OFF)'}</span>
+            </button>
+          </div>
+
           {/* Commission */}
           {shop.commissionPercent !== undefined && (
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl p-4 border border-purple-100 space-y-1.5">
@@ -477,8 +592,18 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           </div>
         </div>
 
-        {/* Footer */}
+        {/* Footer for Details View */}
         <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center space-x-2 shrink-0 flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('items')}
+            className="py-3 px-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95"
+            title="পণ্য ব্যবস্থাপনা করুন"
+          >
+            <Package className="w-3.5 h-3.5" />
+            <span>Manage Items ({storeProductsCount})</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowDisburseModal(true)}
@@ -504,7 +629,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           <button
             type="button"
             onClick={() => { onEdit(shop); onClose(); }}
-            className="flex-1 py-3 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-1.5"
+            className="flex-1 py-3 px-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
           >
             <Edit className="w-4 h-4" />
             <span>Edit Shop</span>
@@ -513,7 +638,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           <button
             type="button"
             onClick={handleDelete}
-            className="py-3 px-4 rounded-2xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold text-xs transition-all flex items-center justify-center space-x-1.5"
+            className="py-3 px-4 rounded-2xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
           >
             <Trash2 className="w-4 h-4" />
             <span>Delete</span>
@@ -522,11 +647,34 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-extrabold text-xs transition-all"
+            className="py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 active:scale-95 font-extrabold text-xs transition-all cursor-pointer"
           >
             Close
           </button>
         </div>
+      </>
+    )}
+
+    {/* Footer for Items View */}
+    {activeTab === 'items' && (
+      <div className="p-3.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between shrink-0">
+        <button
+          type="button"
+          onClick={() => setActiveTab('details')}
+          className="py-2.5 px-4 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-950 font-extrabold text-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+        >
+          <Store className="w-3.5 h-3.5 text-purple-700" />
+          <span>← Back to Store Details</span>
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="py-2.5 px-5 rounded-xl bg-gray-800 hover:bg-gray-900 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer active:scale-95"
+        >
+          Close
+        </button>
+      </div>
+    )}
 
         {/* Admin Block Note Modal */}
         {showBlockModal && (

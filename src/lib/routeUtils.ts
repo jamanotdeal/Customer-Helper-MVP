@@ -74,3 +74,77 @@ export async function fetchRoadRoute(waypoints: LatLngPoint[]): Promise<[number,
   routeCache.set(cacheKey, fallbackRoute);
   return fallbackRoute;
 }
+
+// In-memory cache for road route distances
+const roadDistanceCache = new Map<string, number>();
+
+/**
+ * Calculates straight line distance in km (Haversine).
+ */
+function haversineStraightKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Fetches accurate driving road distance in km between two waypoints using OSRM.
+ * Falls back to Haversine with a 1.25x road winding factor.
+ */
+export async function fetchRoadDistanceKm(
+  start: LatLngPoint,
+  end: LatLngPoint
+): Promise<number> {
+  if (
+    typeof start?.lat !== 'number' ||
+    isNaN(start.lat) ||
+    typeof start?.lng !== 'number' ||
+    isNaN(start.lng) ||
+    typeof end?.lat !== 'number' ||
+    isNaN(end.lat) ||
+    typeof end?.lng !== 'number' ||
+    isNaN(end.lng)
+  ) {
+    return 0;
+  }
+
+  const cacheKey = `${start.lat.toFixed(5)},${start.lng.toFixed(5)};${end.lat.toFixed(5)},${end.lng.toFixed(5)}`;
+  if (roadDistanceCache.has(cacheKey)) {
+    return roadDistanceCache.get(cacheKey)!;
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=false`;
+    const response = await fetch(url);
+    if (response.ok) {
+      const text = await response.text();
+      if (text && !text.trim().startsWith('<')) {
+        const data = JSON.parse(text);
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const meters = data.routes[0].distance;
+          if (typeof meters === 'number' && meters > 0) {
+            const km = Math.round((meters / 1000) * 10) / 10;
+            roadDistanceCache.set(cacheKey, km);
+            return km;
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[routeUtils] fetchRoadDistanceKm failed, falling back:', error);
+  }
+
+  const straight = haversineStraightKm(start.lat, start.lng, end.lat, end.lng);
+  const fallbackKm = Math.round(straight * 1.25 * 10) / 10;
+  roadDistanceCache.set(cacheKey, fallbackKm);
+  return fallbackKm;
+}
+

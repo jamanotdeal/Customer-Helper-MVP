@@ -47,11 +47,16 @@ import { StoreDashboard } from '@/components/StoreDashboard';
 import { PwaSmartPrompt } from '@/components/PwaSmartPrompt';
 import { InAppBrowserModal } from '@/components/InAppBrowserModal';
 import { BlockedUserModal } from '@/components/BlockedUserModal';
+import { CustomerOrdersPage } from '@/components/CustomerOrdersPage';
+import { StoreProductManager } from '@/components/StoreProductManager';
+import { StoreWallet } from '@/components/StoreWallet';
+import { CartSummaryDrawer } from '@/components/CartSummaryDrawer';
+import { FloatingCartBar } from '@/components/FloatingCartBar';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode, openAuthModal } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
+  const [activeTab, setActiveTab] = useState<'request' | 'my_orders' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'store_products'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
@@ -65,11 +70,17 @@ export default function PageClient() {
   );
 
   const isStoreUser = Boolean(
-    user && (user.isStoreApproved || user.role === 'store')
+    user && (
+      user.isStoreApproved ||
+      user.role === 'store' ||
+      user.isStore ||
+      Boolean(user.storeId) ||
+      activeMode === 'store'
+    )
   );
 
   const isHelperUser = Boolean(
-    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper')
+    user && (user.isHelper || user.role === 'helper' || activeMode === 'helper') && !isStoreUser
   );
 
   // Helpers get the new-order popup (HelperOrderAlerts) on every screen.
@@ -673,32 +684,38 @@ export default function PageClient() {
     }
   }, [user, activeMode, isStoreUser, setActiveMode]);
 
-  // Sync activeTab when user or activeMode changes
+  const prevModeRef = useRef<string | undefined>(undefined);
+  const prevUidRef = useRef<string | undefined>(undefined);
+
+  // Sync initial default activeTab ONLY when activeMode or logged-in user session actually changes
   useEffect(() => {
+    const isNewUser = prevUidRef.current !== user?.uid;
+    const isNewMode = prevModeRef.current !== activeMode;
+    prevUidRef.current = user?.uid;
+    prevModeRef.current = activeMode;
+
+    if (!isNewUser && !isNewMode) {
+      // User profile background update / re-render: do NOT reset or override activeTab
+      return;
+    }
+
     if (!user) {
       setInitialSelectedOrderId(null);
-      if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
-        setActiveTab('request');
-      }
+      setActiveTab('request');
       return;
     }
 
     if (isAdminView) {
       setActiveTab('admin_panel');
     } else if (isStoreUser) {
-      if (activeTab !== 'wallet') {
-        setActiveTab('request');
-      }
+      // When switching to store mode, set initial tab to request/orders
+      setActiveTab('request');
     } else if (isHelperUser) {
-      if (activeTab === 'request' || activeTab === 'admin_panel' || activeTab === 'helper_center') {
-        setActiveTab('helper_tasks');
-      }
+      setActiveTab('helper_tasks');
     } else {
-      if (activeTab !== 'fee_details' && activeTab !== 'helper_center') {
-        setActiveTab('request');
-      }
+      setActiveTab('request');
     }
-  }, [user, activeMode, isAdminView, isStoreUser, isHelperUser]);
+  }, [user?.uid, activeMode, isAdminView, isStoreUser, isHelperUser]);
 
   // Strict role view guarding
   const renderCurrentView = () => {
@@ -725,6 +742,25 @@ export default function PageClient() {
 
     // 3. Store view check: Store type users ONLY see Store views
     if (isStoreUser) {
+      // Wallet page
+      if (activeTab === 'wallet') {
+        return <StoreWallet />;
+      }
+      // Products page — accessible even when store is offline
+      if (activeTab === 'store_products') {
+        const storeId =
+          (user.storeId && fallbackStore.shops.has(user.storeId) ? user.storeId : undefined) ||
+          Array.from(fallbackStore.shops.values()).find(
+            (s) => s.ownerUserId === user.uid || (s.assignedUserIds && s.assignedUserIds.includes(user.uid)) || s.id === `store-${user.uid}`
+          )?.id || user.storeId || `store-${user.uid}`;
+        const shopName = storeId ? fallbackStore.shops.get(storeId)?.name || '' : '';
+        return (
+          <StoreProductManager
+            storeId={storeId}
+            storeName={shopName}
+          />
+        );
+      }
       return (
         <StoreDashboard
           activeTab={activeTab}
@@ -760,6 +796,14 @@ export default function PageClient() {
     }
     if (activeTab === 'helper_center') {
       return <HelperCenterPage onBack={() => setActiveTab('request')} />;
+    }
+    if (activeTab === 'my_orders') {
+      return (
+        <CustomerOrdersPage
+          initialSelectedOrderId={initialSelectedOrderId}
+          onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+        />
+      );
     }
 
     return (
@@ -950,6 +994,16 @@ export default function PageClient() {
           targetRole={activeMode === 'helper' ? 'helper' : activeMode === 'store' ? 'store' : 'customer'}
         />
       )}
+
+      {/* Persistent Floating Cart Bar (identical design across all customer views) */}
+      <FloatingCartBar />
+
+      {/* Global Cart Summary Drawer */}
+      <CartSummaryDrawer
+        onOrderCreated={(order) => {
+          handleSelectOrder(order.id);
+        }}
+      />
     </div>
   );
 }

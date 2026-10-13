@@ -48,7 +48,17 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   }, [order, isDone, tick]);
 
   const itemsSummary = order.items?.length
-    ? order.items.map((i) => `${i.name}${i.qty && Number(i.qty) > 1 ? ` ×${i.qty}` : ''}`).join(', ')
+    ? order.items
+      .map((i) => {
+        const qNum = typeof i.quantity === 'number' && i.quantity > 0
+          ? i.quantity
+          : (i.qty && !isNaN(Number(i.qty)) ? Number(i.qty) : undefined);
+        const qStr = qNum && qNum > 1
+          ? ` ×${qNum}`
+          : (i.qty && isNaN(Number(i.qty)) && i.qty.trim() !== '১' && i.qty.trim() !== '১টি' && i.qty.trim() !== '1' ? ` (${i.qty})` : '');
+        return `${i.name}${qStr}`;
+      })
+      .join(', ')
     : 'No items listed';
 
   const distanceKm = getOrderMinDistanceKm(helperLocation, order);

@@ -271,4 +271,59 @@ export const addSavedPickupAddress = (uid: string, newAddress: import('@/types')
   return updated;
 };
 
+/**
+ * Resolves the previously saved contact number (WhatsApp/mobile) and delivery location
+ * for a customer, checking saved localStorage preferences, user profile data,
+ * saved addresses list, and past orders if available.
+ */
+export const getPreviousCustomerContact = (
+  user?: {
+    uid?: string;
+    phoneNumber?: string;
+    alternativePhone?: string;
+    defaultDeliveryLocation?: LocationData;
+    savedDeliveryAddresses?: LocationData[];
+  } | null,
+  fallbackOrders?: import('@/types').Order[]
+): { phone: string; location: LocationData | null } => {
+  let phone = getSavedAltPhone() || user?.alternativePhone || '';
+  let loc: LocationData | null = getSavedDefaultDeliveryLocation();
+  if (!loc?.address && user?.defaultDeliveryLocation?.address) {
+    loc = user.defaultDeliveryLocation;
+  }
+
+  if (user?.uid) {
+    if (!loc?.address) {
+      const savedAddresses = getSavedDeliveryAddresses(user.uid);
+      if (savedAddresses.length > 0 && savedAddresses[0]?.address) {
+        loc = savedAddresses[0];
+      } else if (user.savedDeliveryAddresses && user.savedDeliveryAddresses.length > 0 && user.savedDeliveryAddresses[0]?.address) {
+        loc = user.savedDeliveryAddresses[0];
+      }
+    }
+
+    if ((!phone || !loc?.address) && fallbackOrders && fallbackOrders.length > 0) {
+      const userOrders = fallbackOrders
+        .filter((o) => o?.customerId === user.uid)
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      const lastOrder = userOrders[0];
+      if (lastOrder) {
+        if (!phone) {
+          phone = lastOrder.customerPhone || lastOrder.alternativePhone || '';
+        }
+        if (!loc?.address && lastOrder.deliveryLocation?.address) {
+          loc = lastOrder.deliveryLocation;
+        }
+      }
+    }
+  }
+
+  if (!phone && user?.phoneNumber) {
+    phone = user.phoneNumber;
+  }
+
+  return { phone, location: loc };
+};
+
+
 

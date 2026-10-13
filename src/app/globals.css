@@ -58,6 +58,16 @@ input, textarea, [contenteditable], p, span, h1, h2, h3, h4, h5, h6, label {
   user-select: text;
 }
 
+/* Ensure all inputs/textareas inside modals/drawers are always typeable —
+   iOS Safari can inherit user-select:none from fixed-position ancestors */
+input[type], textarea, select {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  touch-action: manipulation;
+  /* Prevent iOS from zooming in on inputs smaller than 16px */
+  font-size: max(16px, 1em);
+}
+
 /* Custom scrollbar hiding utility */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

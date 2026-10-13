@@ -934,12 +934,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const openAuthModal = () => {
     if (isUserAuthenticated(user)) return;
-    const manualAuthEnabled = fallbackStore.pricingSettings?.manualAuthEnabled === true;
-    if (!manualAuthEnabled) {
-      loginWithGoogle();
-    } else {
-      setIsAuthModalOpen(true);
-    }
+    setIsAuthModalOpen(true);
   };
 
   const loginWithEmail = async (email: string, pass: string) => {
