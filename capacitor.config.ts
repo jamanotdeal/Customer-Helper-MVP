@@ -24,9 +24,10 @@ const config: CapacitorConfig = {
   // ─── Plugin Configuration ─────────────────────────────────────────────────
   plugins: {
     // Pure white, logo only. `launchAutoHide: false` hands control to JS, which
-    // calls hideNativeSplash() once auth resolves — this is what removes the
-    // white-flash-then-content gap. CENTER_INSIDE (not CENTER_CROP) so the logo
-    // is never cropped on tall or short screens.
+    // calls hideNativeSplash() once the page is up and AppSplash (same white,
+    // same logo position, plus the slogan) is underneath — this is what removes
+    // the white-flash-then-content gap. CENTER_INSIDE (not CENTER_CROP) so the
+    // logo is never cropped on tall or short screens.
     SplashScreen: {
       launchShowDuration: 0,
       launchAutoHide: false,
