@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
+import { AppSplash } from '@/components/AppSplash';
 import { BottomNav } from '@/components/BottomNav';
 import { CustomerHome } from '@/components/CustomerHome';
 import { HelperDashboard } from '@/components/HelperDashboard';
@@ -34,6 +35,7 @@ import { BlockedUserModal } from '@/components/BlockedUserModal';
 
 export default function PageClient() {
   const { user, loading, activeMode, setActiveMode } = useAuth();
+  const hasBootedRef = useRef(false);
   const { showAlert, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
@@ -453,74 +455,11 @@ export default function PageClient() {
     );
   };
 
-  // While Firebase auth is resolving, show a skeleton layout (mirrors real layout to avoid CLS)
-  if (loading) {
-    return (
-      <div className="mobile-container relative flex flex-col min-h-screen bg-gray-50">
-        {/* Header Skeleton */}
-        <div className="sticky top-0 z-40 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between"
-          style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
-          <div className="w-28 h-6 rounded-xl bg-gray-200 animate-pulse" />
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
-            <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
-          </div>
-        </div>
-
-        {/* Main Content Skeleton */}
-        <main className="flex-1 w-full">
-          <div className="content-container p-4 pb-24 space-y-4">
-            {/* Form Card Skeleton */}
-            <div className="bg-white rounded-3xl border border-gray-100 p-5 space-y-4 shadow-sm">
-              <div className="space-y-2 text-center">
-                <div className="w-40 h-5 rounded-xl bg-gray-200 animate-pulse mx-auto" />
-                <div className="w-56 h-3.5 rounded-lg bg-gray-100 animate-pulse mx-auto" />
-                <div className="w-44 h-3 rounded-lg bg-gray-100 animate-pulse mx-auto" />
-              </div>
-              <div className="w-full h-12 rounded-2xl bg-emerald-100 animate-pulse" />
-            </div>
-
-            {/* Info cards skeleton */}
-            <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-5 space-y-3">
-              <div className="w-36 h-4 rounded-lg bg-emerald-200 animate-pulse" />
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center space-x-3 bg-white p-3.5 rounded-2xl">
-                  <div className="w-7 h-7 rounded-full bg-emerald-100 animate-pulse shrink-0" />
-                  <div className="flex-1 h-4 rounded-lg bg-gray-100 animate-pulse" />
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-white border border-gray-100 rounded-3xl p-5 space-y-3">
-              <div className="w-24 h-4 rounded-lg bg-gray-200 animate-pulse" />
-              <div className="grid grid-cols-2 gap-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="p-3.5 rounded-2xl bg-gray-50 space-y-2">
-                    <div className="w-5 h-5 rounded-lg bg-gray-200 animate-pulse" />
-                    <div className="w-16 h-3 rounded bg-gray-200 animate-pulse" />
-                    <div className="w-24 h-2.5 rounded bg-gray-100 animate-pulse" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </main>
-
-        {/* Bottom Nav Skeleton */}
-        <div className="fixed bottom-0 left-0 right-0 w-full bg-white border-t border-gray-100 pt-2 z-40"
-          style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
-          <div className="content-container flex items-center justify-around px-6">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col items-center space-y-1">
-                <div className="w-6 h-6 rounded-lg bg-gray-200 animate-pulse" />
-                <div className="w-10 h-2.5 rounded bg-gray-100 animate-pulse" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Splash for the cold start only, until auth first resolves. `loading` also
+  // goes true during sign-in, and the app (with the auth modal and its own
+  // progress and error states) has to stay on screen for that.
+  if (!loading) hasBootedRef.current = true;
+  if (!hasBootedRef.current) return <AppSplash />;
 
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
