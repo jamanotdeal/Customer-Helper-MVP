@@ -936,19 +936,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // already read, or one still in flight, costs nothing (see
   // loadAdminOrdersInRange); Retry and Refresh read it again.
   const needsShopOrderRange = activeTab === 'STORE_ORDERS';
+  // The shops the Store Orders list can show (see realStoreOrders): only their
+  // shop orders are read. Empty until the shops have loaded — then all are read.
+  const receivingShopIds = useMemo(
+    () => shops.filter((sh) => sh.id && sh.id !== 'myself' && sh.canReceiveOrders !== false).map((sh) => sh.id).sort().join(','),
+    [shops]
+  );
   useEffect(() => {
     if (!currentUser?.uid) return;
     let cancelled = false;
     const force = rangeForceRef.current;
     rangeForceRef.current = false;
     setRangeStatus('loading');
-    const reads = [fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force)];
-    if (needsShopOrderRange) reads.push(fallbackStore.loadAdminShopOrdersInRange(rangeStartIso, rangeEndIso, force));
-    Promise.all(reads)
+    const readOrders = () => fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
+    // Store Orders reads its own list first and the orders (for the work-hours
+    // card) after it. Read side by side, the far larger orders read held up
+    // the store orders on the same connection: 30 days took 5–7 s on a phone.
+    const shown = needsShopOrderRange
+      ? fallbackStore.loadAdminShopOrdersInRange(rangeStartIso, rangeEndIso, force, receivingShopIds ? receivingShopIds.split(',') : undefined)
+      : readOrders();
+    if (needsShopOrderRange) {
+      shown.catch(() => { }).then(() => { if (!cancelled) readOrders().catch(() => { /* logged by the store */ }); });
+    }
+    shown
       .then(() => { if (!cancelled) setRangeStatus('ready'); })
       .catch(() => { if (!cancelled) setRangeStatus('error'); });
     return () => { cancelled = true; };
-  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, rangeReload]);
+    // receivingShopIds only matters while Store Orders is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload]);
 
   const reloadRange = (force: boolean) => {
     rangeForceRef.current = force;
