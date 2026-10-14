@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Shop, Order, ShopOrder, WithdrawalRequest, Wallet, WalletTransaction } from '@/types';
 import { fallbackStore, db, cleanForFirestore } from '@/lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { getItemQuantityNum } from '@/lib/itemUtils';
+import { doc, setDoc, collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { useModal } from '../CustomModal';
 import {
   X,
@@ -121,10 +122,41 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   // Target Store User ID
   const storeUserId = shop.ownerUserId || shop.id;
 
+  // Real-time synchronization tick from fallbackStore
+  const [storeTick, setStoreTick] = useState(0);
+  useEffect(() => {
+    const unsub = fallbackStore.subscribe(() => setStoreTick((t) => t + 1));
+
+    const fetchFreshData = async () => {
+      try {
+        const qSo = query(collection(db, 'shopOrders'), where('shopId', '==', shop.id), limit(100));
+        const snapSo = await getDocs(qSo);
+        snapSo.docs.forEach((d) => {
+          const so = d.data() as ShopOrder;
+          if (so && so.id) fallbackStore.shopOrders.set(so.id, so);
+        });
+
+        const qWd = query(collection(db, 'withdrawals'), where('shopId', '==', shop.id), limit(100));
+        const snapWd = await getDocs(qWd);
+        snapWd.docs.forEach((d) => {
+          const wd = d.data() as WithdrawalRequest;
+          if (wd && wd.id) fallbackStore.withdrawals.set(wd.id, wd);
+        });
+
+        fallbackStore.notify();
+      } catch (err) {
+        console.warn('Error fetching fresh disbursement data:', err);
+      }
+    };
+    fetchFreshData();
+
+    return () => unsub();
+  }, [shop.id]);
+
   // Retrieve all orders and shop orders
-  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), []);
-  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), []);
-  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), []);
+  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), [storeTick]);
+  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), [storeTick]);
+  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), [storeTick]);
 
   // Filter Shop Orders matching this shop
   const shopOrdersForThisStore = useMemo(() => {
@@ -148,17 +180,21 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
 
   // Store Withdrawals / Disbursements
   const storeWithdrawals = useMemo(() => {
-    return allWithdrawals.filter(
-      (w) =>
-        w.helperId === storeUserId ||
-        w.helperId === shop.id ||
-        w.helperId === `store-${storeUserId}` ||
-        (w.userType === 'store' && (w.helperName === shop.name || w.helperId === shop.id))
-    ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return allWithdrawals.filter((w) => {
+      if (w.status !== 'APPROVED') return false;
+      if (w.shopId && (w.shopId === shop.id || w.shopId === storeUserId || w.shopId === `store-${storeUserId}`)) return true;
+      if (w.helperId === storeUserId || w.helperId === shop.id || w.helperId === `store-${storeUserId}`) return true;
+      if (storeUserId && w.helperId.startsWith('store-') && w.helperId.replace('store-', '') === storeUserId) return true;
+      if (w.userType === 'store') {
+        if (shop.name && w.helperName === shop.name) return true;
+        if (w.helperId === shop.id || w.helperId === storeUserId || w.shopId === shop.id) return true;
+      }
+      return false;
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [allWithdrawals, storeUserId, shop.id, shop.name]);
 
-  // Total Disbursed (All Time Approved)
-  const totalAllTimeDisbursed = useMemo(() => {
+  // Approved Withdrawals / Disbursements
+  const totalApprovedWithdrawalSum = useMemo(() => {
     return storeWithdrawals
       .filter((w) => w.status === 'APPROVED')
       .reduce((sum, w) => sum + w.amount, 0);
@@ -171,10 +207,25 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     // 1. From ShopOrders
     shopOrdersForThisStore.forEach((so) => {
       const parent = allOrders.find((o) => o.id === so.parentOrderId);
-      const isCanceled = so.status === 'CANCELED' || parent?.status === 'CANCELED';
-      const isDelivered = parent?.status === 'DELIVERED' || so.status === 'DELIVERED';
+      const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parent?.status === 'CANCELED' || (parent?.status as string) === 'CANCELLED';
+      const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED';
       const isHandover = so.status === 'HANDOVER';
-      const grossPrice = (so.price && so.price > 0) ? so.price : (parent?.productCost || 0);
+
+      let grossPrice = 0;
+      if (so.price && Number(so.price) > 0) {
+        grossPrice = Number(so.price);
+      } else if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        grossPrice = so.itemsWithPrice.reduce((sum: number, it: any) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+      } else if (parent?.items && parent.items.length > 0) {
+        const storeItems = parent.items.filter((it) => it.storeId === shop.id || it.storeId === storeUserId || (shop.name && it.storeName === shop.name));
+        if (storeItems.length > 0) {
+          grossPrice = storeItems.reduce((sum: number, it: any) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+        } else if (parent.shopId === shop.id || parent.shopId === storeUserId) {
+          grossPrice = parent.productCost || 0;
+        }
+      } else if (parent && (parent.shopId === shop.id || parent.shopId === storeUserId)) {
+        grossPrice = parent.productCost || 0;
+      }
 
       const comm = Math.round(grossPrice * (commissionRate / 100));
       const net = Math.max(0, grossPrice - comm);
@@ -219,9 +270,21 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     // 2. From Parent Orders directly (if not already captured)
     parentOrdersForThisStore.forEach((po) => {
       if (!map.has(po.id)) {
-        const isCanceled = po.status === 'CANCELED';
-        const isDelivered = po.status === 'DELIVERED';
-        const grossPrice = po.productCost || 0;
+        const isCanceled = po.status === 'CANCELED' || (po.status as string) === 'CANCELLED';
+        const isDelivered = po.status === 'DELIVERED' || (po.status as string) === 'COMPLETED';
+
+        let grossPrice = 0;
+        if (po.items && po.items.length > 0) {
+          const storeItems = po.items.filter((it) => it.storeId === shop.id || it.storeId === storeUserId || (shop.name && it.storeName === shop.name));
+          if (storeItems.length > 0) {
+            grossPrice = storeItems.reduce((sum: number, it: any) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+          } else if (po.shopId === shop.id || po.shopId === storeUserId) {
+            grossPrice = po.productCost || 0;
+          }
+        } else if (po.shopId === shop.id || po.shopId === storeUserId) {
+          grossPrice = po.productCost || 0;
+        }
+
         const comm = Math.round(grossPrice * (commissionRate / 100));
         const net = Math.max(0, grossPrice - comm);
 
@@ -262,7 +325,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     });
 
     return Array.from(map.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [shopOrdersForThisStore, parentOrdersForThisStore, allOrders, commissionRate]);
+  }, [shopOrdersForThisStore, parentOrdersForThisStore, allOrders, commissionRate, shop.id, storeUserId, shop.name]);
 
   // Filter orders by Date Range
   const filteredOrders = useMemo(() => {
@@ -275,10 +338,22 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     });
   }, [normalizedStoreOrders, startDate, endDate]);
 
-  // Overall Financials Calculation (All-time vs Date Filtered)
+  // Overall Financials Calculation directly based on order statuses "disbursed" or not:
   const allTimeDeliveredNetSales = useMemo(() => {
     return normalizedStoreOrders
       .filter((o) => o.status === 'DELIVERED' || o.status === 'HANDOVER')
+      .reduce((sum, o) => sum + o.netSales, 0);
+  }, [normalizedStoreOrders]);
+
+  const allTimeDisbursedNetSales = useMemo(() => {
+    return normalizedStoreOrders
+      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && (o.isStorePaid || o.isPaid))
+      .reduce((sum, o) => sum + o.netSales, 0);
+  }, [normalizedStoreOrders]);
+
+  const allTimeUnpaidBalance = useMemo(() => {
+    return normalizedStoreOrders
+      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid)
       .reduce((sum, o) => sum + o.netSales, 0);
   }, [normalizedStoreOrders]);
 
@@ -288,21 +363,44 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       .reduce((sum, o) => sum + o.grossSales, 0);
   }, [normalizedStoreOrders]);
 
-  const allTimeCommission = useMemo(() => {
+  const allTimeDisbursedCommission = useMemo(() => {
     return normalizedStoreOrders
-      .filter((o) => o.status === 'DELIVERED' || o.status === 'HANDOVER')
+      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && (o.isStorePaid || o.isPaid))
       .reduce((sum, o) => sum + o.commission, 0);
   }, [normalizedStoreOrders]);
 
-  // Current Available Unpaid Balance = All Time Delivered Net Sales - All Time Disbursed
-  const currentAvailableBalance = Math.max(0, allTimeDeliveredNetSales - totalAllTimeDisbursed);
+  const allTimeUnpaidCommission = useMemo(() => {
+    return normalizedStoreOrders
+      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid)
+      .reduce((sum, o) => sum + o.commission, 0);
+  }, [normalizedStoreOrders]);
 
-  // Metrics for the Selected Date Range
+  const allTimeCommission = useMemo(() => {
+    return allTimeDisbursedCommission + allTimeUnpaidCommission;
+  }, [allTimeDisbursedCommission, allTimeUnpaidCommission]);
+
+  // Current Available Unpaid Balance directly from unpaid delivered orders
+  const currentAvailableBalance = allTimeUnpaidBalance;
+
+  // Total Disbursed directly from disbursed orders (or manual withdrawal records if no orders yet)
+  const totalAllTimeDisbursed = (normalizedStoreOrders.length > 0 || allTimeDisbursedNetSales > 0)
+    ? allTimeDisbursedNetSales
+    : totalApprovedWithdrawalSum;
+
+  // Metrics for the Selected Date Range calculated dynamically based on order statuses
   const rangeMetrics = useMemo(() => {
     let gross = 0;
     let comm = 0;
     let net = 0;
+    let disbursedGross = 0;
+    let disbursedComm = 0;
+    let disbursedNet = 0;
+    let unpaidGross = 0;
+    let unpaidComm = 0;
+    let unpaidNet = 0;
     let deliveredCount = 0;
+    let disbursedCount = 0;
+    let unpaidCount = 0;
     let activeCount = 0;
     let canceledCount = 0;
 
@@ -312,6 +410,19 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
         comm += o.commission;
         net += o.netSales;
         deliveredCount++;
+
+        const isDisbursed = Boolean(o.isStorePaid || o.isPaid);
+        if (isDisbursed) {
+          disbursedGross += o.grossSales;
+          disbursedComm += o.commission;
+          disbursedNet += o.netSales;
+          disbursedCount++;
+        } else {
+          unpaidGross += o.grossSales;
+          unpaidComm += o.commission;
+          unpaidNet += o.netSales;
+          unpaidCount++;
+        }
       } else if (o.status === 'CANCELED') {
         canceledCount++;
       } else {
@@ -323,7 +434,15 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       gross,
       comm,
       net,
+      disbursedGross,
+      disbursedComm,
+      disbursedNet,
+      unpaidGross,
+      unpaidComm,
+      unpaidNet,
       deliveredCount,
+      disbursedCount,
+      unpaidCount,
       activeCount,
       canceledCount,
       totalCount: filteredOrders.length,
@@ -484,7 +603,8 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
 
         const existing = fallbackStore.wallets.get(storeUserId);
         const currentWithdrawn = (existing?.totalWithdrawn ?? 0) + amountNum;
-        const currentBalance = Math.max(0, (existing?.balance ?? 0) - amountNum);
+        // Allow negative balance if platform disbursed more than current balance
+        const currentBalance = (existing?.balance ?? 0) - amountNum;
         const updatedWallet: Wallet = {
           userId: storeUserId,
           totalEarned: existing?.totalEarned ?? 0,
@@ -501,6 +621,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
           await setDoc(doc(db, 'wallets', storeUserId), cleanForFirestore(updatedWallet), { merge: true });
           await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
           await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
+          await fallbackStore.markStoreOrdersAsPaid(shop.id, storeUserId, amountNum, req.id);
         } catch (e: any) {
           console.warn('[Firestore] direct recordStoreDisbursement note:', e?.message || e);
         }
@@ -588,21 +709,35 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
             </div>
 
             {/* Current Due / Available Balance Box */}
-            <div className="bg-emerald-500/15 border border-emerald-400/30 backdrop-blur-md px-4 py-2.5 rounded-2xl text-right ml-auto">
-              <span className="text-[10px] text-emerald-200 uppercase font-black tracking-wider block">
-                Current Unpaid Balance
+            <div className={`px-4 py-2.5 rounded-2xl text-right ml-auto border backdrop-blur-md ${
+              currentAvailableBalance < 0
+                ? 'bg-amber-500/20 border-amber-400/40'
+                : 'bg-emerald-500/15 border-emerald-400/30'
+            }`}>
+              <span className={`text-[10px] uppercase font-black tracking-wider block ${
+                currentAvailableBalance < 0 ? 'text-amber-200' : 'text-emerald-200'
+              }`}>
+                {currentAvailableBalance < 0 ? 'Balance (Advance / Overpaid)' : 'Current Unpaid Balance'}
               </span>
-              <span className="text-2xl font-black text-emerald-300 block">
-                ৳{currentAvailableBalance.toLocaleString('en-US')}
+              <span className={`text-2xl font-black block font-mono ${
+                currentAvailableBalance < 0 ? 'text-amber-300' : 'text-emerald-300'
+              }`}>
+                {currentAvailableBalance < 0
+                  ? `-৳${Math.abs(currentAvailableBalance).toLocaleString('en-US')}`
+                  : `৳${currentAvailableBalance.toLocaleString('en-US')}`}
               </span>
               <button
                 type="button"
                 onClick={() => {
-                  setPayoutAmount(String(currentAvailableBalance));
+                  setPayoutAmount(currentAvailableBalance > 0 ? String(currentAvailableBalance) : '');
                   setShowDisburseForm(true);
                   setActiveTab('OVERVIEW');
                 }}
-                className="mt-1 px-3 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition-all shadow-sm inline-flex items-center gap-1.5"
+                className={`mt-1 px-3 py-1 rounded-xl text-slate-950 font-black text-xs transition-all shadow-sm inline-flex items-center gap-1.5 ${
+                  currentAvailableBalance < 0
+                    ? 'bg-amber-400 hover:bg-amber-300'
+                    : 'bg-emerald-500 hover:bg-emerald-400'
+                }`}
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Disburse Payment</span>
@@ -758,37 +893,42 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider block">
                     Platform Fee ({commissionRate}%)
                   </span>
-                  <span className="text-xl font-black text-purple-700 block">
+                  <span className="text-xl font-black text-purple-700 block font-mono">
                     ৳{rangeMetrics.comm.toLocaleString('en-US')}
                   </span>
-                  <span className="text-[10px] text-purple-500 font-bold block">
-                    Commission Deducted
-                  </span>
+                  <div className="text-[10px] text-purple-600 font-bold space-y-0.5">
+                    <span className="block">Settled: ৳{rangeMetrics.disbursedComm.toLocaleString('en-US')}</span>
+                    {rangeMetrics.unpaidComm > 0 && (
+                      <span className="block text-amber-700 font-semibold">Due: ৳{rangeMetrics.unpaidComm.toLocaleString('en-US')}</span>
+                    )}
+                  </div>
                 </div>
 
-                {/* Net Sales in Period */}
+                {/* Net Sales Payable / Due */}
                 <div className="bg-white p-4 rounded-2xl border border-emerald-100 shadow-xs space-y-1 bg-gradient-to-br from-emerald-50/50 to-white">
                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">
-                    Net Sales Payable
+                    Unpaid Net Sales (Due)
                   </span>
-                  <span className="text-xl font-black text-emerald-700 block">
-                    ৳{rangeMetrics.net.toLocaleString('en-US')}
+                  <span className="text-xl font-black text-emerald-700 block font-mono">
+                    ৳{rangeMetrics.unpaidNet.toLocaleString('en-US')}
                   </span>
                   <span className="text-[10px] text-emerald-600 font-bold block">
-                    Gross - Platform Fee
+                    {rangeMetrics.unpaidCount} orders pending payout
                   </span>
                 </div>
 
-                {/* Total Disbursed (All Time) */}
+                {/* Total Disbursed */}
                 <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-xs space-y-1">
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider block">
                     Total Disbursed
                   </span>
-                  <span className="text-xl font-black text-slate-800 block">
-                    ৳{totalAllTimeDisbursed.toLocaleString('en-US')}
+                  <span className="text-xl font-black text-slate-800 block font-mono">
+                    ৳{(activePreset === 'ALL_TIME' ? totalAllTimeDisbursed : rangeMetrics.disbursedNet).toLocaleString('en-US')}
                   </span>
                   <span className="text-[10px] text-gray-500 font-bold block">
-                    {storeWithdrawals.filter((w) => w.status === 'APPROVED').length} payouts made
+                    {(activePreset === 'ALL_TIME'
+                      ? normalizedStoreOrders.filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && (o.isStorePaid || o.isPaid)).length
+                      : rangeMetrics.disbursedCount)} orders disbursed
                   </span>
                 </div>
               </div>
@@ -808,7 +948,13 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-gray-500">Unpaid Balance:</span>
-                    <span className="text-base font-black text-emerald-700">৳{currentAvailableBalance.toLocaleString('en-US')}</span>
+                    <span className={`text-base font-black font-mono ${
+                      currentAvailableBalance < 0 ? 'text-amber-600' : 'text-emerald-700'
+                    }`}>
+                      {currentAvailableBalance < 0
+                        ? `-৳${Math.abs(currentAvailableBalance).toLocaleString('en-US')} (Advance)`
+                        : `৳${currentAvailableBalance.toLocaleString('en-US')}`}
+                    </span>
                   </div>
                 </div>
 
@@ -1083,8 +1229,8 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                   >
                     <option value="ALL">All Status ({filteredOrders.length})</option>
                     <option value="DELIVERED">Delivered ({filteredOrders.filter((o) => o.status === 'DELIVERED').length})</option>
-                    <option value="PAID">Paid ({filteredOrders.filter((o) => o.isStorePaid || o.isPaid).length})</option>
-                    <option value="UNPAID">Unpaid Delivered ({filteredOrders.filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid).length})</option>
+                    <option value="PAID">Disbursed ({filteredOrders.filter((o) => o.isStorePaid || o.isPaid).length})</option>
+                    <option value="UNPAID">Due / Unpaid Delivered ({filteredOrders.filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid).length})</option>
                     <option value="IN_PROGRESS">In Progress ({filteredOrders.filter((o) => o.status === 'IN_PROGRESS' || o.status === 'HANDOVER').length})</option>
                     <option value="CANCELED">Canceled ({filteredOrders.filter((o) => o.status === 'CANCELED').length})</option>
                   </select>
@@ -1174,11 +1320,11 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                           <td className="py-3.5 px-4 text-center">
                             {ord.isStorePaid || ord.isPaid ? (
                               <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Paid
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Disbursed
                               </span>
                             ) : (
                               <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-block bg-amber-100 text-amber-800 border border-amber-300">
-                                Unpaid
+                                Due / Unpaid
                               </span>
                             )}
                           </td>

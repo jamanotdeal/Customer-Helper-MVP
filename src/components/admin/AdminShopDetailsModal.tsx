@@ -88,63 +88,17 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
       ? `https://www.google.com/maps/search/?api=1&query=${shop.location.lat},${shop.location.lng}`
       : null;
 
-  // Compute Order Statistics for this Shop
-  const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.shopId === shop.id);
-  const allOrders = Array.from(fallbackStore.orders.values());
-  const mainOrders = allOrders.filter((o) => o.selectedShopIds?.includes(shop.id));
-
-  let completedOrders = 0;
-  let rejectedOrders = 0;
-  let runningOrders = 0;
-  let totalSales = 0;
-
-  if (shopOrders.length > 0) {
-    const seenParentIds = new Set<string>();
-    shopOrders.forEach((so) => {
-      seenParentIds.add(so.parentOrderId);
-      const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
-      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-      if (isCanceled) {
-        rejectedOrders++;
-      } else if (isCompleted) {
-        completedOrders++;
-        totalSales += (so.price || parentOrder?.productCost || 0);
-      } else {
-        runningOrders++;
-        totalSales += (so.price || 0);
-      }
-    });
-
-    mainOrders.forEach((mo) => {
-      if (!seenParentIds.has(mo.id)) {
-        if (mo.status === 'CANCELED') {
-          rejectedOrders++;
-        } else if (mo.status === 'DELIVERED') {
-          completedOrders++;
-          totalSales += (mo.productCost || 0);
-        } else {
-          runningOrders++;
-          totalSales += (mo.productCost || 0);
-        }
-      }
-    });
-  } else {
-    mainOrders.forEach((mo) => {
-      if (mo.status === 'CANCELED') {
-        rejectedOrders++;
-      } else if (mo.status === 'DELIVERED') {
-        completedOrders++;
-        totalSales += (mo.productCost || 0);
-      } else {
-        runningOrders++;
-        totalSales += (mo.productCost || 0);
-      }
-    });
-  }
-
-  const commission = Math.round(totalSales * ((shop.commissionPercent || 0) / 100));
+  // Compute Order Statistics & Financials dynamically based on order statuses
+  const fin = fallbackStore.getStoreFinancials(shop);
+  const completedOrders = fin.completedOrders;
+  const rejectedOrders = fin.canceledOrders;
+  const runningOrders = fin.runningOrders;
+  const totalSales = fin.deliveredSales;
+  const totalDisbursed = fin.totalDisbursed;
+  const unpaidBalance = fin.unpaidBalance;
+  const commission = fin.deliveredCommission;
+  const disbursedCommission = fin.disbursedCommission;
+  const unpaidCommission = fin.unpaidCommission;
 
   const handleToggleBlock = async () => {
     if (currentShop.isBlocked) {
@@ -383,12 +337,27 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
             <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/10">
               <div className="bg-emerald-950/60 border border-emerald-500/20 rounded-xl p-2.5">
-                <span className="text-[10px] font-bold text-emerald-300 block">Total Sales</span>
+                <span className="text-[10px] font-bold text-emerald-300 block">Total Delivered Sales</span>
                 <span className="text-base font-black text-emerald-400">৳{totalSales.toLocaleString()}</span>
+                {unpaidBalance > 0 ? (
+                  <span className="text-[10px] text-amber-300 font-extrabold block mt-0.5">
+                    Due Payout: ৳{unpaidBalance.toLocaleString()}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-emerald-300 font-bold block mt-0.5">
+                    Settled / Cleared
+                  </span>
+                )}
               </div>
               <div className="bg-purple-950/60 border border-purple-500/20 rounded-xl p-2.5">
                 <span className="text-[10px] font-bold text-purple-300 block">Commission ({shop.commissionPercent || 0}%)</span>
                 <span className="text-base font-black text-purple-300">৳{commission.toLocaleString()}</span>
+                <div className="text-[9px] text-purple-200/90 font-medium mt-0.5 leading-tight">
+                  <span>Settled: ৳{disbursedCommission.toLocaleString()}</span>
+                  {unpaidCommission > 0 && (
+                    <span className="text-amber-300 font-bold block">Due: ৳{unpaidCommission.toLocaleString()}</span>
+                  )}
+                </div>
               </div>
             </div>
 

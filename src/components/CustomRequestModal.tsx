@@ -6,7 +6,8 @@ import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { Order, OrderItem, LocationData } from '@/types';
 import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
-import { DEFAULT_SERVICES, calculateEstimatedFee, getServiceDescriptionHint } from '@/lib/pricing';
+import { DEFAULT_SERVICES, calculateEstimatedFee, getServiceDescriptionHint, isOrderTimingOpen } from '@/lib/pricing';
+import { saveScheduledOrder } from '@/utils/scheduledOrders';
 import {
   X, Sparkles, Send, MapPin, Phone, ArrowRight,
   ShoppingBag, Pill, Utensils, Shirt, Package, AlertCircle, Check, ChevronDown
@@ -67,8 +68,8 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-
-
+  const [useFreeDelivery, setUseFreeDelivery] = useState(false);
+  const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
 
   // Sync services from settings
   useEffect(() => {
@@ -215,7 +216,13 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         }
         : undefined;
 
-      const baseFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
+      const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
+      const isFree = useFreeDelivery && (user?.coins || 0) >= reqCoins;
+      const discountPct = fallbackStore.pricingSettings?.freeDeliveryDiscountPercent ?? 100;
+      const rawFee = fallbackStore.pricingSettings?.feeCalculatorMinFee ?? 20;
+      const baseFee = isFree
+        ? (discountPct === 100 ? 0 : Math.round(rawFee * (100 - discountPct) / 100))
+        : rawFee;
 
       let orderNum = Math.floor(Math.random() * 90000) + 10000;
       while (fallbackStore.orders.has(`${orderNum}`)) {
@@ -236,7 +243,10 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         deliveryLocation: delivLoc,
         status: 'PENDING',
         deliveryFee: baseFee,
-        originalDeliveryFee: baseFee,
+        originalDeliveryFee: rawFee,
+        isFreeDelivery: isFree || undefined,
+        deliveryDiscountPercent: isFree ? discountPct : undefined,
+        coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
         createdAt: now,
         updatedAt: now,
         statusHistory: [
@@ -245,10 +255,40 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
             status: 'PENDING',
             timestamp: now,
             actor: 'Customer',
-            note: 'Custom request submitted',
+            note: isFree ? 'Custom request submitted (free delivery claimed)' : 'Custom request submitted',
           },
         ],
       };
+      // Check if platform service is currently open; if closed, queue locally
+      const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
+      if (!serviceTiming.isOpen) {
+        const scheduledOrder: Order = {
+          ...newOrder,
+          status: 'SCHEDULED' as any,
+          isScheduled: true,
+          scheduledAt: new Date().toISOString(),
+          scheduledNote: serviceTiming.message || undefined,
+        };
+        saveScheduledOrder(scheduledOrder);
+        if (altPhone.trim()) saveAltPhone(altPhone.trim());
+        if (delivLoc.address) {
+          saveDefaultDeliveryLocation(delivLoc);
+          if (user.uid) {
+            addSavedDeliveryAddress(user.uid, delivLoc);
+            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => {});
+          }
+        }
+        updateCustomerPreferences(altPhone.trim() || undefined, delivLoc, undefined);
+        showAlert(
+          'রিকোয়েস্ট শিডিউল হয়েছে!',
+          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
+            ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+          'info'
+        );
+        onClose();
+        if (onOrderCreated) onOrderCreated(scheduledOrder as Order);
+        return;
+      }
 
       await fallbackStore.addOrder(newOrder);
 
@@ -522,6 +562,43 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
             </div>
           </div>
 
+          {/* Free Delivery Coin Claim Toggle */}
+          {(() => {
+            const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
+            const userCoins = user?.coins || 0;
+            const hasEnough = userCoins >= reqCoins;
+            return (
+              <div
+                onClick={() => {
+                  if (!user || !hasEnough) {
+                    setShowInsufficientCoinsModal(true);
+                    return;
+                  }
+                  setUseFreeDelivery((prev) => !prev);
+                }}
+                className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${
+                  useFreeDelivery
+                    ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
+                    : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={useFreeDelivery}
+                    readOnly
+                    className="w-3.5 h-3.5 accent-amber-600 rounded pointer-events-none"
+                  />
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span className="text-[11px] font-bold text-gray-900">ফ্রি ডেলিভারি ক্লেম করুন!</span>
+                </div>
+                <span className="text-[10px] text-amber-700 font-extrabold">
+                  {userCoins}/{reqCoins} Coins
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Submit CTA */}
           <div className="pt-2 flex items-center space-x-2">
             <button
@@ -548,6 +625,43 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Insufficient Coins Modal */}
+      {showInsufficientCoinsModal && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setShowInsufficientCoinsModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="font-extrabold text-base text-gray-900">
+                {fallbackStore.pricingSettings?.insufficientCoinsTitle || 'ফ্রি ডেলিভারি'}
+              </h3>
+              <p className="text-xs text-gray-600 font-medium leading-relaxed">
+                {fallbackStore.pricingSettings?.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই। ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
+              </p>
+              <div className="mt-2 py-2 px-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs font-semibold text-amber-900 flex items-center justify-between">
+                <span>প্রয়োজন: <strong>{fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50} Coins</strong></span>
+                <span>আপনার আছে: <strong className="text-emerald-700">{user?.coins || 0} Coins</strong></span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowInsufficientCoinsModal(false)}
+              className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer transition-colors"
+            >
+              ঠিক আছে
+            </button>
+          </div>
+        </div>
+      )}
     </div>
+
   );
 };

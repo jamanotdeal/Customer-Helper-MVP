@@ -77,11 +77,29 @@ export const getItemQuantityNum = (item: { qty?: string | number; quantity?: num
   if (typeof item.qty === 'number' && item.qty > 0) return item.qty;
   if (typeof item.qty === 'string') {
     const bengaliNormalized = item.qty.replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+    const multMatch = bengaliNormalized.match(/^(\d+(?:\.\d+)?)\s*[×x*]/i);
+    if (multMatch) {
+      const mult = parseFloat(multMatch[1]);
+      if (!isNaN(mult) && mult > 0) return mult;
+    }
+    if (/(?:গ্রাম|gm|gram|ml|মিলি)/i.test(bengaliNormalized)) {
+      const parsed = parseFloat(bengaliNormalized);
+      if (!isNaN(parsed) && parsed >= 20) return 1;
+    }
     const parsed = parseFloat(bengaliNormalized);
     if (!isNaN(parsed) && parsed > 0) return parsed;
   }
   if (typeof item.unit === 'string') {
     const bengaliNormalized = item.unit.replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+    const multMatch = bengaliNormalized.match(/^(\d+(?:\.\d+)?)\s*[×x*]/i);
+    if (multMatch) {
+      const mult = parseFloat(multMatch[1]);
+      if (!isNaN(mult) && mult > 0) return mult;
+    }
+    if (/(?:গ্রাম|gm|gram|ml|মিলি)/i.test(bengaliNormalized)) {
+      const parsed = parseFloat(bengaliNormalized);
+      if (!isNaN(parsed) && parsed >= 20) return 1;
+    }
     const parsed = parseFloat(bengaliNormalized);
     if (!isNaN(parsed) && parsed > 0) return parsed;
   }
@@ -172,8 +190,12 @@ export const getShopItemPriceDisplay = (
   let lineTotal = Math.round(rawPrice * qtyNum * 100) / 100;
 
   if (shopOrderTotalPrice && shopOrderTotalPrice > 0) {
-    // If rawPrice is equal or closer to the shopOrderTotalPrice than rawPrice * qtyNum, rawPrice is line total
-    if (Math.abs(rawPrice - shopOrderTotalPrice) < Math.abs(lineTotal - shopOrderTotalPrice)) {
+    // 1. If rawPrice * qtyNum strictly exceeds the entire shop order total, rawPrice must be line total
+    if (lineTotal > shopOrderTotalPrice + 0.05) {
+      lineTotal = rawPrice;
+      unitPrice = Math.round((rawPrice / qtyNum) * 100) / 100;
+    } else if (Math.abs(rawPrice - shopOrderTotalPrice) < 0.01 && Math.abs(lineTotal - shopOrderTotalPrice) > 0.01) {
+      // 2. If rawPrice exactly matches the whole shop order total, rawPrice is line total
       lineTotal = rawPrice;
       unitPrice = Math.round((rawPrice / qtyNum) * 100) / 100;
     }

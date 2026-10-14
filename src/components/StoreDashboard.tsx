@@ -17,7 +17,8 @@ import { OrderDetailsView } from './OrderDetailsView';
 import { useModal } from './CustomModal';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
-import { getShopItemPriceDisplay } from '@/lib/itemUtils';
+import { getShopItemPriceDisplay, getItemQuantityNum } from '@/lib/itemUtils';
+import { PaginationControl } from './admin/PaginationControl';
 
 
 
@@ -211,11 +212,17 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [myRequests, setMyRequests] = useState<Order[]>([]);
   const [storeShopOrders, setStoreShopOrders] = useState<ShopOrder[]>([]);
 
-  // Incoming Orders (Store Shop Orders) Filters & Pagination
+  // Incoming Orders (Store Shop Orders) Filters, Sorting & Pagination
   const [storeStatusFilter, setStoreStatusFilter] = useState<string>('ALL');
   const [storeDateFilter, setStoreDateFilter] = useState<'ALL' | 'TODAY' | 'LAST_7_DAYS' | 'THIS_MONTH'>('ALL');
   const [storeSortOrder, setStoreSortOrder] = useState<'ACTIVE_FIRST' | 'NEWEST' | 'OLDEST'>('ACTIVE_FIRST');
-  const [storeVisibleCount, setStoreVisibleCount] = useState(10);
+  const [storeCurrentPage, setStoreCurrentPage] = useState<number>(1);
+  const [storePageSize, setStorePageSize] = useState<number>(10);
+
+  // Reset pagination when filters or sort change
+  useEffect(() => {
+    setStoreCurrentPage(1);
+  }, [storeStatusFilter, storeDateFilter, storeSortOrder]);
 
   // My Requests Filters & Pagination
   const [myReqStatusFilter, setMyReqStatusFilter] = useState<string>('ALL');
@@ -470,20 +477,15 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return () => unsub();
   }, [storeId]);
 
-  const fetchCompletedPage = async (isFirstPage: boolean) => {
-    if (!storeId || completedLoading || (!completedHasMore && !isFirstPage)) return;
+  const fetchCompletedPage = async () => {
+    if (!storeId || completedLoading) return;
     setCompletedLoading(true);
     try {
-      let q = query(
+      const q = query(
         collection(db, 'shopOrders'),
         where('shopId', '==', storeId),
-        orderBy('createdAt', 'desc'),
-        limit(15)
+        orderBy('createdAt', 'desc')
       );
-
-      if (!isFirstPage && completedLastVisible) {
-        q = query(q, startAfter(completedLastVisible));
-      }
       const snap = await getDocs(q);
       const newShopOrders: ShopOrder[] = [];
       const parentOrderFetchPromises: Promise<void>[] = [];
@@ -508,9 +510,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       await Promise.all(parentOrderFetchPromises);
 
       setCompletedParentOrders(prev => ({ ...prev, ...newParentOrders }));
-      setCompletedShopOrders(prev => isFirstPage ? newShopOrders : [...prev, ...newShopOrders]);
-      setCompletedLastVisible(snap.docs[snap.docs.length - 1] || null);
-      setCompletedHasMore(snap.docs.length === 15);
+      setCompletedShopOrders(newShopOrders);
+      setCompletedHasMore(false);
     } catch (err) {
       console.error('Error fetching completed shop orders:', err);
     } finally {
@@ -544,10 +545,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
   };
 
-  // Trigger paginated fetches when tabs change
+  // Trigger fetches when tabs change
   useEffect(() => {
     if (localActiveTab === 'ORDERS') {
-      fetchCompletedPage(true);
+      fetchCompletedPage();
     }
   }, [localActiveTab, storeId]);
 
@@ -840,6 +841,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
     return result;
   }, [allAvailableShopOrders, storeStatusFilter, storeDateFilter, storeSortOrder, completedParentOrders]);
+
+  const totalStorePages = Math.max(1, Math.ceil(filteredShopOrders.length / storePageSize));
+  const validStorePage = Math.min(Math.max(1, storeCurrentPage), totalStorePages);
+  const paginatedShopOrders = useMemo(() => {
+    const startIdx = (validStorePage - 1) * storePageSize;
+    return filteredShopOrders.slice(startIdx, startIdx + storePageSize);
+  }, [filteredShopOrders, validStorePage, storePageSize]);
 
   const filteredMyRequests = useMemo(() => {
     let result = [...myRequests, ...completedRequests];
@@ -1280,10 +1288,12 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {filteredShopOrders.slice(0, storeVisibleCount).map((so) => {
+                  {paginatedShopOrders.map((so) => {
                     const parentStatus = getParentOrderStatus(so.parentOrderId);
+                    const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
                     const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
                     const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
+                    const isDisbursed = Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid);
                     const isActive = !isCanceled && !isDelivered;
                     const { itemsText, helperNote } = extractShopOrderNoteAndItems(so);
                     const parsedItems = parseShopOrderItems(so);
@@ -1321,15 +1331,26 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                               </>
                             )}
                           </div>
-                          <div className="shrink-0">
+                          <div className="shrink-0 flex items-center gap-1.5 flex-wrap justify-end">
                             {isCanceled ? (
                               <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
                                 Canceled
                               </span>
                             ) : isDelivered ? (
-                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700 border border-gray-300">
-                                Delivered
-                              </span>
+                              <>
+                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700 border border-gray-300">
+                                  Delivered
+                                </span>
+                                {isDisbursed ? (
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-0.5">
+                                    <CheckCircle className="w-2.5 h-2.5 text-emerald-600" /> Disbursed
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                                    Due
+                                  </span>
+                                )}
+                              </>
                             ) : so.status === 'ACCEPTED' ? (
                               <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
                                 Confirmed
@@ -1362,7 +1383,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                       <span className="font-bold text-gray-800 break-words">{item.name}</span>
                                       {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
                                     </div>
-                                    {item.price ? (
+                                    {priceInfo.lineTotal > 0 ? (
                                       <div className="text-right shrink-0">
                                         {priceInfo.isMultiQty ? (
                                           <div className="flex items-center gap-1.5 justify-end">
@@ -1401,19 +1422,25 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                               {(() => {
                                 const shopForCard = fallbackStore.shops.get(so.shopId);
                                 const commPct = shopForCard?.commissionPercent;
-                                const total = so.price || 0;
-                                if (commPct && commPct > 0 && total > 0) {
-                                  const commAmt = Math.round(total * (commPct / 100));
-                                  const payable = Math.max(0, total - commAmt);
+                                const exactTotal = (so.price && so.price > 0)
+                                  ? so.price
+                                  : parsedItems.reduce((acc, it) => {
+                                      const p = parseFloat(String(it.price || '0')) || 0;
+                                      const q = getItemQuantityNum({ unit: it.unit, qty: it.unit });
+                                      return acc + p * q;
+                                    }, 0);
+                                if (commPct && commPct > 0 && exactTotal > 0) {
+                                  const commAmt = Math.round(exactTotal * (commPct / 100));
+                                  const payable = Math.max(0, exactTotal - commAmt);
                                   return (
                                     <div className="flex items-center justify-end gap-1.5">
-                                      <span className="text-gray-400 line-through font-semibold text-xs">৳{total}</span>
+                                      <span className="text-gray-400 line-through font-semibold text-xs">৳{exactTotal}</span>
                                       <span className="text-emerald-700 font-black text-sm font-mono">৳{payable}</span>
                                       <span className="text-[9px] text-emerald-700 font-bold bg-emerald-100 border border-emerald-200 rounded-full px-1.5 py-0.5">-{commPct}%</span>
                                     </div>
                                   );
                                 }
-                                return <span className="text-emerald-700 font-black text-sm font-mono">৳{total}</span>;
+                                return <span className="text-emerald-700 font-black text-sm font-mono">৳{exactTotal}</span>;
                               })()}
                             </div>
                           </div>
@@ -1504,19 +1531,25 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     );
                   })}
 
-                  {(filteredShopOrders.length > storeVisibleCount || completedHasMore) && (
-                    <button
-                      onClick={async () => {
-                        if (completedHasMore) {
-                          await fetchCompletedPage(false);
-                        }
-                        setStoreVisibleCount((prev) => prev + PAGE_SIZE);
+                  {/* Pagination Controls */}
+                  {filteredShopOrders.length > 0 && (
+                    <PaginationControl
+                      currentPage={validStorePage}
+                      totalPages={totalStorePages}
+                      totalItems={filteredShopOrders.length}
+                      pageSize={storePageSize}
+                      onPageChange={(page) => {
+                        setStoreCurrentPage(page);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
-                      disabled={completedLoading}
-                      className="w-full py-3 bg-white hover:bg-gray-50 border border-gray-200 text-gray-800 font-extrabold text-xs rounded-2xl transition-all text-center mt-2 shadow-xs disabled:opacity-50"
-                    >
-                      {completedLoading ? 'লোড হচ্ছে...' : 'আরও দেখুন (Load More)'}
-                    </button>
+                      onPageSizeChange={(newSize) => {
+                        setStorePageSize(newSize);
+                        setStoreCurrentPage(1);
+                      }}
+                      pageSizeOptions={[10, 20, 30, 50]}
+                      colorScheme="emerald"
+                      className="rounded-2xl border border-gray-100 shadow-soft mt-3"
+                    />
                   )}
                 </div>
               )}
@@ -1876,7 +1909,7 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
                                 {it.name}
                                 {it.unit ? <span className="ml-1 text-[10px] text-purple-600 font-bold bg-purple-50 px-1 py-0.5 rounded">({it.unit})</span> : null}
                               </span>
-                              {it.price ? (
+                              {priceInfo.lineTotal > 0 ? (
                                 <div className="text-right shrink-0">
                                   {priceInfo.isMultiQty ? (
                                     <div className="flex items-center gap-1 justify-end">
@@ -1902,16 +1935,22 @@ const StoreNewOrderAlertOverlay: React.FC<StoreNewOrderAlertOverlayProps> = ({
                     {(() => {
                       const shopForDetail = fallbackStore.shops.get(shopOrder.shopId);
                       const commPct = shopForDetail?.commissionPercent;
-                      const total = shopOrder.price || 0;
-                      const hasComm = commPct && commPct > 0 && total > 0;
-                      const commAmt = hasComm ? Math.round(total * (commPct! / 100)) : 0;
-                      const payable = hasComm ? Math.max(0, total - commAmt) : total;
+                      const exactTotal = (shopOrder.price && shopOrder.price > 0)
+                        ? shopOrder.price
+                        : parsedItems.reduce((acc, it) => {
+                            const p = parseFloat(String(it.price || '0')) || 0;
+                            const q = getItemQuantityNum({ unit: it.unit, qty: it.unit });
+                            return acc + p * q;
+                          }, 0);
+                      const hasComm = commPct && commPct > 0 && exactTotal > 0;
+                      const commAmt = hasComm ? Math.round(exactTotal * (commPct! / 100)) : 0;
+                      const payable = hasComm ? Math.max(0, exactTotal - commAmt) : exactTotal;
                       return (
                         <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-gray-50 to-emerald-50 overflow-hidden">
                           <div className="px-3 pt-2.5 pb-1.5 space-y-1">
                             <div className="flex items-center justify-between text-xs font-bold text-gray-600">
                               <span>মোট পণ্যের মূল্য (Total Cost)</span>
-                              <span className="font-mono text-gray-900">৳{total}</span>
+                              <span className="font-mono text-gray-900">৳{exactTotal}</span>
                             </div>
                             {hasComm && (
                               <div className="flex items-center justify-between text-xs font-bold text-rose-600">

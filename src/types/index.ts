@@ -9,7 +9,8 @@ export type OrderStatus =
   | 'ON_THE_WAY'
   | 'ARRIVED'
   | 'DELIVERED'
-  | 'CANCELED';
+  | 'CANCELED'
+  | 'SCHEDULED';
 
 export type MissingItemPref = 'SKIP' | 'SIMILAR' | 'CALL';
 
@@ -177,6 +178,11 @@ export interface Order {
   isStoreOrder?: boolean;
   isStoreClosedAtOrder?: boolean; // true if the store was closed when the order was placed
   creatorRole?: string;
+
+  // Out of service time scheduled orders
+  isScheduled?: boolean;
+  scheduledAt?: string;
+  scheduledNote?: string;
 
   // Payment settlement tracking (Store Payout & Helper Commission Payback)
   isPaid?: boolean;

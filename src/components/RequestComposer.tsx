@@ -17,6 +17,7 @@ import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
 import { StoreOffWarningModal } from './StoreOffWarningModal';
 import { isShopOpenNow } from './StoreGrid';
+import { saveScheduledOrder } from '@/utils/scheduledOrders';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -573,7 +574,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         if (it.storeId) {
           const s = fallbackStore.shops.get(it.storeId);
           if (s && (s.isOpen === false || s.isBlocked === true)) {
-            return { ...it, isCustom: true };
+            // Mark as custom and clear price — helper will determine the actual price
+            return { ...it, isCustom: true, price: undefined };
           }
         }
         return it;
@@ -660,6 +662,36 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
           },
         ],
       };
+      // Check if platform service is currently open; if not, schedule the order locally
+      const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
+      if (!serviceTiming.isOpen) {
+        const scheduledOrder: Order = {
+          ...newOrder,
+          status: 'SCHEDULED' as any,
+          isScheduled: true,
+          scheduledAt: new Date().toISOString(),
+          scheduledNote: serviceTiming.message || undefined,
+        };
+        saveScheduledOrder(scheduledOrder);
+        setDescription('');
+        setService('');
+        setIsServiceDropdownOpen(false);
+        setPickupNote('');
+        setPickupLat(undefined);
+        setPickupLng(undefined);
+        setPickupAddressId(undefined);
+        setDeliveryAddressId(undefined);
+        setIsExpanded(false);
+        setSubmitting(false);
+        await showAlert(
+          'রিকোয়েস্ট শিডিউল হয়েছে!',
+          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
+            ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+          'info'
+        );
+        onOrderCreated(scheduledOrder as Order);
+        return;
+      }
 
       // Save to server first (awaited — order must be confirmed on Firestore before proceeding)
       await fallbackStore.addOrder(newOrder);

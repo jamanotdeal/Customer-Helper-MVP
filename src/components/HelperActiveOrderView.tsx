@@ -317,6 +317,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     originalId: string;
     name: string;
     qty?: string | number;
+    unit?: string;
     price?: string;
     isChecked: boolean;
     isNote: boolean;
@@ -326,6 +327,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [customCostItems, setCustomCostItems] = useState<SelectedItemEntry[]>([]);
   const [shopOrderItems, setShopOrderItems] = useState<SelectedItemEntry[]>([]);
   const [customShopItemName, setCustomShopItemName] = useState('');
+  const [customShopItemUnit, setCustomShopItemUnit] = useState('');
   const [customShopItemPrice, setCustomShopItemPrice] = useState('');
   const [showAddCustomShopItem, setShowAddCustomShopItem] = useState(false);
   const [viewRequestItems, setViewRequestItems] = useState<SelectedItemEntry[]>([]);
@@ -472,6 +474,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         originalId: it.id,
         name: it.name,
         qty: it.qty,
+        unit: it.unit,
         price: it.price ? String(it.price) : '',
         isChecked: true,
         isNote: false,
@@ -622,7 +625,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return [];
     }
 
-    const result: Array<{ id: string; originalId: string; name: string; qty?: string | number; quantity?: number; purchased: boolean }> = [];
+    const result: Array<{ id: string; originalId: string; name: string; qty?: string | number; unit?: string; quantity?: number; purchased: boolean }> = [];
     order.items.forEach((item) => {
       const parts = item.name.split(/,|\r?\n/).map((p) => p.trim()).filter(Boolean);
       const effectiveQty = getItemQuantityNum(item);
@@ -636,6 +639,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             originalId: item.id,
             name: part,
             qty: index === 0 ? item.qty : undefined,
+            unit: index === 0 ? item.unit : undefined,
             quantity: index === 0 ? effectiveQty : 1,
             purchased: isSubChecked,
           });
@@ -648,6 +652,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           originalId: item.id,
           name: item.name,
           qty: item.qty,
+          unit: item.unit,
           quantity: effectiveQty,
           purchased: isSubChecked,
         });
@@ -684,6 +689,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         originalId: i.originalId,
         name: i.name,
         qty: i.qty,
+        unit: (i as any).unit,
         price: '',
         isChecked: true,
         isNote: false,
@@ -715,6 +721,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         originalId: i.originalId,
         name: i.name,
         qty: i.qty,
+        unit: (i as any).unit,
         price: '',
         isChecked: false,
         isNote: false,
@@ -754,6 +761,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             originalId: it.id,
             name: it.name,
             qty: it.qty,
+            unit: it.unit,
             price: it.price ? String(it.price) : '',
             isChecked: true,
             isNote: false,
@@ -768,6 +776,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             originalId: it.id,
             name: it.name,
             qty: it.qty,
+            unit: it.unit,
             price: it.price ? String(it.price) : '',
             isChecked: true,
             isNote: false,
@@ -792,19 +801,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const handleAddCustomShopItem = () => {
     if (!customShopItemName.trim()) return;
     const newId = `custom-item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const parsedQty = getItemQuantityNum({ qty: customShopItemUnit });
     setShopOrderItems((prev) => [
       ...prev,
       {
         id: newId,
         originalId: newId,
         name: customShopItemName.trim(),
-        qty: '1',
+        qty: parsedQty > 1 ? parsedQty : '1',
+        unit: customShopItemUnit.trim() || undefined,
         price: customShopItemPrice.trim() || '',
         isChecked: true,
         isNote: false,
       },
     ]);
     setCustomShopItemName('');
+    setCustomShopItemUnit('');
     setCustomShopItemPrice('');
     setShowAddCustomShopItem(false);
     if (orderTextError) setOrderTextError('');
@@ -1201,7 +1213,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         price: calculatedTotal,
         itemsWithPrice: checkedItems.map((i) => ({
           name: i.name,
-          unit: i.qty !== undefined && i.qty !== null ? String(i.qty) : undefined,
+          unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
           price: parseFloat(i.price || '0') || undefined,
           itemId: i.id,
           originalId: i.originalId,
@@ -2592,6 +2604,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                           setOrderNowLoading(prev => ({ ...prev, [sid]: true }));
                                           try {
                                             const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
+                                            const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
                                             const newSO: ShopOrder = {
                                               id: `so-${sid}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
                                               parentOrderId: order.id,
@@ -2603,8 +2616,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                               sellerName: storeName,
                                               status: 'PENDING',
                                               viewedByStore: false,
-                                              price: 0,
-                                              itemsWithPrice: items.map(i => ({ name: i.name, itemId: i.id, originalId: i.id, price: i.price || 0 })),
+                                              price: totalOrdered,
+                                              itemsWithPrice: items.map(i => ({
+                                                name: i.name,
+                                                unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
+                                                itemId: i.id,
+                                                originalId: i.id,
+                                                price: i.price ? Number(i.price) : undefined,
+                                              })),
                                               createdAt: new Date().toISOString(),
                                               updatedAt: new Date().toISOString(),
                                               statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
@@ -5145,6 +5164,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       price: totalStoreCost,
                       itemsWithPrice: storePriceItems.map(i => ({
                         name: i.name,
+                        unit: formatItemQuantityUnit(getItemQuantityNum(i), (i as any).unit, i.qty),
                         price: parseFloat(i.price || '0') || 0,
                         itemId: i.id,
                         originalId: i.originalId,
@@ -5251,6 +5271,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     price: totalCustomCost,
                     itemsWithPrice: checkedItems.map((i) => ({
                       name: i.name,
+                      unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
                       price: parseFloat(i.price || '0') || 0,
                       itemId: i.id,
                       originalId: i.originalId,

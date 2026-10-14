@@ -11,9 +11,10 @@ import { CustomRequestModal } from './CustomRequestModal';
 interface BottomNavProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  onHomeClick?: () => void;
 }
 
-export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab }) => {
+export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, onHomeClick }) => {
   const { user, activeMode, openAuthModal } = useAuth();
   const { cartItems, openCartDrawer } = useCart();
   const [exploreCount, setExploreCount] = useState(0);
@@ -93,6 +94,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab })
 
   const handleTabChange = (tab: string) => {
     hapticFeedback('selection');
+    if (tab === 'request') {
+      onHomeClick?.();
+    }
     if (tab !== activeTab) {
       setActiveTab(tab);
     }

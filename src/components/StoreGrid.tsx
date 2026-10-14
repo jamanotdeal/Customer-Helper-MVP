@@ -184,38 +184,48 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
               hapticFeedback('selection');
               setIsDropdownOpen((prev) => !prev);
             }}
-            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border-2 transition-all cursor-pointer bg-white ${isDropdownOpen
-                ? 'border-emerald-600 ring-4 ring-emerald-500/15 shadow-md'
-                : 'border-emerald-200/90 hover:border-emerald-500 shadow-xs hover:shadow-sm'
-              }`}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20 active:scale-[0.99] ${
+              isDropdownOpen
+                ? 'border-emerald-300 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-600/30'
+                : 'border-emerald-500/80 hover:border-emerald-400 hover:shadow-lg'
+            }`}
             aria-expanded={isDropdownOpen}
             aria-haspopup="listbox"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0">
-                <Layers className="w-4 h-4" />
+              <div className="w-10 h-10 rounded-xl bg-white/20 border border-white/25 text-white shadow-inner flex items-center justify-center shrink-0 backdrop-blur-xs relative">
+                <span className="inline-block animate-bounce">
+                  <Layers className="w-5 h-5 text-white" />
+                </span>
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-300 opacity-80" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400" />
+                </span>
               </div>
               <div className="text-left min-w-0">
-                <span className="block text-[10px] font-black uppercase tracking-wider text-emerald-700">
+                <span className="block text-[10px] font-black uppercase tracking-wider text-emerald-100">
                   সার্ভিস বেছে নিন
                 </span>
-                <span className="block text-xs sm:text-sm font-extrabold text-gray-900 truncate">
+                <span className="block text-xs sm:text-sm font-black text-white truncate">
                   {selectedService || 'সার্ভিস নির্বাচন করুন'}
                 </span>
               </div>
             </div>
 
             <div
-              className={`w-7 h-7 rounded-full flex items-center justify-center transition-transform duration-200 shrink-0 ${isDropdownOpen ? 'bg-emerald-100/70 rotate-180' : 'text-gray-400'
-                }`}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${
+                isDropdownOpen
+                  ? 'bg-white text-emerald-700 rotate-180 shadow-xs'
+                  : 'bg-white/20 border border-white/25 text-white'
+              }`}
             >
-              <ChevronDown className="w-4 h-4 text-emerald-700" />
+              <ChevronDown className="w-4 h-4 stroke-[2.5]" />
             </div>
           </button>
 
           {/* Custom Dropdown Menu */}
           {isDropdownOpen && (
-            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-gray-100 shadow-xl overflow-hidden py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border-2 border-emerald-200 shadow-2xl overflow-hidden py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
                 {servicesList.map((svc) => {
                   const isSelected = svc === selectedService;
@@ -229,22 +239,24 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
                         setVisibleCount(INITIAL_COUNT);
                         setIsDropdownOpen(false);
                       }}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${isSelected
-                          ? 'bg-emerald-50/80 text-emerald-950 font-black'
+                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-50 text-emerald-950 font-black'
                           : 'hover:bg-gray-50 text-gray-800 font-bold'
-                        }`}
+                      }`}
                     >
                       <div className="flex items-center gap-2.5 truncate">
                         <div
-                          className={`w-2 h-2 rounded-full shrink-0 ${isSelected
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                            isSelected
                               ? 'bg-emerald-600 ring-4 ring-emerald-200'
                               : 'bg-gray-300'
-                            }`}
+                          }`}
                         />
                         <span className="text-xs sm:text-sm truncate">{svc}</span>
                       </div>
                       {isSelected && (
-                        <Check className="w-4 h-4 text-emerald-600 shrink-0 ml-2" />
+                        <Check className="w-4 h-4 text-emerald-600 shrink-0 ml-2 stroke-[3]" />
                       )}
                     </button>
                   );

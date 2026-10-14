@@ -36,11 +36,16 @@ import { StoreProductManager } from '@/components/StoreProductManager';
 import { StoreWallet } from '@/components/StoreWallet';
 import { CartSummaryDrawer } from '@/components/CartSummaryDrawer';
 import { FloatingCartBar } from '@/components/FloatingCartBar';
+import { MissingItemFloatingButton } from '@/components/MissingItemFloatingButton';
+import { CustomRequestModal } from '@/components/CustomRequestModal';
+import { processAndDispatchScheduledOrders } from '@/utils/scheduledOrders';
 
 export default function PageClient() {
-  const { user, loading, activeMode, setActiveMode } = useAuth();
+  const { user, loading, activeMode, setActiveMode, openAuthModal } = useAuth();
   const { showAlert, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'my_orders' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'store_products'>('request');
+  const [customerHomeResetTrigger, setCustomerHomeResetTrigger] = useState(0);
+  const [showGlobalCustomRequestModal, setShowGlobalCustomRequestModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
@@ -94,6 +99,31 @@ export default function PageClient() {
       fallbackStore.markNotificationsRead(user.uid).catch(() => {/* ignore */});
     }
   }, [user?.uid, activeMode]);
+
+  // Auto-dispatch locally queued scheduled orders when service time opens
+  useEffect(() => {
+    const tryDispatch = async () => {
+      try {
+        const dispatched = await processAndDispatchScheduledOrders();
+        if (dispatched > 0) {
+          showAlert(
+            `${dispatched}টি শিডিউল রিকোয়েস্ট পাঠানো হয়েছে!`,
+            'সার্ভিস সময় শুরু হওয়ায় আপনার আগে করা শিডিউল রিকোয়েস্টগুলো হেলপারদের কাছে পাঠানো হয়েছে।',
+            'success'
+          );
+        }
+      } catch (e) {
+        console.warn('[PageClient] Failed to dispatch scheduled orders:', e);
+      }
+    };
+
+    if (user) {
+      tryDispatch();
+      const interval = setInterval(tryDispatch, 60000);
+      return () => clearInterval(interval);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]);
 
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
@@ -493,6 +523,7 @@ export default function PageClient() {
       <CustomerHome
         initialSelectedOrderId={initialSelectedOrderId}
         onClearInitialOrder={() => setInitialSelectedOrderId(null)}
+        resetTrigger={customerHomeResetTrigger}
       />
     );
   };
@@ -590,6 +621,20 @@ export default function PageClient() {
           setActiveTab={(tab) => {
             setActiveTab(tab as any);
           }}
+          onHomeClick={() => {
+            // When Home is tapped from any tab, reset back to top-level home
+            setActiveTab('request');
+            setCustomerHomeResetTrigger((prev) => prev + 1);
+          }}
+        />
+      )}
+
+      {/* Global Missing Item Floating Button (visible on all customer pages when footer nav is shown) */}
+      {user && !isAdminView && (
+        <MissingItemFloatingButton
+          onOpenCustomRequest={() => {
+            setShowGlobalCustomRequestModal(true);
+          }}
         />
       )}
 
@@ -681,6 +726,16 @@ export default function PageClient() {
       {/* Global Cart Summary Drawer */}
       <CartSummaryDrawer
         onOrderCreated={(order) => {
+          handleSelectOrder(order.id);
+        }}
+      />
+
+      {/* Global Custom Request Modal (triggered from MissingItemFloatingButton on any page) */}
+      <CustomRequestModal
+        isOpen={showGlobalCustomRequestModal}
+        onClose={() => setShowGlobalCustomRequestModal(false)}
+        onOrderCreated={(order) => {
+          setShowGlobalCustomRequestModal(false);
           handleSelectOrder(order.id);
         }}
       />

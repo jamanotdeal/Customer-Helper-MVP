@@ -8088,113 +8088,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
 
-        // Pre-compute metrics for sorting & display
-        const allShopOrdersList = Array.from(fallbackStore.shopOrders.values());
-        const allWithdrawalsList = Array.from(fallbackStore.withdrawals.values());
-        const allOrdersList = Array.from(fallbackStore.orders.values());
-
+        // Pre-compute metrics for sorting & display via unified store financials
         const getShopComputedMetrics = (s: Shop) => {
-          const storeUserId = s.ownerUserId || s.id;
-          const targetShopId = s.id;
-
-          let completed = 0;
-          let rejected = 0;
-          let running = 0;
-          let totalSales = 0;       // all (delivered + running) for display
-          let deliveredSales = 0;   // only delivered/handover — for unpaid balance
-          let todaySales = 0;
-
-          const now = new Date();
-          const todayYear = now.getFullYear();
-          const todayMonth = now.getMonth();
-          const todayDate = now.getDate();
-
-          const isSameDay = (dateStr?: string) => {
-            if (!dateStr) return false;
-            const d = new Date(dateStr);
-            if (isNaN(d.getTime())) return false;
-            return d.getFullYear() === todayYear && d.getMonth() === todayMonth && d.getDate() === todayDate;
-          };
-
-          const seenParentIds = new Set<string>();
-          allShopOrdersList.forEach((so) => {
-            if (so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`) {
-              seenParentIds.add(so.parentOrderId);
-              const parentOrder = allOrdersList.find((o) => o.id === so.parentOrderId);
-              const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
-              const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-              if (isCanceled) {
-                rejected++;
-              } else if (isCompleted) {
-                completed++;
-                const price = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
-                totalSales += price;
-                deliveredSales += price;
-
-                if (isSameDay(parentOrder?.deliveredAt || so.updatedAt || so.createdAt)) {
-                  todaySales += price;
-                }
-              } else {
-                running++;
-                totalSales += (so.price || 0);
-              }
-            }
-          });
-
-          allOrdersList.forEach((mo) => {
-            const matches =
-              mo.shopId === targetShopId ||
-              mo.shopId === storeUserId ||
-              mo.selectedShopIds?.includes(targetShopId) ||
-              mo.selectedShopIds?.includes(storeUserId);
-            if (matches && !seenParentIds.has(mo.id)) {
-              if (mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED') {
-                rejected++;
-              } else if (mo.status === 'DELIVERED') {
-                completed++;
-                const price = mo.productCost || 0;
-                totalSales += price;
-                deliveredSales += price;
-
-                if (isSameDay(mo.deliveredAt || mo.createdAt)) {
-                  todaySales += price;
-                }
-              } else {
-                running++;
-                totalSales += (mo.productCost || 0);
-              }
-            }
-          });
-
-          const commPercent = s.commissionPercent || 0;
-          const commission = Math.round(totalSales * (commPercent / 100));
-          const netSales = Math.max(0, totalSales - commission);
-          // Unpaid balance: only from delivered orders net of commission
-          const deliveredCommission = Math.round(deliveredSales * (commPercent / 100));
-          const deliveredNetSales = Math.max(0, deliveredSales - deliveredCommission);
-
-          const approvedWds = allWithdrawalsList.filter(
-            (w) =>
-              (w.helperId === storeUserId ||
-                w.helperId === targetShopId ||
-                w.helperId === `store-${storeUserId}` ||
-                (w.userType === 'store' && (w.helperName === s.name || w.helperId === s.id))) &&
-              w.status === 'APPROVED'
-          );
-          const totalDisbursed = approvedWds.reduce((sum, w) => sum + w.amount, 0);
-          const unpaidBalance = Math.max(0, deliveredNetSales - totalDisbursed);
-
+          const fin = fallbackStore.getStoreFinancials(s);
           return {
-            completed,
-            rejected,
-            running,
-            totalSales,
-            todaySales,
-            commission,
-            netSales,
-            totalDisbursed,
-            unpaidBalance,
+            completed: fin.completedOrders,
+            rejected: fin.canceledOrders,
+            running: fin.runningOrders,
+            totalSales: fin.totalSales,
+            todaySales: fin.todaySales,
+            commission: fin.deliveredCommission,
+            disbursedCommission: fin.disbursedCommission,
+            unpaidCommission: fin.unpaidCommission,
+            netSales: fin.deliveredNetSales,
+            totalDisbursed: fin.totalDisbursed,
+            unpaidBalance: fin.unpaidBalance,
           };
         };
 
@@ -8976,6 +8884,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           totalSales: 0,
                           todaySales: 0,
                           commission: 0,
+                          disbursedCommission: 0,
+                          unpaidCommission: 0,
                           netSales: 0,
                           totalDisbursed: 0,
                           unpaidBalance: 0,
@@ -9153,6 +9063,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     Click to Disburse →
                                   </span>
                                 </button>
+                              ) : metrics.unpaidBalance < 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDisbursingShop(s)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black text-xs block text-left shadow-2xs transition-all cursor-pointer group"
+                                  title="Platform paid more - Advance / Minus balance"
+                                >
+                                  <span className="block text-[13px] font-black text-amber-700 group-hover:text-amber-900 font-mono">
+                                    -৳{Math.abs(metrics.unpaidBalance).toLocaleString('en-US')}
+                                  </span>
+                                  <span className="text-[9px] text-amber-700/80 font-bold block">
+                                    Advance / Overpaid →
+                                  </span>
+                                </button>
                               ) : (
                                 <div className="space-y-0.5">
                                   <span className="px-2 py-0.5 rounded-lg bg-gray-100 text-gray-600 font-extrabold text-[10px] inline-block">
@@ -9181,7 +9105,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
                                 <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block mb-0.5">Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong></div>
                                 <div>Total Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
-                                <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong></div>
+                                <div>
+                                  Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong>
+                                  {metrics.disbursedCommission > 0 && (
+                                    <span className="text-[10px] text-gray-500 font-normal ml-1">
+                                      (Settled: ৳{metrics.disbursedCommission.toLocaleString('en-US')}{metrics.unpaidCommission > 0 ? `, Due: ৳${metrics.unpaidCommission.toLocaleString('en-US')}` : ''})
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </td>
                             <td className="py-4 px-4">
