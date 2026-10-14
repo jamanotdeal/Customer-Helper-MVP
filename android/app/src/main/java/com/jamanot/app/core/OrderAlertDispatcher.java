@@ -252,6 +252,10 @@ public final class OrderAlertDispatcher {
                                     TaskCompletionSource<Void> done) {
         boolean foreground = MainActivity.isAppInForeground();
 
+        // Every new-order notification a store gets is a new request (its id is
+        // the request's), even when the parent order's key was answered before.
+        if (ring && "store".equals(Prefs.role(app))) ActiveOrderAlerts.reopen(orderId);
+
         if (ring) {
             // In the foreground the alarm starts at once, because the popup opens
             // in the same instant (the payload travels with the event). In the

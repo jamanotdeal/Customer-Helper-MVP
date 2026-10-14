@@ -36,6 +36,7 @@
  *    src/lib/pricing.ts so both paths alert the same helpers.
  */
 
+const crypto = require('node:crypto');
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { initializeApp } = require('firebase-admin/app');
@@ -54,8 +55,44 @@ const REGION = 'us-central1';
 /** Matches DEFAULT_PRICING_SETTINGS.helperRadiusKm in src/lib/pricing.ts. */
 const DEFAULT_RADIUS_KM = 3.5;
 
-/** Older documents are a backfill or a retry storm, not news worth waking a phone for. */
+/**
+ * Older documents are a backfill or a retry storm, not news worth waking a phone
+ * for. Measured from the document's server create time — the sender's own
+ * clock (notif.createdAt) can be minutes off on a phone with manual time, and
+ * judging by it silently dropped every push from such a phone.
+ */
 const MAX_AGE_MS = 10 * 60 * 1000;
+
+/** Extra in-process attempts for tokens that failed transiently, and the waits before them. */
+const RETRY_DELAYS_MS = [500, 2000];
+
+/**
+ * FCM errors worth trying again: the service, not the token or the message,
+ * was the problem. Everything else is either a dead token (removed) or a bug in
+ * the message (logged; retrying would fail the same way).
+ */
+const TRANSIENT_CODES = new Set([
+  'messaging/internal-error',
+  'messaging/server-unavailable',
+  'messaging/unknown-error',
+  'messaging/message-rate-exceeded',
+  'messaging/quota-exceeded',
+  'app/network-error',
+  'app/network-timeout',
+]);
+
+/** The token no longer belongs to an installed app. Nothing else proves that. */
+const DEAD_TOKEN_CODES = new Set([
+  'messaging/registration-token-not-registered',
+  'messaging/invalid-registration-token',
+]);
+
+/** FCM caps a data payload at 4 KB; Bengali is 3 bytes a character. */
+const MAX_TITLE_CHARS = 120;
+const MAX_BODY_CHARS = 600;
+
+/** How long a pushLog entry is kept (set a TTL policy on `expireAt` to purge them). */
+const PUSH_LOG_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** An order alert nobody saw within the hour is stale; do not deliver it late. */
 const TTL_MS = 60 * 60 * 1000;
@@ -108,6 +145,29 @@ function withinRadius(helperLocation, order, radiusKm) {
 
 // ── Recipient resolution ─────────────────────────────────────────────────────
 
+/**
+ * Every device registered for an account. `fcmTokens` holds one token per
+ * signed-in device; `fcmToken` is the newest of them, and the only one older
+ * app versions write. An account used on a phone and in a browser used to keep
+ * just whichever registered last — so signing in to the website silently
+ * stopped the phone from being woken.
+ */
+function tokensOf(profile) {
+  const out = new Set();
+  if (profile && typeof profile.fcmToken === 'string' && profile.fcmToken) out.add(profile.fcmToken);
+  if (profile && Array.isArray(profile.fcmTokens)) {
+    profile.fcmTokens.forEach((t) => {
+      if (typeof t === 'string' && t) out.add(t);
+    });
+  }
+  return [...out];
+}
+
+/** Short, stable stand-in for a token in logs and pushLog — never the token itself. */
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+}
+
 const HELPER_GROUPS = new Set(['all-helpers', 'all-commuter-helpers', 'all-dedicated-helpers']);
 
 /**
@@ -126,11 +186,17 @@ async function resolveRecipients(db, target) {
     const snap = await db.doc(`users/${target}`).get();
     if (!snap.exists) return [];
     const profile = snap.data() || {};
-    return profile.fcmToken ? [{ uid: snap.id, token: profile.fcmToken, profile }] : [];
+    const tokens = tokensOf(profile);
+    return tokens.length ? [{ uid: snap.id, tokens, profile }] : [];
   }
 
+  // Every client that registers a device also writes fcmToken (see
+  // saveFcmToken), and the token cleanup below keeps it set ('' at worst)
+  // while fcmTokens has entries — so this still finds every reachable user.
   const snap = await db.collection('users').where('fcmToken', '!=', null).get();
-  const users = snap.docs.map((d) => ({ uid: d.id, token: d.data().fcmToken, profile: d.data() }));
+  const users = snap.docs
+    .map((d) => ({ uid: d.id, tokens: tokensOf(d.data()), profile: d.data() }))
+    .filter((u) => u.tokens.length > 0);
 
   const isHelper = (u) => !!u.profile.isHelper;
   const isDedicated = (u) => u.profile.helperType === 'dedicated';
@@ -192,9 +258,10 @@ async function addStoreAccounts(db, recipients, notif) {
   const out = [...recipients];
   linked.docs.forEach((d) => {
     const profile = d.data() || {};
-    if (seen.has(d.id) || !profile.fcmToken || !shopIds.has(profile.storeId)) return;
+    const tokens = tokensOf(profile);
+    if (seen.has(d.id) || tokens.length === 0 || !shopIds.has(profile.storeId)) return;
     seen.add(d.id);
-    out.push({ uid: d.id, token: profile.fcmToken, profile });
+    out.push({ uid: d.id, tokens, profile });
   });
   return out;
 }
@@ -209,6 +276,15 @@ async function applyGeofence(db, recipients, notif) {
   if (!orderSnap.exists) return recipients; // Cannot verify — a missed order costs more than a spurious alert.
   const order = orderSnap.data();
 
+  // Taken or cancelled before the push went out: every phone would drop it
+  // without showing anything, and FCM lowers the priority of an app whose
+  // high-priority pushes keep producing nothing visible — which is what then
+  // makes the *next* order late on those phones.
+  if (!isOrderOpen(order)) {
+    logger.info('skipped: order no longer open', { orderId: notif.orderId, status: order && order.status });
+    return [];
+  }
+
   let radiusKm = DEFAULT_RADIUS_KM;
   try {
     const pricing = await db.doc('settings/pricing').get();
@@ -219,6 +295,18 @@ async function applyGeofence(db, recipients, notif) {
   }
 
   return recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
+}
+
+/**
+ * Same question OrderMatcher.isOrderOpen asks on the phone. A document with no
+ * status is not judged — only an explicit answer closes an order.
+ */
+function isOrderOpen(order) {
+  if (!order) return true;
+  if (order.status && order.status !== 'PENDING') return false;
+  if (typeof order.helperId === 'string' && order.helperId.trim()) return false;
+  if (order.cancellationRequest && order.cancellationRequest.status === 'APPROVED') return false;
+  return true;
 }
 
 // ── Dedicated routing ─────────────────────────────────────────────
@@ -455,28 +543,103 @@ async function suppressDuplicateDedicated(db, notifId, notif) {
 
 // ── Send ─────────────────────────────────────────────────────────────────────
 
-/** FCM data values must all be strings; undefined keys are dropped. */
-function buildData(notifId, notif) {
+function clip(text, max) {
+  const s = String(text || '');
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+/**
+ * FCM data values must all be strings; undefined keys are dropped.
+ *
+ * `createdAtMs` (server time the notification was written) and `sentAt` (when
+ * this function handed it to FCM) let the phone log how late it arrived.
+ */
+function buildData(notifId, notif, timing = {}) {
   const data = {
     tag: notifId,
-    title: notif.title || 'Jamanot',
-    body: notif.body || '',
+    title: clip(notif.title || 'Jamanot', MAX_TITLE_CHARS),
+    body: clip(notif.body, MAX_BODY_CHARS),
     userId: notif.userId || '',
     type: notif.type || 'order_update',
   };
   if (notif.orderId) data.orderId = String(notif.orderId);
+  if (timing.createdAtMs) data.createdAtMs = String(timing.createdAtMs);
+  if (timing.sentAt) data.sentAt = String(timing.sentAt);
   return data;
 }
 
-async function removeStaleTokens(db, uids) {
+/**
+ * Removes dead tokens from the accounts that held them. fcmToken is moved to
+ * another of the account's devices rather than deleted, so the account stays
+ * visible to the broadcast query while it still has one.
+ */
+async function removeDeadTokens(db, deadByUid) {
   await Promise.all(
-    [...new Set(uids)].map((uid) =>
+    [...deadByUid.entries()].map(([uid, dead]) =>
       db
-        .doc(`users/${uid}`)
-        .update({ fcmToken: FieldValue.delete() })
+        .runTransaction(async (tx) => {
+          const ref = db.doc(`users/${uid}`);
+          const snap = await tx.get(ref);
+          if (!snap.exists) return;
+          const profile = snap.data() || {};
+          const remaining = tokensOf(profile).filter((t) => !dead.has(t));
+          const update = { fcmTokens: remaining };
+          if (dead.has(profile.fcmToken)) update.fcmToken = remaining[remaining.length - 1] || '';
+          tx.set(ref, update, { merge: true });
+        })
         .catch((e) => logger.warn('token cleanup failed', { uid, error: e.message }))
     )
   );
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Sends to every token, retrying the ones that failed for a transient reason.
+ *
+ * @returns per-token outcome: 'sent' | 'dead' | 'transient' | 'failed:<code>'
+ */
+async function sendWithRetry(messaging, tokens, message, notifId) {
+  const outcome = new Map();
+  let pending = tokens;
+  for (let attempt = 0; pending.length > 0; attempt++) {
+    const retryLater = [];
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      const batch = pending.slice(i, i + BATCH_SIZE);
+      let res;
+      try {
+        res = await messaging.sendEachForMulticast({ ...message, tokens: batch });
+      } catch (e) {
+        // The whole call failed (network, auth): every token in it is unsent.
+        logger.warn('push call failed', { notifId, attempt, error: e.message, code: e.code });
+        batch.forEach((t) => {
+          outcome.set(t, 'transient');
+          retryLater.push(t);
+        });
+        continue;
+      }
+      res.responses.forEach((r, idx) => {
+        const token = batch[idx];
+        if (r.success) return outcome.set(token, 'sent');
+        const code = (r.error && r.error.code) || 'unknown';
+        if (DEAD_TOKEN_CODES.has(code)) return outcome.set(token, 'dead');
+        if (TRANSIENT_CODES.has(code)) {
+          outcome.set(token, 'transient');
+          retryLater.push(token);
+          return;
+        }
+        // invalid-argument and friends: the message, not the device, is wrong.
+        // These used to delete the recipients' tokens, unregistering phones
+        // that had done nothing wrong.
+        outcome.set(token, `failed:${code}`);
+        logger.error('push rejected', { notifId, code, detail: r.error && r.error.message });
+      });
+    }
+    if (retryLater.length === 0 || attempt >= RETRY_DELAYS_MS.length) break;
+    await sleep(RETRY_DELAYS_MS[attempt]);
+    pending = retryLater;
+  }
+  return outcome;
 }
 
 exports.pushOnNotificationCreate = onDocumentCreated(
@@ -489,23 +652,47 @@ exports.pushOnNotificationCreate = onDocumentCreated(
     memory: '256MiB',
     maxInstances: 10,
     timeoutSeconds: 60,
+    // A failed run (Firestore unreadable, FCM down after the in-process
+    // retries) is run again by the platform instead of the push being lost.
+    // pushLog makes a re-run send only to the devices still missing it, and
+    // MAX_AGE_MS ends the retries once the alert would be stale anyway.
+    retry: true,
   },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
 
+    const startedAt = Date.now();
     const notif = snap.data() || {};
     const notifId = event.params.notifId;
 
-    if (notif.createdAt) {
-      const age = Date.now() - new Date(notif.createdAt).getTime();
-      if (Number.isFinite(age) && age > MAX_AGE_MS) {
-        logger.info('skipped: too old', { notifId, ageMs: age });
-        return;
-      }
+    const createdAtMs = snap.createTime ? snap.createTime.toMillis() : Date.parse(event.time) || startedAt;
+    const clientCreatedMs = notif.createdAt ? Date.parse(notif.createdAt) : NaN;
+    const timing = {
+      notifId,
+      type: notif.type,
+      target: notif.userId,
+      orderId: notif.orderId,
+      // How late the trigger fired (event delivery + cold start).
+      triggerLagMs: startedAt - createdAtMs,
+      // The sender's clock against the server's; large values explain odd ids/ages.
+      senderClockSkewMs: Number.isFinite(clientCreatedMs) ? clientCreatedMs - createdAtMs : null,
+    };
+
+    const age = startedAt - createdAtMs;
+    if (age > MAX_AGE_MS) {
+      logger.info('skipped: too old', { ...timing, ageMs: age });
+      return;
     }
 
     const db = getFirestore();
+    const logRef = db.doc(`pushLog/${notifId}`);
+
+    // A re-run after a partial failure: skip the devices already reached.
+    const prior = await logRef.get();
+    const priorData = prior.exists ? prior.data() || {} : {};
+    if (priorData.status === 'done') return;
+    const alreadySent = new Set(priorData.sentTokenHashes || []);
 
     // A duplicate written by a client without the deterministic-id fix is
     // removed here, before it can become a push or a tray entry.
@@ -514,75 +701,112 @@ exports.pushOnNotificationCreate = onDocumentCreated(
     let recipients = await resolveRecipients(db, notif.userId);
     recipients = await addStoreAccounts(db, recipients, notif);
     recipients = await applyGeofence(db, recipients, notif);
-    if (recipients.length === 0) {
-      logger.info('no reachable devices', { notifId, target: notif.userId });
-      return;
-    }
+    const resolvedAt = Date.now();
 
     // One device token can belong to several accounts (a shared phone); send once
     // per token and let the receiver decide whether it is addressed to it.
     const byToken = new Map();
     for (const r of recipients) {
-      if (!r.token) continue;
-      const uids = byToken.get(r.token) || [];
-      uids.push(r.uid);
-      byToken.set(r.token, uids);
+      for (const token of r.tokens || []) {
+        const uids = byToken.get(token) || [];
+        uids.push(r.uid);
+        byToken.set(token, uids);
+      }
+    }
+    const tokens = [...byToken.keys()].filter((t) => !alreadySent.has(tokenHash(t)));
+
+    if (byToken.size === 0) {
+      logger.info('no reachable devices', { ...timing, resolveMs: resolvedAt - startedAt });
+      return;
     }
 
-    const tokens = [...byToken.keys()];
-    const data = buildData(notifId, notif);
-    const messaging = getMessaging();
+    const sentAt = Date.now();
+    const message = {
+      data: buildData(notifId, notif, { createdAtMs, sentAt }),
+      android: {
+        priority: 'high', // Wakes an idle or app-standby device.
+        ttl: TTL_MS,
+      },
+      apns: {
+        headers: { 'apns-priority': '10' },
+        payload: { aps: { 'content-available': 1, sound: 'default' } },
+      },
+    };
+    const outcome = await sendWithRetry(getMessaging(), tokens, message, notifId);
+    const providerMs = Date.now() - sentAt;
 
+    const deadByUid = new Map();
     let sent = 0;
-    const staleUids = [];
+    let transient = 0;
+    const failures = {};
+    outcome.forEach((result, token) => {
+      if (result === 'sent') {
+        sent++;
+        alreadySent.add(tokenHash(token));
+      } else if (result === 'dead') {
+        (byToken.get(token) || []).forEach((uid) => {
+          const set = deadByUid.get(uid) || new Set();
+          set.add(token);
+          deadByUid.set(uid, set);
+        });
+      } else if (result === 'transient') {
+        transient++;
+      } else {
+        failures[result] = (failures[result] || 0) + 1;
+      }
+    });
+    if (deadByUid.size > 0) await removeDeadTokens(db, deadByUid);
 
-    for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
-      const batch = tokens.slice(i, i + BATCH_SIZE);
-      const res = await messaging.sendEachForMulticast({
-        tokens: batch,
-        data,
-        android: {
-          priority: 'high', // Wakes an idle or app-standby device.
-          ttl: TTL_MS,
-        },
-        apns: {
-          headers: { 'apns-priority': '10' },
-          payload: { aps: { 'content-available': 1, sound: 'default' } },
-        },
-      });
+    const summary = {
+      ...timing,
+      devices: byToken.size,
+      skippedAlreadySent: byToken.size - tokens.length,
+      sent,
+      dead: [...deadByUid.values()].reduce((n, set) => n + set.size, 0),
+      transient,
+      failures,
+      resolveMs: resolvedAt - startedAt,
+      providerMs,
+      // Notification written → FCM accepted it. The phone logs the rest.
+      endToEndMs: Date.now() - createdAtMs,
+    };
 
-      sent += res.successCount;
-      res.responses.forEach((r, idx) => {
-        if (r.success) return;
-        const code = r.error && r.error.code;
-        if (
-          code === 'messaging/registration-token-not-registered' ||
-          code === 'messaging/invalid-registration-token' ||
-          code === 'messaging/invalid-argument'
-        ) {
-          staleUids.push(...(byToken.get(batch[idx]) || []));
-        } else {
-          logger.warn('push failed', { notifId, code });
-        }
-      });
+    try {
+      // JSON round trip drops undefined fields (a notification without an
+      // orderId), which Firestore would reject — and a failed log write must
+      // never fail the push itself.
+      const entry = JSON.parse(
+        JSON.stringify({
+          ...summary,
+          status: transient > 0 ? 'partial' : 'done',
+          notifCreatedAt: new Date(createdAtMs).toISOString(),
+          sentAt: new Date(sentAt).toISOString(),
+          sentTokenHashes: [...alreadySent],
+          attempts: (priorData.attempts || 0) + 1,
+        })
+      );
+      entry.expireAt = new Date(Date.now() + PUSH_LOG_TTL_MS);
+      await logRef.set(entry, { merge: true });
+    } catch (e) {
+      logger.warn('pushLog write failed', { notifId, error: e.message });
     }
 
-    if (staleUids.length > 0) await removeStaleTokens(db, staleUids);
+    logger.info('push fan-out complete', summary);
 
-    logger.info('push fan-out complete', {
-      notifId,
-      target: notif.userId,
-      type: notif.type,
-      devices: tokens.length,
-      sent,
-      stale: staleUids.length,
-    });
+    // Some devices are still unreached for a reason that may pass: let the
+    // platform run this again (retry: true). They alone are sent to next time.
+    if (transient > 0) throw new Error(`${transient} device(s) failed transiently`);
   }
 );
 
 // Exported for the offline test harness only; nothing in the deployed function
 // reads this. See functions/test/logic.test.js.
 exports._internals = {
+  tokensOf,
+  tokenHash,
+  isOrderOpen,
+  sendWithRetry,
+  clip,
   withinRadius,
   resolveRecipients,
   addStoreAccounts,

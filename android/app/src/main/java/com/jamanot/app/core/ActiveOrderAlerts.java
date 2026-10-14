@@ -120,6 +120,20 @@ public final class ActiveOrderAlerts {
     }
 
     /**
+     * Lets a key ring again. A store's alerts are keyed by the parent order, and
+     * a helper can send the same store a second request under it — re-ordering
+     * after a cancel, or more items later. That arrives as a new notification
+     * for a key already resolved, and was dropped without a sound or even a
+     * tray entry. The watcher still resolves it at once if nothing is waiting.
+     */
+    public static void reopen(String key) {
+        if (key == null) return;
+        synchronized (LOCK) {
+            RESOLVED.remove(key);
+        }
+    }
+
+    /**
      * Ends one alert: stops watching it, withdraws its notification, and stops
      * the alarm if it was the last one.
      *

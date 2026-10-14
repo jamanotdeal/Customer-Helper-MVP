@@ -15,6 +15,10 @@ process.env.GCLOUD_PROJECT = 'test';
 
 const assert = require('node:assert');
 const {
+  tokensOf,
+  tokenHash,
+  isOrderOpen,
+  sendWithRetry,
   withinRadius,
   resolveRecipients,
   addStoreAccounts,
@@ -310,6 +314,124 @@ console.log('recipient resolution');
       dedicatedNotifId('90431', Date.parse('2026-09-08T14:13:10.924Z')),
       'notif-1788876790924-ded-90431'
     );
+  });
+
+  console.log('devices per account');
+
+  test('every registered device of an account is pushed, newest field included', () => {
+    assert.deepStrictEqual(tokensOf({ fcmToken: 'phone', fcmTokens: ['web', 'phone', '', 7] }).sort(), ['phone', 'web']);
+  });
+
+  test('an account from an older app version (fcmToken only) still works', () => {
+    assert.deepStrictEqual(tokensOf({ fcmToken: 'phone' }), ['phone']);
+  });
+
+  test('an account whose newest device logged out keeps its other devices', () => {
+    assert.deepStrictEqual(tokensOf({ fcmToken: '', fcmTokens: ['tablet'] }), ['tablet']);
+  });
+
+  await testAsync('a direct uid reaches the phone and the browser alike', async () => {
+    const db = mockDb({ users: { both: { fcmToken: 'web', fcmTokens: ['phone', 'web'] } } });
+    const [r] = await resolveRecipients(db, 'both');
+    assert.deepStrictEqual(r.tokens.sort(), ['phone', 'web']);
+  });
+
+  test('token hashes are stable and never the token', () => {
+    assert.strictEqual(tokenHash('abc'), tokenHash('abc'));
+    assert.notStrictEqual(tokenHash('abc'), tokenHash('abd'));
+    assert.ok(!tokenHash('secret-token').includes('secret'));
+  });
+
+  console.log('orders already taken');
+
+  test('a pending order nobody took is open', () => {
+    assert.strictEqual(isOrderOpen({ status: 'PENDING' }), true);
+  });
+  test('an accepted or assigned order is not', () => {
+    assert.strictEqual(isOrderOpen({ status: 'ACCEPTED' }), false);
+    assert.strictEqual(isOrderOpen({ status: 'PENDING', helperId: 'h1' }), false);
+  });
+  test('an approved cancellation closes it', () => {
+    assert.strictEqual(isOrderOpen({ status: 'PENDING', cancellationRequest: { status: 'APPROVED' } }), false);
+  });
+
+  await testAsync('a broadcast for an order already taken pushes nobody', async () => {
+    const takenDb = mockDb({
+      users: USERS,
+      orders: { taken: { status: 'ACCEPTED', helperId: 'h9', pickupLocation: PICKUP } },
+      pricing: { helperRadiusKm: 3.5 },
+    });
+    const notif = { type: 'new_order', userId: 'all-helpers', orderId: 'taken' };
+    assert.deepStrictEqual(await applyGeofence(takenDb, everyone, notif), []);
+  });
+
+  console.log('payload limits and timing');
+
+  test('a long body is clipped well under the 4 KB FCM limit', () => {
+    const data = buildData('n1', { title: 'ত'.repeat(500), body: 'ক'.repeat(5000) });
+    assert.ok(Buffer.byteLength(JSON.stringify(data)) < 3000, Buffer.byteLength(JSON.stringify(data)) + ' bytes');
+  });
+
+  test('timing fields travel as strings', () => {
+    const data = buildData('n1', { title: 't' }, { createdAtMs: 1000, sentAt: 2000 });
+    assert.strictEqual(data.createdAtMs, '1000');
+    assert.strictEqual(data.sentAt, '2000');
+  });
+
+  console.log('sending and retries');
+
+  /** Fake FCM: each call takes the next scripted reply per token. */
+  function fakeMessaging(script) {
+    const calls = [];
+    return {
+      calls,
+      async sendEachForMulticast({ tokens }) {
+        calls.push([...tokens]);
+        return {
+          responses: tokens.map((t) => {
+            const next = (script[t] || []).shift() || 'ok';
+            return next === 'ok' ? { success: true } : { success: false, error: { code: next, message: next } };
+          }),
+        };
+      },
+    };
+  }
+
+  await testAsync('a transient failure is retried, and only for that device', async () => {
+    const m = fakeMessaging({ b: ['messaging/server-unavailable'] });
+    const out = await sendWithRetry(m, ['a', 'b'], { data: {} }, 'n');
+    assert.strictEqual(out.get('a'), 'sent');
+    assert.strictEqual(out.get('b'), 'sent');
+    assert.deepStrictEqual(m.calls, [['a', 'b'], ['b']]);
+  });
+
+  await testAsync('a device still failing after the retries is reported as transient', async () => {
+    const down = 'messaging/internal-error';
+    const m = fakeMessaging({ a: [down, down, down, down] });
+    const out = await sendWithRetry(m, ['a'], { data: {} }, 'n');
+    assert.strictEqual(out.get('a'), 'transient');
+    assert.strictEqual(m.calls.length, 3);
+  });
+
+  await testAsync('only an unregistered token counts as dead', async () => {
+    const m = fakeMessaging({ gone: ['messaging/registration-token-not-registered'], bad: ['messaging/invalid-argument'] });
+    const out = await sendWithRetry(m, ['gone', 'bad'], { data: {} }, 'n');
+    assert.strictEqual(out.get('gone'), 'dead');
+    // invalid-argument is a message problem: the device keeps its token.
+    assert.strictEqual(out.get('bad'), 'failed:messaging/invalid-argument');
+    assert.strictEqual(m.calls.length, 1);
+  });
+
+  await testAsync('a call that throws outright is retried as a whole', async () => {
+    let n = 0;
+    const m = {
+      async sendEachForMulticast({ tokens }) {
+        if (n++ === 0) throw Object.assign(new Error('socket hang up'), { code: 'app/network-error' });
+        return { responses: tokens.map(() => ({ success: true })) };
+      },
+    };
+    const out = await sendWithRetry(m, ['a', 'b'], { data: {} }, 'n');
+    assert.deepStrictEqual([...out.values()], ['sent', 'sent']);
   });
 
   console.log('\n' + passed + ' passed');

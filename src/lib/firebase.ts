@@ -154,18 +154,35 @@ export async function initFcmMessaging(userId: string): Promise<string | null> {
   }
 }
 
+// This device's FCM token, once registered in this session — what logout
+// takes back off the account, and what keeps it from being written twice.
+let _registeredToken: { userId: string; token: string } | null = null;
+
 /**
- * Saves this device's FCM token to the user's Firestore profile.
- * Other devices read this token to send targeted pushes.
+ * Registers this device for pushes on the user's profile.
+ *
+ * An account can be signed in on several devices (the store's phone and its
+ * owner's laptop), so each one adds itself to `fcmTokens` and the push
+ * function sends to all of them. `fcmToken` is kept as the newest device for
+ * older app versions. It used to be the only field: whichever device
+ * registered last took every push, so opening the website silently stopped the
+ * phone from being woken.
+ *
+ * Written once per session rather than skipped when the cached profile already
+ * shows this token — that cache can be stale (the server dropped the token, or
+ * another device replaced it), and the skip then kept the device unregistered
+ * until the cache happened to refresh.
  */
 export async function saveFcmToken(userId: string, token: string): Promise<void> {
+  if (!userId || !token) return;
+  if (_registeredToken?.userId === userId && _registeredToken.token === token) return;
   try {
+    await setDoc(doc(db, 'users', userId), { fcmToken: token, fcmTokens: arrayUnion(token) }, { merge: true });
+    _registeredToken = { userId, token };
     const existing = fallbackStore.users.get(userId);
-    if (existing && existing.fcmToken === token) return; // no change needed
-    await setDoc(doc(db, 'users', userId), { fcmToken: token }, { merge: true });
     if (existing) {
-      const updated = { ...existing, fcmToken: token };
-      fallbackStore.users.set(userId, updated);
+      const tokens = Array.from(new Set([...(existing.fcmTokens || []), token]));
+      fallbackStore.users.set(userId, { ...existing, fcmToken: token, fcmTokens: tokens });
     }
   } catch (e: any) {
     console.warn('[FCM] saveFcmToken note:', e?.message || e);
@@ -173,16 +190,36 @@ export async function saveFcmToken(userId: string, token: string): Promise<void>
 }
 
 /**
- * Removes this device's FCM token from the user's Firestore profile on logout
- * so notifications are not delivered to subsequent users on the same device.
+ * Takes this device off the user's profile on logout, so the next account on
+ * this device is not sent the previous one's notifications. Only this device:
+ * it used to blank the account's single token, which also cut off every other
+ * device the user was still signed in on.
  */
-export async function removeFcmToken(userId: string): Promise<void> {
+export async function removeFcmToken(userId: string, token?: string | null): Promise<void> {
+  const mine = token || (_registeredToken?.userId === userId ? _registeredToken.token : null);
+  if (!userId || !mine) return; // This device never registered — nothing of ours to remove.
+  if (_registeredToken?.userId === userId) _registeredToken = null;
   try {
-    await setDoc(doc(db, 'users', userId), { fcmToken: '' }, { merge: true });
+    const ref = doc(db, 'users', userId);
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const data = snap.data() as UserProfile;
+      const remaining = (data.fcmTokens || []).filter((t) => t && t !== mine);
+      const update: Partial<UserProfile> = { fcmTokens: remaining };
+      // Hand the "newest device" slot to one still signed in ('' keeps the
+      // account visible to the push function's broadcast query).
+      if (data.fcmToken === mine) update.fcmToken = remaining[remaining.length - 1] || '';
+      tx.set(ref, update, { merge: true });
+    });
     const existing = fallbackStore.users.get(userId);
     if (existing) {
-      const updated = { ...existing, fcmToken: undefined };
-      fallbackStore.users.set(userId, updated);
+      const remaining = (existing.fcmTokens || []).filter((t) => t !== mine);
+      fallbackStore.users.set(userId, {
+        ...existing,
+        fcmTokens: remaining,
+        fcmToken: existing.fcmToken === mine ? remaining[remaining.length - 1] || undefined : existing.fcmToken,
+      });
     }
   } catch (e: any) {
     console.warn('[FCM] removeFcmToken note:', e?.message || e);
