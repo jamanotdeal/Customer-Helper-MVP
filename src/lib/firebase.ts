@@ -9,16 +9,12 @@ import {
   getFirestore,
   collection,
   doc,
-  getDoc,
-  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
-  onSnapshot,
   query,
   where,
   orderBy,
-  getDocs,
   limit,
   documentId,
   arrayUnion,
@@ -29,8 +25,12 @@ import {
   disableNetwork,
   enableNetwork,
   startAfter,
+  serverTimestamp,
+  Timestamp,
 } from 'firebase/firestore';
 import type { Query, QuerySnapshot, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
+// Reads go through the meter (see firestoreMetered.ts) so their cost can be attributed.
+import { onSnapshot, getDocs, getDoc, getDocFromServer, startReadStatsUpload } from './firestoreMetered';
 import {
   getMessaging,
   getToken,
@@ -610,6 +610,15 @@ const NOTIFY_COALESCE_MS = 50;
 /** Debounce on serialising the whole cache to localStorage. */
 const SAVE_DEBOUNCE_MS = 5000;
 
+/**
+ * Server addresses (the shared address book behind autocomplete): a device
+ * re-reads the whole collection at most this often; in between it only
+ * listens for documents written since its last sync (see _syncServerAddresses).
+ */
+const ADDRESS_FULL_SYNC_MS = 24 * 60 * 60 * 1000;
+const ADDRESS_FULL_AT_KEY = 'jamanot_server_addresses_full_at';
+const ADDRESS_CURSOR_KEY = 'jamanot_server_addresses_cursor';
+
 /** How long a full read of a collection stands in for another — see isFullReadFresh. */
 const FULL_READ_TTL_MS = 2 * 60 * 1000;
 
@@ -865,7 +874,6 @@ class FallbackStore {
   private _unsubListeners: (() => void)[] = [];
   private _shopsCachedAt = 0;  // epoch ms when shops were last fetched
   private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
-  private _addressesCachedAt = 0; // epoch ms when serverAddresses were last fetched
   private _listenersRole: string | null = null; // e.g. 'helper:uid123'
   // uid the per-account collections currently belong to. Unlike _listenersRole
   // it survives teardown, so a different account signing in can be detected.
@@ -906,12 +914,28 @@ class FallbackStore {
     // Start a lightweight always-on pricing listener so admin settings are
     // always live even for unauthenticated / pre-login users.
     this._startPricingListener();
-    if (typeof window !== 'undefined') {
+    // Visitors get the shops by a one-off read. A returning signed-in user's
+    // shops come from the listener initListenersForRole starts moments later
+    // (and from the localStorage copy until then), so reading here as well
+    // doubled the cost on every launch.
+    if (typeof window !== 'undefined' && !this._hasSignedInUser()) {
       this.loadShops();
     }
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
     this.watchVisibilityForPersistence();
+    startReadStatsUpload(db, () => ({
+      uid: this.currentUserId,
+      role: this._listenersRole ? this._listenersRole.split(':')[0] : null,
+    }));
+  }
+
+  private _hasSignedInUser(): boolean {
+    try {
+      return !!localStorage.getItem('jamanot_active_user_uid') && this.shops.size > 0;
+    } catch {
+      return false;
+    }
   }
 
   // ─── Always-on pricing listener ───────────────────────────────────────────
@@ -978,6 +1002,11 @@ class FallbackStore {
    * listeners (or the user's place in the app) away. Writes made meanwhile are
    * queued by the SDK and flushed on reconnect.
    */
+  /** Whether this role's listeners are running for this account. */
+  public isListeningAs(role: string, userId: string): boolean {
+    return this._listenersRole === `${role}:${userId}`;
+  }
+
   public reconnectAfterBackground() {
     if (this._reconnecting) return;
     this._reconnecting = true;
@@ -1674,6 +1703,8 @@ class FallbackStore {
 
   // ─── Shops: one-time read with 30-minute localStorage cache ───────────────
   public loadShops() {
+    // Signed in, the shops listener (initListenersForRole) holds every shop.
+    if (this._listenersRole) return;
     const CACHE_TTL = 30 * 60 * 1000;
     if (Date.now() - this._shopsCachedAt < CACHE_TTL && this.shops.size > 0) return;
     getDocs(collection(db, 'shops'))
@@ -1696,6 +1727,9 @@ class FallbackStore {
   // ─── Store Products: cached read with localStorage backup ─────────────────
   private _storeProductsCachedAt = 0;
   public loadStoreProducts() {
+    // Signed in, the store_products listener (initListenersForRole) already
+    // holds the whole collection; screens calling this re-read it for nothing.
+    if (this._listenersRole) return;
     const CACHE_TTL = 5 * 60 * 1000;
     if (Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
     getDocs(collection(db, 'store_products'))
@@ -1727,27 +1761,111 @@ class FallbackStore {
       .catch((err) => console.warn('[Firestore] CustomModals getDocs note:', err));
   }
 
-  // ─── Server Addresses: cached read with localStorage cache ─────────────────
-  private _loadServerAddressesCached() {
-    const CACHE_TTL = 15 * 60 * 1000;
-    if (Date.now() - this._addressesCachedAt < CACHE_TTL && this.serverAddresses.size > 0) return;
-    getDocs(collection(db, 'server_addresses'))
+  // ─── Server addresses: one shared address book, synced incrementally ──────
+  //
+  // 357 documents in October 2026, and every session of every role read all of
+  // them twice — a one-off read and a full listener — which was over half of
+  // what a helper's or customer's session start cost. Now a device keeps the
+  // book in localStorage, re-reads it whole once a day, and otherwise listens
+  // only for documents whose `syncAt` (a server timestamp every writer sets)
+  // is newer than what it has. Deletions are soft (`deleted: true`) so that
+  // listener sees them too.
+  private _addressesFullRead: Promise<void> | null = null;
+
+  /** Adds, replaces or (for a soft-deleted document) removes one address. */
+  private _ingestServerAddress(docId: string, data: any) {
+    const id = (data && data.id) || docId;
+    if (!data || data.deleted) {
+      this.serverAddresses.delete(id);
+      return;
+    }
+    this.serverAddresses.set(id, { ...(data as ServerAddress), id });
+  }
+
+  private _readNumber(key: string): number {
+    try {
+      return Number(localStorage.getItem(key)) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private _writeNumber(key: string, value: number) {
+    try {
+      localStorage.setItem(key, String(value));
+    } catch {
+      /* private mode — the next session just reads more */
+    }
+  }
+
+  /** Moves the incremental cursor to the newest server time among `docs`. */
+  private _advanceAddressCursor(docs: { data: () => any }[]) {
+    let max = this._readNumber(ADDRESS_CURSOR_KEY);
+    docs.forEach((d) => {
+      const t = d.data()?.syncAt;
+      if (t && typeof t.toMillis === 'function') max = Math.max(max, t.toMillis());
+    });
+    this._writeNumber(ADDRESS_CURSOR_KEY, max);
+  }
+
+  /** The whole book, when this device has none or its copy is a day old. */
+  private _loadServerAddressesCached(force = false): Promise<void> {
+    const fresh = Date.now() - this._readNumber(ADDRESS_FULL_AT_KEY) < ADDRESS_FULL_SYNC_MS;
+    if (!force && fresh && this.serverAddresses.size > 0) return Promise.resolve();
+    if (this._addressesFullRead) return this._addressesFullRead;
+    const read = getDocs(collection(db, 'server_addresses'))
       .then((snapshot) => {
-        snapshot.forEach((docSnap) => {
-          const addr = docSnap.data() as ServerAddress;
-          if (addr) {
-            const id = addr.id || docSnap.id;
-            this.serverAddresses.set(id, { ...addr, id });
-          }
-        });
-        this._addressesCachedAt = Date.now();
+        this.serverAddresses = new Map();
+        snapshot.forEach((docSnap) => this._ingestServerAddress(docSnap.id, docSnap.data()));
+        this._writeNumber(ADDRESS_FULL_AT_KEY, Date.now());
+        this._advanceAddressCursor(snapshot.docs);
         this.orders.forEach((ord, id) => {
           this.orders.set(id, this.resolveOrderLocations(ord));
         });
         this.scheduleLocalStoreSave();
         this.notify();
       })
-      .catch((err) => console.warn('[Firestore] ServerAddresses getDocs note:', err));
+      .catch((err) => console.warn('[Firestore] ServerAddresses getDocs note:', err))
+      .finally(() => {
+        this._addressesFullRead = null;
+      });
+    this._addressesFullRead = read;
+    return read;
+  }
+
+  /**
+   * Keeps the address book live for this session: the full read only if due,
+   * then a listener on what was written after it. Returns the disposer.
+   */
+  private _syncServerAddresses(): () => void {
+    let unsub: (() => void) | null = null;
+    let disposed = false;
+    this._loadServerAddressesCached().then(() => {
+      if (disposed) return;
+      const since = Timestamp.fromMillis(this._readNumber(ADDRESS_CURSOR_KEY));
+      unsub = onSnapshot(
+        query(collection(db, 'server_addresses'), where('syncAt', '>', since)),
+        (snapshot) => {
+          const changes = snapshot.docChanges();
+          if (changes.length === 0) return;
+          changes.forEach((change) => {
+            if (change.type === 'removed') this.serverAddresses.delete(change.doc.id);
+            else this._ingestServerAddress(change.doc.id, change.doc.data());
+          });
+          this._advanceAddressCursor(changes.filter((c) => c.type !== 'removed').map((c) => c.doc));
+          this.orders.forEach((ord, id) => {
+            this.orders.set(id, this.resolveOrderLocations(ord));
+          });
+          this.scheduleLocalStoreSave();
+          this.notify();
+        },
+        (err) => console.warn('[Firestore] ServerAddresses realtime sync note:', err)
+      );
+    });
+    return () => {
+      disposed = true;
+      if (unsub) unsub();
+    };
   }
 
   // ─── Tear down all active Firestore listeners ──────────────────────────────
@@ -1841,29 +1959,8 @@ class FallbackStore {
     // No need to add another snapshot here; the global one already keeps
     // pricingSettings live for all users including unauthenticated visitors.
 
-    // ── Server Addresses: realtime sync so address text updates reflect instantly across all clients ──
-    unsubs.push(
-      onSnapshot(
-        collection(db, 'server_addresses'),
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === 'removed') {
-              this.serverAddresses.delete(change.doc.id);
-            } else {
-              const addr = change.doc.data() as ServerAddress;
-              const id = addr.id || change.doc.id;
-              this.serverAddresses.set(id, { ...addr, id });
-            }
-          });
-          this.orders.forEach((ord, id) => {
-            this.orders.set(id, this.resolveOrderLocations(ord));
-          });
-          this.scheduleLocalStoreSave();
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] ServerAddresses realtime sync note:', err)
-      )
-    );
+    // ── Server Addresses: live, but only what changed since this device's copy ──
+    unsubs.push(this._syncServerAddresses());
 
     // ── Own applications: realtime for every non-admin role ───────────────────
     // Without these the maps are only ever filled from this device's
@@ -2172,7 +2269,6 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
       this._loadModalsCached();
-      this._loadServerAddressesCached();
 
       // ── CUSTOMER role ─────────────────────────────────────────────────────────
     } else if (role === 'customer') {
@@ -2299,42 +2395,18 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache (rarely change)
       this._loadShopsCached();
       this._loadModalsCached();
-      this._loadServerAddressesCached();
 
       // ── HELPER role ───────────────────────────────────────────────────────────
     } else if (role === 'helper') {
       const helperGroup =
         helperType === 'dedicated' ? 'all-dedicated-helpers' : 'all-commuter-helpers';
 
-      // Recent orders stream (realtime, latest 150 orders ordered by createdAt desc)
-      // This ensures any newly created order is immediately received by helpers in realtime
-      unsubs.push(
-        onSnapshot(
-          query(
-            collection(db, 'orders'),
-            orderBy('createdAt', 'desc'),
-            limit(150)
-          ),
-          (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === 'removed') {
-                // "Removed" from this query only means it left the newest-150
-                // window. Pending orders and this helper's own orders are each
-                // owned by a stream below, which removes them itself once they
-                // are truly gone — deleting them here dropped live requests.
-                const cached = this.orders.get(change.doc.id);
-                if (cached?.status !== 'PENDING' && cached?.helperId !== userId) {
-                  this.orders.delete(change.doc.id);
-                }
-              } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
-              }
-            });
-            this.notify();
-          },
-          (err) => console.warn('[Firestore] Helper active orders sync note:', err)
-        )
-      );
+      // No platform-wide "newest 150 orders" stream any more. Helpers only
+      // show open orders (the pending stream below) and their own (the
+      // streams after it); the 150 were read on every session start and
+      // every update to any of them reached every helper, for the one thing
+      // they were used for — the first-order badge, now saved on the order
+      // (isFirstOrder, see addOrder).
 
       // Unassigned pending requests stream (realtime, ensures all new requests are received immediately)
       unsubs.push(
@@ -2515,7 +2587,6 @@ class FallbackStore {
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
       this._loadModalsCached();
-      this._loadServerAddressesCached();
 
       // Shop orders placed by this helper (realtime)
       unsubs.push(
@@ -2676,19 +2747,23 @@ class FallbackStore {
     // holds any collection in full.
     this._fullReadAt.clear();
     try {
+      // Not read here any more (measured on a phone, 2026-10-15):
+      //  - order feedbacks and shops: the live listeners already hold them
+      //    (feedbacks were read twice, 165 + 165);
+      //  - shop orders (500) and wallet transactions (500): an arbitrary
+      //    slice nothing on the first screen shows. Store Orders reads its
+      //    date range, the wallet/lifetime views read every shop order
+      //    (ensureAdminLifetimeData), an order's details fetch its own shop
+      //    orders, and a user's details fetch their own transactions.
       await Promise.all([
         this._fetchAdminUsers(),
         this._fetchAdminWithdrawals(),
         this._fetchAdminHelperApplications(),
         this._fetchAdminStoreApplications(),
-        this._fetchAdminOrderFeedbacks(),
         this._fetchAdminFeeSuggestions(),
         this._fetchAdminCustomModals(),
         this._fetchAdminRewardPrizes(),
-        this._fetchAdminShops(),
-        this._fetchAdminShopOrders(),
         this._fetchAdminWallets(),
-        this._fetchAdminWalletTransactions(),
         this._fetchAdminScheduledNotifications(),
         this._fetchServerAddresses(),
       ]);
@@ -2846,6 +2921,7 @@ class FallbackStore {
       this.loadAdminOrderHistory(force),
       this.getAllWithdrawals(force),
       this._loadAllShopOrdersForAdmin(),
+      this._loadPaybackTransactions(),
     ]).then(() => {
       // loadAdminOrderHistory reports failure by resolving without loading.
       if (!this.adminOrderHistoryLoaded) throw new Error('order history not loaded');
@@ -2876,6 +2952,44 @@ class FallbackStore {
     this.shopOrders = map;
     this._fullReadAt.set('shopOrders', Date.now());
     this.notify();
+  }
+
+  /** Merges transactions into the per-user lists, newest first, without duplicates. */
+  private _mergeWalletTransactions(txs: WalletTransaction[]) {
+    const touched = new Set<string>();
+    txs.forEach((tx) => {
+      if (!tx || !tx.userId) return;
+      const list = this.walletTransactions.get(tx.userId) || [];
+      const i = list.findIndex((t) => t.id === tx.id);
+      if (i >= 0) list[i] = tx;
+      else list.push(tx);
+      this.walletTransactions.set(tx.userId, list);
+      touched.add(tx.userId);
+    });
+    touched.forEach((uid) => {
+      this.walletTransactions.get(uid)!.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    });
+  }
+
+  /** Every payback (62 in October 2026) — what the revenue report sums. */
+  private async _loadPaybackTransactions(): Promise<void> {
+    const snap = await getDocs(query(collection(db, 'walletTransactions'), where('type', '==', 'PAYBACK')));
+    this._mergeWalletTransactions(snap.docs.map((d) => d.data() as WalletTransaction));
+    this.notify();
+  }
+
+  /** Admin: one user's latest wallet transactions, for their details screen. */
+  public async loadWalletTransactionsFor(uid: string): Promise<void> {
+    if (!uid) return;
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'walletTransactions'), where('userId', '==', uid), orderBy('createdAt', 'desc'), limit(100))
+      );
+      this._mergeWalletTransactions(snap.docs.map((d) => d.data() as WalletTransaction));
+      this.notify();
+    } catch (e: any) {
+      console.warn('[Firestore] loadWalletTransactionsFor note:', e?.message || e);
+    }
   }
 
   public isAdminLifetimeDataReady(): boolean {
@@ -3203,20 +3317,8 @@ class FallbackStore {
   }
 
   private async _fetchServerAddresses() {
-    try {
-      const snap = await getDocs(collection(db, 'server_addresses'));
-      this.serverAddresses.clear();
-      snap.docs.forEach((d) => {
-        const a = d.data() as ServerAddress;
-        if (a) {
-          const id = a.id || d.id;
-          this.serverAddresses.set(id, { ...a, id });
-        }
-      });
-      this.scheduleLocalStoreSave();
-    } catch (e) {
-      console.warn('[Firestore] _fetchServerAddresses error:', e);
-    }
+    // Kept current by _syncServerAddresses like every other role.
+    await this._loadServerAddressesCached();
   }
 
   public subscribe(listener: Listener): () => void {
@@ -3865,10 +3967,40 @@ class FallbackStore {
     return order;
   }
 
+  /**
+   * Whether `customerId` has no order other than `orderId`. Answered from this
+   * device's copy when it already holds one, else by one read (limit 2).
+   * null when the server can't say quickly — the flag is then left unset and
+   * helpers fall back to what they can see.
+   */
+  private async _isCustomersFirstOrder(customerId: string, orderId: string): Promise<boolean | null> {
+    if (!customerId) return null;
+    if (Array.from(this.orders.values()).some((o) => o.customerId === customerId && o.id !== orderId)) return false;
+    try {
+      const read = getDocs(query(collection(db, 'orders'), where('customerId', '==', customerId), limit(2)));
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500));
+      const snap = await Promise.race([read, timeout]);
+      if (!snap) return null;
+      return !snap.docs.some((d) => d.id !== orderId);
+    } catch {
+      return null;
+    }
+  }
+
   public async addOrder(order: Order) {
     const customer = this.users.get(order.customerId);
     if (customer?.isBlocked) {
       throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। নতুন রিকোয়েস্ট তৈরি করা সম্ভব নয়।');
+    }
+
+    // Whether this is the customer's first order, decided once here and saved
+    // on the order. Helpers used to work it out from the newest 150 orders on
+    // the whole platform, which every helper listened to only for this — 150
+    // reads per helper session start (see the helper branch of
+    // initListenersForRole).
+    if (order.isFirstOrder === undefined) {
+      const first = await this._isCustomersFirstOrder(order.customerId, order.id);
+      if (first !== null) order = { ...order, isFirstOrder: first };
     }
 
     // 1. Temporarily place in local memory
@@ -8121,7 +8253,7 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
     try {
-      await setDoc(doc(db, 'server_addresses', addr.id), cleanForFirestore(addr), { merge: true });
+      await setDoc(doc(db, 'server_addresses', addr.id), { ...cleanForFirestore(addr), syncAt: serverTimestamp() }, { merge: true });
     } catch (e) {
       console.warn('[Firestore] addServerAddress error:', e);
     }
@@ -8319,7 +8451,7 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
     try {
-      await setDoc(doc(db, 'server_addresses', id), cleanForFirestore(updated), { merge: true });
+      await setDoc(doc(db, 'server_addresses', id), { ...cleanForFirestore(updated), syncAt: serverTimestamp() }, { merge: true });
       await Promise.all(orderPromises);
     } catch (e) {
       console.warn('[Firestore] updateServerAddress error:', e);
@@ -8331,7 +8463,13 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
     try {
-      await deleteDoc(doc(db, 'server_addresses', id));
+      // Soft delete: other devices only listen for changes, and a removed
+      // document would never reach them (see _syncServerAddresses).
+      await setDoc(
+        doc(db, 'server_addresses', id),
+        { deleted: true, updatedAt: new Date().toISOString(), syncAt: serverTimestamp() },
+        { merge: true }
+      );
     } catch (e) {
       console.warn('[Firestore] deleteServerAddress error:', e);
     }
@@ -8340,15 +8478,11 @@ class FallbackStore {
   public async getAllServerAddresses(): Promise<ServerAddress[]> {
     try {
       const snap = await getDocs(collection(db, 'server_addresses'));
-      const map = new Map<string, ServerAddress>();
-      snap.forEach((docSnap) => {
-        const addr = docSnap.data() as ServerAddress;
-        if (addr) {
-          const id = addr.id || docSnap.id;
-          map.set(id, { ...addr, id });
-        }
-      });
-      this.serverAddresses = map;
+      this.serverAddresses = new Map();
+      snap.forEach((docSnap) => this._ingestServerAddress(docSnap.id, docSnap.data()));
+      const map = this.serverAddresses;
+      this._writeNumber(ADDRESS_FULL_AT_KEY, Date.now());
+      this._advanceAddressCursor(snap.docs);
       this.orders.forEach((ord, id) => {
         this.orders.set(id, this.resolveOrderLocations(ord));
       });
@@ -8436,7 +8570,7 @@ class FallbackStore {
         this.serverAddresses.set(matched.id, updated);
         this.scheduleLocalStoreSave();
         this.notify();
-        setDoc(doc(db, 'server_addresses', matched.id), cleanForFirestore(updated), { merge: true }).catch(() => { });
+        setDoc(doc(db, 'server_addresses', matched.id), { ...cleanForFirestore(updated), syncAt: serverTimestamp() }, { merge: true }).catch(() => { });
         return updated;
       }
       return matched;
@@ -8459,7 +8593,7 @@ class FallbackStore {
     this.serverAddresses.set(id, newAddr);
     this.scheduleLocalStoreSave();
     this.notify();
-    setDoc(doc(db, 'server_addresses', id), cleanForFirestore(newAddr), { merge: true }).catch(() => { });
+    setDoc(doc(db, 'server_addresses', id), { ...cleanForFirestore(newAddr), syncAt: serverTimestamp() }, { merge: true }).catch(() => { });
     return newAddr;
   }
 }

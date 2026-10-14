@@ -97,6 +97,8 @@ export interface OrderEditHistoryItem {
 }
 
 export interface Order {
+  /** Set when the order is placed: the customer had no order before it (shown to helpers). */
+  isFirstOrder?: boolean;
   id: string;
   customerId: string;
   customerName: string;

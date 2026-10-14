@@ -4,7 +4,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Order, OrderItem, Shop, ShopOrder } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc } from 'firebase/firestore';
+import { getDoc } from '@/lib/firestoreMetered';
 import {
   X,
   Store,

@@ -632,8 +632,18 @@ export default function PageClient() {
               : (user.isStoreApproved || activeMode === 'store') ? 'store'
               : (user.isHelper && activeMode === 'helper') ? 'helper'
               : 'customer';
-          fallbackStore.teardownListeners();
-          fallbackStore.initListenersForRole(role, user.uid, user.helperType, user.storeId);
+          // Reconnect, don't re-subscribe. Tearing every listener down and
+          // starting them again re-read the whole session (server addresses,
+          // order lists, notifications — about 1,400 reads for a helper) on
+          // each pull, and pulling is a habit. Cycling the connection makes
+          // every listener re-sync with the server just the same, which is
+          // what un-wedges a stale app, for the documents that changed.
+          if (fallbackStore.isListeningAs(role, user.uid)) {
+            fallbackStore.reconnectAfterBackground();
+            fallbackStore.retryShopOrderOutbox();
+          } else {
+            fallbackStore.initListenersForRole(role, user.uid, user.helperType, user.storeId);
+          }
         }
       } finally {
         finishRefresh();

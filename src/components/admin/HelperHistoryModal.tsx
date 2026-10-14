@@ -61,6 +61,18 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   // Wallets and history here are summed over every order, withdrawal and
   // shop order, which the admin panel reads only when a view like this opens.
   const lifetimeData = useAdminLifetimeData();
+  // This user's wallet transactions are read when the screen opens (the admin
+  // panel no longer loads an arbitrary 500 of everyone's at startup).
+  const [, setTxVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.loadWalletTransactionsFor(helperId).then(() => {
+      if (!cancelled) setTxVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [helperId]);
 
   const { showAlert } = useModal();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);

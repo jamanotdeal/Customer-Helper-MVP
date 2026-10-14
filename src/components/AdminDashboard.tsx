@@ -5,7 +5,8 @@ import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingS
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
 import { computeShopMetrics, createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
 import type { ShopMetrics } from '@/lib/adminMetrics';
-import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
+import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
 import { AreaDrawerModal } from './admin/AreaDrawerModal';
@@ -2429,7 +2430,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // summed over every order, so these views read the full history — on
   // demand, once per session — instead of every admin session doing it.
   const lifetimeData = useAdminLifetimeData(
-    activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || showHighDurationModal
+    // Shops: its per-shop sales and payouts are summed from shop orders, their
+    // parent orders and withdrawals (computeShopMetrics).
+    activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
   );
 
   if (isNormalAdmin && allowedAdminTabs.length === 0) {
@@ -4051,7 +4054,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       })()}
 
       {/* The helper and user tables total every order ever placed. */}
-      {(activeTab === 'HELPERS' || activeTab === 'USERS_LIST') && (
+      {(activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS') && (
         <LifetimeDataNotice loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
       )}
 

@@ -3,7 +3,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Order, OrderItem, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, doc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, doc, query, where } from 'firebase/firestore';
+import { onSnapshot, getDocs } from '@/lib/firestoreMetered';
 import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
