@@ -2118,9 +2118,17 @@ class FallbackStore {
     return this._loadAdminRange('orders', 'deliveredAt', startIso, endIso, force);
   }
 
-  /** Admin: the shop orders created in [startIso, endIso). See loadAdminOrdersInRange. */
-  public loadAdminShopOrdersInRange(startIso: string, endIso: string, force = false): Promise<void> {
-    return this._loadAdminRange('shopOrders', 'createdAt', startIso, endIso, force);
+  /**
+   * Admin: the shop orders created in [startIso, endIso). See loadAdminOrdersInRange.
+   *
+   * `shopIds` limits the read to those shops. Most of the collection is
+   * helpers' own cost entries (shopId 'myself' — 1,900 of 1,990 documents in a
+   * 30-day range on 2026-10-15) that the Store Orders list never shows, so
+   * reading by shop is what makes a month take a second instead of fifteen.
+   * Served by the (shopId, createdAt desc) index.
+   */
+  public loadAdminShopOrdersInRange(startIso: string, endIso: string, force = false, shopIds?: string[]): Promise<void> {
+    return this._loadAdminRange('shopOrders', 'createdAt', startIso, endIso, force, shopIds);
   }
 
   private _loadAdminRange(
@@ -2128,9 +2136,11 @@ class FallbackStore {
     field: 'createdAt' | 'deliveredAt',
     startIso: string,
     endIso: string,
-    force: boolean
+    force: boolean,
+    shopIds?: string[]
   ): Promise<void> {
-    const key = `${path}|${field}|${startIso}|${endIso}`;
+    const shops = shopIds && shopIds.length > 0 ? Array.from(new Set(shopIds)).sort() : null;
+    const key = `${path}|${field}|${startIso}|${endIso}|${shops ? shops.join(',') : '*'}`;
     const cached = this._rangeReads.get(key);
     if (cached && !force && Date.now() - cached.at < FULL_READ_TTL_MS) return cached.promise;
 
@@ -2139,29 +2149,39 @@ class FallbackStore {
       const startedAt = new Date().toISOString();
       const docs: QueryDocumentSnapshot<DocumentData>[] = [];
       const pageSize = 500;
-      let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
-      for (;;) {
-        const base = [
-          where(field, '>=', startIso),
-          where(field, '<', endIso),
-          orderBy(field, 'desc'),
-        ] as const;
-        const q: Query<DocumentData> = cursor
-          ? query(collection(db, path), ...base, startAfter(cursor), limit(pageSize))
-          : query(collection(db, path), ...base, limit(pageSize));
-        const snap: QuerySnapshot<DocumentData> = await getDocs(q);
-        docs.push(...snap.docs);
-        if (snap.docs.length < pageSize) break;
-        cursor = snap.docs[snap.docs.length - 1];
-        // Let the UI run between pages.
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      // `in` takes at most 30 values; more shops than that are read in groups.
+      const groups: (string[] | null)[] = [];
+      if (shops) for (let i = 0; i < shops.length; i += 30) groups.push(shops.slice(i, i + 30));
+      else groups.push(null);
+      for (const group of groups) {
+        let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+        for (;;) {
+          const base = [
+            ...(group ? [where('shopId', 'in', group)] : []),
+            where(field, '>=', startIso),
+            where(field, '<', endIso),
+            orderBy(field, 'desc'),
+          ];
+          const q: Query<DocumentData> = cursor
+            ? query(collection(db, path), ...base, startAfter(cursor), limit(pageSize))
+            : query(collection(db, path), ...base, limit(pageSize));
+          const snap: QuerySnapshot<DocumentData> = await getDocs(q);
+          docs.push(...snap.docs);
+          if (snap.docs.length < pageSize) break;
+          cursor = snap.docs[snap.docs.length - 1];
+          // Let the UI run between pages.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
       }
       // The admin left admin mode (or switched account) while this was reading.
       if (this._listenersRole !== role) return;
 
       const seen = new Set<string>();
+      const shopSet = shops ? new Set(shops) : null;
+      // Only what this query covered can be judged deleted by its absence.
       const inRange = (doc: Order | ShopOrder) => {
         const v = (doc as any)[field] as string | undefined;
+        if (shopSet && !shopSet.has((doc as ShopOrder).shopId)) return false;
         return typeof v === 'string' && v >= startIso && v < endIso && (doc.createdAt || '') < startedAt;
       };
       if (path === 'orders') {
@@ -2212,7 +2232,7 @@ class FallbackStore {
     const promise = Promise.all([
       this.loadAdminOrderHistory(force),
       this.getAllWithdrawals(force),
-      this.getAllShopOrders(force),
+      this._loadAllShopOrdersForAdmin(),
     ]).then(() => {
       // loadAdminOrderHistory reports failure by resolving without loading.
       if (!this.adminOrderHistoryLoaded) throw new Error('order history not loaded');
@@ -2223,6 +2243,26 @@ class FallbackStore {
       if (this._lifetimePromise === promise) this._lifetimePromise = null;
     });
     return promise;
+  }
+
+  /**
+   * Every shop order, for the wallets. getAllShopOrders stops at the newest
+   * 1,000 and the collection is past 2,000 (mostly helpers' own cost
+   * entries), so wallets summed over it were missing the older ones.
+   */
+  private async _loadAllShopOrdersForAdmin(): Promise<void> {
+    const role = this._listenersRole;
+    const docs = await this._scanCollection('shopOrders');
+    if (this._listenersRole !== role) return;
+    const map = new Map<string, ShopOrder>();
+    docs.forEach((d) => {
+      const so = d.data() as ShopOrder;
+      const id = so.id || d.id;
+      map.set(id, { ...so, id });
+    });
+    this.shopOrders = map;
+    this._fullReadAt.set('shopOrders', Date.now());
+    this.notify();
   }
 
   public isAdminLifetimeDataReady(): boolean {
