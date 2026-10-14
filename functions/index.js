@@ -381,8 +381,9 @@ async function claimAndAnnounce(db, orderId, delayMins) {
     const order = snap.data() || {};
 
     // Re-checked inside the transaction: the order may have been accepted or
-    // routed between the query and here.
-    if (order.status !== 'PENDING') return null;
+    // routed between the query and here. isOrderOpen, not just the status: an
+    // order left PENDING with a helper on it is taken.
+    if (!isOrderOpen(order)) return null;
     if (order.dedicatedNotifId || order.routedToDedicated) return null;
 
     const createdAtMs = new Date(order.createdAt).getTime();

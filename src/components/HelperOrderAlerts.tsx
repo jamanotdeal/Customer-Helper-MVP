@@ -132,6 +132,10 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
     const onNewOrderHint = (e: Event) => {
       const orderId = (e as CustomEvent).detail?.orderId;
       if (!orderId) return;
+      // A session alerts on an order once. A reopen announcement is the one
+      // exception: the order was taken and is genuinely open again, so it may
+      // ring again — still only if evaluate() finds it available.
+      if ((e as CustomEvent).detail?.reopen) everAvailable.delete(orderId);
       if (fallbackStore.orders.has(orderId)) {
         evaluate();
         return;
