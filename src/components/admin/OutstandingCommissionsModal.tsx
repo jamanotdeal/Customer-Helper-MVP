@@ -4,6 +4,8 @@ import React, { useState, useMemo } from 'react';
 import { fallbackStore } from '@/lib/firebase';
 import { Wallet, UserProfile, HelperApplication } from '@/types';
 import { X, Search, Bike, DollarSign, TrendingUp, User, CheckCircle2 } from 'lucide-react';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface OutstandingCommissionsModalProps {
   onClose: () => void;
@@ -14,6 +16,10 @@ export const OutstandingCommissionsModal: React.FC<OutstandingCommissionsModalPr
   onClose,
   totalOutstanding,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const [searchQuery, setSearchQuery] = useState('');
 
   // Get all wallets and helper applications/profiles
@@ -49,7 +55,8 @@ export const OutstandingCommissionsModal: React.FC<OutstandingCommissionsModalPr
         };
       })
       .sort((a, b) => b.wallet.balance - a.wallet.balance);
-  }, []);
+    // Recomputed once the full history has arrived (see useAdminLifetimeData).
+  }, [lifetimeData.ready]);
 
   // Filtered list based on search query
   const filteredWallets = useMemo(() => {
@@ -66,6 +73,7 @@ export const OutstandingCommissionsModal: React.FC<OutstandingCommissionsModalPr
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
         {/* Modal Header */}
         <div className="p-5 border-b border-indigo-950/10 flex items-center justify-between bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 text-white">
           <div className="flex items-center space-x-3">

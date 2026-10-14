@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { DraggableTabsContainer } from './DraggableTabsContainer';
 import { getSpiderfiedCoordinates, setupMarkerHoverElevation } from '@/utils/mapMarkerUtils';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface AdminHelperMapViewProps {
   users: UserProfile[];
@@ -533,10 +534,12 @@ export const AdminHelperMapView: React.FC<AdminHelperMapViewProps> = ({
   const selectedHelperActiveOrders = selectedHelper ? runningOrdersByHelper.get(selectedHelper.uid) || [] : [];
   // The wallet walks every order; once per selection or data change, not once a second.
   const selectedHelperUid = selectedHelper?.uid;
+  // The wallet is summed over every order, read only once a helper is picked.
+  const lifetimeData = useAdminLifetimeData(Boolean(selectedHelperUid));
   const selectedHelperWallet = useMemo(
     () => (selectedHelperUid ? fallbackStore.getHelperWallet(selectedHelperUid) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedHelperUid, orders]
+    [selectedHelperUid, orders, lifetimeData.ready]
   );
 
   return (

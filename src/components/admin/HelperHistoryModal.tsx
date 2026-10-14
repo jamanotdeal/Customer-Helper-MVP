@@ -42,6 +42,8 @@ import {
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface HelperHistoryModalProps {
   helperId: string;
@@ -56,6 +58,10 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   helperName,
   onClose,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const { showAlert } = useModal();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'PERFORMANCE' | 'EARNINGS' | 'JOBS' | 'REVIEWS' | 'PAYBACKS'>('PERFORMANCE');
@@ -973,6 +979,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
         <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh] border border-gray-100">
+          <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
           
           {/* Header */}
           <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-950 via-purple-900 to-indigo-900 text-white flex items-center justify-between shrink-0 shadow-sm">
