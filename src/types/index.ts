@@ -219,6 +219,7 @@ export interface UserProfile {
   blockedBy?: string;
   labels?: string[];
   fcmToken?: string; // FCM push subscription token for this device
+  fcmTokens?: string[]; // every device signed in to this account (see saveFcmToken)
   isStore?: boolean;         // True if user has an approved store application
   isStoreApproved?: boolean; // Explicit approval flag for store mode
   storeId?: string;          // The shop document ID linked to this user's store
