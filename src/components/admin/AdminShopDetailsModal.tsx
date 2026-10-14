@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { AdminBlockModal } from './AdminBlockModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
@@ -38,6 +40,10 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   onDeleted,
   onShopUpdated,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const { showConfirm, showAlert } = useModal();
   const [showBlockModal, setShowBlockModal] = React.useState(false);
   const [showDisburseModal, setShowDisburseModal] = React.useState(false);
@@ -82,7 +88,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
     const seenParentIds = new Set<string>();
     shopOrders.forEach((so) => {
       seenParentIds.add(so.parentOrderId);
-      const parentOrder = allOrders.find((o) => o.id === so.parentOrderId);
+      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
       const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
       const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
 
@@ -188,6 +194,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   return (
     <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]">
+        <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
 
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-900 via-purple-800 to-indigo-900 text-white p-6 relative shrink-0">

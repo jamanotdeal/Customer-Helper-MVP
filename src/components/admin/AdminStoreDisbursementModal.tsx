@@ -30,6 +30,8 @@ import {
   FileSpreadsheet,
   BarChart2,
 } from 'lucide-react';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface AdminStoreDisbursementModalProps {
   shop: Shop;
@@ -45,6 +47,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   onClose,
   onDisbursed,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const { showConfirm, showAlert } = useModal();
 
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
@@ -122,9 +128,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const storeUserId = shop.ownerUserId || shop.id;
 
   // Retrieve all orders and shop orders
-  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), []);
-  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), []);
-  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), []);
+  // Re-read once the full history has arrived (see useAdminLifetimeData).
+  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), [lifetimeData.ready]);
+  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), [lifetimeData.ready]);
+  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), [lifetimeData.ready]);
 
   // Filter Shop Orders matching this shop
   const shopOrdersForThisStore = useMemo(() => {
@@ -168,9 +175,14 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const normalizedStoreOrders = useMemo(() => {
     const map = new Map<string, any>();
 
+    const orderById = new Map<string, Order>();
+    allOrders.forEach((o) => {
+      if (!orderById.has(o.id)) orderById.set(o.id, o);
+    });
+
     // 1. From ShopOrders
     shopOrdersForThisStore.forEach((so) => {
-      const parent = allOrders.find((o) => o.id === so.parentOrderId);
+      const parent = orderById.get(so.parentOrderId);
       const isCanceled = so.status === 'CANCELED' || parent?.status === 'CANCELED';
       const isDelivered = parent?.status === 'DELIVERED' || so.status === 'DELIVERED';
       const isHandover = so.status === 'HANDOVER';
@@ -184,6 +196,9 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       const helperPhone = parent?.helperPhone || helper?.phoneNumber || '';
 
       const effectiveDate = so.createdAt || parent?.createdAt || new Date().toISOString();
+      const isStorePaid = Boolean(so.isPaid || parent?.isStorePaid || parent?.isPaid);
+      const isHelperPaid = Boolean(parent?.isHelperPaid);
+      const isPaid = Boolean(parent?.isPaid || (isStorePaid && (isHelperPaid || !parent?.helperId)));
 
       map.set(so.parentOrderId || so.id, {
         id: so.id,
@@ -197,6 +212,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
         commissionRate,
         commission: comm,
         netSales: net,
+        isPaid,
+        isStorePaid,
+        isHelperPaid,
+        storePaidAt: parent?.storePaidAt || so.paidAt,
         helperId: so.helperId || parent?.helperId || 'unassigned',
         helperName,
         helperPhone,
@@ -221,6 +240,9 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
         const helper = po.helperId ? fallbackStore.users.get(po.helperId) : undefined;
         const helperName = po.helperName || helper?.displayName || 'Helper';
         const helperPhone = po.helperPhone || helper?.phoneNumber || '';
+        const isStorePaid = Boolean(po.isStorePaid || po.isPaid);
+        const isHelperPaid = Boolean(po.isHelperPaid);
+        const isPaid = Boolean(po.isPaid || (isStorePaid && (isHelperPaid || !po.helperId)));
 
         map.set(po.id, {
           id: `po-${po.id}`,
@@ -234,6 +256,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
           commissionRate,
           commission: comm,
           netSales: net,
+          isPaid,
+          isStorePaid,
+          isHelperPaid,
+          storePaidAt: po.storePaidAt,
           helperId: po.helperId || 'unassigned',
           helperName,
           helperPhone,
@@ -381,7 +407,11 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   // Filtered Orders for the Orders Tab
   const searchedOrders = useMemo(() => {
     return filteredOrders.filter((o) => {
-      if (orderStatusFilter !== 'ALL' && o.status !== orderStatusFilter) {
+      if (orderStatusFilter === 'PAID') {
+        if (!o.isStorePaid && !o.isPaid) return false;
+      } else if (orderStatusFilter === 'UNPAID') {
+        if (o.isStorePaid || o.isPaid || (o.status !== 'DELIVERED' && o.status !== 'HANDOVER')) return false;
+      } else if (orderStatusFilter !== 'ALL' && o.status !== orderStatusFilter) {
         return false;
       }
       if (orderSearch.trim()) {
@@ -527,6 +557,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   return (
     <div className="fixed inset-0 z-[1000] bg-black/75 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh] animate-in zoom-in-95 duration-200">
+        <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
 
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-emerald-950 text-white p-5 sm:p-6 relative shrink-0">
@@ -1065,6 +1096,8 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                   >
                     <option value="ALL">All Status ({filteredOrders.length})</option>
                     <option value="DELIVERED">Delivered ({filteredOrders.filter((o) => o.status === 'DELIVERED').length})</option>
+                    <option value="PAID">Paid ({filteredOrders.filter((o) => o.isStorePaid || o.isPaid).length})</option>
+                    <option value="UNPAID">Unpaid Delivered ({filteredOrders.filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid).length})</option>
                     <option value="IN_PROGRESS">In Progress ({filteredOrders.filter((o) => o.status === 'IN_PROGRESS' || o.status === 'HANDOVER').length})</option>
                     <option value="CANCELED">Canceled ({filteredOrders.filter((o) => o.status === 'CANCELED').length})</option>
                   </select>
@@ -1085,7 +1118,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
 
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[780px]">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[850px]">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-black text-[10px] tracking-wider border-b border-gray-100">
                       <tr>
                         <th className="py-3 px-4">Order & Time</th>
@@ -1095,6 +1128,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                         <th className="py-3 px-4 text-right">Product Cost (৳)</th>
                         <th className="py-3 px-4 text-right">Net Payable (৳)</th>
                         <th className="py-3 px-4 text-center">Status</th>
+                        <th className="py-3 px-4 text-center">Payment</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-medium">
@@ -1150,11 +1184,22 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                               {ord.status}
                             </span>
                           </td>
+                          <td className="py-3.5 px-4 text-center">
+                            {ord.isStorePaid || ord.isPaid ? (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Paid
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-block bg-amber-100 text-amber-800 border border-amber-300">
+                                Unpaid
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                       {searchedOrders.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="py-10 text-center text-gray-400 font-semibold">
+                          <td colSpan={8} className="py-10 text-center text-gray-400 font-semibold">
                             No orders found for this search/filter.
                           </td>
                         </tr>

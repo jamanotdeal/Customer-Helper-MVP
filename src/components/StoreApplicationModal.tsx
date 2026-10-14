@@ -106,8 +106,8 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
       setError('অনুগ্রহ করে মানচিত্রে দোকানের সঠিক অবস্থান পিন করুন।');
       return;
     }
-    const commPercent = commissionPercent !== '' ? parseFloat(commissionPercent) : 0;
-    if (commissionPercent === '' || isNaN(commPercent) || commPercent < 0 || commPercent > 100) {
+    const commPercent = commissionPercent.trim() !== '' ? parseFloat(commissionPercent) : NaN;
+    if (commissionPercent.trim() === '' || isNaN(commPercent) || commPercent < 0 || commPercent > 100) {
       setError('প্রতি অর্ডারে কমিশন শতাংশ ০% থেকে ১০০% এর মধ্যে হতে হবে।');
       return;
     }
@@ -350,7 +350,6 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
                   onChange={(e) => setCommissionPercent(e.target.value)}
                   placeholder={ph.commissionPercent || 'যেমন: ৫'}
                   className="w-full p-3 pr-10 rounded-2xl border border-gray-200 focus:border-orange-500 outline-none text-sm font-semibold"
-                  required
                 />
                 <span className="absolute right-4 top-3.5 text-sm font-black text-gray-400">%</span>
               </div>

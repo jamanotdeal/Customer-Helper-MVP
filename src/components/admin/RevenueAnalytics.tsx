@@ -8,6 +8,8 @@ import { PaginationControl } from './PaginationControl';
 import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 import { GrowthAnalytics } from './GrowthAnalytics';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import {
   DollarSign,
   Calendar,
@@ -106,10 +108,15 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     );
   };
 
-  // Date Range state (Default to Last 7 Days)
-  const [startDate, setStartDate] = useState<string>(getDaysAgoStr(7));
+  // Date Range state (Default to Today)
+  const [startDate, setStartDate] = useState<string>(getTodayStr());
   const [endDate, setEndDate] = useState<string>(getTodayStr());
-  const [activePreset, setActivePreset] = useState<'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM'>('LAST_7');
+  const [activePreset, setActivePreset] = useState<'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM'>('TODAY');
+
+  // The helper ledger, wallet liabilities and all-time figures here are summed
+  // over every order, withdrawal and shop order, so this report reads the full
+  // history when it is opened (once per session) rather than at admin startup.
+  const lifetimeData = useAdminLifetimeData();
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -192,7 +199,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
       ...Array.from(fallbackStore.wallets.keys()),
     ]) as Set<string>;
 
-    const allWallets = Array.from(allUsersWithActivity).map((uid) => fallbackStore.getHelperWallet(uid));
+    const allWallets = Array.from(fallbackStore.getHelperWallets(allUsersWithActivity).values());
     const totalOutstandingLiability = allWallets.reduce((sum, w) => sum + w.balance, 0);
 
     // Calculate all-time figures for the helper ledger
@@ -219,21 +226,41 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     allShopsList.forEach((s) => shopMap.set(s.id, s));
 
     const storeAppsList = Array.from(fallbackStore.storeApplications.values());
+    // Worked out once per shop: it is asked for on every shop order below.
+    const commissionRateByShop = new Map<Shop, number>();
     const getShopCommissionRate = (s?: Shop): number => {
       if (!s) return 0;
-      const rate = Number(s.commissionPercent);
-      if (!isNaN(rate) && s.commissionPercent !== undefined && s.commissionPercent !== null) return rate;
-      const app = storeAppsList.find((a) => a.userId === s.ownerUserId || a.id === s.applicationId);
-      return Number(app?.commissionPercent) || 0;
+      const known = commissionRateByShop.get(s);
+      if (known !== undefined) return known;
+      let rate = Number(s.commissionPercent);
+      if (isNaN(rate) || s.commissionPercent === undefined || s.commissionPercent === null) {
+        const app = storeAppsList.find((a) => a.userId === s.ownerUserId || a.id === s.applicationId);
+        rate = Number(app?.commissionPercent) || 0;
+      }
+      commissionRateByShop.set(s, rate);
+      return rate;
     };
 
+    // Each shop's wallet, computed once. A store wallet walks every shop order,
+    // order and withdrawal, and the totals below used to recompute it five
+    // times per shop.
+    const storeWalletByShopId = new Map<string, ReturnType<typeof fallbackStore.getStoreWallet>>();
+    allShopsList.forEach((s) => {
+      storeWalletByShopId.set(s.id, fallbackStore.getStoreWallet(s.ownerUserId || s.id, s.id));
+    });
+    const storeWalletOf = (s: Shop) => storeWalletByShopId.get(s.id)!;
+
     // Store Withdrawals / Disbursements
+    const storeAccountIds = new Set<string>();
+    allShopsList.forEach((s) => {
+      storeAccountIds.add(s.id);
+      if (s.ownerUserId) storeAccountIds.add(s.ownerUserId);
+    });
     const storeWithdrawals = allWithdrawals.filter(
       (w) =>
         w.userType === 'store' ||
         w.helperId?.startsWith('store-') ||
-        Array.from(shopMap.keys()).includes(w.helperId || '') ||
-        Array.from(shopMap.values()).some((s) => s.ownerUserId === w.helperId || s.id === w.helperId)
+        storeAccountIds.has(w.helperId || '')
     );
 
     const storeWithdrawalsInRange = storeWithdrawals.filter((w) => {
@@ -275,7 +302,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     // Initialize all existing shops into the map
     allShopsList.forEach((shop) => {
       const commPct = getShopCommissionRate(shop);
-      const storeWallet = fallbackStore.getStoreWallet(shop.ownerUserId || shop.id, shop.id);
+      const storeWallet = storeWalletOf(shop);
       storeCommissionMap.set(shop.id, {
         storeId: shop.id,
         shop,
@@ -498,22 +525,22 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
       .reduce((sum, w) => sum + w.amount, 0);
 
     const allTimeStoreCommission = allShopsList.reduce((sum, s) => {
-      const w = fallbackStore.getStoreWallet(s.ownerUserId || s.id, s.id);
+      const w = storeWalletOf(s);
       return sum + (w.totalPaidCommission || 0);
     }, 0);
 
     const allTimeStoreGrossSales = allShopsList.reduce((sum, s) => {
-      const w = fallbackStore.getStoreWallet(s.ownerUserId || s.id, s.id);
+      const w = storeWalletOf(s);
       return sum + (w.totalEarned + (w.totalPaidCommission || 0));
     }, 0);
 
     const totalStoreOutstandingBalance = allShopsList.reduce((sum, s) => {
-      const w = fallbackStore.getStoreWallet(s.ownerUserId || s.id, s.id);
+      const w = storeWalletOf(s);
       return sum + Math.max(0, w.balance || 0);
     }, 0);
 
     const storesWithBalanceCount = allShopsList.filter((s) => {
-      const w = fallbackStore.getStoreWallet(s.ownerUserId || s.id, s.id);
+      const w = storeWalletOf(s);
       return (w.balance || 0) > 0;
     }).length;
 
@@ -643,7 +670,10 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
       storesWithBalanceCount,
       totalStoreCommissionOrders,
     };
-  }, [orders, pricing, shops, startDate, endDate]);
+    // lifetimeData.ready: the withdrawals and shop orders read here may land
+    // after the orders do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready]);
 
   // Filtered store commission data by search
   const filteredStoreCommissionData = useMemo(() => {
@@ -676,6 +706,8 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
+      <LifetimeDataNotice loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
+
       {/* Analytics View Selector Sub-Tabs */}
       <div className="flex items-center space-x-2 bg-gray-100/80 p-1.5 rounded-2xl w-fit">
         <button

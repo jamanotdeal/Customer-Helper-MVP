@@ -4,7 +4,8 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore, db, versionOf, createChangeGate } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
+import { getDocs, getDoc, onSnapshot } from '@/lib/firestoreMetered';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
 import { StoreWallet } from './StoreWallet';
@@ -731,7 +732,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (storeStatusFilter !== 'ALL') {
       result = result.filter((so) => {
         const parentStatus = getParentOrderStatus(so.parentOrderId);
-        const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
+        const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentStatus === 'CANCELED' || (parentStatus as string) === 'CANCELLED';
         const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
         const isActive = !isCanceled && !isDelivered;
 

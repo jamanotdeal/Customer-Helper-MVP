@@ -39,6 +39,7 @@ import {
   Navigation,
   Maximize2,
   ExternalLink,
+  CreditCard,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 import { AdminStoreOrderDetailsModal } from './AdminStoreOrderDetailsModal';
@@ -60,6 +61,18 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
   // Reactive live order state bound to fallbackStore updates
   const [order, setOrder] = useState<Order | undefined>(() => fallbackStore.orders.get(orderId));
+  // Its shop orders, read for this order alone (the admin panel no longer
+  // loads a slice of all shop orders at startup). Read-only: no helper given.
+  const [, setShopOrdersVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.fetchShopOrdersForOrder(orderId).then(() => {
+      if (!cancelled) setShopOrdersVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
   const [isLoading, setIsLoading] = useState<boolean>(() => !fallbackStore.orders.get(orderId));
 
   useEffect(() => {
@@ -1740,6 +1753,89 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                         ⚠ Order not yet delivered — amount is collectable but not yet confirmed
                       </p>
                     )}
+                  </div>
+
+                  {/* Payment Settlement Status Card */}
+                  <div className="p-3.5 rounded-2xl border border-gray-200 bg-white shadow-2xs space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <CreditCard className="w-4 h-4 text-purple-700" />
+                        <h5 className="text-xs font-black text-gray-900 uppercase tracking-wider">
+                          Payment Settlement Status
+                        </h5>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {order.isPaid ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Fully Paid
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider inline-block bg-amber-100 text-amber-800 border border-amber-300">
+                            Pending Settlement
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const updated = await fallbackStore.toggleOrderPaidStatus(order.id);
+                            if (updated) setOrder({ ...updated });
+                          }}
+                          className="px-2 py-0.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 text-[10px] font-extrabold transition-all border border-gray-200"
+                        >
+                          {order.isPaid ? 'Mark Unpaid' : 'Mark Paid'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-gray-500 uppercase block">Helper Commission</span>
+                          <span className="text-xs font-black text-gray-900">
+                            {order.isHelperPaid ? 'Paid to Platform' : 'Pending Payback'}
+                          </span>
+                          {order.helperPaidAt && (
+                            <span className="text-[9px] text-emerald-600 block">
+                              Settled: {new Date(order.helperPaidAt).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
+                          order.isHelperPaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                        }`}>
+                          {order.isHelperPaid ? 'Settled' : 'Due'}
+                        </span>
+                      </div>
+
+                      {(order.shopId || (order.selectedShopIds && order.selectedShopIds.length > 0) || order.isStoreOrder) ? (
+                        <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase block">Store Payout</span>
+                            <span className="text-xs font-black text-gray-900">
+                              {order.isStorePaid ? 'Disbursed to Store' : 'Pending Disbursement'}
+                            </span>
+                            {order.storePaidAt && (
+                              <span className="text-[9px] text-emerald-600 block">
+                                Disbursed: {new Date(order.storePaidAt).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
+                            order.isStorePaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}>
+                            {order.isStorePaid ? 'Disbursed' : 'Due'}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase block">Store Payout</span>
+                            <span className="text-xs font-semibold text-gray-400">Not a Store Order</span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-gray-400 bg-gray-200">N/A</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

@@ -89,6 +89,8 @@ export interface OrderEditHistoryItem {
 }
 
 export interface Order {
+  /** Set when the order is placed: the customer had no order before it (shown to helpers). */
+  isFirstOrder?: boolean;
   id: string;
   customerId: string;
   customerName: string;
@@ -120,6 +122,10 @@ export interface Order {
   
   routedToDedicated?: boolean;
   dedicatedNotifiedAt?: string;
+  /** Id of the one dedicated-routing announcement this order may have.
+   *  Written by dedicatedRoutingSweep (functions/index.js); anything else
+   *  addressed to all-dedicated-helpers for this order is a duplicate. */
+  dedicatedNotifId?: string;
 
   updatedByCustomer?: boolean;
   lastEditedAt?: string;
@@ -168,6 +174,16 @@ export interface Order {
   // Store request tagging
   isStoreOrder?: boolean;
   creatorRole?: string;
+
+  // Payment settlement tracking (Store Payout & Helper Commission Payback)
+  isPaid?: boolean;
+  paidAt?: string;
+  isHelperPaid?: boolean;
+  helperPaidAt?: string;
+  helperPaidWdId?: string;
+  isStorePaid?: boolean;
+  storePaidAt?: string;
+  storeDisbursementId?: string;
 }
 
 export interface OrderDuePayment {
@@ -209,6 +225,7 @@ export interface UserProfile {
   blockedBy?: string;
   labels?: string[];
   fcmToken?: string; // FCM push subscription token for this device
+  fcmTokens?: string[]; // every device signed in to this account (see saveFcmToken)
   isStore?: boolean;         // True if user has an approved store application
   isStoreApproved?: boolean; // Explicit approval flag for store mode
   storeId?: string;          // The shop document ID linked to this user's store
@@ -587,6 +604,9 @@ export interface ShopOrder {
   createdAt: string;
   updatedAt: string;
   statusHistory: ShopOrderStatusHistoryItem[];
+  isPaid?: boolean;
+  paidAt?: string;
+  disbursementId?: string;
 }
 
 export interface FeeSuggestion {

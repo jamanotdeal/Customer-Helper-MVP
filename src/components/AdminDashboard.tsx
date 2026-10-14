@@ -1,9 +1,12 @@
 'use client';
-
+// AdminDashboard
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, getCountFromServer, getAggregateFromServer, sum } from 'firebase/firestore';
+import { computeShopMetrics, createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
+import type { ShopMetrics } from '@/lib/adminMetrics';
+import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
+import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
 import { AreaDrawerModal } from './admin/AreaDrawerModal';
@@ -91,6 +94,10 @@ import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AdminBlockModal } from './admin/AdminBlockModal';
 import { BlockedUserModal } from './BlockedUserModal';
 import { AsyncButton } from './ui/AsyncButton';
+import { AdminDateRangeFilter } from './admin/AdminDateRangeFilter';
+import { LifetimeDataNotice } from './admin/LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
+import { AdminDateRange, rangeForPreset, rangeBoundsIso, isInRange, describeRange } from '@/lib/adminDateRange';
 import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 import {
   exportUsersToCSV,
@@ -134,8 +141,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [storeOrdersStatusFilter, setStoreOrdersStatusFilter] = useState<string>('ALL');
   const [storeOrdersShopFilter, setStoreOrdersShopFilter] = useState<string>('ALL');
   const [storeOrdersHelperFilter, setStoreOrdersHelperFilter] = useState<string>('ALL');
-  const [storeOrdersStartDate, setStoreOrdersStartDate] = useState<string>('');
-  const [storeOrdersEndDate, setStoreOrdersEndDate] = useState<string>('');
   const [storeOrdersSortBy, setStoreOrdersSortBy] = useState<'NEWEST' | 'OLDEST' | 'PRICE_HIGH' | 'PRICE_LOW'>('NEWEST');
   const [selectedStoreOrderIds, setSelectedStoreOrderIds] = useState<string[]>([]);
   const [isDeletingStoreOrders, setIsDeletingStoreOrders] = useState<boolean>(false);
@@ -531,9 +536,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [excBadFeedbackPage, setExcBadFeedbackPage] = useState(1);
   const [excBadFeedbackPageSize, setExcBadFeedbackPageSize] = useState(10);
 
-  // Tab-specific Date Filters
-  const [ordersStartDate, setOrdersStartDate] = useState('');
-  const [ordersEndDate, setOrdersEndDate] = useState('');
+  // The days the order lists (Orders, Store Orders) and the work-hours card
+  // cover. Only those days are read from the server; today by default.
+  const [dateRange, setDateRange] = useState<AdminDateRange>(() => rangeForPreset('TODAY'));
+  const { startIso: rangeStartIso, endIso: rangeEndIso } = useMemo(
+    () => rangeBoundsIso(dateRange.start, dateRange.end),
+    [dateRange.start, dateRange.end]
+  );
+  const [rangeStatus, setRangeStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [rangeReload, setRangeReload] = useState(0);
+  const rangeForceRef = useRef(false);
 
   const [usersStartDate, setUsersStartDate] = useState('');
   const [usersEndDate, setUsersEndDate] = useState('');
@@ -554,8 +566,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     statusFilter,
     withdrawalStatusFilter,
     sortBy,
-    ordersStartDate,
-    ordersEndDate,
+    rangeStartIso,
+    rangeEndIso,
     usersStartDate,
     usersEndDate,
     audienceFilter,
@@ -569,19 +581,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // subscriber, so copying (and re-rendering) only what actually changed is what
   // keeps a wallet or notification update from re-rendering every list here.
   const adminSyncSeenRef = useRef<Record<string, unknown>>({});
-  // True while the full order history is still arriving in the background, so
-  // lifetime totals and reports can say they are not final yet.
-  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
+  // Bumped whenever something the helper wallets are computed from changes in
+  // the store. Not all of it is mirrored into state here, so the memoised
+  // helper list depends on this instead.
+  const [walletInputsVersion, setWalletInputsVersion] = useState(0);
 
   useEffect(() => {
     const syncAdminData = () => {
-      setOrderHistoryLoading(fallbackStore.adminOrderHistoryLoading);
       const seen = adminSyncSeenRef.current;
       const changed = (key: string, current: unknown) => {
         if (seen[key] === current) return false;
         seen[key] = current;
         return true;
       };
+
+      // Everything fallbackStore.getHelperWallets reads. (An array, so that
+      // every one of them is checked and recorded, not just the first hit.)
+      const walletInputsChanged = [
+        changed('wallet:orders', versionOf(fallbackStore.orders)),
+        changed('wallet:withdrawals', versionOf(fallbackStore.withdrawals)),
+        changed('wallet:shopOrders', versionOf(fallbackStore.shopOrders)),
+        changed('wallet:shops', versionOf(fallbackStore.shops)),
+        changed('wallet:storeApplications', versionOf(fallbackStore.storeApplications)),
+        changed('wallet:pricing', fallbackStore.pricingSettings),
+      ].some(Boolean);
+      if (walletInputsChanged) setWalletInputsVersion((v) => v + 1);
 
       if (changed('orders', versionOf(fallbackStore.orders))) {
         const freshOrders = Array.from(fallbackStore.orders.values());
@@ -803,13 +827,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     fallbackStore.getOrder(q).catch(() => { });
   }, [activeTab, ordersAppliedSearchQuery]);
 
+  // The selected days of orders — and of shop orders while Store Orders is
+  // open — read from the server. Runs after the admin listeners above are set
+  // up (a read started under another role is discarded). Asking for a range
+  // already read, or one still in flight, costs nothing (see
+  // loadAdminOrdersInRange); Retry and Refresh read it again.
+  const needsShopOrderRange = activeTab === 'STORE_ORDERS';
+  // The shops the Store Orders list can show (see realStoreOrders): only their
+  // shop orders are read. Empty until the shops have loaded — then all are read.
+  const receivingShopIds = useMemo(
+    () => shops.filter((sh) => sh.id && sh.id !== 'myself' && sh.canReceiveOrders !== false).map((sh) => sh.id).sort().join(','),
+    [shops]
+  );
   useEffect(() => {
-    if (activeTab === 'STORE_ORDERS') {
-      fallbackStore.getAllShopOrders().then((fetched) => {
-        setShopOrders(fetched);
-      }).catch((err) => console.warn('Error fetching shop orders:', err));
+    if (!currentUser?.uid) return;
+    let cancelled = false;
+    const force = rangeForceRef.current;
+    rangeForceRef.current = false;
+    setRangeStatus('loading');
+    const readOrders = () => fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
+    // Store Orders reads its own list first and the orders (for the work-hours
+    // card) after it. Read side by side, the far larger orders read held up
+    // the store orders on the same connection: 30 days took 5–7 s on a phone.
+    const shown = needsShopOrderRange
+      ? fallbackStore.loadAdminShopOrdersInRange(rangeStartIso, rangeEndIso, force, receivingShopIds ? receivingShopIds.split(',') : undefined)
+      : readOrders();
+    if (needsShopOrderRange) {
+      shown.catch(() => { }).then(() => { if (!cancelled) readOrders().catch(() => { /* logged by the store */ }); });
     }
-  }, [activeTab]);
+    shown
+      .then(() => { if (!cancelled) setRangeStatus('ready'); })
+      .catch(() => { if (!cancelled) setRangeStatus('error'); });
+    return () => { cancelled = true; };
+    // receivingShopIds only matters while Store Orders is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload]);
+
+  const reloadRange = (force: boolean) => {
+    rangeForceRef.current = force;
+    setRangeReload((n) => n + 1);
+  };
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -946,6 +1003,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsRefreshing(true);
     try {
       await fallbackStore.refreshAdminData(subset);
+      reloadRange(true);
       // Sync local state from the updated store
       setUsers(Array.from(fallbackStore.users.values()));
       setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
@@ -1107,11 +1165,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (c) => c.status === 'PENDING'
   );
 
+  const allOrdersById = React.useMemo(() => {
+    const map = new Map<string, Order>();
+    allOrders.forEach((o) => {
+      if (!map.has(o.id)) map.set(o.id, o);
+    });
+    return map;
+  }, [allOrders]);
+
   const badFeedbacks = React.useMemo(() => {
     return feedbacks
       .filter((f) => {
         if (!f || !f.id || f.mutuallyDiscussed) return false;
-        const linkedOrder = allOrders.find((o) => o.id === f.orderId);
+        const linkedOrder = allOrdersById.get(f.orderId);
         if (linkedOrder?.mutuallyDiscussed) return false;
 
         // ONLY strictly negative feedback:
@@ -1128,7 +1194,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return false;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [feedbacks, allOrders]);
+  }, [feedbacks, allOrdersById]);
 
   const totalExceptionsCount =
     cancellingRequests.filter(o => o.cancellationRequest?.status === 'PENDING').length +
@@ -1190,8 +1256,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { avgRating: avg, count: totalCount };
   }, [feedbacks, exactFeedbacksCount]);
 
+  // Work hours of the orders placed on the selected days (see dateRange).
   const totalHoursOfWork = React.useMemo(() => {
-    const delivered = allOrders.filter(o => o.status === 'DELIVERED');
+    const delivered = allOrders.filter(o => o.status === 'DELIVERED' && isInRange(o.createdAt, rangeStartIso, rangeEndIso));
     let totalMs = 0;
     delivered.forEach(o => {
       if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
@@ -1203,7 +1270,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
     const hours = totalMs / (1000 * 60 * 60);
     return hours > 0 ? (hours >= 10 ? Math.round(hours).toString() : hours.toFixed(1)) : '0';
-  }, [allOrders]);
+  }, [allOrders, rangeStartIso, rangeEndIso]);
 
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
   const approvedHelpersCount = applications.filter((a) => a.status === 'APPROVED').length;
@@ -1428,7 +1495,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       dedicatedHelperDelayMinutes: dedicatedDelayMins !== '' && !isNaN(Number(dedicatedDelayMins)) ? Number(dedicatedDelayMins) : 7,
       orderReceiverRule: receiverRule,
       allowedHelperTypes: allowedHelperTypes,
-      helperRadiusKm: helperRadiusKm !== '' && !isNaN(Number(helperRadiusKm)) ? Number(helperRadiusKm) : 3.5,
+      helperRadiusKm: helperRadiusKm !== '' && !isNaN(Number(helperRadiusKm)) ? Math.min(1000, Math.max(1, Number(helperRadiusKm))) : 3.5,
       mapLocationPreference: mapLocationPref,
       customCountryCode: customCountryCode.trim().toLowerCase() || 'bd',
       allowedDeliveryAreasEnabled: allowedDeliveryAreasEnabled,
@@ -1646,15 +1713,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
 
-    // Date range filter
-    if (ordersStartDate) {
-      const startMs = new Date(`${ordersStartDate}T00:00:00`).getTime();
-      list = list.filter((o) => new Date(o.createdAt).getTime() >= startMs);
-    }
-    if (ordersEndDate) {
-      const endMs = new Date(`${ordersEndDate}T23:59:59.999`).getTime();
-      list = list.filter((o) => new Date(o.createdAt).getTime() <= endMs);
-    }
+    // Date range — the days read from the server for this list. An exact
+    // order id typed into search is shown whatever its date (it is fetched on
+    // its own, see the effect on ordersAppliedSearchQuery).
+    const exactIdSearch = ordersAppliedSearchQuery.trim().replace(/^#/, '');
+    list = list.filter((o) => o.id === exactIdSearch || isInRange(o.createdAt, rangeStartIso, rangeEndIso));
 
     // Search query filter
     if (ordersAppliedSearchQuery.trim()) {
@@ -1677,6 +1740,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         list = list.filter((o) => !o.helperId && o.status !== 'CANCELED' && o.status !== 'DELIVERED');
       } else if (statusFilter === 'DELIVERY_BACK') {
         list = list.filter((o) => !!o.needDeliveryBack);
+      } else if (statusFilter === 'PAID') {
+        list = list.filter((o) => o.isPaid || (o.status === 'DELIVERED' && (o.isHelperPaid || o.isStorePaid)));
+      } else if (statusFilter === 'UNPAID') {
+        list = list.filter((o) => o.status === 'DELIVERED' && !o.isPaid);
       } else {
         list = list.filter((o) => o.status === statusFilter);
       }
@@ -1692,19 +1759,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Sorting (Default Latest First)
-    list.sort((a, b) => {
-      if (sortBy === 'OLDEST') {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      if (sortBy === 'FEE_HIGH') {
-        return b.deliveryFee - a.deliveryFee;
-      }
-      if (sortBy === 'FEE_LOW') {
-        return a.deliveryFee - b.deliveryFee;
-      }
-      // NEWEST default
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    if (sortBy === 'FEE_HIGH') {
+      list.sort((a, b) => b.deliveryFee - a.deliveryFee);
+    } else if (sortBy === 'FEE_LOW') {
+      list.sort((a, b) => a.deliveryFee - b.deliveryFee);
+    } else {
+      list = sortByDate(list, (o) => o.createdAt, sortBy === 'OLDEST');
+    }
 
     return list;
   };
@@ -1713,15 +1774,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getProcessedStoreOrders = (rawShopOrders: ShopOrder[]) => {
     let list = [...rawShopOrders];
 
-    // Date range filter
-    if (storeOrdersStartDate) {
-      const startMs = new Date(`${storeOrdersStartDate}T00:00:00`).getTime();
-      list = list.filter((so) => new Date(so.createdAt).getTime() >= startMs);
-    }
-    if (storeOrdersEndDate) {
-      const endMs = new Date(`${storeOrdersEndDate}T23:59:59.999`).getTime();
-      list = list.filter((so) => new Date(so.createdAt).getTime() <= endMs);
-    }
+    // Date range — the days read from the server for this list.
+    list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
 
     // Search query filter
     if (storeOrdersAppliedSearchQuery.trim()) {
@@ -1756,50 +1810,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     // Sorting
-    list.sort((a, b) => {
-      if (storeOrdersSortBy === 'OLDEST') {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      if (storeOrdersSortBy === 'PRICE_HIGH') {
-        return (b.price || 0) - (a.price || 0);
-      }
-      if (storeOrdersSortBy === 'PRICE_LOW') {
-        return (a.price || 0) - (b.price || 0);
-      }
-      // NEWEST default
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    if (storeOrdersSortBy === 'PRICE_HIGH') {
+      list.sort((a, b) => (b.price || 0) - (a.price || 0));
+    } else if (storeOrdersSortBy === 'PRICE_LOW') {
+      list.sort((a, b) => (a.price || 0) - (b.price || 0));
+    } else {
+      list = sortByDate(list, (so) => so.createdAt, storeOrdersSortBy === 'OLDEST');
+    }
 
     return list;
   };
 
 
   // 2. Helper Aggregated List
-  const getProcessedHelpers = () => {
-    const helperMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        phone: string;
-        email?: string;
-        nid?: string;
-        status: string;
-        completedJobs: number;
-        activeOrders: number;
-        storeOrdersCount: number;
-        storeOrdersPercentage: number;
-        totalEarned: number;
-        balance: number;
-        totalWithdrawn: number;
-        createdAt: string;
-        avgDeliveryTimeMins?: number;
-      }
-    >();
+  //
+  // Memoised, and built in one pass over the orders. It used to be rebuilt on
+  // every render — twice, when the table view was open — and looked up each
+  // helper's wallet and each order's shop orders inside the loop over orders,
+  // both of which walk whole collections themselves: opening the Helpers tab
+  // blocked the app for ~11 s with 1,300 orders.
+  type HelperRow = {
+    id: string;
+    name: string;
+    phone: string;
+    email?: string;
+    nid?: string;
+    status: string;
+    completedJobs: number;
+    activeOrders: number;
+    storeOrdersCount: number;
+    storeOrdersPercentage: number;
+    totalEarned: number;
+    balance: number;
+    totalWithdrawn: number;
+    createdAt: string;
+    avgDeliveryTimeMins?: number;
+  };
+  const processedHelpers = React.useMemo((): HelperRow[] => {
+    if (activeTab !== 'HELPERS') return [];
+    const helperMap = new Map<string, HelperRow>();
+
+    // Every helper's wallet, and which orders have shop orders, up front.
+    const helperIds = new Set<string>();
+    applications.forEach((app) => helperIds.add(app.userId));
+    allOrders.forEach((o) => {
+      if (o.helperId) helperIds.add(o.helperId);
+    });
+    const wallets = fallbackStore.getHelperWallets(helperIds);
+    const ordersWithShopOrders = new Set<string>();
+    fallbackStore.shopOrders.forEach((so) => {
+      if (so.parentOrderId) ordersWithShopOrders.add(so.parentOrderId);
+    });
 
     // Seed from helper applications & wallets
     applications.forEach((app) => {
-      const w = fallbackStore.getHelperWallet(app.userId);
+      const w = wallets.get(app.userId)!;
       helperMap.set(app.userId, {
         id: app.userId,
         name: app.legalName || app.userName,
@@ -1822,24 +1887,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // Aggregate from orders (using allOrders for complete history)
     allOrders.forEach((o) => {
       if (!o.helperId) return;
-      const w = fallbackStore.getHelperWallet(o.helperId);
-      const existing = helperMap.get(o.helperId) || {
-        id: o.helperId,
-        name: o.helperName || 'Helper',
-        phone: 'N/A',
-        status: 'APPROVED',
-        completedJobs: 0,
-        activeOrders: 0,
-        storeOrdersCount: 0,
-        storeOrdersPercentage: 0,
-        totalEarned: w.totalEarned,
-        balance: w.balance,
-        totalWithdrawn: w.totalWithdrawn,
-        createdAt: o.createdAt,
-      };
+      let existing = helperMap.get(o.helperId);
+      if (!existing) {
+        const w = wallets.get(o.helperId)!;
+        existing = {
+          id: o.helperId,
+          name: o.helperName || 'Helper',
+          phone: 'N/A',
+          status: 'APPROVED',
+          completedJobs: 0,
+          activeOrders: 0,
+          storeOrdersCount: 0,
+          storeOrdersPercentage: 0,
+          totalEarned: w.totalEarned,
+          balance: w.balance,
+          totalWithdrawn: w.totalWithdrawn,
+          createdAt: o.createdAt,
+        };
+        helperMap.set(o.helperId, existing);
+      }
 
-      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id);
-      if ((shopOrders && shopOrders.length > 0) || (o.selectedShopIds && o.selectedShopIds.length > 0) || o.isStoreOrder) {
+      if (ordersWithShopOrders.has(o.id) || (o.selectedShopIds && o.selectedShopIds.length > 0) || o.isStoreOrder) {
         existing.storeOrdersCount += 1;
       }
 
@@ -1857,8 +1925,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       } else if (o.status !== 'CANCELED') {
         existing.activeOrders += 1;
       }
-
-      helperMap.set(o.helperId, existing);
     });
 
     // Calculate average delivery time & store orders percentage for each helper
@@ -1895,30 +1961,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
 
     return list;
-  };
+    // walletInputsVersion stands for everything the wallets are computed from
+    // inside the store (orders, withdrawals, shop orders, shops, pricing).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, applications, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion]);
 
   // 4. Unified Users List with Live Running States
-  const getProcessedUsersList = () => {
+  //
+  // Memoised, with the orders indexed once (createUserOrderStats). It used to
+  // search the whole order list four times for every user, on every render
+  // (470 users × 1,300 orders × 4 ≈ 2.8 s per tab switch).
+  const processedUsersList = React.useMemo(() => {
+    if (activeTab !== 'USERS_LIST') return [];
     const usersList = serverUsers !== null ? serverUsers : users;
     const ordersSource = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
 
-    let list = usersList.map((u) => {
-      const activeReq = ordersSource.find(
-        (o) => (o.customerId === u.uid || (u.phoneNumber && o.customerPhone === u.phoneNumber) || (u.alternativePhone && o.customerPhone === u.alternativePhone)) &&
-          o.status !== 'DELIVERED' &&
-          o.status !== 'CANCELED'
-      );
-      const activeDel = ordersSource.find(
-        (o) => o.helperId === u.uid && o.status !== 'DELIVERED' && o.status !== 'CANCELED'
-      );
+    const orderStatsOf = createUserOrderStats(ordersSource);
 
-      const userOrders = ordersSource.filter((o) =>
-        o.customerId === u.uid ||
-        (u.phoneNumber && o.customerPhone === u.phoneNumber) ||
-        (u.alternativePhone && o.customerPhone === u.alternativePhone)
-      );
-      const customerOrdersCount = userOrders.length;
-      const helperOrdersCount = ordersSource.filter((o) => o.helperId === u.uid).length;
+    let list = usersList.map((u) => {
+      const { activeReq, activeDel, customerOrdersCount, helperOrdersCount, lastOrderMs } = orderStatsOf(u);
 
       const registrationDate = u.createdAt ? new Date(u.createdAt) : new Date();
       const now = new Date();
@@ -1929,12 +1990,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const monthlyOrderRate = (customerOrdersCount / diffDays) * 30;
 
       let daysSinceLastOrder: number | null = null;
-      if (userOrders.length > 0) {
-        const sortedUserOrders = [...userOrders].sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-        const lastOrderDate = new Date(sortedUserOrders[0].createdAt);
-        const diffLastOrder = Math.abs(now.getTime() - lastOrderDate.getTime());
+      if (lastOrderMs !== null) {
+        const diffLastOrder = Math.abs(now.getTime() - lastOrderMs);
         daysSinceLastOrder = Math.floor(diffLastOrder / (1000 * 60 * 60 * 24));
       }
 
@@ -2115,7 +2172,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     return list;
-  };
+  }, [
+    activeTab, serverUsers, users, serverOrders, allOrders, orders,
+    usersStartDate, usersEndDate, usersAppliedSearchQuery, statusFilter, audienceFilter,
+    usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortColumn, usersSortDirection, usersSortByCoins, sortBy,
+  ]);
+
+  // The two big order lists, filtered and sorted once per change of their
+  // inputs rather than on every render of this component (which every store
+  // update, every keystroke in a search box and every open modal causes).
+  const processedOrdersForTab = React.useMemo(
+    () => (activeTab === 'ORDERS' ? getProcessedOrders(serverOrders !== null ? serverOrders : allOrders) : []),
+    // getProcessedOrders reads exactly the filters listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy]
+  );
+  // Which order is each customer's first — for the "first order" badge.
+  const firstOrderIds = React.useMemo(
+    () => (activeTab === 'ORDERS' || activeTab === 'EXCEPTIONS' ? getFirstOrderIds(orders) : new Set<string>()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, orders]
+  );
 
   // Generic Pagination Calculator
   function paginateList<T>(items: T[], customPage?: number, customPageSize?: number, overrideTotalCount?: number) {
@@ -2127,6 +2204,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { totalPages, paginatedItems, totalItems: totalCount };
   }
 
+  const shopById = React.useMemo(() => {
+    const map = new Map<string, Shop>();
+    shops.forEach((shop) => {
+      if (!map.has(shop.id)) map.set(shop.id, shop);
+    });
+    return map;
+  }, [shops]);
+
   // Filter out custom costs and only include requests sent to registered shops that can receive orders in app
   const realStoreOrders = React.useMemo(() => {
     return shopOrders.filter((so) => {
@@ -2136,12 +2221,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return false;
       }
       // Only include orders sent to a registered store that can receive/accept orders directly in app
-      const targetShop = shops.find((s) => s.id === so.shopId) || fallbackStore.shops.get(so.shopId);
+      const targetShop = shopById.get(so.shopId) || fallbackStore.shops.get(so.shopId);
       if (!targetShop) return false;
       if (targetShop.canReceiveOrders === false) return false;
       return true;
     });
-  }, [shopOrders, shops]);
+  }, [shopOrders, shopById]);
+
+  const processedStoreOrdersForTab = React.useMemo(
+    () => (activeTab === 'STORE_ORDERS' ? getProcessedStoreOrders(realStoreOrders) : []),
+    // getProcessedStoreOrders reads exactly the filters listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, realStoreOrders, rangeStartIso, rangeEndIso, storeOrdersAppliedSearchQuery, storeOrdersStatusFilter, storeOrdersShopFilter, storeOrdersHelperFilter, storeOrdersSortBy]
+  );
+
+  // Sales, commission and payout figures of every shop, for the Shops tab.
+  // One pass over the shop orders, orders and withdrawals (computeShopMetrics);
+  // it used to be redone per shop, on every render, with a search of all
+  // orders for each shop order.
+  // "Today's sales" turns over at midnight, so the day is one of its inputs.
+  const todayKey = new Date().toDateString();
+  const shopMetricsMap = React.useMemo(
+    () =>
+      activeTab === 'SHOPS'
+        ? computeShopMetrics(
+          serverShops !== null ? serverShops : shops,
+          Array.from(fallbackStore.shopOrders.values()),
+          Array.from(fallbackStore.orders.values()),
+          Array.from(fallbackStore.withdrawals.values())
+        )
+        : new Map<string, ShopMetrics>(),
+    // walletInputsVersion covers the three store collections read above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, serverShops, shops, walletInputsVersion, todayKey]
+  );
+
+  // Who is a store, for labelling and filtering withdrawals: looked up per
+  // withdrawal, so a set and a map rather than a search of users and shops.
+  const storeUserIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    users.forEach((u) => {
+      if (u.isStore || u.role === 'store') ids.add(u.uid);
+    });
+    return ids;
+  }, [users]);
+  const shopByOwnerId = React.useMemo(() => {
+    const map = new Map<string, Shop>();
+    shops.forEach((shop) => {
+      if (shop.ownerUserId && !map.has(shop.ownerUserId)) map.set(shop.ownerUserId, shop);
+    });
+    return map;
+  }, [shops]);
 
   const isSuperAdmin = currentUser?.isSuperAdmin;
   const isAdmin = currentUser?.isAdmin;
@@ -2181,6 +2311,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     }
   }, [activeTab, allowedAdminTabs, isNormalAdmin]);
+
+  // Helper wallets, per-user order counts and the longest-delivery list are
+  // summed over every order, so these views read the full history — on
+  // demand, once per session — instead of every admin session doing it.
+  const lifetimeData = useAdminLifetimeData(
+    // Shops: its per-shop sales and payouts are summed from shop orders, their
+    // parent orders and withdrawals (computeShopMetrics).
+    activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
+  );
 
   if (isNormalAdmin && allowedAdminTabs.length === 0) {
     return (
@@ -2360,7 +2499,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span className="text-3xl font-extrabold text-gray-900">
               {totalHoursOfWork} <span className="text-lg font-bold text-gray-600">hrs</span>
             </span>
-            <span className="text-xs text-teal-700 font-semibold">{orderHistoryLoading ? 'calculating…' : 'sum of durations'}</span>
+            <span className="text-xs text-teal-700 font-semibold">{rangeStatus === 'loading' ? 'loading…' : `orders placed ${describeRange(dateRange)}`}</span>
           </div>
         </div>
 
@@ -2692,6 +2831,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
       </DraggableTabsContainer>
 
+      {/* Date range — the very top of the order lists. Only these days are read. */}
+      {(activeTab === 'ORDERS' || activeTab === 'STORE_ORDERS') && isTabAllowed(activeTab) && (
+        <AdminDateRangeFilter
+          value={dateRange}
+          onChange={setDateRange}
+          loading={rangeStatus === 'loading'}
+          error={rangeStatus === 'error'}
+          onRetry={() => reloadRange(true)}
+          summary={
+            activeTab === 'ORDERS'
+              ? `${processedOrdersForTab.length} order${processedOrdersForTab.length === 1 ? '' : 's'}`
+              : `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
+          }
+        />
+      )}
+
       {/* Global Search & Sorting Bar (Visible on list tabs) */}
       {activeTab !== 'PRICING' && activeTab !== 'SETTINGS' && activeTab !== 'GROWTH' && activeTab !== 'REVENUE' && activeTab !== 'REWARDS' && activeTab !== 'ADDRESSES' && (() => {
         const getTabSearchStates = () => {
@@ -2762,41 +2917,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* Date Range Filter — Orders tab only */}
-            {activeTab === 'ORDERS' && (
-              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-100">
-                <div className="flex items-center gap-1 text-xs font-bold text-gray-500">
-                  <Calendar className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Date Range:</span>
-                </div>
-                <div className="flex items-center space-x-1 bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1.5">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">From:</span>
-                  <input
-                    type="date"
-                    value={ordersStartDate}
-                    onChange={(e) => { setOrdersStartDate(e.target.value); setCurrentPage(1); }}
-                    className="bg-transparent text-gray-800 font-semibold focus:outline-none text-[11px]"
-                  />
-                </div>
-                <div className="flex items-center space-x-1 bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1.5">
-                  <span className="text-gray-400 text-[10px] uppercase font-bold">To:</span>
-                  <input
-                    type="date"
-                    value={ordersEndDate}
-                    onChange={(e) => { setOrdersEndDate(e.target.value); setCurrentPage(1); }}
-                    className="bg-transparent text-gray-800 font-semibold focus:outline-none text-[11px]"
-                  />
-                </div>
-                {(ordersStartDate || ordersEndDate) && (
-                  <button
-                    onClick={() => { setOrdersStartDate(''); setOrdersEndDate(''); setCurrentPage(1); }}
-                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition-all"
-                  >
-                    Clear Dates
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         );
       })()}
@@ -2953,7 +3073,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const notAccepted = getProcessedOrders(notAcceptedRequests);
         const cancelling = getProcessedOrders(cancellingRequests);
         const feeAdjustments = getProcessedOrders(feeAdjustmentsPending);
-        const firstOrderIds = getFirstOrderIds(orders);
 
         // Per-section pagination helpers
         const paginate = <T,>(list: T[], page: number, size: number) => ({
@@ -3647,8 +3766,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </thead>
                         <tbody className="divide-y divide-gray-100 font-medium">
                           {pwd.items.map((w) => {
-                            const shop = shops.find(s => s.ownerUserId === w.helperId);
-                            const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                            const shop = shopByOwnerId.get(w.helperId);
+                            const isStore = w.userType === 'store' || Boolean(shop) || storeUserIds.has(w.helperId);
                             const storeName = shop?.name;
                             return (
                               <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
@@ -3813,26 +3932,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
       })()}
 
-      {/* Reports and the helper/user tables total every order ever placed;
-          until the background history load finishes they cover recent ones. */}
-      {orderHistoryLoading && (['REVENUE', 'GROWTH', 'HELPERS', 'USERS_LIST'] as string[]).includes(activeTab) && (
-        <div className="px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold flex items-center gap-2">
-          <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-          Loading full order history — totals below will update when it finishes.
-        </div>
+      {/* The helper and user tables total every order ever placed. */}
+      {(activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS') && (
+        <LifetimeDataNotice loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
       )}
 
       {/* --- TAB 2: ALL ORDERS TAB --- */}
       {activeTab === 'ORDERS' && isTabAllowed('ORDERS') && (() => {
         // Use serverOrders when available; fall back to allOrders (accumulates ALL fetched orders)
-        const ordersSource = serverOrders !== null ? serverOrders : allOrders;
-        const processed = getProcessedOrders(ordersSource);
-        const hasOrdersFilter = Boolean(ordersAppliedSearchQuery.trim() || ordersStartDate || ordersEndDate || statusFilter !== 'ALL' || ordersHelperFilter !== 'ALL');
-        // When no filter is active, always use the server count for total (even after serverOrders loaded,
-        // exactTotalOrders is the authoritative number from getCountFromServer)
-        const overrideOrdersCount = (!hasOrdersFilter && exactTotalOrders !== null && exactTotalOrders > processed.length) ? exactTotalOrders : undefined;
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideOrdersCount);
-        const firstOrderIds = getFirstOrderIds(orders);
+        const processed = processedOrdersForTab;
+        // The list is one date range read in full, so its length is the total.
+        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
 
         return (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden space-y-2">
@@ -3840,12 +3950,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div>
                 <h3 className="font-extrabold text-base text-gray-900">System Orders Master List</h3>
                 <p className="text-xs text-gray-500">Select multiple orders to batch delete or manage</p>
-                {orderHistoryLoading && (
-                  <p className="text-xs text-amber-700 font-semibold flex items-center gap-1 mt-1">
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                    Loading older orders… recent orders are shown below.
-                  </p>
-                )}
               </div>
               <div className="flex items-center gap-3 flex-wrap">
                 {selectedOrderIds.length > 0 && (
@@ -3905,6 +4009,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <option value="ON_THE_WAY">ON_THE_WAY</option>
                   <option value="ARRIVED">ARRIVED</option>
                   <option value="DELIVERED">DELIVERED</option>
+                  <option value="PAID">PAID (Settled Orders)</option>
+                  <option value="UNPAID">UNPAID (Pending Settlement)</option>
                   <option value="CANCELED">CANCELED</option>
                   <option value="UNASSIGNED">Unassigned Only</option>
                   <option value="DELIVERY_BACK">Return Orders Only</option>
@@ -3975,7 +4081,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {paginatedItems.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
-                        No orders match your criteria.
+                        {rangeStatus === 'loading'
+                          ? `Loading orders for ${describeRange(dateRange)}…`
+                          : rangeStatus === 'error'
+                            ? 'Could not load orders for these dates. Use Retry above.'
+                            : `No orders match your criteria for ${describeRange(dateRange)}.`}
                       </td>
                     </tr>
                   ) : (
@@ -4103,6 +4213,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 🔁 Return
                               </span>
                             )}
+                            {ord.status === 'DELIVERED' && (
+                              <div className="mt-0.5">
+                                {ord.isPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-wide">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Paid
+                                  </span>
+                                ) : ord.isStorePaid && !ord.isHelperPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black uppercase tracking-wide">
+                                    Store Paid
+                                  </span>
+                                ) : ord.isHelperPaid && !ord.isStorePaid ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-black uppercase tracking-wide">
+                                    Helper Paid
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black uppercase tracking-wide">
+                                    Unpaid
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -4146,7 +4277,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 2b: ALL STORE ORDERS TAB --- */}
       {activeTab === 'STORE_ORDERS' && isTabAllowed('STORE_ORDERS') && (() => {
-        const processed = getProcessedStoreOrders(realStoreOrders);
+        const processed = processedStoreOrdersForTab;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
         const totalStoreRevenue = processed
           .filter((so) => so.status !== 'CANCELED')
@@ -4310,6 +4441,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <option value="PRICE_LOW">Price (Low to High)</option>
                 </select>
               </div>
+
+              {/* Filter by Helper */}
+              <div className="md:col-span-2">
+                <label className="text-[11px] font-bold text-gray-500 uppercase block mb-1">Filter by Helper</label>
+                <select
+                  value={storeOrdersHelperFilter}
+                  onChange={(e) => {
+                    setStoreOrdersHelperFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full p-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-purple-600"
+                >
+                  <option value="ALL">All Helpers</option>
+                  {Array.from(
+                    new Map(
+                      realStoreOrders
+                        .filter((so) => so.helperId && so.helperName)
+                        .map((so) => [so.helperId, { id: so.helperId, name: so.helperName! }])
+                    ).values()
+                  )
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Clear All Filters */}
+              {(storeOrdersHelperFilter !== 'ALL' || storeOrdersShopFilter !== 'ALL' || storeOrdersStatusFilter !== 'ALL' || storeOrdersAppliedSearchQuery) && (
+                <div className="flex items-end">
+                  <button
+                    onClick={() => {
+                      setStoreOrdersHelperFilter('ALL');
+                      setStoreOrdersShopFilter('ALL');
+                      setStoreOrdersStatusFilter('ALL');
+                      setStoreOrdersSearchQuery('');
+                      setStoreOrdersAppliedSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="w-full p-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <X className="w-3 h-3" />
+                    Clear All Filters
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Table */}
@@ -4342,7 +4521,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {paginatedItems.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="py-12 text-center text-gray-400 font-semibold">
-                        No store orders match your criteria.
+                        {rangeStatus === 'loading'
+                          ? `Loading store orders for ${describeRange(dateRange)}…`
+                          : rangeStatus === 'error'
+                            ? 'Could not load store orders for these dates. Use Retry above.'
+                            : `No store orders match your criteria for ${describeRange(dateRange)}.`}
                       </td>
                     </tr>
                   ) : (
@@ -4500,7 +4683,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
-        const processed = getProcessedUsersList();
+        const processed = processedUsersList;
         const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null);
         const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
@@ -4978,7 +5161,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 3: HELPER STATS TAB --- */}
       {activeTab === 'HELPERS' && isTabAllowed('HELPERS') && (() => {
-        const processed = getProcessedHelpers();
+        const processed = processedHelpers;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed);
 
         const handleUpdateHelperType = async (userId: string, newType: 'commuter' | 'dedicated') => {
@@ -5476,7 +5659,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Helper Performance Table View Component */}
             {helperSubView === 'TABLE' && (() => {
               // Deduplicate list by id
-              const processedList = getProcessedHelpers();
+              const processedList = processedHelpers;
               const uniqueProcessedMap = new Map<string, typeof processedList[0]>();
               processedList.forEach((h) => {
                 if (!uniqueProcessedMap.has(h.id)) {
@@ -5794,7 +5977,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
         if (withdrawalTypeFilter !== 'ALL') {
           filtered = filtered.filter((w) => {
-            const isStore = w.userType === 'store' || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store')) || shops.some(s => s.ownerUserId === w.helperId);
+            const isStore = w.userType === 'store' || storeUserIds.has(w.helperId) || shopByOwnerId.has(w.helperId);
             return withdrawalTypeFilter === 'STORE' ? isStore : !isStore;
           });
         }
@@ -5884,8 +6067,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-medium">
                   {paginatedItems.map((w) => {
-                    const shop = shops.find(s => s.ownerUserId === w.helperId);
-                    const isStore = w.userType === 'store' || Boolean(shop) || users.some(u => u.uid === w.helperId && (u.isStore || u.role === 'store'));
+                    const shop = shopByOwnerId.get(w.helperId);
+                    const isStore = w.userType === 'store' || Boolean(shop) || storeUserIds.has(w.helperId);
                     const storeName = shop?.name;
                     return (
                       <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
@@ -6431,8 +6614,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <input
                   type="number"
                   step="any"
-                  min={0}
-                  max={50}
+                  min={1}
+                  max={1000}
                   value={helperRadiusKm}
                   onChange={(e) => setHelperRadiusKm(e.target.value === '' ? '' : e.target.value)}
                   className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
@@ -7503,98 +7686,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           );
         }
 
-        // Pre-compute metrics for sorting & display
-        const allShopOrdersList = Array.from(fallbackStore.shopOrders.values());
-        const allWithdrawalsList = Array.from(fallbackStore.withdrawals.values());
-        const allOrdersList = Array.from(fallbackStore.orders.values());
-
-        const getShopComputedMetrics = (s: Shop) => {
-          const storeUserId = s.ownerUserId || s.id;
-          const targetShopId = s.id;
-
-          let completed = 0;
-          let rejected = 0;
-          let running = 0;
-          let totalSales = 0;       // all (delivered + running) for display
-          let deliveredSales = 0;   // only delivered/handover — for unpaid balance
-
-          const seenParentIds = new Set<string>();
-          allShopOrdersList.forEach((so) => {
-            if (so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`) {
-              seenParentIds.add(so.parentOrderId);
-              const parentOrder = allOrdersList.find((o) => o.id === so.parentOrderId);
-              const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
-              const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-              if (isCanceled) {
-                rejected++;
-              } else if (isCompleted) {
-                completed++;
-                const price = so.price || parentOrder?.productCost || 0;
-                totalSales += price;
-                deliveredSales += price;
-              } else {
-                running++;
-                totalSales += (so.price || 0);
-              }
-            }
-          });
-
-          allOrdersList.forEach((mo) => {
-            const matches =
-              mo.shopId === targetShopId ||
-              mo.shopId === storeUserId ||
-              mo.selectedShopIds?.includes(targetShopId) ||
-              mo.selectedShopIds?.includes(storeUserId);
-            if (matches && !seenParentIds.has(mo.id)) {
-              if (mo.status === 'CANCELED') {
-                rejected++;
-              } else if (mo.status === 'DELIVERED') {
-                completed++;
-                totalSales += (mo.productCost || 0);
-                deliveredSales += (mo.productCost || 0);
-              } else {
-                running++;
-                totalSales += (mo.productCost || 0);
-              }
-            }
-          });
-
-          const commPercent = s.commissionPercent || 0;
-          const commission = Math.round(totalSales * (commPercent / 100));
-          const netSales = Math.max(0, totalSales - commission);
-          // Unpaid balance: only from delivered orders net of commission
-          const deliveredCommission = Math.round(deliveredSales * (commPercent / 100));
-          const deliveredNetSales = Math.max(0, deliveredSales - deliveredCommission);
-
-          const approvedWds = allWithdrawalsList.filter(
-            (w) =>
-              (w.helperId === storeUserId ||
-                w.helperId === targetShopId ||
-                w.helperId === `store-${storeUserId}` ||
-                (w.userType === 'store' && (w.helperName === s.name || w.helperId === s.id))) &&
-              w.status === 'APPROVED'
-          );
-          const totalDisbursed = approvedWds.reduce((sum, w) => sum + w.amount, 0);
-          const unpaidBalance = Math.max(0, deliveredNetSales - totalDisbursed);
-
-          return {
-            completed,
-            rejected,
-            running,
-            totalSales,
-            commission,
-            netSales,
-            totalDisbursed,
-            unpaidBalance,
-          };
-        };
-
-        const shopMetricsMap = new Map<string, ReturnType<typeof getShopComputedMetrics>>();
-        filteredShops.forEach((s) => {
-          shopMetricsMap.set(s.id, getShopComputedMetrics(s));
-        });
-
         // Sort shops by selected field & direction (default: UNPAID DESC)
         filteredShops.sort((a, b) => {
           const ma = shopMetricsMap.get(a.id)!;
@@ -8064,6 +8155,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           rejected: 0,
                           running: 0,
                           totalSales: 0,
+                          todaySales: 0,
                           commission: 0,
                           netSales: 0,
                           totalDisbursed: 0,
@@ -8192,7 +8284,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </span>
                               </div>
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
-                                <div>Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
+                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block mb-0.5">Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong></div>
+                                <div>Total Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
                                 <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong></div>
                               </div>
                             </td>
@@ -9126,6 +9219,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Top High-Duration Deliveries (Average Order List)
                   </h2>
                   <p className="text-xs text-gray-400 mt-0.5">Most recent completed orders with longest delivery times</p>
+                  <LifetimeDataNotice className="mt-2" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedOrderIds.length > 0 && (

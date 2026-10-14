@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Order, UserProfile, OrderFeedback } from '@/types';
 import { getElapsedMinutes } from '@/lib/timeUtils';
+import { fallbackStore } from '@/lib/firebase';
 import {
   TrendingUp,
   TrendingDown,
@@ -17,7 +18,9 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Download,
-  Check
+  Check,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 
 interface GrowthAnalyticsProps {
@@ -76,8 +79,8 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
   };
 
   // Date Filter State
-  const [activePreset, setActivePreset] = useState<PresetType>('LAST_7');
-  const [startDate, setStartDate] = useState<string>(getDaysAgoStr(6));
+  const [activePreset, setActivePreset] = useState<PresetType>('TODAY');
+  const [startDate, setStartDate] = useState<string>(getTodayStr());
   const [endDate, setEndDate] = useState<string>(getTodayStr());
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
@@ -145,6 +148,32 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
       currentDates
     };
   }, [startDate, endDate]);
+
+  // Read the orders these figures need from the server: those placed, and
+  // those delivered, from the start of the comparison period to the end of
+  // the range. Debounced so picking two custom dates reads once.
+  const [rangeStatus, setRangeStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [rangeAttempt, setRangeAttempt] = useState(0);
+  useEffect(() => {
+    const { prevStartMs, endMs } = dateRangeData;
+    if (!Number.isFinite(prevStartMs) || !Number.isFinite(endMs) || prevStartMs > endMs) return;
+    let cancelled = false;
+    setRangeStatus('loading');
+    const timer = setTimeout(() => {
+      const startIso = new Date(prevStartMs).toISOString();
+      const endIso = new Date(endMs + 1).toISOString();
+      Promise.all([
+        fallbackStore.loadAdminOrdersInRange(startIso, endIso, rangeAttempt > 0),
+        fallbackStore.loadAdminDeliveredOrdersInRange(startIso, endIso, rangeAttempt > 0),
+      ])
+        .then(() => { if (!cancelled) setRangeStatus('ready'); })
+        .catch(() => { if (!cancelled) setRangeStatus('error'); });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [dateRangeData, rangeAttempt]);
 
   // Aggregate Data Day-by-Day and Calculate Overall Growth Rates
   const analytics = useMemo(() => {
@@ -285,12 +314,14 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
     });
 
     // Process order embedded feedback
+    const feedbackOrderIds = new Set(feedbacks.map((f) => f.orderId));
+    const feedbackIds = new Set(feedbacks.map((f) => f.id));
     orders.forEach((o) => {
       if (o.feedback) {
         const fbTime = getTimestamp(o.feedback.createdAt || o.deliveredAt);
         const fbDateStr = fbTime ? getLocalYYYYMMDD(new Date(fbTime)) : '';
         const avgRating = (o.feedback.riderRating + o.feedback.serviceRating + o.feedback.shopRating) / 3;
-        const alreadyCounted = feedbacks.some((f) => f.orderId === o.id || f.id === o.feedback?.id);
+        const alreadyCounted = feedbackOrderIds.has(o.id) || feedbackIds.has(o.feedback.id);
 
         if (!alreadyCounted) {
           if (fbTime >= startMs && fbTime <= endMs) {
@@ -680,6 +711,29 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
 
   return (
     <div className="space-y-6">
+      {rangeStatus !== 'ready' && (
+        <div
+          className={`px-4 py-2.5 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
+            rangeStatus === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}
+        >
+          {rangeStatus === 'error' ? (
+            <>
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>Couldn&apos;t load orders for these dates — figures below may be incomplete.</span>
+              <button type="button" onClick={() => setRangeAttempt((n) => n + 1)} className="underline font-extrabold">
+                Retry
+              </button>
+            </>
+          ) : (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span>Loading orders for these dates…</span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Clean Control Bar & Date Filters (Without Banner Text) */}
       <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-soft flex flex-col lg:flex-row items-center justify-between gap-4">
         {/* Preset Range Selector */}

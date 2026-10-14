@@ -20,6 +20,23 @@ interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
 }
 
+/**
+ * Whether `text` still names the place whose coordinates were picked for
+ * `source`: the same address with details added or a word corrected, rather
+ * than a different address typed over it. Most of the source's words must
+ * still be there (a word typed halfway still counts).
+ */
+function describesSamePlace(source: string, text: string): boolean {
+  const words = (s: string) => s.toLowerCase().split(/[\s,.\-/।#()]+/).filter((w) => w.length >= 2);
+  const from = words(source);
+  if (from.length === 0) return false;
+  const now = words(text);
+  const kept = from.filter((w) =>
+    now.some((t) => t === w || (t.length >= 3 && w.startsWith(t)) || (w.length >= 3 && t.startsWith(w)))
+  ).length;
+  return kept / from.length >= 0.6;
+}
+
 export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated }) => {
   const { user, openAuthModal, updateCustomerPreferences, activeMode } = useAuth();
   const { showAlert, showConfirm } = useModal();
@@ -47,6 +64,24 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
   const [pickupLat, setPickupLat] = useState<number | undefined>(undefined);
   const [pickupLng, setPickupLng] = useState<number | undefined>(undefined);
   const [pickupAddressId, setPickupAddressId] = useState<string | undefined>(undefined);
+
+  // The address text each pair of coordinates was set for. Typing in the
+  // address box changes only the text, so a customer who types a new address
+  // over the pre-filled one kept the old place's coordinates: orders went out
+  // pinned at the old spot, alerting helpers there instead of near the real
+  // address, and that wrong pin was saved back under the new address text.
+  // handleSubmit compares against these to drop coordinates that no longer fit.
+  const deliveryCoordsTextRef = useRef('');
+  const pickupCoordsTextRef = useRef('');
+  // Every place that sets coordinates sets the matching text in the same update.
+  useEffect(() => {
+    if (deliveryLat !== undefined && deliveryLng !== undefined) deliveryCoordsTextRef.current = deliveryAddress;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deliveryLat, deliveryLng]);
+  useEffect(() => {
+    if (pickupLat !== undefined && pickupLng !== undefined) pickupCoordsTextRef.current = pickupNote;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickupLat, pickupLng]);
 
   // Saved address states (from localStorage & Firestore)
   const [savedAddresses, setSavedAddresses] = useState<LocationData[]>([]);
@@ -400,18 +435,30 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       // Save preferences
       saveAltPhone(altPhone);
 
+      // 0. Coordinates left over from an address the customer has since typed
+      //    over describe the old place, not this one. Send the order without
+      //    them (and without the old address id) rather than pinned there.
+      const deliveryCoordsFit = deliveryLat !== undefined && deliveryLng !== undefined
+        && describesSamePlace(deliveryCoordsTextRef.current, deliveryAddress);
+      const orderDeliveryLat = deliveryCoordsFit ? deliveryLat : undefined;
+      const orderDeliveryLng = deliveryCoordsFit ? deliveryLng : undefined;
+      const pickupCoordsFit = pickupLat !== undefined && pickupLng !== undefined
+        && describesSamePlace(pickupCoordsTextRef.current, pickupNote);
+      const orderPickupLat = pickupCoordsFit ? pickupLat : undefined;
+      const orderPickupLng = pickupCoordsFit ? pickupLng : undefined;
+
       // 1. Resolve delivery + pickup addresses IN PARALLEL (no need to do them sequentially)
       let finalDeliveryAddressText = deliveryAddress.trim();
-      let effectiveDelivAddressId = deliveryAddressId;
+      let effectiveDelivAddressId = deliveryCoordsFit ? deliveryAddressId : undefined;
       let finalPickupAddressText = pickupNote.trim();
-      let effectivePickupAddressId = pickupAddressId;
+      let effectivePickupAddressId = pickupCoordsFit ? pickupAddressId : undefined;
 
       const [delivResult, pickResult] = await Promise.allSettled([
         finalDeliveryAddressText
-          ? fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, { lat: deliveryLat, lng: deliveryLng })
+          ? fallbackStore.recordOrUpsertServerAddress(finalDeliveryAddressText, { lat: orderDeliveryLat, lng: orderDeliveryLng })
           : Promise.resolve(null),
         finalPickupAddressText
-          ? fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, { lat: pickupLat, lng: pickupLng })
+          ? fallbackStore.recordOrUpsertServerAddress(finalPickupAddressText, { lat: orderPickupLat, lng: orderPickupLng })
           : Promise.resolve(null),
       ]);
 
@@ -426,8 +473,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
 
       const finalDelivLoc: LocationData = {
         address: finalDeliveryAddressText,
-        lat: deliveryLat,
-        lng: deliveryLng,
+        lat: orderDeliveryLat,
+        lng: orderDeliveryLng,
         addressId: effectiveDelivAddressId,
       };
       saveDefaultDeliveryLocation(finalDelivLoc);
@@ -446,8 +493,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       if (finalPickupAddressText) {
         pickupLoc = {
           address: finalPickupAddressText,
-          lat: pickupLat,
-          lng: pickupLng,
+          lat: orderPickupLat,
+          lng: orderPickupLng,
           addressId: effectivePickupAddressId,
         };
 
@@ -469,8 +516,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({ onOrderCreated
       };
 
       // Calculate initial estimated delivery fee
-      const distKm = (pickupLat && pickupLng && deliveryLat && deliveryLng)
-        ? calculateDistanceKm(pickupLat, pickupLng, deliveryLat, deliveryLng)
+      const distKm = (orderPickupLat && orderPickupLng && orderDeliveryLat && orderDeliveryLng)
+        ? calculateDistanceKm(orderPickupLat, orderPickupLng, orderDeliveryLat, orderDeliveryLng)
         : 0;
       const estdFee = calculateEstimatedFee({
         distanceKm: Math.ceil(distKm),

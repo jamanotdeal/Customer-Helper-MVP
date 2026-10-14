@@ -42,6 +42,8 @@ import {
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface HelperHistoryModalProps {
   helperId: string;
@@ -56,6 +58,22 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
   helperName,
   onClose,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+  // This user's wallet transactions are read when the screen opens (the admin
+  // panel no longer loads an arbitrary 500 of everyone's at startup).
+  const [, setTxVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.loadWalletTransactionsFor(helperId).then(() => {
+      if (!cancelled) setTxVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [helperId]);
+
   const { showAlert } = useModal();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'PERFORMANCE' | 'EARNINGS' | 'JOBS' | 'REVIEWS' | 'PAYBACKS'>('PERFORMANCE');
@@ -475,6 +493,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     let returnableStoreAmount = 0;    // Acceptable (registered) stores — full amount returned to company
     let nonAcceptableStoreCommission = 0; // Non-acceptable stores — commission owed
 
+    const storeApplications = Array.from(fallbackStore.storeApplications.values());
     filteredDeliveredOrders.forEach((o) => {
       const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
       shopOrders.forEach((so) => {
@@ -491,7 +510,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
         } else {
           let commissionRate = Number(shop?.commissionPercent);
           if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
-            const app = Array.from(fallbackStore.storeApplications.values()).find(
+            const app = storeApplications.find(
               (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
             );
             commissionRate = Number(app?.commissionPercent) || 0;
@@ -972,6 +991,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
         <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh] border border-gray-100">
+          <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
           
           {/* Header */}
           <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-950 via-purple-900 to-indigo-900 text-white flex items-center justify-between shrink-0 shadow-sm">
@@ -1858,6 +1878,15 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                               <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800">
                                 DELIVERED
                               </span>
+                              {ord.isHelperPaid || ord.isPaid ? (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  Commission Paid
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+                                  Commission Due
+                                </span>
+                              )}
                               {hasStore && (
                                 <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-0.5">
                                   <Store className="w-2.5 h-2.5 text-amber-700" />

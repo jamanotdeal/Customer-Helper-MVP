@@ -153,10 +153,11 @@ export const AdminStoreOrderDetailsModal: React.FC<AdminStoreOrderDetailsModalPr
     '';
 
   // Commission calculations
+  const isCanceledStatus = currentStatus === 'CANCELED' || (currentStatus as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
   const commissionRate = Number(selectedShop?.commissionPercent || 0);
   const parsedGrossPrice = Number(priceInput) || 0;
-  const commissionAmount = currentStatus === 'CANCELED' ? 0 : Math.round(parsedGrossPrice * (commissionRate / 100));
-  const netStoreEarnings = currentStatus === 'CANCELED' ? 0 : Math.max(0, parsedGrossPrice - commissionAmount);
+  const commissionAmount = isCanceledStatus ? 0 : Math.round(parsedGrossPrice * (commissionRate / 100));
+  const netStoreEarnings = isCanceledStatus ? 0 : Math.max(0, parsedGrossPrice - commissionAmount);
 
   // Items manipulation
   const handleAddItem = () => {
