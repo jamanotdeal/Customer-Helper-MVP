@@ -30,6 +30,8 @@ import {
   FileSpreadsheet,
   BarChart2,
 } from 'lucide-react';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface AdminStoreDisbursementModalProps {
   shop: Shop;
@@ -45,6 +47,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   onClose,
   onDisbursed,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const { showConfirm, showAlert } = useModal();
 
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
@@ -122,9 +128,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const storeUserId = shop.ownerUserId || shop.id;
 
   // Retrieve all orders and shop orders
-  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), []);
-  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), []);
-  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), []);
+  // Re-read once the full history has arrived (see useAdminLifetimeData).
+  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), [lifetimeData.ready]);
+  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), [lifetimeData.ready]);
+  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), [lifetimeData.ready]);
 
   // Filter Shop Orders matching this shop
   const shopOrdersForThisStore = useMemo(() => {
@@ -550,6 +557,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   return (
     <div className="fixed inset-0 z-[1000] bg-black/75 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh] animate-in zoom-in-95 duration-200">
+        <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
 
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-emerald-950 text-white p-5 sm:p-6 relative shrink-0">

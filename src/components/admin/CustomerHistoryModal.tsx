@@ -6,6 +6,8 @@ import { fallbackStore } from '@/lib/firebase';
 import { X, User, Phone, ShoppingBag, DollarSign, Calendar, Clock, ChevronRight } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface CustomerHistoryModalProps {
   customerId: string;
@@ -20,6 +22,10 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
   customerPhone,
   onClose,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -51,6 +57,7 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
         <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+          <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
           {/* Header */}
           <div className="p-5 bg-gradient-to-r from-purple-950 to-indigo-900 text-white flex items-center justify-between">
             <div className="flex items-center space-x-3">

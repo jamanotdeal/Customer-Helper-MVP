@@ -32,6 +32,8 @@ import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
 import { useAuth } from '@/context/AuthContext';
 import { DraggableTabsContainer } from './DraggableTabsContainer';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
 interface UserDetailsModalProps {
   userId: string;
@@ -44,6 +46,10 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   onClose,
   onUserUpdated,
 }) => {
+  // Wallets and history here are summed over every order, withdrawal and
+  // shop order, which the admin panel reads only when a view like this opens.
+  const lifetimeData = useAdminLifetimeData();
+
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMER_ORDERS' | 'HELPER_DELIVERIES' | 'WALLET' | 'MANAGEMENT'>('OVERVIEW');
@@ -365,6 +371,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
         <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+          <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
           {/* Top Banner Header */}
           <div className="p-6 bg-gradient-to-r from-purple-950 via-indigo-950 to-purple-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center space-x-4">

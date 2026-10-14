@@ -8,6 +8,8 @@ import { PaginationControl } from './PaginationControl';
 import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 import { GrowthAnalytics } from './GrowthAnalytics';
+import { LifetimeDataNotice } from './LifetimeDataNotice';
+import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import {
   DollarSign,
   Calendar,
@@ -106,10 +108,15 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     );
   };
 
-  // Date Range state (Default to Last 7 Days)
-  const [startDate, setStartDate] = useState<string>(getDaysAgoStr(7));
+  // Date Range state (Default to Today)
+  const [startDate, setStartDate] = useState<string>(getTodayStr());
   const [endDate, setEndDate] = useState<string>(getTodayStr());
-  const [activePreset, setActivePreset] = useState<'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM'>('LAST_7');
+  const [activePreset, setActivePreset] = useState<'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM'>('TODAY');
+
+  // The helper ledger, wallet liabilities and all-time figures here are summed
+  // over every order, withdrawal and shop order, so this report reads the full
+  // history when it is opened (once per session) rather than at admin startup.
+  const lifetimeData = useAdminLifetimeData();
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -663,7 +670,10 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
       storesWithBalanceCount,
       totalStoreCommissionOrders,
     };
-  }, [orders, pricing, shops, startDate, endDate]);
+    // lifetimeData.ready: the withdrawals and shop orders read here may land
+    // after the orders do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready]);
 
   // Filtered store commission data by search
   const filteredStoreCommissionData = useMemo(() => {
@@ -696,6 +706,8 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
+      <LifetimeDataNotice loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
+
       {/* Analytics View Selector Sub-Tabs */}
       <div className="flex items-center space-x-2 bg-gray-100/80 p-1.5 rounded-2xl w-fit">
         <button

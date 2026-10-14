@@ -840,6 +840,12 @@ class FallbackStore {
   public adminOrderHistoryLoading = false;
   public adminOrderHistoryLoaded = false;
   private _allUsersPromise: Promise<void> | null = null;
+  // Admin: date ranges of orders / shop orders read this session (see
+  // loadAdminOrdersInRange), and the on-demand read of everything the helper
+  // wallets are computed from (see ensureAdminLifetimeData).
+  private _rangeReads: Map<string, { at: number; promise: Promise<void> }> = new Map();
+  private _lifetimePromise: Promise<void> | null = null;
+  private _lifetimeReady = false;
   // Orders being re-read after leaving one of the admin's live queries.
   private _recheckingOrders: Set<string> = new Set();
   // When each whole collection was last read in full for the admin's filters
@@ -1719,6 +1725,9 @@ class FallbackStore {
     this.adminOrderHistoryLoading = false;
     this.adminOrderHistoryLoaded = false;
     this._allUsersPromise = null;
+    this._rangeReads.clear();
+    this._lifetimePromise = null;
+    this._lifetimeReady = false;
     this.notifications.clear();
     this._knownNotifIds.clear();
     if (typeof sessionStorage !== 'undefined') {
@@ -2651,9 +2660,149 @@ class FallbackStore {
     } catch (err) {
       console.warn('[Firestore] Admin initial fetch error:', err);
     }
-    // Not awaited: the dashboard is usable on the live queries alone, and the
-    // history only completes the reports and lifetime totals.
-    this.loadAdminOrderHistory(refresh).catch(() => { });
+    // The full order history is no longer read at startup: the lists and
+    // reports read the date range on screen (loadAdminOrdersInRange), and only
+    // the wallet / lifetime views ask for everything (ensureAdminLifetimeData).
+    // The capped first pages above have just replaced what those views read,
+    // so a refresh after one of them has opened reads it all again.
+    this._rangeReads.clear();
+    if (refresh && this._lifetimePromise) {
+      this.ensureAdminLifetimeData(true).catch(() => { });
+    }
+  }
+
+  /**
+   * Admin: the orders created in [startIso, endIso), read from the server a
+   * page at a time and merged into the store. The admin lists and reports ask
+   * for the range on screen instead of the whole collection. A range read in
+   * the last couple of minutes is answered from the store, and the same range
+   * asked for again while it is in flight shares the request. New orders and
+   * status changes keep arriving through the live queries meanwhile.
+   */
+  public loadAdminOrdersInRange(startIso: string, endIso: string, force = false): Promise<void> {
+    // The full history, once read, already holds every range.
+    if (!force && this.adminOrderHistoryLoaded) return Promise.resolve();
+    return this._loadAdminRange('orders', 'createdAt', startIso, endIso, force);
+  }
+
+  /**
+   * Admin: the orders delivered in [startIso, endIso), whenever they were
+   * placed — for reports that count a delivery on the day it happened.
+   */
+  public loadAdminDeliveredOrdersInRange(startIso: string, endIso: string, force = false): Promise<void> {
+    if (!force && this.adminOrderHistoryLoaded) return Promise.resolve();
+    return this._loadAdminRange('orders', 'deliveredAt', startIso, endIso, force);
+  }
+
+  /** Admin: the shop orders created in [startIso, endIso). See loadAdminOrdersInRange. */
+  public loadAdminShopOrdersInRange(startIso: string, endIso: string, force = false): Promise<void> {
+    return this._loadAdminRange('shopOrders', 'createdAt', startIso, endIso, force);
+  }
+
+  private _loadAdminRange(
+    path: 'orders' | 'shopOrders',
+    field: 'createdAt' | 'deliveredAt',
+    startIso: string,
+    endIso: string,
+    force: boolean
+  ): Promise<void> {
+    const key = `${path}|${field}|${startIso}|${endIso}`;
+    const cached = this._rangeReads.get(key);
+    if (cached && !force && Date.now() - cached.at < FULL_READ_TTL_MS) return cached.promise;
+
+    const role = this._listenersRole;
+    const run = async () => {
+      const startedAt = new Date().toISOString();
+      const docs: QueryDocumentSnapshot<DocumentData>[] = [];
+      const pageSize = 500;
+      let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+      for (;;) {
+        const base = [
+          where(field, '>=', startIso),
+          where(field, '<', endIso),
+          orderBy(field, 'desc'),
+        ] as const;
+        const q: Query<DocumentData> = cursor
+          ? query(collection(db, path), ...base, startAfter(cursor), limit(pageSize))
+          : query(collection(db, path), ...base, limit(pageSize));
+        const snap: QuerySnapshot<DocumentData> = await getDocs(q);
+        docs.push(...snap.docs);
+        if (snap.docs.length < pageSize) break;
+        cursor = snap.docs[snap.docs.length - 1];
+        // Let the UI run between pages.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      // The admin left admin mode (or switched account) while this was reading.
+      if (this._listenersRole !== role) return;
+
+      const seen = new Set<string>();
+      const inRange = (doc: Order | ShopOrder) => {
+        const v = (doc as any)[field] as string | undefined;
+        return typeof v === 'string' && v >= startIso && v < endIso && (doc.createdAt || '') < startedAt;
+      };
+      if (path === 'orders') {
+        docs.forEach((d) => {
+          const o = this.resolveOrderLocations(d.data() as Order);
+          if (!o) return;
+          const id = o.id || d.id;
+          seen.add(id);
+          this.orders.set(id, o);
+        });
+        // The query listed the whole range, so a cached order in it that it did
+        // not return, and that is older than the read, has been deleted.
+        Array.from(this.orders.entries()).forEach(([id, o]) => {
+          if (!seen.has(id) && inRange(o)) this.orders.delete(id);
+        });
+      } else {
+        docs.forEach((d) => {
+          const so = d.data() as ShopOrder;
+          const id = so.id || d.id;
+          seen.add(id);
+          this.shopOrders.set(id, { ...so, id });
+        });
+        Array.from(this.shopOrders.entries()).forEach(([id, so]) => {
+          if (!seen.has(id) && inRange(so)) this.shopOrders.delete(id);
+        });
+      }
+      this.notify();
+    };
+
+    const promise = run();
+    this._rangeReads.set(key, { at: Date.now(), promise });
+    // A failed read must not be served from the cache.
+    promise.catch((e) => {
+      console.warn(`[Firestore] Admin ${path} range read note:`, e?.message || e);
+      if (this._rangeReads.get(key)?.promise === promise) this._rangeReads.delete(key);
+    });
+    return promise;
+  }
+
+  /**
+   * Admin: everything a helper's wallet and the lifetime totals are summed
+   * from — every order, withdrawal and shop order (see getHelperWallets). Read
+   * once per session, and only when a view that shows those numbers opens.
+   */
+  public ensureAdminLifetimeData(force = false): Promise<void> {
+    if (this._lifetimePromise && !force) return this._lifetimePromise;
+    this._lifetimeReady = false;
+    const promise = Promise.all([
+      this.loadAdminOrderHistory(force),
+      this.getAllWithdrawals(force),
+      this.getAllShopOrders(force),
+    ]).then(() => {
+      // loadAdminOrderHistory reports failure by resolving without loading.
+      if (!this.adminOrderHistoryLoaded) throw new Error('order history not loaded');
+      if (this._lifetimePromise === promise) this._lifetimeReady = true;
+    });
+    this._lifetimePromise = promise;
+    promise.catch(() => {
+      if (this._lifetimePromise === promise) this._lifetimePromise = null;
+    });
+    return promise;
+  }
+
+  public isAdminLifetimeDataReady(): boolean {
+    return this._lifetimeReady;
   }
 
   /**
@@ -2771,7 +2920,12 @@ class FallbackStore {
       // A capped first page is about to replace what the store holds of it.
       this._fullReadAt.delete(target);
       switch (target) {
-        case 'orders': await this.loadAdminOrderHistory(true); break;
+        case 'orders':
+          // Date ranges are read again by the views showing them; the full
+          // history only if a wallet / lifetime view had asked for it.
+          this._rangeReads.clear();
+          if (this._lifetimePromise) await this.ensureAdminLifetimeData(true);
+          break;
         case 'users': await this._fetchAdminUsers(); break;
         case 'withdrawals': await this._fetchAdminWithdrawals(); break;
         case 'helperApplications': await this._fetchAdminHelperApplications(); break;
