@@ -4,7 +4,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Wallet, WithdrawalRequest, Order, ShopOrder } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, startAfter, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
+import { getDocs, getDoc } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
 import {
   Wallet as WalletIcon,

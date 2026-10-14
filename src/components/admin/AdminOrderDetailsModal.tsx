@@ -61,6 +61,18 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
 
   // Reactive live order state bound to fallbackStore updates
   const [order, setOrder] = useState<Order | undefined>(() => fallbackStore.orders.get(orderId));
+  // Its shop orders, read for this order alone (the admin panel no longer
+  // loads a slice of all shop orders at startup). Read-only: no helper given.
+  const [, setShopOrdersVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.fetchShopOrdersForOrder(orderId).then(() => {
+      if (!cancelled) setShopOrdersVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
   const [isLoading, setIsLoading] = useState<boolean>(() => !fallbackStore.orders.get(orderId));
 
   useEffect(() => {

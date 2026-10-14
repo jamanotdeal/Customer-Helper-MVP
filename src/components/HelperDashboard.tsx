@@ -571,7 +571,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         setOwnOrderCount(all.filter((o) => o.helperId === user.uid).length);
         setActiveOrderLimit(fallbackStore.pricingSettings.helperActiveOrderLimit ?? 5);
 
-        // Compute which orders are each customer's very first
+        // Each customer's very first order. Saved on the order when it is
+        // placed (isFirstOrder); older orders without the flag fall back to the
+        // earliest order this device holds for that customer.
         const earliest: Record<string, string> = {};
         const fid: Record<string, string> = {};
         all.forEach((o) => {
@@ -580,7 +582,10 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             fid[o.customerId] = o.id;
           }
         });
-        setFirstOrderIds(new Set(Object.values(fid)));
+        const fallbackFirst = new Set(Object.values(fid));
+        setFirstOrderIds(
+          new Set(all.filter((o) => (o.isFirstOrder !== undefined ? o.isFirstOrder : fallbackFirst.has(o.id))).map((o) => o.id))
+        );
       }
     };
 

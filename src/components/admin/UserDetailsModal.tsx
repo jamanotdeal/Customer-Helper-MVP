@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, Order, UserRole } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
@@ -49,6 +49,18 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   // Wallets and history here are summed over every order, withdrawal and
   // shop order, which the admin panel reads only when a view like this opens.
   const lifetimeData = useAdminLifetimeData();
+  // This user's wallet transactions are read when the screen opens (the admin
+  // panel no longer loads an arbitrary 500 of everyone's at startup).
+  const [, setTxVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.loadWalletTransactionsFor(userId).then(() => {
+      if (!cancelled) setTxVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
