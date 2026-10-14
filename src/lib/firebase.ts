@@ -60,6 +60,7 @@ import {
 } from '@/types';
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isHelperEligibleForOrder } from './geofenceUtils';
+import { isOrderOpen } from './orderStatus';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -687,6 +688,11 @@ class FallbackStore {
   private _lifetimeReady = false;
   // Orders being re-read after leaving one of the admin's live queries.
   private _recheckingOrders: Set<string> = new Set();
+  // Orders this device has already tried to route to dedicated riders, and the
+  // extra wait before it does so (the server sweep normally gets there first)
+  // — see checkDedicatedRouting.
+  private _dedicatedRouted: Set<string> = new Set();
+  private _DEDICATED_FALLBACK_GRACE_MS = 90 * 1000;
   // When each whole collection was last read in full for the admin's filters
   // and paging — see isFullReadFresh().
   private _fullReadAt: Map<string, number> = new Map();
@@ -830,32 +836,116 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Every signed-in client runs this sweep on its own 30 s timer, and a pending
+   * order sits in the cache of all of them at once (helpers subscribe to every
+   * PENDING order, the customer to their own, admin to the newest 100). So the
+   * moment the delay elapses, N devices reach this code within the same second.
+   *
+   * Two things keep that from becoming N notifications, which is exactly the
+   * duplicate storm users were seeing in their tray:
+   *
+   *  1. The document id is derived from the order, not from {@code Date.now()},
+   *     so every racing client writes the SAME `notifications/{id}` document.
+   *     Firestore collapses them into one, the push Cloud Function fires only
+   *     on the create, and both de-dup sets (web `_knownNotifIds`, native
+   *     `Prefs.markSeen`) see a single id.
+   *  2. The routing flag is persisted. It used to be set on the in-memory order
+   *     only, so it was lost on every reload and never reached other devices —
+   *     which also meant HelperDashboard, which filters dedicated riders on
+   *     `routedToDedicated` coming back from Firestore, never actually showed
+   *     them the order this notification was announcing.
+   */
   private async checkDedicatedRouting() {
     const delayMins = this.pricingSettings.dedicatedHelperDelayMinutes || 7;
     const now = Date.now();
     const thresholdMs = delayMins * 60 * 1000;
 
+    const due: Order[] = [];
     this.orders.forEach((order) => {
-      if (order.status === 'PENDING' && !order.routedToDedicated) {
-        const createdMs = new Date(order.createdAt).getTime();
-        if (now - createdMs >= thresholdMs) {
-          order.routedToDedicated = true;
-          order.dedicatedNotifiedAt = new Date().toISOString();
-          this.orders.set(order.id, order);
+      if (order.status !== 'PENDING' || order.routedToDedicated) return;
+      // The server already owns this order's announcement.
+      if (order.dedicatedNotifId) return;
+      // Local guard for the window between deciding to route and our own write
+      // landing back through the snapshot listener, during which the next tick
+      // would otherwise see routedToDedicated still false and fire again.
+      if (this._dedicatedRouted.has(order.id)) return;
+      const createdMs = new Date(order.createdAt).getTime();
+      if (!Number.isFinite(createdMs)) return;
+      if (now - createdMs < thresholdMs + this._DEDICATED_FALLBACK_GRACE_MS) return;
+      due.push(order);
+    });
 
-          const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
-          this.addNotification({
-            id: `notif-ded-${Date.now()}-${order.id}`,
+    for (const order of due) {
+      this._dedicatedRouted.add(order.id);
+      // Deterministic, and already in canonicalNotifId's `notif-<13 digits>`
+      // shape so it is stored verbatim. Seeded from the order's createdAt rather
+      // than the routing moment: two writers whose clocks differ by a second
+      // must still agree on the id. dedicatedNotifId() in functions/index.js
+      // builds the identical string.
+      const notifId = `notif-${new Date(order.createdAt).getTime()}-ded-${order.id}`;
+      const orderRef = doc(db, 'orders', order.id);
+
+      // Decided on the server's copy, flag and announcement in one
+      // transaction — exactly as the server sweep does (claimAndAnnounce).
+      // This used to trust the device's cache: a phone coming back from the
+      // background, its listeners not yet caught up, still held an accepted
+      // order as PENDING and announced it to every dedicated rider. Production
+      // had nine such announcements in ten days, 2 to 40 minutes after the
+      // order was accepted.
+      let outcome: 'announced' | 'not-open' | 'missing' | 'failed';
+      let serverCopy: Order | null = null;
+      try {
+        await this.whenNetworkReady();
+        outcome = await runTransaction(db, async (tx) => {
+          const snap = await tx.get(orderRef);
+          if (!snap.exists()) return 'missing' as const;
+          const current = snap.data() as Order;
+          serverCopy = current;
+          if (!isOrderOpen(current) || current.routedToDedicated || current.dedicatedNotifId) return 'not-open' as const;
+
+          const routedAt = new Date().toISOString();
+          const itemDesc = (current.items || []).map((i) => i.name).join(', ') || current.title;
+          const notif: AppNotification = {
+            id: notifId,
             userId: 'all-dedicated-helpers',
             title: `[ডেডিকেটেড রাইডার] অর্ডার গ্রহণ করতে পারেন!`,
-            body: `${order.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
-            orderId: order.id,
+            body: `${current.title}: ${itemDesc} - ${delayMins} মিনিট পার হয়েছে।`,
+            orderId: current.id,
             read: false,
-            createdAt: new Date().toISOString(),
-          });
-        }
+            createdAt: routedAt,
+            // A new order as far as a dedicated rider is concerned — alarm and popup.
+            type: 'new_order',
+            targetRole: 'helper',
+          };
+          // Flag and announcement together: a rider's device reacts to the
+          // announcement by reading the order, and must find it routed.
+          tx.update(orderRef, { routedToDedicated: true, dedicatedNotifiedAt: routedAt, dedicatedNotifId: notifId });
+          tx.set(doc(db, 'notifications', notifId), cleanForFirestore(notif));
+          serverCopy = { ...current, routedToDedicated: true, dedicatedNotifiedAt: routedAt, dedicatedNotifId: notifId };
+          return 'announced' as const;
+        });
+      } catch (e: any) {
+        // Offline or contended: leave it to the server sweep, or to this
+        // device's next tick once it can reach the server.
+        this._dedicatedRouted.delete(order.id);
+        console.warn('[Firestore] dedicated routing deferred:', e?.message || e);
+        outcome = 'failed';
       }
-    });
+
+      if (outcome === 'missing') {
+        this.orders.delete(order.id);
+      } else if (serverCopy) {
+        // Either way the cache now matches the server, so a stale PENDING copy
+        // cannot bring this order back here.
+        this.orders.set(order.id, this.resolveOrderLocations(serverCopy));
+      }
+    }
+
+    if (due.length > 0) {
+      this.notify();
+      this.scheduleLocalStoreSave();
+    }
   }
 
   private safeParse<T>(key: string): T | null {
@@ -1144,7 +1234,11 @@ class FallbackStore {
         if (isTargetForThisUser(notif)) {
           // Instant order dispatch for helper overlay
           if (notif.orderId && notif.type === 'new_order' && typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('new-order-received', { detail: { orderId: notif.orderId } }));
+            // `reopen`: announced because the order became open again after
+            // being taken (see runOrderSideEffects) — allowed to alert again.
+            window.dispatchEvent(new CustomEvent('new-order-received', {
+              detail: { orderId: notif.orderId, reopen: notif.id.includes('-reopen-') },
+            }));
           }
 
           if (!notif.read) {
@@ -3145,9 +3239,16 @@ class FallbackStore {
     this.orders.set(order.id, order);
     this.notify();
 
-    // 2. Persist to Firestore FIRST — must succeed before alerting helpers
+    // 2. The order and its announcement are written together, in one batch.
+    // Written one after the other, the announcement could land after a fast
+    // helper had already accepted (2–5 s, twice in ten days in production),
+    // and then rang every other helper for an order that was gone.
+    const announcement = this.newOrderAnnouncement(order, `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`);
     try {
-      await setDoc(doc(db, 'orders', order.id), cleanForFirestore(order));
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'orders', order.id), cleanForFirestore(order));
+      batch.set(doc(db, 'notifications', announcement.id), cleanForFirestore(announcement));
+      await batch.commit();
     } catch (e: any) {
       // Rollback local memory so app state matches server truth
       this.orders.delete(order.id);
@@ -3155,8 +3256,15 @@ class FallbackStore {
       console.error('[Firestore] addOrder failed to persist to Firestore:', e?.message || e);
       throw e;
     }
+  }
 
-    // 3. ONLY after the order is confirmed in Firestore, dispatch helper notification
+  /**
+   * The new-order broadcast for an order, addressed to the helper group the
+   * receiver rule picks. `id` must be derived from the order (and, for a
+   * reopen, the moment it reopened) so a retry rewrites the same document
+   * instead of announcing twice.
+   */
+  private newOrderAnnouncement(order: Order, id: string): AppNotification {
     const rule = this.pricingSettings.orderReceiverRule || 'commuter_first';
     const targetGroup =
       rule === 'dedicated_first'
@@ -3164,26 +3272,20 @@ class FallbackStore {
         : rule === 'both_simultaneous'
           ? 'all-helpers'
           : 'all-commuter-helpers';
-
-    const itemDesc = order.items.map((i) => i.name).join(', ') || order.title;
-    try {
-      await this.addNotification({
-        // Tied to the order, so a retry of addOrder cannot announce it twice.
-        id: `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`,
-        userId: targetGroup,
-        title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
-        body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation.address})`,
-        orderId: order.id,
-        read: false,
-        createdAt: new Date().toISOString(),
-        targetRole: 'helper',
-        type: 'new_order',
-      });
-    } catch (notifErr: any) {
-      console.warn('[Firestore] Broadcast new order notification note:', notifErr?.message || notifErr);
-      // Non-blocking notification error: do NOT fail the order since it was already saved
-    }
+    const itemDesc = (order.items || []).map((i) => i.name).join(', ') || order.title;
+    return {
+      id,
+      userId: targetGroup,
+      title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title}`,
+      body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation?.address || ''})`,
+      orderId: order.id,
+      read: false,
+      createdAt: new Date().toISOString(),
+      targetRole: 'helper',
+      type: 'new_order',
+    };
   }
+
 
   public async deleteOrder(orderId: string) {
     this.orders.delete(orderId);
@@ -3428,6 +3530,17 @@ class FallbackStore {
     const previousStatus = existing.status;
     const previousHelperId = existing.helperId;
 
+    // The one way an existing order announces itself to helpers again: it
+    // went from not open (taken, cancelled) to open — PENDING, nobody on it.
+    // Any other edit or status change is an update for the people already on
+    // the order and never reaches the new-order flow. `existing` and `updated`
+    // are the server's copies from the write's transaction.
+    if (!isOrderOpen(existing) && isOrderOpen(updated)) {
+      const reopenedAt = Date.parse(updated.updatedAt || '') || Date.now();
+      const notif = this.newOrderAnnouncement(updated, `notif-${reopenedAt}-reopen-${updated.id}`);
+      this.addNotification(notif).catch(() => { });
+    }
+
     // The helper it was taken from is told. Their order used to just vanish
     // from the Running list.
     if (previousHelperId && updated.helperId !== previousHelperId && updated.status !== 'CANCELED') {
@@ -3643,8 +3756,12 @@ class FallbackStore {
       updated.lastEditedBy === 'customer' &&
       existing.lastEditedAt !== updated.lastEditedAt
     ) {
-      const helperTarget = updated.helperId || 'all-helpers';
-      this.addNotification({
+      // The assigned helper only. An unassigned order used to be broadcast to
+      // every helper on each customer edit — and when the edit raced an
+      // accept, every helper was alerted about an order already taken. Helpers
+      // browsing open orders see the edit in the list itself.
+      const helperTarget = updated.helperId;
+      if (helperTarget) this.addNotification({
         id: `notif-${Date.now()}-cust-edit`,
         userId: helperTarget,
         title: 'অর্ডার পরিবর্তন (Order Updated)',
