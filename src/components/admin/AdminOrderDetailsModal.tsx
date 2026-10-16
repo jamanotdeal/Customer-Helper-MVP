@@ -3,7 +3,7 @@ import { Order, OrderStatus, LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { MapPickerModal } from '../MapPickerModal';
 import { HelperOrderMapModal } from '../HelperOrderMapModal';
-import { calculateHelperCommission, calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
+import { calculateHelperCommission, calculateEstimatedFee, calculateDistanceKm, calculateCustomStoreFee } from '@/lib/pricing';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from '../CustomModal';
 import { useAuth } from '@/context/AuthContext';
@@ -1651,11 +1651,13 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 pricingSettings
               );
               const processingFeeValue = est.processingFee || (order.processingFee || 0);
+              const customStorePricing = calculateCustomStoreFee(order, shopPrices, pricingSettings);
+              const customStoreFeeVal = customStorePricing.totalFee;
               const platformRevenueTotal = platformRevenue + processingFeeValue;
               const isFreeDeliv = !!order.isFreeDelivery;
               const effectiveCustomerDeliveryFee = isFreeDeliv ? 0 : order.deliveryFee;
               const appliedDueVal = order.appliedDuePayment?.amount || 0;
-              const totalCollectable = effectiveCustomerDeliveryFee + effectiveProductCost + processingFeeValue + (est.returnFee || 0) + appliedDueVal;
+              const totalCollectable = effectiveCustomerDeliveryFee + effectiveProductCost + processingFeeValue + (est.returnFee || 0) + appliedDueVal + customStoreFeeVal;
               const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
                 { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
                 ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
@@ -1670,6 +1672,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   color: 'text-amber-700 font-extrabold',
                 }] : []),
                 ...(est.processingFee > 0 ? [{ label: `Processing Fee (${pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? pricingSettings.feeCalculatorProcessingFee + '%' : '৳' + pricingSettings.feeCalculatorProcessingFee})`, value: `৳${est.processingFee}`, sub: 'Applied when product cost is set', color: 'text-orange-700' }] : []),
+                ...(customStoreFeeVal > 0 ? [{ label: `Custom Store Fee (${customStorePricing.count} items × ৳${customStorePricing.unitFee})`, value: `+৳${customStoreFeeVal}`, sub: 'Applied for items purchased from non-listed/custom stores', color: 'text-indigo-700 font-extrabold' }] : []),
                 ...(appliedDueVal > 0 ? [{ label: `Previous Order Due (পূর্বের বাকি)`, value: `+৳${appliedDueVal}`, sub: order.appliedDuePayment?.note || 'Carried over from previous completed order', color: 'text-red-600 font-extrabold' }] : []),
               ];
 
@@ -1744,7 +1747,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <div className="text-right">
                         <span className="text-2xl font-black">৳{totalCollectable}</span>
                         <p className="text-[10px] text-emerald-200">
-                          ({effectiveCustomerDeliveryFee} fee{isFreeDeliv ? ' [Reward Claimed]' : ''} + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''})
+                          ({effectiveCustomerDeliveryFee} fee{isFreeDeliv ? ' [Reward Claimed]' : ''} + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''}{customStoreFeeVal > 0 ? ` + ${customStoreFeeVal} custom store` : ''})
                         </p>
                       </div>
                     </div>

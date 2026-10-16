@@ -10,8 +10,8 @@ import { CustomRequestModal } from './CustomRequestModal';
 import { StorePage } from './StorePage';
 import { OrderItem, Shop, Order } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { DEFAULT_SERVICES } from '@/lib/pricing';
-import { Sparkles, ShoppingBag } from 'lucide-react';
+import { DEFAULT_SERVICES, isOrderTimingOpen } from '@/lib/pricing';
+import { Sparkles, ShoppingBag, Clock } from 'lucide-react';
 import { hapticFeedback } from '@/lib/native';
 import { HomeSearchBox } from './HomeSearchBox';
 import { useCart } from '@/context/CartContext';
@@ -20,11 +20,13 @@ import { CartSummaryDrawer } from './CartSummaryDrawer';
 interface CustomerHomeProps {
   initialSelectedOrderId?: string | null;
   onClearInitialOrder?: () => void;
+  resetTrigger?: number;
 }
 
 export const CustomerHome: React.FC<CustomerHomeProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
+  resetTrigger,
 }) => {
   const { user, loginWithGoogle, openAuthModal } = useAuth();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(
@@ -37,6 +39,14 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [customRequestInitialDesc, setCustomRequestInitialDesc] = useState('');
   const { cartItems, cartShop, openCartDrawer, totalCartCount, subtotal, addCustomItem } = useCart();
 
+  // Out of service timing status with client-mount safety (prevents Next.js hydration mismatch)
+  const [isMounted, setIsMounted] = useState(false);
+  const [timingStatus, setTimingStatus] = useState(() => isOrderTimingOpen(fallbackStore.pricingSettings));
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   // Admin saved services list for placeholder rotation
   const [servicesList, setServicesList] = useState<string[]>(() => {
     const adminServices = fallbackStore.pricingSettings?.services;
@@ -46,6 +56,45 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     return DEFAULT_SERVICES;
   });
   const [serviceIndex, setServiceIndex] = useState(0);
+
+  // Sync timing status in real time and every 30 seconds
+  useEffect(() => {
+    const syncTiming = () => {
+      setTimingStatus(isOrderTimingOpen(fallbackStore.pricingSettings));
+    };
+    syncTiming();
+    const unsub = fallbackStore.subscribe(syncTiming);
+    const interval = setInterval(syncTiming, 30000);
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Listen for resetTrigger to return back to top-level home view
+  useEffect(() => {
+    if (resetTrigger !== undefined && resetTrigger > 0) {
+      setSelectedOrderId(null);
+      setSelectedShop(null);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+  }, [resetTrigger]);
+
+  // If currently selected shop is blocked, clear it immediately
+  useEffect(() => {
+    if (!selectedShop) return;
+    const checkBlocked = () => {
+      const live = fallbackStore.shops.get(selectedShop.id);
+      if (live && (live.isBlocked || live.status === 'Rejected' || live.status === 'REJECTED')) {
+        setSelectedShop(null);
+      }
+    };
+    checkBlocked();
+    const unsub = fallbackStore.subscribe(checkBlocked);
+    return () => unsub();
+  }, [selectedShop]);
 
   // Sync admin services in real time from store
   useEffect(() => {
@@ -171,6 +220,20 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
 
   return (
     <div className="space-y-4 pb-28 relative">
+      {/* ── 0. Out of Service Hours Admin Message Banner (Right Before Slide) ── */}
+      {isMounted && !timingStatus.isOpen && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border-2 border-amber-400/80 shadow-md shadow-amber-500/10 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-amber-500/30">
+              <Clock className="w-5 h-5 animate-pulse" />
+            </div>
+            <p className="text-xs sm:text-sm text-amber-950 font-bold leading-relaxed flex-1 min-w-0">
+              {timingStatus.message || fallbackStore.pricingSettings?.orderTimingMessage || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── 1. Full Banner Image Slider ── */}
       <ServiceTickerHeader
         onOpenCustomRequest={(hint) => handleOpenCustomRequest(hint)}
@@ -187,32 +250,6 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
         onStoreClick={(shop) => setSelectedShop(shop)}
         onOpenCustomRequest={(hint) => handleOpenCustomRequest(hint)}
       />
-
-      {/* ── 6. Floating button at bottom for missing/custom item ── */}
-      <div
-        id="missing-item-floating-button"
-        className={`fixed ${
-          user ? 'bottom-20' : 'bottom-5'
-        } left-1/2 -translate-x-1/2 z-30 max-w-[92vw] pointer-events-auto transition-all`}
-      >
-        <button
-          type="button"
-          onClick={() => {
-            if (totalCartCount > 0) {
-              openCartDrawer(true);
-            } else {
-              handleOpenCustomRequest();
-            }
-          }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-gray-950/90 hover:bg-black text-white text-xs font-bold shadow-xl shadow-black/25 backdrop-blur-md border border-white/20 active:scale-95 transition-all cursor-pointer whitespace-nowrap animate-in fade-in slide-in-from-bottom-2"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
-          <span className="text-[11px] sm:text-xs">
-            কিছু মিসিং বা অন্যকিছু করাতে চাইলে ক্লিক করুন
-          </span>
-        </button>
-      </div>
-
 
       {/* Modals */}
       <AddCustomItemModal

@@ -20,12 +20,16 @@ import {
   Send,
   DollarSign,
   Package,
+  Upload,
+  Image as ImageIcon,
+  Sparkles,
 } from 'lucide-react';
 import { StoreProductManager } from '../StoreProductManager';
 import { AdminBlockModal } from './AdminBlockModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
+import { compressImage } from '@/lib/imageUtils';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
@@ -64,6 +68,44 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
     ).length;
   });
 
+  const shopPhotoInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleShopPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showAlert('ভুল ফাইল', 'অনুগ্রহ করে একটি ছবি ফাইল নির্বাচন করুন।', 'warning');
+      return;
+    }
+    try {
+      const compressed = await compressImage(file, 700, 700, 0.85);
+      await fallbackStore.updateShop(shop.id, { photoUrl: compressed });
+      setCurrentShop((prev) => ({ ...prev, photoUrl: compressed }));
+      if (onShopUpdated) onShopUpdated();
+      showAlert('সফল', 'দোকানের প্রোফাইল ছবি সফলভাবে আপডেট করা হয়েছে।', 'success');
+    } catch {
+      showAlert('ত্রুটি', 'ছবি প্রসেস করতে ব্যর্থ হয়েছে।', 'error');
+    }
+  };
+
+  const handleRemoveShopPhoto = async () => {
+    const confirmed = await showConfirm(
+      'ছবি অপসারণ নিশ্চিতকরণ',
+      `"${shop.name}" দোকানের প্রোফাইল ছবি মুছে ফেলবেন?`,
+      'হ্যাঁ, মুছে ফেলুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+    try {
+      await fallbackStore.updateShop(shop.id, { photoUrl: '' });
+      setCurrentShop((prev) => ({ ...prev, photoUrl: '' }));
+      if (onShopUpdated) onShopUpdated();
+      showAlert('সফল', 'দোকানের ছবি মুছে ফেলা হয়েছে।', 'info');
+    } catch {
+      showAlert('ত্রুটি', 'ছবি মুছতে ব্যর্থ হয়েছে।', 'error');
+    }
+  };
+
   React.useEffect(() => {
     const updateCount = () => {
       const cnt = Array.from(fallbackStore.storeProducts.values()).filter(
@@ -94,63 +136,17 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
       ? `https://www.google.com/maps/search/?api=1&query=${shop.location.lat},${shop.location.lng}`
       : null;
 
-  // Compute Order Statistics for this Shop
-  const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => so.shopId === shop.id);
-  const allOrders = Array.from(fallbackStore.orders.values());
-  const mainOrders = allOrders.filter((o) => o.selectedShopIds?.includes(shop.id));
-
-  let completedOrders = 0;
-  let rejectedOrders = 0;
-  let runningOrders = 0;
-  let totalSales = 0;
-
-  if (shopOrders.length > 0) {
-    const seenParentIds = new Set<string>();
-    shopOrders.forEach((so) => {
-      seenParentIds.add(so.parentOrderId);
-      const parentOrder = fallbackStore.orders.get(so.parentOrderId);
-      const isCanceled = so.status === 'CANCELED' || parentOrder?.status === 'CANCELED';
-      const isCompleted = so.status === 'DELIVERED' || so.status === 'HANDOVER' || parentOrder?.status === 'DELIVERED';
-
-      if (isCanceled) {
-        rejectedOrders++;
-      } else if (isCompleted) {
-        completedOrders++;
-        totalSales += (so.price || parentOrder?.productCost || 0);
-      } else {
-        runningOrders++;
-        totalSales += (so.price || 0);
-      }
-    });
-
-    mainOrders.forEach((mo) => {
-      if (!seenParentIds.has(mo.id)) {
-        if (mo.status === 'CANCELED') {
-          rejectedOrders++;
-        } else if (mo.status === 'DELIVERED') {
-          completedOrders++;
-          totalSales += (mo.productCost || 0);
-        } else {
-          runningOrders++;
-          totalSales += (mo.productCost || 0);
-        }
-      }
-    });
-  } else {
-    mainOrders.forEach((mo) => {
-      if (mo.status === 'CANCELED') {
-        rejectedOrders++;
-      } else if (mo.status === 'DELIVERED') {
-        completedOrders++;
-        totalSales += (mo.productCost || 0);
-      } else {
-        runningOrders++;
-        totalSales += (mo.productCost || 0);
-      }
-    });
-  }
-
-  const commission = Math.round(totalSales * ((shop.commissionPercent || 0) / 100));
+  // Compute Order Statistics & Financials dynamically based on order statuses
+  const fin = fallbackStore.getStoreFinancials(shop);
+  const completedOrders = fin.completedOrders;
+  const rejectedOrders = fin.canceledOrders;
+  const runningOrders = fin.runningOrders;
+  const totalSales = fin.deliveredSales;
+  const totalDisbursed = fin.totalDisbursed;
+  const unpaidBalance = fin.unpaidBalance;
+  const commission = fin.deliveredCommission;
+  const disbursedCommission = fin.disbursedCommission;
+  const unpaidCommission = fin.unpaidCommission;
 
   const handleToggleBlock = async () => {
     if (currentShop.isBlocked) {
@@ -199,6 +195,40 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
       `"${shop.name}" স্টোরটি এখন ${newActive ? 'সক্রিয় (Active) এবং গ্রাহকদের জন্য খোলা' : 'নিষ্ক্রিয় (Inactive / Offline) করা হয়েছে'}।`,
       newActive ? 'success' : 'info'
     );
+    if (onShopUpdated) onShopUpdated();
+  };
+
+  const isFeatured = Boolean(currentShop.isFeatured);
+
+  const handleToggleFeatured = async () => {
+    const nextVal = !isFeatured;
+    await fallbackStore.toggleShopFeaturedStatus(shop.id, nextVal, currentShop.featuredOrder);
+    const updated = {
+      ...currentShop,
+      isFeatured: nextVal,
+      featuredAt: nextVal ? (currentShop.featuredAt || new Date().toISOString()) : undefined,
+    };
+    setCurrentShop(updated);
+    showAlert(
+      nextVal ? 'স্টোর টপে ফিচার করা হয়েছে' : 'টপ ফিচার থেকে সরানো হয়েছে',
+      `"${shop.name}" ${nextVal ? 'সফলভাবে টপে ফিচার করা হয়েছে। গ্রাহক ক্যাটাগরি সিলেক্ট করলে এই দোকানটি তালিকার শীর্ষে প্রদর্শিত হবে।' : 'টপ ফিচার থেকে বাদ দেওয়া হয়েছে।'}`,
+      'success'
+    );
+    if (onShopUpdated) onShopUpdated();
+  };
+
+  const handleUpdateFeaturedOrder = async () => {
+    const input = prompt(
+      `"${currentShop.name}" এর জন্য প্রায়োরিটি ক্রম নম্বর দিন (কম নম্বর শীর্ষে থাকবে, যেমন 1, 2, 3...):`,
+      currentShop.featuredOrder !== undefined ? String(currentShop.featuredOrder) : '1'
+    );
+    if (input === null) return;
+    const num = parseInt(input.trim(), 10);
+    const newOrder = !isNaN(num) && num > 0 ? num : undefined;
+    await fallbackStore.toggleShopFeaturedStatus(shop.id, true, newOrder);
+    const updated = { ...currentShop, isFeatured: true, featuredOrder: newOrder };
+    setCurrentShop(updated);
+    showAlert('অগ্রাধিকার আপডেট', `"${shop.name}" এর প্রায়োরিটি #${newOrder || 'Default'} সেট করা হয়েছে।`, 'success');
     if (onShopUpdated) onShopUpdated();
   };
 
@@ -332,16 +362,65 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
           </div>
         ) : (
           <>
-            {/* Shop Photo */}
-            {shop.photoUrl && (
-              <div className="w-full h-40 overflow-hidden relative shrink-0">
+            {/* Hidden Photo Input */}
+            <input
+              ref={shopPhotoInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleShopPhotoUpload}
+              className="hidden"
+            />
+
+            {/* Shop Photo Banner with Admin Upload/Edit Button */}
+            {currentShop.photoUrl ? (
+              <div className="w-full h-44 overflow-hidden relative shrink-0 group bg-gray-900">
                 <img
-                  src={shop.photoUrl}
-                  alt={shop.name}
-                  className="w-full h-full object-cover"
+                  src={currentShop.photoUrl}
+                  alt={currentShop.name}
+                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                   onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none'; }}
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
+                
+                {/* Admin Quick Action Controls */}
+                <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => shopPhotoInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-xl bg-white/90 hover:bg-white text-gray-800 text-xs font-bold backdrop-blur-md shadow-md flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-purple-700" />
+                    <span>ছবি পরিবর্তন করুন</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRemoveShopPhoto}
+                    className="p-1.5 rounded-xl bg-black/60 hover:bg-rose-600 text-white backdrop-blur-md shadow-md transition-all cursor-pointer"
+                    title="ছবি মুছে ফেলুন"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 mx-5 mt-4 rounded-2xl border-2 border-dashed border-purple-200/80 bg-purple-50/40 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center text-purple-600 shrink-0">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-extrabold text-gray-900">দোকানের কোনো প্রোফাইল ছবি নেই</p>
+                    <p className="text-[10px] text-gray-500">গ্রাহক ও হেলপারদের সহজে চেনার জন্য ছবি যুক্ত করুন।</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => shopPhotoInputRef.current?.click()}
+                  className="px-3 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 active:scale-95 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer shrink-0"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>ছবি আপলোড</span>
+                </button>
               </div>
             )}
 
@@ -390,12 +469,27 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
             <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/10">
               <div className="bg-emerald-950/60 border border-emerald-500/20 rounded-xl p-2.5">
-                <span className="text-[10px] font-bold text-emerald-300 block">Total Sales</span>
+                <span className="text-[10px] font-bold text-emerald-300 block">Total Delivered Sales</span>
                 <span className="text-base font-black text-emerald-400">৳{totalSales.toLocaleString()}</span>
+                {unpaidBalance > 0 ? (
+                  <span className="text-[10px] text-amber-300 font-extrabold block mt-0.5">
+                    Due Payout: ৳{unpaidBalance.toLocaleString()}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-emerald-300 font-bold block mt-0.5">
+                    Settled / Cleared
+                  </span>
+                )}
               </div>
               <div className="bg-purple-950/60 border border-purple-500/20 rounded-xl p-2.5">
                 <span className="text-[10px] font-bold text-purple-300 block">Commission ({shop.commissionPercent || 0}%)</span>
                 <span className="text-base font-black text-purple-300">৳{commission.toLocaleString()}</span>
+                <div className="text-[9px] text-purple-200/90 font-medium mt-0.5 leading-tight">
+                  <span>Settled: ৳{disbursedCommission.toLocaleString()}</span>
+                  {unpaidCommission > 0 && (
+                    <span className="text-amber-300 font-bold block">Due: ৳{unpaidCommission.toLocaleString()}</span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -563,6 +657,56 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             >
               <span>{isStoreActive ? 'Active (ON)' : 'Inactive (OFF)'}</span>
             </button>
+          </div>
+
+          {/* Top Featured Store Switch */}
+          <div className="bg-amber-50/70 rounded-2xl p-4 border border-amber-200/90 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-1.5">
+                  <Sparkles className={`w-4 h-4 ${isFeatured ? 'text-amber-500 fill-amber-400 animate-pulse' : 'text-gray-400'}`} />
+                  <h4 className="text-xs font-black text-amber-950 uppercase tracking-wider">
+                    Feature at Top (শীর্ষে ফিচার করুন)
+                  </h4>
+                </div>
+                <p className="text-[11px] text-amber-900 font-semibold mt-0.5">
+                  {isFeatured
+                    ? 'এই দোকানটি ক্যাটাগরি নির্বাচনের সময় শীর্ষে (টপে) প্রদর্শিত হবে। গ্রাহকদের কোনো "Featured" স্ট্যাটাস ট্যাগ দেখানো হবে না।'
+                    : 'বর্তমানে সাধারণ নিয়মে প্রদর্শিত হচ্ছে (টপে ফিচার্ড নয়)।'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleFeatured}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border shadow-sm transition-all cursor-pointer flex items-center space-x-1.5 shrink-0 ${
+                  isFeatured
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+                }`}
+              >
+                <span>{isFeatured ? '⭐ Featured: ON' : '☆ Featured: OFF'}</span>
+              </button>
+            </div>
+
+            {isFeatured && (
+              <div className="flex items-center justify-between pt-2.5 border-t border-amber-200/60 bg-amber-100/50 p-2.5 rounded-xl">
+                <div>
+                  <span className="text-[10px] font-black uppercase text-amber-800 tracking-wider block">
+                    অগ্রাধিকার ক্রম (Priority Order)
+                  </span>
+                  <span className="text-xs text-amber-900 font-bold">
+                    #{currentShop.featuredOrder || '1'} (কম নম্বর আগে প্রদর্শিত হবে)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleUpdateFeaturedOrder}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer transition-all active:scale-95"
+                >
+                  ক্রম পরিবর্তন করুন
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Commission */}

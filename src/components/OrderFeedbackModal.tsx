@@ -106,7 +106,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
         @keyframes fadeInOverlay { from { opacity: 0 } to { opacity: 1 } }
         @keyframes slideUpCard { from { opacity: 0; transform: translateY(24px) scale(0.96) } to { opacity: 1; transform: translateY(0) scale(1) } }
         @keyframes thumbPop { 0% { transform: scale(1) } 30% { transform: scale(1.35) rotate(-8deg) } 60% { transform: scale(0.95) rotate(4deg) } 100% { transform: scale(1) rotate(0deg) } }
-        @keyframes textareaSlide { from { opacity: 0; max-height: 0; transform: translateY(-8px) } to { opacity: 1; max-height: 200px; transform: translateY(0) } }
+        @keyframes textareaSlide { from { opacity: 0; max-height: 0; transform: translateY(-8px) } to { opacity: 1; max-height: 600px; transform: translateY(0) } }
         .thumb-pop { animation: thumbPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
         .textarea-slide { animation: textareaSlide 0.3s ease forwards; }
         .card-slide { animation: slideUpCard 0.25s cubic-bezier(0.34, 1.2, 0.64, 1) forwards; }
@@ -248,7 +248,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
 
           {/* Negative feedback section — slides in only when thumbs-down selected */}
           {isNegative && (
-            <div className="textarea-slide overflow-hidden space-y-3">
+            <div className="textarea-slide space-y-3">
               {/* Bad Selection: Rider or Product */}
               <div className="p-3.5 rounded-2xl bg-red-50/90 border border-red-200 space-y-2.5">
                 <div className="flex items-center gap-1.5">
@@ -262,26 +262,7 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 pt-0.5">
-                  {/* Rider Option */}
-                  <button
-                    type="button"
-                    onClick={() => toggleBadAspect('rider')}
-                    className={`p-2.5 rounded-xl border-2 font-extrabold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      badAspects.includes('rider')
-                        ? 'bg-red-600 text-white border-red-600 shadow-md shadow-red-600/30 scale-[1.02]'
-                        : 'bg-white text-gray-700 border-red-200 hover:border-red-300 hover:bg-red-50/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <Bike className="w-4 h-4" />
-                      <span>রাইডার</span>
-                    </div>
-                    <span className={`text-[10px] font-semibold ${badAspects.includes('rider') ? 'text-red-100' : 'text-gray-400'}`}>
-                      (Rider / ডেলিভারি)
-                    </span>
-                  </button>
-
-                  {/* Product Option */}
+                  {/* Product Option — first */}
                   <button
                     type="button"
                     onClick={() => toggleBadAspect('product')}
@@ -297,6 +278,25 @@ export const OrderFeedbackModal: React.FC<OrderFeedbackModalProps> = ({
                     </div>
                     <span className={`text-[10px] font-semibold ${badAspects.includes('product') ? 'text-red-100' : 'text-gray-400'}`}>
                       (Product / পণ্য)
+                    </span>
+                  </button>
+
+                  {/* Rider Option — second */}
+                  <button
+                    type="button"
+                    onClick={() => toggleBadAspect('rider')}
+                    className={`p-2.5 rounded-xl border-2 font-extrabold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      badAspects.includes('rider')
+                        ? 'bg-red-600 text-white border-red-600 shadow-md shadow-red-600/30 scale-[1.02]'
+                        : 'bg-white text-gray-700 border-red-200 hover:border-red-300 hover:bg-red-50/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Bike className="w-4 h-4" />
+                      <span>রাইডার</span>
+                    </div>
+                    <span className={`text-[10px] font-semibold ${badAspects.includes('rider') ? 'text-red-100' : 'text-gray-400'}`}>
+                      (Rider / ডেলিভারি)
                     </span>
                   </button>
                 </div>

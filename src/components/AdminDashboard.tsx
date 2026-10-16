@@ -3,8 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
-import { computeShopMetrics, createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
-import type { ShopMetrics } from '@/lib/adminMetrics';
+import { createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
 import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
 import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
@@ -83,6 +82,7 @@ import { AdminHelperMapView } from './admin/AdminHelperMapView';
 import { DraggableTabsContainer } from './admin/DraggableTabsContainer';
 import { AddShopModal } from './AddShopModal';
 import { UserActionDropdown } from './admin/UserActionDropdown';
+import { ShopActionDropdown } from './admin/ShopActionDropdown';
 import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 import { AdminStoreOrderDetailsModal } from './admin/AdminStoreOrderDetailsModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
@@ -131,7 +131,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS' | 'ITEMS'>('TABLE');
-  const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE'>('UNPAID');
+  const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE' | 'FEATURED'>('UNPAID');
   const [shopsSortDirection, setShopsSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
   const [selectedStoreApp, setSelectedStoreApp] = useState<import('@/types').StoreApplication | null>(null);
@@ -377,6 +377,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [feeSuggestionsModalPage, setFeeSuggestionsModalPage] = useState<number>(1);
   const [feeSuggestionsModalPageSize, setFeeSuggestionsModalPageSize] = useState<number>(5);
 
+  // Custom Store Pricing Admin States
+  const [customStorePricingEnabled, setCustomStorePricingEnabled] = useState<boolean>(
+    fallbackStore.pricingSettings?.customStorePricingEnabled === true
+  );
+  const [customStorePricingAmount, setCustomStorePricingAmount] = useState<number | string>(
+    fallbackStore.pricingSettings?.customStorePricingAmount ?? 15
+  );
+
   // Modals state
   const [showPushNotificationModal, setShowPushNotificationModal] = useState<boolean>(false);
   const [editingNotification, setEditingNotification] = useState<AppNotification | null>(null);
@@ -586,6 +594,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [shopsCategoryFilter, setShopsCategoryFilter] = useState<string>('ALL');
+  const [shopsFeaturedFilter, setShopsFeaturedFilter] = useState<'ALL' | 'FEATURED' | 'NOT_FEATURED'>('ALL');
   const [shopsActiveFilter, setShopsActiveFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [shopsApprovalFilter, setShopsApprovalFilter] = useState<'ALL' | 'Approved' | 'Pending' | 'Rejected'>('ALL');
   const [usersCoinsFilter, setUsersCoinsFilter] = useState<string>('ALL');
@@ -903,6 +912,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setFeeCalculatorMaxLimitMessage(settings.feeCalculatorMaxLimitMessage || '');
       setFeeCalculatorCompanyDetails(settings.feeCalculatorCompanyDetails || '');
 
+      // Custom Store pricing sync
+      setCustomStorePricingEnabled(settings.customStorePricingEnabled === true);
+      setCustomStorePricingAmount(settings.customStorePricingAmount ?? 15);
+
       // Home Banner Slides & Search Not Found Message sync
       setAdminSlides(settings.homeSlides || []);
       setSearchNotFoundMsg(settings.searchNotFoundMessage || '');
@@ -1000,7 +1013,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     const fetchShops = async () => {
       if (activeTab !== 'SHOPS') return;
-      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || statusFilter !== 'ALL');
+      const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || shopsFeaturedFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= shops.length;
       if (!hasFilter && !needsPageFetch) {
         setServerShops(null);
@@ -1019,7 +1032,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     fetchShops();
-  }, [activeTab, shopsAppliedSearchQuery, shopsCategoryFilter, statusFilter, currentPage, pageSize, shops.length]);
+  }, [activeTab, shopsAppliedSearchQuery, shopsCategoryFilter, shopsFeaturedFilter, statusFilter, currentPage, pageSize, shops.length]);
 
   useEffect(() => {
     if (activeTab === 'SHOPS') {
@@ -1685,6 +1698,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       feeCalculatorMaxLimit: feeCalculatorMaxLimit !== '' && !isNaN(Number(feeCalculatorMaxLimit)) ? Number(feeCalculatorMaxLimit) : 70,
       feeCalculatorMaxLimitMessage: feeCalculatorMaxLimitMessage.trim() || undefined,
       feeCalculatorCompanyDetails: feeCalculatorCompanyDetails.trim() || undefined,
+      customStorePricingEnabled: Boolean(customStorePricingEnabled),
+      customStorePricingAmount: customStorePricingAmount !== '' && !isNaN(Number(customStorePricingAmount)) ? Number(customStorePricingAmount) : 15,
       allowedAdminTabs: allowedAdminTabs,
       homeSlides: adminSlides.length > 0 ? adminSlides : undefined,
       searchNotFoundMessage: searchNotFoundMsg.trim() || undefined,
@@ -2349,22 +2364,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     [activeTab, realStoreOrders, rangeStartIso, rangeEndIso, storeOrdersAppliedSearchQuery, storeOrdersStatusFilter, storeOrdersShopFilter, storeOrdersHelperFilter, storeOrdersSortBy]
   );
 
-  // Sales, commission and payout figures of every shop, for the Shops tab.
-  // One pass over the shop orders, orders and withdrawals (computeShopMetrics);
-  // it used to be redone per shop, on every render, with a search of all
-  // orders for each shop order.
+  // Sales, commission and payout figures of every shop, for the Shops tab,
+  // from the unified store financials (fallbackStore.getStoreFinancials) so
+  // they match the shop details modal and the store's own wallet.
+  // Computed only on the Shops tab and only when its inputs change.
   // "Today's sales" turns over at midnight, so the day is one of its inputs.
   const todayKey = new Date().toDateString();
+  type ShopMetrics = {
+    completed: number; rejected: number; running: number;
+    totalSales: number; todaySales: number;
+    commission: number; disbursedCommission: number; unpaidCommission: number;
+    netSales: number; totalDisbursed: number; unpaidBalance: number;
+  };
   const shopMetricsMap = React.useMemo(
-    () =>
-      activeTab === 'SHOPS'
-        ? computeShopMetrics(
-          serverShops !== null ? serverShops : shops,
-          Array.from(fallbackStore.shopOrders.values()),
-          Array.from(fallbackStore.orders.values()),
-          Array.from(fallbackStore.withdrawals.values())
-        )
-        : new Map<string, ShopMetrics>(),
+    () => {
+      const map = new Map<string, ShopMetrics>();
+      if (activeTab !== 'SHOPS') return map;
+      (serverShops !== null ? serverShops : shops).forEach((s) => {
+        const fin = fallbackStore.getStoreFinancials(s);
+        map.set(s.id, {
+          completed: fin.completedOrders,
+          rejected: fin.canceledOrders,
+          running: fin.runningOrders,
+          totalSales: fin.totalSales,
+          todaySales: fin.todaySales,
+          commission: fin.deliveredCommission,
+          disbursedCommission: fin.disbursedCommission,
+          unpaidCommission: fin.unpaidCommission,
+          netSales: fin.deliveredNetSales,
+          totalDisbursed: fin.totalDisbursed,
+          unpaidBalance: fin.unpaidBalance,
+        });
+      });
+      return map;
+    },
     // walletInputsVersion covers the three store collections read above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeTab, serverShops, shops, walletInputsVersion, todayKey]
@@ -2431,7 +2464,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // demand, once per session — instead of every admin session doing it.
   const lifetimeData = useAdminLifetimeData(
     // Shops: its per-shop sales and payouts are summed from shop orders, their
-    // parent orders and withdrawals (computeShopMetrics).
+    // parent orders and withdrawals (getStoreFinancials).
     activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
   );
 
@@ -6394,6 +6427,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* ── Custom Store Pricing Settings ── */}
+          <div className="border border-indigo-200 rounded-3xl p-5 bg-indigo-50/40 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="font-extrabold text-sm text-indigo-950 flex items-center gap-2">
+                  <Store className="w-5 h-5 text-indigo-700" />
+                  <span>Custom Store pricing (কাস্টম স্টোর চার্জ)</span>
+                </h4>
+                <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
+                  কাস্টমার যদি ৫টি পণ্যের মধ্যে ৪টি লিস্টেড স্টোর থেকে এবং ১টি কাস্টম আইটেম অর্ডার করে এবং হেলপার সেটি লিস্টেড স্টোর থেকে কিনতে না পেরে অন্য কোনো দোকান থেকে কিনে কাস্টম খরচ যোগ করে, তবে প্রতি কাস্টম পণ্যে/খরচে এই অতিরিক্ত চার্জ যোগ হবে।
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                <input
+                  type="checkbox"
+                  checked={customStorePricingEnabled}
+                  onChange={(e) => setCustomStorePricingEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
+
+            {customStorePricingEnabled && (
+              <div className="pt-3 border-t border-indigo-100 grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-200">
+                <div>
+                  <label className="text-xs font-bold text-gray-750 block mb-1">
+                    Charge per Custom Item (প্রতি কাস্টম পণ্যের চার্জ ৳):
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={customStorePricingAmount}
+                    onChange={(e) => setCustomStorePricingAmount(e.target.value === '' ? '' : e.target.value)}
+                    placeholder="e.g. 15"
+                    className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-extrabold outline-none focus:border-indigo-600 bg-white"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1 font-medium">
+                    হেলপার কাস্টম খরচ যুক্ত করলে কাস্টমার ও হেলপার উভয়ের ক্যালকুলেশন সামারিতে পণ্য প্রতি এই ফি প্রদর্শিত হবে।
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* ── Fee Details Calculator Settings ── */}
           <div className="border border-emerald-200 rounded-2xl p-5 bg-emerald-50/30 space-y-4">
             <h4 className="font-extrabold text-sm text-emerald-950 flex items-center gap-2">
@@ -8154,6 +8233,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             return sStatus === shopsApprovalFilter;
           });
         }
+        if (shopsFeaturedFilter === 'FEATURED') {
+          filteredShops = filteredShops.filter((s) => Boolean(s.isFeatured));
+        } else if (shopsFeaturedFilter === 'NOT_FEATURED') {
+          filteredShops = filteredShops.filter((s) => !s.isFeatured);
+        }
         if (shopsAppliedSearchQuery.trim()) {
           const q = shopsAppliedSearchQuery.toLowerCase().trim();
           filteredShops = filteredShops.filter(
@@ -8172,7 +8256,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           const mb = shopMetricsMap.get(b.id)!;
 
           let diff = 0;
-          if (shopsSortField === 'UNPAID') {
+          if (shopsSortField === 'FEATURED') {
+            const featA = a.isFeatured ? 1 : 0;
+            const featB = b.isFeatured ? 1 : 0;
+            diff = featB - featA;
+            if (diff === 0 && a.isFeatured && b.isFeatured) {
+              const ordA = typeof a.featuredOrder === 'number' ? a.featuredOrder : 999999;
+              const ordB = typeof b.featuredOrder === 'number' ? b.featuredOrder : 999999;
+              diff = ordA - ordB;
+            }
+          } else if (shopsSortField === 'UNPAID') {
             diff = mb.unpaidBalance - ma.unpaidBalance;
           } else if (shopsSortField === 'SALES') {
             diff = mb.totalSales - ma.totalSales;
@@ -8208,7 +8301,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }
         };
 
-        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL');
+        const hasShopsFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || shopsFeaturedFilter !== 'ALL' || shopsActiveFilter !== 'ALL' || shopsApprovalFilter !== 'ALL');
         const overrideShopsCount = (serverShops === null && !hasShopsFilter && exactShopsCount !== null) ? exactShopsCount : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(filteredShops, undefined, undefined, overrideShopsCount);
 
@@ -8295,10 +8388,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                 </div>
 
-                {(shopsCategoryFilter !== 'ALL' || shopsActiveFilter !== 'ALL' || shopsApprovalFilter !== 'ALL') && (
+                {/* Featured Filter */}
+                <div className="flex items-center space-x-1.5 bg-gray-100 border border-gray-200 rounded-2xl px-3 py-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span className="text-gray-500 text-[11px] font-bold">Featured:</span>
+                  <select
+                    value={shopsFeaturedFilter}
+                    onChange={(e) => {
+                      setShopsFeaturedFilter(e.target.value as 'ALL' | 'FEATURED' | 'NOT_FEATURED');
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer"
+                  >
+                    <option value="ALL">All ({shopsSource.length})</option>
+                    <option value="FEATURED">
+                      ⭐ Featured ({shopsSource.filter(s => Boolean(s.isFeatured)).length})
+                    </option>
+                    <option value="NOT_FEATURED">
+                      Not Featured ({shopsSource.filter(s => !s.isFeatured).length})
+                    </option>
+                  </select>
+                </div>
+
+                {(shopsCategoryFilter !== 'ALL' || shopsFeaturedFilter !== 'ALL' || shopsActiveFilter !== 'ALL' || shopsApprovalFilter !== 'ALL') && (
                   <button
                     onClick={() => {
                       setShopsCategoryFilter('ALL');
+                      setShopsFeaturedFilter('ALL');
                       setShopsActiveFilter('ALL');
                       setShopsApprovalFilter('ALL');
                       setCurrentPage(1);
@@ -8850,7 +8966,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[1100px]">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[760px]">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
                       <tr>
                         <th
@@ -8858,7 +8974,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => toggleShopSort('NAME')}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Store Name</span>
+                            <span>Store Name, Type & Items</span>
                             {shopsSortField === 'NAME' ? (
                               shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
                             ) : (
@@ -8866,23 +8982,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             )}
                           </div>
                         </th>
-                        <th
-                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
-                          onClick={() => toggleShopSort('TYPE')}
-                        >
-                          <div className="flex items-center space-x-1">
-                            <span>Store Type</span>
-                            {shopsSortField === 'TYPE' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
-                            )}
-                          </div>
-                        </th>
-                        <th className="py-3.5 px-4 min-w-[185px]">
+                        <th className="py-3.5 px-4 min-w-[190px]">
                           <div className="flex items-center space-x-1.5 text-gray-800 font-black">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Store Status (স্ট্যাটাস)</span>
+                            <span>Status & Featured</span>
                           </div>
                         </th>
                         <th
@@ -8891,9 +8994,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         >
                           <div className="flex items-center space-x-1 text-emerald-950 font-black">
                             <DollarSign className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Unpaid Balance (৳)</span>
+                            <span>Due Amount (৳)</span>
                             {shopsSortField === 'UNPAID' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3.5 h-3.5 text-emerald-700" /> : <ArrowDown className="w-3.5 h-3.5 text-emerald-700" />
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-emerald-700" /> : <ArrowDown className="w-3 h-3 text-emerald-700" />
                             ) : (
                               <ArrowUpDown className="w-3 h-3 text-emerald-300" />
                             )}
@@ -8904,23 +9007,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => toggleShopSort('SALES')}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Orders & Sales</span>
+                            <span>Current Orders</span>
                             {shopsSortField === 'SALES' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
-                            )}
-                          </div>
-                        </th>
-                        <th className="py-3.5 px-4">Contact & WhatsApp</th>
-                        <th className="py-3.5 px-4">Location Address</th>
-                        <th
-                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
-                          onClick={() => toggleShopSort('DATE')}
-                        >
-                          <div className="flex items-center space-x-1">
-                            <span>Added Date</span>
-                            {shopsSortField === 'DATE' ? (
                               shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
                             ) : (
                               <ArrowUpDown className="w-3 h-3 text-gray-300" />
@@ -8939,6 +9027,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           totalSales: 0,
                           todaySales: 0,
                           commission: 0,
+                          disbursedCommission: 0,
+                          unpaidCommission: 0,
                           netSales: 0,
                           totalDisbursed: 0,
                           unpaidBalance: 0,
@@ -8958,10 +9048,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onClick={() => setSelectedShopDetails(s)}
                             className="hover:bg-purple-50/50 transition-colors cursor-pointer"
                           >
+                            {/* 1. STORE NAME + TYPE + ITEMS */}
                             <td className="py-4 px-4">
                               <div className="font-extrabold text-gray-900 flex items-center space-x-2">
                                 <Store className="w-4 h-4 text-purple-600 shrink-0" />
-                                <span>{s.name}</span>
+                                <span className="font-bold text-gray-950">{s.name}</span>
                                 {s.isBlocked && (
                                   <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider flex items-center space-x-0.5">
                                     <Ban className="w-2.5 h-2.5" />
@@ -8972,12 +9063,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {s.isBlocked && (s.adminBlockNote || s.blockedReason) && (
                                 <p className="text-[10px] text-red-700 font-bold flex items-center gap-1 mt-0.5">
                                   <Lock className="w-2.5 h-2.5 text-red-500 shrink-0" />
-                                  <span className="truncate max-w-[140px]" title={s.adminBlockNote || s.blockedReason}>
+                                  <span className="truncate max-w-[200px]" title={s.adminBlockNote || s.blockedReason}>
                                     Note: {s.adminBlockNote || s.blockedReason}
                                   </span>
                                 </p>
                               )}
-                              <div className="mt-1 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                                <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-900 font-bold text-[9px] border border-purple-200">
+                                  {s.type}
+                                </span>
                                 <button
                                   type="button"
                                   onClick={() => setManagingItemsShop(s)}
@@ -8993,15 +9087,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </button>
                               </div>
                             </td>
-                            <td className="py-4 px-4">
-                              <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
-                                {s.type}
-                              </span>
-                            </td>
-                            {/* DEDICATED STORE STATUS CELL */}
-                            <td className="py-4 px-4 min-w-[185px]" onClick={(e) => e.stopPropagation()}>
+
+                            {/* 2. INACTIVE + FEATURED STATUS */}
+                            <td className="py-4 px-4 min-w-[190px]" onClick={(e) => e.stopPropagation()}>
                               <div className="space-y-1.5">
-                                {/* 1. Active / Inactive Toggle Switch */}
+                                {/* Active / Inactive Toggle Switch */}
                                 <div
                                   onClick={async () => {
                                     const nextVal = !isStoreActive;
@@ -9044,8 +9134,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </div>
                                 </div>
 
-                                {/* 2. Approval Status Selector */}
-                                <div className="flex items-center">
+                                {/* Featured Toggle Switch */}
+                                <div className="space-y-1">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const nextVal = !s.isFeatured;
+                                      await fallbackStore.toggleShopFeaturedStatus(s.id, nextVal);
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      if (serverShops) {
+                                        setServerShops((prev) =>
+                                          prev ? prev.map((item) => (item.id === s.id ? { ...item, isFeatured: nextVal, featuredAt: nextVal ? new Date().toISOString() : undefined } : item)) : null
+                                        );
+                                      }
+                                      showAlert(
+                                        'ফিচার্ড স্ট্যাটাস আপডেট',
+                                        `"${s.name}" ${nextVal ? 'সফলভাবে টপে ফিচার করা হয়েছে। গ্রাহক ক্যাটাগরি বেছে নিলে এই দোকানটি সবার উপরে থাকবে।' : 'টপ ফিচার থেকে সরানো হয়েছে।'}`,
+                                        'success'
+                                      );
+                                    }}
+                                    title={s.isFeatured ? 'টপ ফিচার থেকে বাদ দিতে ক্লিক করুন' : 'টপে ফিচার করতে ক্লিক করুন'}
+                                    className={`w-full flex items-center justify-between gap-1.5 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all shadow-2xs ${
+                                      s.isFeatured
+                                        ? 'bg-amber-50 hover:bg-amber-100/90 border-amber-300 text-amber-950'
+                                        : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-500'
+                                    }`}
+                                  >
+                                    <div className="flex items-center space-x-1.5">
+                                      <Sparkles className={`w-3.5 h-3.5 ${s.isFeatured ? 'text-amber-500 fill-amber-400 animate-pulse' : 'text-gray-400'}`} />
+                                      <span className="text-[11px] font-black uppercase tracking-wider">
+                                        {s.isFeatured ? '⭐ Featured' : '☆ Not Top'}
+                                      </span>
+                                    </div>
+                                    <div
+                                      className={`w-7 h-3.5 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
+                                        s.isFeatured ? 'bg-amber-500' : 'bg-gray-300'
+                                      }`}
+                                    >
+                                      <div
+                                        className={`bg-white w-2.5 h-2.5 rounded-full shadow transform transition-transform duration-200 ${
+                                          s.isFeatured ? 'translate-x-3.5' : 'translate-x-0'
+                                        }`}
+                                      />
+                                    </div>
+                                  </button>
+
+                                  {s.isFeatured && (
+                                    <div className="flex items-center justify-between gap-1 px-1">
+                                      <span className="text-[9px] font-black uppercase text-amber-700 tracking-wider">
+                                        Priority:
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const input = prompt(
+                                            `"${s.name}" এর জন্য প্রায়োরিটি ক্রম নম্বর দিন (কম নম্বর শীর্ষে থাকবে, যেমন 1, 2, 3...):`,
+                                            s.featuredOrder !== undefined ? String(s.featuredOrder) : '1'
+                                          );
+                                          if (input === null) return;
+                                          const num = parseInt(input.trim(), 10);
+                                          const newOrder = !isNaN(num) && num > 0 ? num : undefined;
+                                          await fallbackStore.toggleShopFeaturedStatus(s.id, true, newOrder);
+                                          setShops(Array.from(fallbackStore.shops.values()));
+                                          if (serverShops) {
+                                            setServerShops((prev) =>
+                                              prev ? prev.map((item) => (item.id === s.id ? { ...item, featuredOrder: newOrder } : item)) : null
+                                            );
+                                          }
+                                          showAlert('অগ্রাধিকার আপডেট', `"${s.name}" এর প্রায়োরিটি #${newOrder || 'Default'} সেট করা হয়েছে।`, 'success');
+                                        }}
+                                        className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 font-black text-[10px] border border-amber-300 transition-colors cursor-pointer"
+                                        title="ক্লিক করে প্রায়োরিটি ক্রম পরিবর্তন করুন"
+                                      >
+                                        #{s.featuredOrder || '1'} (Edit ✎)
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Approval Status & Direct Orders */}
+                                <div className="flex items-center gap-1">
                                   <select
                                     value={sStatus}
                                     onChange={async (e) => {
@@ -9059,7 +9227,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       }
                                       showAlert('স্ট্যাটাস আপডেট', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
                                     }}
-                                    className={`w-full px-2 py-1 rounded-xl text-[10px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
+                                    className={`flex-1 px-1.5 py-0.5 rounded-lg text-[9px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
                                       sStatus === 'Approved'
                                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                                         : sStatus === 'Pending'
@@ -9067,14 +9235,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
                                     }`}
                                   >
-                                    <option value="Approved">✓ Approved (অনুমোদিত)</option>
-                                    <option value="Pending">⏳ Pending (অপেক্ষমাণ)</option>
-                                    <option value="Rejected">✕ Rejected (বাতিল)</option>
+                                    <option value="Approved">✓ Approved</option>
+                                    <option value="Pending">⏳ Pending</option>
+                                    <option value="Rejected">✕ Rejected</option>
                                   </select>
-                                </div>
 
-                                {/* 3. Can Receive Orders Toggle */}
-                                <div>
                                   <button
                                     type="button"
                                     onClick={async () => {
@@ -9089,18 +9254,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         'success'
                                       );
                                     }}
-                                    title="Click to toggle whether this store can accept order requests directly"
-                                    className={`w-full px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all text-center ${
+                                    title={s.canReceiveOrders !== false ? 'Accepts orders directly' : 'Admin manual orders only'}
+                                    className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
                                       (s.canReceiveOrders !== false)
                                         ? 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
                                         : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
                                     }`}
                                   >
-                                    {(s.canReceiveOrders !== false) ? '⚡ Accepts Orders' : '🚫 Admin Manual Only'}
+                                    {(s.canReceiveOrders !== false) ? '⚡ Orders ON' : '🚫 OFF'}
                                   </button>
                                 </div>
                               </div>
                             </td>
+
+                            {/* 3. DUE AMOUNT */}
                             <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
                               {metrics.unpaidBalance > 0 ? (
                                 <button
@@ -9116,6 +9283,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     Click to Disburse →
                                   </span>
                                 </button>
+                              ) : metrics.unpaidBalance < 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDisbursingShop(s)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black text-xs block text-left shadow-2xs transition-all cursor-pointer group"
+                                  title="Platform paid more - Advance / Minus balance"
+                                >
+                                  <span className="block text-[13px] font-black text-amber-700 group-hover:text-amber-900 font-mono">
+                                    -৳{Math.abs(metrics.unpaidBalance).toLocaleString('en-US')}
+                                  </span>
+                                  <span className="text-[9px] text-amber-700/80 font-bold block">
+                                    Advance / Overpaid →
+                                  </span>
+                                </button>
                               ) : (
                                 <div className="space-y-0.5">
                                   <span className="px-2 py-0.5 rounded-lg bg-gray-100 text-gray-600 font-extrabold text-[10px] inline-block">
@@ -9129,156 +9310,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </div>
                               )}
                             </td>
+
+                            {/* 4. CURRENT ORDERS */}
                             <td className="py-4 px-4">
                               <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className={`px-2 py-0.5 rounded-md font-black text-[10px] border ${
+                                    metrics.running > 0
+                                      ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
+                                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  }`}
+                                  title="Running Orders"
+                                >
+                                  ⚡ {metrics.running} Running
+                                </span>
                                 <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-black text-[10px] border border-emerald-200" title="Completed Orders">
                                   ✓ {metrics.completed}
-                                </span>
-                                <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-black text-[10px] border border-amber-200" title="Running Orders">
-                                  ⚡ {metrics.running}
                                 </span>
                                 <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 font-black text-[10px] border border-rose-200" title="Rejected Orders">
                                   ✕ {metrics.rejected}
                                 </span>
                               </div>
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
-                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block mb-0.5">Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong></div>
-                                <div>Total Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
-                                <div>Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong></div>
+                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block">
+                                  Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong>
+                                </div>
+                                <div className="text-[10px] text-gray-500">
+                                  Total Sales: <strong className="text-emerald-700 font-bold">৳{metrics.totalSales.toLocaleString('en-US')}</strong>
+                                </div>
                               </div>
                             </td>
-                            <td className="py-4 px-4">
-                              <div className="font-bold text-gray-800">{s.contactPerson}</div>
-                              <div className="text-[11px] text-emerald-700 font-extrabold">WA: {s.whatsapp}</div>
-                            </td>
-                            <td className="py-4 px-4">
-                              <div className="text-gray-800 font-semibold max-w-xs">{s.location.address}</div>
-                              {typeof s.location.lat === 'number' && typeof s.location.lng === 'number' && (
-                                <div className="text-[10px] text-gray-400 font-mono">
-                                  {s.location.lat.toFixed(4)}, {s.location.lng.toFixed(4)}
-                                </div>
-                              )}
-                            </td>
-                            <td className="py-4 px-4 text-gray-500 font-medium">
-                              <span className="block text-gray-800 font-bold text-xs">{s.addedByHelperName || 'Admin'}</span>
-                              <span className="text-[10px] text-gray-400 block">
-                                {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '—'}
-                              </span>
-                            </td>
+
+                            {/* 5. ACTIONS (DROPDOWN UNDER THREE-DOT BUTTON) */}
                             <td className="py-4 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center justify-end space-x-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setDisbursingShop(s)}
-                                  className="py-1 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                                  title="Disburse Payment, View Financials & Helper Breakdown"
-                                >
-                                  <DollarSign className="w-3.5 h-3.5" />
-                                  <span className="text-[10px] font-black uppercase">Disburse</span>
-                                </button>
-                                {s.isBlocked ? (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const confirmed = await showConfirm(
-                                        'স্টোর আনব্লক নিশ্চিতকরণ',
-                                        `আপনি কি "${s.name}" স্টোরটি আনব্লক করতে চান?`,
-                                        'হ্যাঁ, আনব্লক করুন',
-                                        'বাতিল'
-                                      );
-                                      if (!confirmed) return;
-                                      await fallbackStore.blockShop(s.id, false);
-                                      setShops(Array.from(fallbackStore.shops.values()));
-                                      showAlert('আনব্লক সম্পন্ন', `"${s.name}" স্টোরটি আনব্লক করা হয়েছে।`, 'success');
-                                    }}
-                                    className="p-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs"
-                                    title="Unblock Store"
-                                  >
-                                    <CheckCircle2 className="w-4 h-4" />
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => setBlockTarget({ id: s.id, name: s.name, type: 'Store' })}
-                                    className="p-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-xs"
-                                    title="Block Store"
-                                  >
-                                    <Ban className="w-4 h-4" />
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const nextVal = !isStoreActive;
-                                    await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
-                                    setShops(Array.from(fallbackStore.shops.values()));
-                                    if (serverShops) {
-                                      setServerShops((prev) =>
-                                        prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
-                                      );
-                                    }
-                                    showAlert(
-                                      'স্টোর স্ট্যাটাস পরিবর্তন',
-                                      `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
-                                      'success'
+                              <ShopActionDropdown
+                                shop={s}
+                                isStoreActive={isStoreActive}
+                                onDisburse={() => setDisbursingShop(s)}
+                                onToggleActive={async () => {
+                                  const nextVal = !isStoreActive;
+                                  await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                  setShops(Array.from(fallbackStore.shops.values()));
+                                  if (serverShops) {
+                                    setServerShops((prev) =>
+                                      prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
                                     );
-                                  }}
-                                  className={`p-1.5 rounded-xl font-bold text-xs transition-colors cursor-pointer ${
-                                    isStoreActive
-                                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
-                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
-                                  }`}
-                                  title={isStoreActive ? 'Deactivate Store (দোকান বন্ধ করুন)' : 'Activate Store (দোকান চালু করুন)'}
-                                >
-                                  <Power className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setManagingItemsShop(s)}
-                                  className="p-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs cursor-pointer"
-                                  title="Manage Store Items (পণ্য ব্যবস্থাপনা)"
-                                >
-                                  <Package className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedShopDetails(s)}
-                                  className="p-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-xs"
-                                  title="View Details"
-                                >
-                                  <Globe className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingShop(s);
-                                    setShowAddShopModal(true);
-                                  }}
-                                  className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={async () => {
+                                  }
+                                  showAlert(
+                                    'স্টোর স্ট্যাটাস পরিবর্তন',
+                                    `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
+                                    'success'
+                                  );
+                                }}
+                                onToggleBlock={async () => {
+                                  if (s.isBlocked) {
                                     const confirmed = await showConfirm(
-                                      'দোকান ডিলিট নিশ্চিতকরণ',
-                                      `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
-                                      'হ্যাঁ, ডিলিট করুন',
+                                      'স্টোর আনব্লক নিশ্চিতকরণ',
+                                      `আপনি কি "${s.name}" স্টোরটি আনব্লক করতে চান?`,
+                                      'হ্যাঁ, আনব্লক করুন',
                                       'বাতিল'
                                     );
                                     if (!confirmed) return;
-                                    await fallbackStore.deleteShop(s.id);
+                                    await fallbackStore.blockShop(s.id, false);
                                     setShops(Array.from(fallbackStore.shops.values()));
-                                    setServerShops((prev) => (prev ? prev.filter((shop) => shop.id !== s.id) : null));
-                                    setExactShopsCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
-                                    showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
-                                  }}
-                                  className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
+                                    showAlert('আনব্লক সম্পন্ন', `"${s.name}" স্টোরটি আনব্লক করা হয়েছে।`, 'success');
+                                  } else {
+                                    setBlockTarget({ id: s.id, name: s.name, type: 'Store' });
+                                  }
+                                }}
+                                onManageItems={() => setManagingItemsShop(s)}
+                                onViewDetails={() => setSelectedShopDetails(s)}
+                                onEdit={() => {
+                                  setEditingShop(s);
+                                  setShowAddShopModal(true);
+                                }}
+                                onDelete={async () => {
+                                  const confirmed = await showConfirm(
+                                    'দোকান ডিলিট নিশ্চিতকরণ',
+                                    `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
+                                    'হ্যাঁ, ডিলিট করুন',
+                                    'বাতিল'
+                                  );
+                                  if (!confirmed) return;
+                                  await fallbackStore.deleteShop(s.id);
+                                  setShops(Array.from(fallbackStore.shops.values()));
+                                  setServerShops((prev) => (prev ? prev.filter((shop) => shop.id !== s.id) : null));
+                                  setExactShopsCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
+                                  showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
+                                }}
+                              />
                             </td>
                           </tr>
                         );

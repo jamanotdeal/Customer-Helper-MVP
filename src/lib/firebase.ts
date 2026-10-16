@@ -66,6 +66,7 @@ import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrde
 import { isAppVisible, subscribeAppVisibility } from './appVisibility';
 import { isHelperEligibleForOrder } from './geofenceUtils';
 import { isOrderOpen } from './orderStatus';
+import { getItemQuantityNum } from './itemUtils';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDSN_Q5PTgnL7nTm0Ni1yktCculx6jlRYY',
@@ -1758,9 +1759,16 @@ class FallbackStore {
     if (Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
     getDocs(collection(db, 'store_products'))
       .then((snapshot) => {
+        // Full replacement — ensures deleted products are purged from local cache
+        const freshMap = new Map<string, StoreProduct>();
         snapshot.forEach((docSnap) => {
-          this.storeProducts.set(docSnap.id, docSnap.data() as StoreProduct);
+          const p = docSnap.data() as StoreProduct;
+          const id = p.id || docSnap.id;
+          freshMap.set(id, { ...p, id });
         });
+        // Clear then repopulate so deleted products don't linger
+        this.storeProducts.clear();
+        freshMap.forEach((p, id) => this.storeProducts.set(id, p));
         this._storeProductsCachedAt = Date.now();
         this.scheduleLocalStoreSave();
         this.notify();
@@ -3754,6 +3762,7 @@ class FallbackStore {
     const updated: Shop = {
       ...existing,
       isBlocked,
+      status: isBlocked ? 'Rejected' : (existing.status === 'Rejected' ? 'Approved' : existing.status || 'Approved'),
       blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
       adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
       blockedAt: isBlocked ? new Date().toISOString() : undefined,
@@ -3762,6 +3771,7 @@ class FallbackStore {
       updatedAt: new Date().toISOString(),
     };
     this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updated), { merge: true });
@@ -5656,105 +5666,256 @@ class FallbackStore {
     return wallets;
   }
 
-  public getStoreWallet(
-    storeUserId: string,
-    storeId?: string,
+  public getStoreFinancials(
+    shopOrId: Shop | string,
     cachedParentOrders?: Record<string, Order>,
     extraShopOrders?: ShopOrder[]
-  ): Wallet {
-    const targetStoreId = storeId || `store-${storeUserId}`;
-    const shopDoc = this.shops.get(targetStoreId) || Array.from(this.shops.values()).find(
-      (s) => s.id === targetStoreId || s.ownerUserId === storeUserId || s.id === `store-${storeUserId}`
-    );
+  ) {
+    const shop = typeof shopOrId === 'string'
+      ? (this.shops.get(shopOrId) || Array.from(this.shops.values()).find((s) => s.id === shopOrId || s.ownerUserId === shopOrId || s.id === `store-${shopOrId}`))
+      : shopOrId;
+    const targetShopId = shop?.id || (typeof shopOrId === 'string' ? shopOrId : '');
+    const storeUserId = shop?.ownerUserId || (targetShopId.startsWith('store-') ? targetShopId.replace('store-', '') : targetShopId);
+    const storeName = shop?.name || '';
 
-    let commissionRate = Number(shopDoc?.commissionPercent);
-    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined) {
+    let commissionRate = Number(shop?.commissionPercent);
+    if (isNaN(commissionRate) || shop?.commissionPercent === undefined || shop?.commissionPercent === null) {
       const app = Array.from(this.storeApplications.values()).find(
-        (a) => a.userId === storeUserId || a.id === shopDoc?.applicationId
+        (a) => a.userId === storeUserId || a.id === shop?.applicationId
       );
       commissionRate = Number(app?.commissionPercent) || 0;
     }
 
-    // Combine shop orders from memory and any extra passed (e.g. from pagination)
     const allShopOrdersMap = new Map<string, ShopOrder>();
     Array.from(this.shopOrders.values()).forEach((so) => allShopOrdersMap.set(so.id, so));
     if (extraShopOrders) {
       extraShopOrders.forEach((so) => allShopOrdersMap.set(so.id, so));
     }
 
-    const effectiveShopId = shopDoc?.id || targetStoreId;
+    const effectiveShopId = shop?.id || targetShopId;
 
-    // Filter shop orders belonging to this store where parent order is delivered, handed over, or canceled
     const storeShopOrders = Array.from(allShopOrdersMap.values()).filter((so) => {
-      const matchesShop = so.shopId === effectiveShopId || so.shopId === targetStoreId || so.shopId === `store-${storeUserId}`;
-      if (!matchesShop) return false;
-      if (so.status === 'CANCELED' || so.status === 'HANDOVER' || so.status === 'DELIVERED') return true;
-      const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
-      return parentOrder?.status === 'DELIVERED' || parentOrder?.status === 'CANCELED';
+      const matchesShop =
+        so.shopId === effectiveShopId ||
+        so.shopId === targetShopId ||
+        so.shopId === storeUserId ||
+        so.shopId === `store-${storeUserId}`;
+      return matchesShop;
     });
 
     const seenParentOrderIds = new Set<string>();
+    let completedOrders = 0;
+    let runningOrders = 0;
+    let canceledOrders = 0;
     let totalSales = 0;
-    let totalCommission = 0;
-    let totalNetSales = 0;
+    let deliveredSales = 0;
+    let todaySales = 0;
+
+    let disbursedGrossSales = 0;
+    let disbursedCommission = 0;
+    let disbursedNetSales = 0;
+    let unpaidGrossSales = 0;
+    let unpaidCommission = 0;
+    let unpaidNetSales = 0;
+
+    const now = new Date();
+    const todayYear = now.getFullYear();
+    const todayMonth = now.getMonth();
+    const todayDate = now.getDate();
+    const isSameDay = (dateStr?: string) => {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      return d.getFullYear() === todayYear && d.getMonth() === todayMonth && d.getDate() === todayDate;
+    };
 
     storeShopOrders.forEach((so) => {
       seenParentOrderIds.add(so.parentOrderId);
       const parentOrder = this.orders.get(so.parentOrderId) || (cachedParentOrders ? cachedParentOrders[so.parentOrderId] : undefined);
-      const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
-      const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
-      const sales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
+      const isCanceled =
+        so.status === 'CANCELED' ||
+        (so.status as string) === 'CANCELLED' ||
+        parentOrder?.status === 'CANCELED' ||
+        (parentOrder?.status as string) === 'CANCELLED';
+      const isCompleted =
+        so.status === 'DELIVERED' ||
+        so.status === 'HANDOVER' ||
+        parentOrder?.status === 'DELIVERED' ||
+        (parentOrder?.status as string) === 'COMPLETED';
 
-      if (!isCanceled) {
-        totalSales += sales;
-        if (isDelivered) {
-          const commission = Math.round(sales * (commissionRate / 100));
-          totalCommission += commission;
-          totalNetSales += Math.max(0, sales - commission);
+      let price = 0;
+      if (so.price && Number(so.price) > 0) {
+        price = Number(so.price);
+      } else if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        price = so.itemsWithPrice.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+      } else if (parentOrder?.items && parentOrder.items.length > 0) {
+        const storeItems = parentOrder.items.filter(
+          (it) => it.storeId === targetShopId || it.storeId === storeUserId || (storeName && it.storeName === storeName)
+        );
+        if (storeItems.length > 0) {
+          price = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+        } else if (parentOrder.shopId === targetShopId || parentOrder.shopId === storeUserId) {
+          price = parentOrder.productCost || 0;
         }
+      } else if (parentOrder && (parentOrder.shopId === targetShopId || parentOrder.shopId === storeUserId)) {
+        price = parentOrder.productCost || 0;
+      }
+
+      if (isCanceled) {
+        canceledOrders++;
+      } else if (isCompleted) {
+        completedOrders++;
+        totalSales += price;
+        deliveredSales += price;
+
+        const comm = Math.round(price * (commissionRate / 100));
+        const net = Math.max(0, price - comm);
+        const isDisbursed = Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid);
+        if (isDisbursed) {
+          disbursedGrossSales += price;
+          disbursedCommission += comm;
+          disbursedNetSales += net;
+        } else {
+          unpaidGrossSales += price;
+          unpaidCommission += comm;
+          unpaidNetSales += net;
+        }
+
+        if (isSameDay(parentOrder?.deliveredAt || so.updatedAt || so.createdAt)) {
+          todaySales += price;
+        }
+      } else {
+        runningOrders++;
+        totalSales += price;
       }
     });
 
-    // Also include main orders with selectedShopIds that might not have a separate shopOrder subdocument
     const allMainOrders = Array.from(this.orders.values());
     allMainOrders.forEach((mo) => {
-      const matchesShop = mo.shopId === effectiveShopId || mo.shopId === targetStoreId || mo.selectedShopIds?.includes(effectiveShopId) || mo.selectedShopIds?.includes(targetStoreId);
+      const matchesShop =
+        mo.shopId === effectiveShopId ||
+        mo.shopId === targetShopId ||
+        mo.shopId === storeUserId ||
+        mo.selectedShopIds?.includes(effectiveShopId) ||
+        mo.selectedShopIds?.includes(targetShopId) ||
+        mo.selectedShopIds?.includes(storeUserId);
       if (matchesShop && !seenParentOrderIds.has(mo.id)) {
         const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
-        if (!isCanceled && mo.status === 'DELIVERED') {
-          const sales = mo.productCost || 0;
-          totalSales += sales;
-          const commission = Math.round(sales * (commissionRate / 100));
-          totalCommission += commission;
-          totalNetSales += Math.max(0, sales - commission);
+        const isCompleted = mo.status === 'DELIVERED' || (mo.status as string) === 'COMPLETED';
+
+        let price = 0;
+        if (mo.items && mo.items.length > 0) {
+          const storeItems = mo.items.filter(
+            (it) => it.storeId === targetShopId || it.storeId === storeUserId || (storeName && it.storeName === storeName)
+          );
+          if (storeItems.length > 0) {
+            price = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+          } else if (mo.shopId === targetShopId || mo.shopId === storeUserId) {
+            price = mo.productCost || 0;
+          }
+        } else if (mo.shopId === targetShopId || mo.shopId === storeUserId) {
+          price = mo.productCost || 0;
+        }
+
+        // If this order has 0 items for this store and shopId doesn't match, skip it
+        if (price === 0 && mo.shopId !== targetShopId && mo.shopId !== storeUserId) {
+          return;
+        }
+
+        if (isCanceled) {
+          canceledOrders++;
+        } else if (isCompleted) {
+          completedOrders++;
+          totalSales += price;
+          deliveredSales += price;
+
+          const comm = Math.round(price * (commissionRate / 100));
+          const net = Math.max(0, price - comm);
+          const isDisbursed = Boolean(mo.isStorePaid || mo.isPaid);
+          if (isDisbursed) {
+            disbursedGrossSales += price;
+            disbursedCommission += comm;
+            disbursedNetSales += net;
+          } else {
+            unpaidGrossSales += price;
+            unpaidCommission += comm;
+            unpaidNetSales += net;
+          }
+
+          if (isSameDay(mo.deliveredAt || mo.createdAt)) {
+            todaySales += price;
+          }
+        } else {
+          runningOrders++;
+          totalSales += price;
         }
       }
     });
+
+    const deliveredCommission = disbursedCommission + unpaidCommission;
+    const deliveredNetSales = disbursedNetSales + unpaidNetSales;
 
     const approvedWithdrawals = Array.from(this.withdrawals.values()).filter((w) => {
       if (w.status !== 'APPROVED') return false;
-      if (w.helperId === storeUserId || w.helperId === effectiveShopId || w.helperId === targetStoreId) return true;
-      if (shopDoc && (w.helperId === shopDoc.id || w.helperId === shopDoc.ownerUserId || w.helperId === `store-${shopDoc.ownerUserId}`)) return true;
-      if (storeUserId && (w.helperId === `store-${storeUserId}` || (w.helperId.startsWith('store-') && w.helperId.replace('store-', '') === storeUserId))) return true;
+      if (w.shopId && (w.shopId === targetShopId || w.shopId === storeUserId || w.shopId === `store-${storeUserId}`)) return true;
+      if (w.helperId === storeUserId || w.helperId === targetShopId || w.helperId === `store-${storeUserId}`) return true;
+      if (storeUserId && w.helperId.startsWith('store-') && w.helperId.replace('store-', '') === storeUserId) return true;
       if (w.userType === 'store') {
-        if (shopDoc?.name && w.helperName === shopDoc.name) return true;
-        if (effectiveShopId && (w.helperId === effectiveShopId || w.shopId === effectiveShopId)) return true;
-        if (storeUserId && (w.helperId === storeUserId || w.shopId === storeUserId)) return true;
+        if (storeName && w.helperName === storeName) return true;
+        if (w.helperId === targetShopId || w.helperId === storeUserId || w.shopId === targetShopId) return true;
       }
       return false;
     });
 
-    const totalPaidPayouts = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const balance = Math.max(0, totalNetSales - totalPaidPayouts);
+    const totalWithdrawalRecords = approvedWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    // Calculated dynamically based on order statuses "disbursed" or not:
+    const totalDisbursed = (completedOrders > 0 || disbursedNetSales > 0) ? disbursedNetSales : totalWithdrawalRecords;
+    const unpaidBalance = unpaidNetSales;
 
-    return {
+    const wallet: Wallet = {
       userId: storeUserId,
-      balance,
-      totalEarned: totalNetSales,
-      totalWithdrawn: totalPaidPayouts,
-      totalPaidCommission: totalCommission,
+      balance: unpaidBalance,
+      totalEarned: deliveredNetSales,
+      totalWithdrawn: totalDisbursed,
+      totalPaidCommission: disbursedCommission,
       updatedAt: new Date().toISOString(),
     };
+
+    return {
+      shop,
+      targetShopId,
+      storeUserId,
+      storeName,
+      commissionRate,
+      completedOrders,
+      runningOrders,
+      canceledOrders,
+      totalOrders: completedOrders + runningOrders + canceledOrders,
+      totalSales,
+      todaySales,
+      deliveredSales,
+      deliveredCommission,
+      deliveredNetSales,
+      totalDisbursed,
+      unpaidBalance,
+      disbursedGrossSales,
+      disbursedCommission,
+      disbursedNetSales,
+      unpaidGrossSales,
+      unpaidCommission,
+      unpaidNetSales,
+      wallet,
+    };
+  }
+
+  public getStoreWallet(
+    storeUserId: string,
+    storeId?: string,
+    cachedParentOrders?: Record<string, Order>,
+    extraShopOrders?: ShopOrder[]
+  ): Wallet {
+    const fin = this.getStoreFinancials(storeId || storeUserId, cachedParentOrders, extraShopOrders);
+    return fin.wallet;
   }
 
 
@@ -5943,10 +6104,30 @@ class FallbackStore {
 
     const seenOrderIds = new Set<string>();
 
+    const storeName = shopDoc?.name || '';
+
     storeShopOrders.forEach((so) => {
       seenOrderIds.add(so.parentOrderId || so.id);
       const parent = this.orders.get(so.parentOrderId);
-      const gross = (so.price && so.price > 0) ? so.price : (parent?.productCost || 0);
+      
+      let gross = 0;
+      if (so.price && Number(so.price) > 0) {
+        gross = Number(so.price);
+      } else if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        gross = so.itemsWithPrice.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+      } else if (parent?.items && parent.items.length > 0) {
+        const storeItems = parent.items.filter(
+          (it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === targetUserId || (storeName && it.storeName === storeName)
+        );
+        if (storeItems.length > 0) {
+          gross = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+        } else if (parent.shopId === effectiveShopId || parent.shopId === targetShopId || parent.shopId === targetUserId) {
+          gross = parent.productCost || 0;
+        }
+      } else if (parent && (parent.shopId === effectiveShopId || parent.shopId === targetShopId || parent.shopId === targetUserId)) {
+        gross = parent.productCost || 0;
+      }
+
       const comm = Math.round(gross * (commissionRate / 100));
       const net = Math.max(0, gross - comm);
       orderEntries.push({
@@ -5961,15 +6142,30 @@ class FallbackStore {
     storeOrders.forEach((o) => {
       if (!seenOrderIds.has(o.id)) {
         seenOrderIds.add(o.id);
-        const gross = o.productCost || 0;
-        const comm = Math.round(gross * (commissionRate / 100));
-        const net = Math.max(0, gross - comm);
-        orderEntries.push({
-          orderId: o.id,
-          order: o,
-          createdAt: o.createdAt || now,
-          netAmount: net,
-        });
+        let gross = 0;
+        if (o.items && o.items.length > 0) {
+          const storeItems = o.items.filter(
+            (it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === targetUserId || (storeName && it.storeName === storeName)
+          );
+          if (storeItems.length > 0) {
+            gross = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+          } else if (o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId) {
+            gross = o.productCost || 0;
+          }
+        } else if (o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId) {
+          gross = o.productCost || 0;
+        }
+
+        if (gross > 0) {
+          const comm = Math.round(gross * (commissionRate / 100));
+          const net = Math.max(0, gross - comm);
+          orderEntries.push({
+            orderId: o.id,
+            order: o,
+            createdAt: o.createdAt || now,
+            netAmount: net,
+          });
+        }
       }
     });
 
@@ -5978,7 +6174,7 @@ class FallbackStore {
 
     let remaining = amount;
     const totalUnpaidNet = orderEntries.reduce((sum, e) => sum + e.netAmount, 0);
-    const markAll = amount >= totalUnpaidNet && totalUnpaidNet > 0;
+    const markAll = amount >= (totalUnpaidNet - 1) && totalUnpaidNet > 0;
 
     const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
     for (const entry of orderEntries) {
@@ -6280,15 +6476,16 @@ class FallbackStore {
       this.walletTransactions.set(shop.id, shopTxs);
     }
 
-    const existing = this.wallets.get(storeUserId) || (shop?.id ? this.wallets.get(shop.id) : undefined);
-    const currentWithdrawn = (existing?.totalWithdrawn ?? 0) + amount;
-    const currentBalance = Math.max(0, (existing?.balance ?? 0) - amount);
+    await this.markStoreOrdersAsPaid(shopId, storeUserId, amount, req.id);
+
+    // Compute wallet dynamically based on updated order statuses "disbursed" or not:
+    const fin = this.getStoreFinancials(shopId || storeUserId);
     const updatedWallet: Wallet = {
       userId: storeUserId,
-      totalEarned: existing?.totalEarned ?? 0,
-      balance: currentBalance,
-      totalPaidCommission: existing?.totalPaidCommission ?? 0,
-      totalWithdrawn: currentWithdrawn,
+      totalEarned: fin.deliveredNetSales,
+      balance: fin.unpaidBalance,
+      totalPaidCommission: fin.disbursedCommission,
+      totalWithdrawn: fin.totalDisbursed,
       updatedAt: new Date().toISOString(),
     };
     this.wallets.set(storeUserId, updatedWallet);
@@ -6305,7 +6502,6 @@ class FallbackStore {
       }
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
-      await this.markStoreOrdersAsPaid(shopId, storeUserId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordStoreDisbursement note:', e?.message || e);
     }
@@ -7215,6 +7411,29 @@ class FallbackStore {
     return this.toggleShopOpenStatus(shopId, isActive);
   }
 
+  public async toggleShopFeaturedStatus(shopId: string, isFeatured: boolean, featuredOrder?: number) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const now = new Date().toISOString();
+    const updates: Partial<Shop> = {
+      isFeatured,
+      updatedAt: now,
+      featuredAt: isFeatured ? (existing.featuredAt || now) : undefined,
+    };
+    if (featuredOrder !== undefined) {
+      updates.featuredOrder = featuredOrder;
+    }
+    const updated: Shop = { ...existing, ...updates };
+    this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updates), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] toggleShopFeaturedStatus note (saved locally):', e?.message || e);
+    }
+  }
+
   public async saveStoreProduct(product: StoreProduct) {
     this.storeProducts.set(product.id, product);
     this.scheduleLocalStoreSave();
@@ -7228,6 +7447,7 @@ class FallbackStore {
 
   public async deleteStoreProduct(productId: string) {
     this.storeProducts.delete(productId);
+    this._storeProductsCachedAt = 0; // force fresh Firestore fetch on next loadStoreProducts()
     this.scheduleLocalStoreSave();
     this.notify();
     try {
@@ -7928,6 +8148,13 @@ class FallbackStore {
     if (!existing) return;
     const updated = { ...existing, ...updatedFields };
     this.storeApplications.set(appId, updated);
+    if (updatedFields.photoUrl !== undefined) {
+      const shopId = `store-${existing.userId}`;
+      const shop = this.shops.get(shopId) || Array.from(this.shops.values()).find(s => s.applicationId === appId || s.ownerUserId === existing.userId);
+      if (shop) {
+        this.updateShop(shop.id, { photoUrl: updatedFields.photoUrl });
+      }
+    }
     this.notify();
     try {
       await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
@@ -7967,6 +8194,7 @@ class FallbackStore {
       name: existing.storeName,
       type: existing.storeType,
       description: existing.storeDescription,
+      photoUrl: existing.photoUrl,
       contactPerson: existing.ownerName,
       whatsapp: existing.ownerWhatsapp,
       managerName: existing.managerName,
@@ -8108,6 +8336,12 @@ class FallbackStore {
       isStoreApproved: false,
     };
     this.users.set(userId, updatedUser);
+    // Also block any shops owned by this user
+    Array.from(this.shops.entries()).forEach(([id, s]) => {
+      if (s.ownerUserId === userId || id === `store-${userId}`) {
+        this.blockShop(id, true, reason, 'Admin');
+      }
+    });
     this.scheduleLocalStoreSave();
     this.notify();
     try { await this.saveUser(updatedUser); } catch (_) { }

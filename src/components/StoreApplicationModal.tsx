@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '@/context/AuthContext';
-import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, AlertTriangle, FileEdit, ChevronDown, Search } from 'lucide-react';
+import { X, Store, Check, AlertCircle, Trash2, Clock, XCircle, MapPin, AlertTriangle, FileEdit, ChevronDown, Search, Upload, Image as ImageIcon } from 'lucide-react';
 import { fallbackStore } from '@/lib/firebase';
 import { StoreApplication, LocationData } from '@/types';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
 import { MapPickerModal } from './MapPickerModal';
+import { compressImage } from '@/lib/imageUtils';
 
 interface StoreApplicationModalProps {
   onClose: () => void;
@@ -63,9 +64,31 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
   const [managerWhatsapp, setManagerWhatsapp] = useState('');
   const [location, setLocation] = useState<LocationData>({ address: '', lat: undefined, lng: undefined });
   const [commissionPercent, setCommissionPercent] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [photoError, setPhotoError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [categorySearchQuery, setCategorySearchQuery] = useState('');
+
+  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('অনুগ্রহ করে একটি ছবি ফাইল নির্বাচন করুন।');
+      return;
+    }
+
+    try {
+      const compressed = await compressImage(file, 600, 600, 0.8);
+      setPhotoUrl(compressed);
+      setPhotoError('');
+    } catch (err) {
+      console.error('Store photo compression failed:', err);
+      setPhotoError('ছবি প্রসেস করতে ব্যর্থ হয়েছে।');
+    }
+  };
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -129,6 +152,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
         managerWhatsapp: managerWhatsapp.trim(),
         location,
         commissionPercent: commPercent,
+        photoUrl: photoUrl.trim() || undefined,
       });
       setSubmitted(true);
     } catch {
@@ -163,6 +187,15 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
             <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
               <Clock className="w-8 h-8 text-amber-600 animate-pulse" />
             </div>
+            {latestApp.photoUrl && (
+              <div className="w-24 h-24 mx-auto mb-4 rounded-2xl overflow-hidden border-2 border-amber-200 shadow-sm bg-gray-50">
+                <img
+                  src={latestApp.photoUrl}
+                  alt={latestApp.storeName}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            )}
             <h3 className="text-xl font-extrabold text-gray-900 mb-1">আবেদন পর্যালোচনাধীন</h3>
             <p className="text-sm text-gray-500 mb-5">
               আপনার দোকান নিবন্ধনের আবেদন অ্যাডমিনের কাছে পর্যালোচনার জন্য রয়েছে।
@@ -295,6 +328,65 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
                 </div>
                 <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-orange-500 transition-colors shrink-0" />
               </button>
+            </div>
+
+            {/* 2.5 দোকানের প্রোফাইল ছবি / ব্যানার (Photo Upload) */}
+            <div className="space-y-1.5 pt-2 border-t border-gray-100">
+              <label className="text-xs font-bold text-gray-700 block">
+                দোকানের প্রোফাইল ছবি <span className="text-gray-400 font-medium">(ঐচ্ছিক)</span>
+              </label>
+
+              {photoError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{photoError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center space-x-3.5">
+                <div className="w-16 h-16 rounded-2xl bg-gray-50 border-2 border-dashed border-gray-200 overflow-hidden shrink-0 flex items-center justify-center relative group">
+                  {photoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={photoUrl}
+                      alt="Store preview"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <ImageIcon className="w-7 h-7 text-gray-300" />
+                  )}
+                  {photoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setPhotoUrl('')}
+                      className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 flex-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3.5 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 active:scale-95 text-orange-700 border border-orange-200 font-bold text-xs flex items-center space-x-1.5 transition-all cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{photoUrl ? 'ছবি পরিবর্তন করুন' : 'দোকানের ছবি আপলোড করুন'}</span>
+                  </button>
+                  <p className="text-[10px] text-gray-400 leading-tight">
+                    গ্যালারি বা ক্যামেরা থেকে দোকানের ছবি দিন (সহজে চেনার জন্য)।
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* 3. মালিকের নাম + হোয়াটসঅ্যাপ */}

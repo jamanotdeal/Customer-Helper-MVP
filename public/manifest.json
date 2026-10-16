@@ -94,5 +94,12 @@
     }
   ],
   "screenshots": [],
-  "prefer_related_applications": false
+  "prefer_related_applications": true,
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.jamanot.app",
+      "url": "https://play.google.com/store/apps/details?id=com.jamanot.app"
+    }
+  ]
 }

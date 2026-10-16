@@ -7,6 +7,7 @@ import { calculateDistanceKm } from '@/lib/pricing';
 import { AsyncButton } from './ui/AsyncButton';
 import { fallbackStore } from '@/lib/firebase';
 import { isOrderFromStore } from '@/utils/orderUtils';
+import { ServiceIcon, getServiceIconInfo } from './ServiceIcon';
 
 interface OrderCardProps {
   order: Order;
@@ -145,6 +146,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
       : getElapsedTime(order)
   );
   const fromStore = isOrderFromStore(order);
+  const serviceInfo = getServiceIconInfo(order.service);
 
   // One shared clock for every card on screen, paused while the app is hidden,
   // instead of one interval per card ticking behind a dark screen.
@@ -154,21 +156,6 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   }, [order, isDone, tick]);
 
-  // Brief items summary (truncated via CSS)
-  const itemsSummary = order.items?.length
-    ? order.items
-      .map((i) => {
-        const qNum = typeof i.quantity === 'number' && i.quantity > 0
-          ? i.quantity
-          : (i.qty && !isNaN(Number(i.qty)) ? Number(i.qty) : undefined);
-        const qStr = qNum && qNum > 1
-          ? ` ×${qNum}`
-          : (i.qty && isNaN(Number(i.qty)) && i.qty.trim() !== '১' && i.qty.trim() !== '১টি' && i.qty.trim() !== '1' ? ` (${i.qty})` : '');
-        return `${i.name}${qStr}`;
-      })
-      .join(', ')
-      .replace(/\r?\n/g, ', ')
-    : 'No items listed';
 
   // Dynamic card container classes for helper views
   const getHelperCardContainerStyle = () => {
@@ -252,10 +239,15 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             </div>
           </div>
 
-          {/* Service title full width */}
-          <h3 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
-            {order.service || order.title || 'Service Needed'}
-          </h3>
+          {/* Service title full width with service icon */}
+          <div className="flex items-center gap-2.5">
+            <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
+              <ServiceIcon service={order.service} className="w-5 h-5" />
+            </span>
+            <h3 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
+              {order.service || order.title || 'Service Needed'}
+            </h3>
+          </div>
 
           {/* Customer Name & Short Delivery Address */}
           <div className="flex flex-col gap-1 py-1.5 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
@@ -276,6 +268,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </div>
             )}
           </div>
+
 
           {/* Completed time chip — only for DELIVERED orders */}
           {order.status === 'DELIVERED' && order.deliveredAt && (
@@ -321,10 +314,15 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         <div className="p-5">
           <div className="flex items-start justify-between mb-3">
             <div className="min-w-0 flex-1 pr-3">
-              <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-2">
-                {order.service || order.title || 'Service Needed'}
-              </h3>
-              <p className="text-[11px] font-semibold text-gray-400 mt-1.5 flex items-center space-x-1">
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
+                  <ServiceIcon service={order.service} className="w-5 h-5" />
+                </span>
+                <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-2">
+                  {order.service || order.title || 'Service Needed'}
+                </h3>
+              </div>
+              <p className="text-[11px] font-semibold text-gray-400 mt-1 flex items-center space-x-1">
                 <Clock className="w-3.5 h-3.5 text-gray-400" />
                 <span>{formatCreatedAt(order.createdAt)}</span>
               </p>
@@ -341,6 +339,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </div>
             )}
           </div>
+
 
           <AsyncButton
             onClick={(e) => {
@@ -370,6 +369,9 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         <div className="flex items-start justify-between mb-3">
           <div className="min-w-0 flex-1 pr-3">
             <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
+                <ServiceIcon service={order.service} className="w-5 h-5" />
+              </span>
               <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
                 {order.customerName || 'Customer'}
               </h3>
@@ -438,13 +440,6 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           )}
         </div>
 
-        {/* Items brief summary */}
-        <div className="flex items-start space-x-2 mb-3 bg-gray-50/80 border border-gray-100 rounded-2xl px-3 py-2.5">
-          <ShoppingBag className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-          <p className="text-[12px] font-semibold text-gray-700 truncate leading-relaxed">
-            {itemsSummary}
-          </p>
-        </div>
 
         {/* Locations Flow */}
         {(() => {

@@ -6,6 +6,7 @@ import { getOrderMinDistanceKm } from '@/lib/pricing';
 import { useSecondTick } from '@/hooks/useSecondTick';
 import { fallbackStore } from '@/lib/firebase';
 import { isOrderFromStore } from '@/utils/orderUtils';
+import { ServiceIcon, getServiceIconInfo } from './ServiceIcon';
 
 interface HelperRequestCardProps {
   order: Order;
@@ -39,6 +40,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   const [elapsed, setElapsed] = useState(() => isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   const urgency = getHelperUrgencyBgClass(order, isDone);
   const fromStore = isOrderFromStore(order);
+  const serviceInfo = getServiceIconInfo(order.service);
 
   // Shared 1-second clock — see useSecondTick.
   const tick = useSecondTick(!isDone);
@@ -47,19 +49,6 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
     setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   }, [order, isDone, tick]);
 
-  const itemsSummary = order.items?.length
-    ? order.items
-      .map((i) => {
-        const qNum = typeof i.quantity === 'number' && i.quantity > 0
-          ? i.quantity
-          : (i.qty && !isNaN(Number(i.qty)) ? Number(i.qty) : undefined);
-        const qStr = qNum && qNum > 1
-          ? ` ×${qNum}`
-          : (i.qty && isNaN(Number(i.qty)) && i.qty.trim() !== '১' && i.qty.trim() !== '১টি' && i.qty.trim() !== '1' ? ` (${i.qty})` : '');
-        return `${i.name}${qStr}`;
-      })
-      .join(', ')
-    : 'No items listed';
 
   const distanceKm = getOrderMinDistanceKm(helperLocation, order);
 
@@ -127,10 +116,16 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
         </div>
       </div>
 
-      {/* Service Needed Title - FULL WIDTH */}
-      <h4 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
-        {order.service || order.title || 'Service Needed'}
-      </h4>
+      {/* Service Needed Title - with Service Icon */}
+      <div className="flex items-center gap-2.5">
+        <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
+          <ServiceIcon service={order.service} className="w-5 h-5" />
+        </span>
+        <h4 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
+          {order.service || order.title || 'Service Needed'}
+        </h4>
+      </div>
+
 
       {/* Customer Name & Short Delivery Address */}
       <div className="flex flex-col gap-1 py-1 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">

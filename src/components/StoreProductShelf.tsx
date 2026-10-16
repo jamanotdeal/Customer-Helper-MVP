@@ -31,11 +31,14 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
     const sync = () => {
       // Only approved & unblocked shops
       const allShops = Array.from(fallbackStore.shops.values()).filter(
-        (s) => !s.isBlocked && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+        (s) => !s.isBlocked && s.status !== 'Rejected' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
       );
       setShops(allShops);
 
-      const allProds = Array.from(fallbackStore.storeProducts.values());
+      const approvedShopIds = new Set(allShops.map((s) => s.id));
+      const allProds = Array.from(fallbackStore.storeProducts.values()).filter(
+        (p) => !p.storeId || approvedShopIds.has(p.storeId)
+      );
       setProducts(allProds);
     };
 

@@ -112,6 +112,7 @@ function scoreShop(shop: Shop, query: string): number {
   if (score === 0) return 0;
 
   if (isShopOpenNow(shop)) score += 10;
+  if (shop.isFeatured) score += 25;
   if (shop.photoUrl) score += 3;
 
   const lengthDiff = Math.abs(name.length - q.length);
@@ -169,10 +170,14 @@ export const HomeSearchBox: React.FC<HomeSearchBoxProps> = ({
 
   useEffect(() => {
     const sync = () => {
-      setAllProducts(Array.from(fallbackStore.storeProducts.values()));
-      setAllShops(
-        Array.from(fallbackStore.shops.values()).filter(
-          (s) => !s.isBlocked && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+      const unblockedShops = Array.from(fallbackStore.shops.values()).filter(
+        (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+      );
+      const validShopIds = new Set(unblockedShops.map((s) => s.id));
+      setAllShops(unblockedShops);
+      setAllProducts(
+        Array.from(fallbackStore.storeProducts.values()).filter(
+          (p) => !p.storeId || validShopIds.has(p.storeId)
         )
       );
       const adminServices = fallbackStore.pricingSettings?.services;

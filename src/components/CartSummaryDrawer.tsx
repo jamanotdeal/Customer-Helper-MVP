@@ -6,13 +6,12 @@ import { useAuth } from '@/context/AuthContext';
 import { useModal } from './CustomModal';
 import { fallbackStore, saveCustomerSavedAddressToFirestore } from '@/lib/firebase';
 import { Order, OrderItem, LocationData } from '@/types';
-import { calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
+import { calculateEstimatedFee, calculateDistanceKm, isOrderTimingOpen } from '@/lib/pricing';
 import { fetchRoadDistanceKm } from '@/lib/routeUtils';
 import { hapticFeedback } from '@/lib/native';
 import { AddCustomItemModal } from './AddCustomItemModal';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { isShopOpenNow } from './StoreGrid';
-import { StoreOffWarningModal } from './StoreOffWarningModal';
 import {
   saveAltPhone,
   saveDefaultDeliveryLocation,
@@ -20,6 +19,8 @@ import {
   addSavedDeliveryAddress,
   getPreviousCustomerContact,
 } from '@/lib/storage';
+import { saveScheduledOrder } from '@/utils/scheduledOrders';
+
 import {
   X,
   ShoppingBag,
@@ -98,8 +99,8 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
   const [orderNotes, setOrderNotes] = useState('');
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [formError, setFormError] = useState('');
-  const [showStoreOffModal, setShowStoreOffModal] = useState(false);
-  const isStoreWarningAcceptedRef = useRef(false);
+  const [useFreeDelivery, setUseFreeDelivery] = useState(false);
+  const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
 
   // Check if store or items' stores are closed
   const closedStoreNames = useMemo(() => {
@@ -253,12 +254,6 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       return;
     }
 
-    // Check if store is closed before placing order
-    if (!isStoreWarningAcceptedRef.current && closedStoreNames.length > 0) {
-      setShowStoreOffModal(true);
-      return;
-    }
-    isStoreWarningAcceptedRef.current = false;
 
     const totalPayable = subtotal + feeEst.deliverySubtotal + feeEst.processingFee;
     const confirmed = await showConfirm(
@@ -275,7 +270,13 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
     setFormError('');
 
     try {
-      const deliveryFee = feeEst.deliverySubtotal;
+      const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
+      const isFree = useFreeDelivery && (user?.coins || 0) >= reqCoins;
+      const discountPct = fallbackStore.pricingSettings?.freeDeliveryDiscountPercent ?? 100;
+      const rawDeliveryFee = feeEst.deliverySubtotal;
+      const deliveryFee = isFree
+        ? (discountPct === 100 ? 0 : Math.round(rawDeliveryFee * (100 - discountPct) / 100))
+        : rawDeliveryFee;
       const processingFee = feeEst.processingFee;
 
       let orderNum = Math.floor(Math.random() * 90000) + 10000;
@@ -312,9 +313,11 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         const itemShop = item.storeId ? fallbackStore.shops.get(item.storeId) : cartShop;
         const isShopClosed = itemShop ? (itemShop.isOpen === false || itemShop.isBlocked === true) : false;
         if (isShopClosed || isStoreCurrentlyClosed) {
+          // Mark as custom and clear price — helper will determine the actual price
           return {
             ...item,
             isCustom: true,
+            price: undefined,
           };
         }
         return item;
@@ -331,6 +334,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         shopId: cartShop?.id,
         selectedShopIds: cartShop?.id ? [cartShop.id] : [],
         isStoreOrder: true,
+        creatorRole: 'customer',
         isStoreClosedAtOrder: isStoreCurrentlyClosed || undefined,
         items: finalItems,
         pickupLocation: pickupLoc,
@@ -338,7 +342,10 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         additionalNote: finalNote || undefined,
         status: 'PENDING',
         deliveryFee,
-        originalDeliveryFee: deliveryFee,
+        originalDeliveryFee: rawDeliveryFee,
+        isFreeDelivery: isFree || undefined,
+        deliveryDiscountPercent: isFree ? discountPct : undefined,
+        coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
         processingFee: processingFee > 0 ? processingFee : undefined,
         weightKg: undefined, // Weight decided by helper upon pickup/purchase
         productCost: subtotal > 0 ? subtotal : undefined,
@@ -356,6 +363,38 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
           },
         ],
       };
+      // Check if platform service is currently open
+      const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
+      if (!serviceTiming.isOpen) {
+        const scheduledOrder: Order = {
+          ...newOrder,
+          status: 'SCHEDULED' as any,
+          isScheduled: true,
+          scheduledAt: new Date().toISOString(),
+          scheduledNote: serviceTiming.message || undefined,
+        };
+        saveScheduledOrder(scheduledOrder);
+        if (customerPhone.trim()) saveAltPhone(customerPhone.trim());
+        if (delivLoc.address) {
+          saveDefaultDeliveryLocation(delivLoc);
+          if (user.uid) {
+            addSavedDeliveryAddress(user.uid, delivLoc);
+            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
+          }
+        }
+        updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
+        hapticFeedback('medium');
+        showAlert(
+          'রিকোয়েস্ট শিডিউল হয়েছে!',
+          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
+          ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+          'info'
+        );
+        clearCart();
+        closeCartDrawer();
+        if (onOrderCreated) onOrderCreated(scheduledOrder as Order);
+        return;
+      }
 
       await fallbackStore.addOrder(newOrder);
 
@@ -367,7 +406,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         saveDefaultDeliveryLocation(delivLoc);
         if (user.uid) {
           addSavedDeliveryAddress(user.uid, delivLoc);
-          saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => {});
+          saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
         }
       }
       updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
@@ -438,16 +477,20 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
 
             {/* Closed Store Notice */}
             {closedStoreNames.length > 0 && (
-              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/90 text-amber-900 space-y-1.5 shadow-2xs">
-                <div className="flex items-center gap-2 font-black text-xs text-amber-900">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>দোকান বন্ধ: অন্য দোকান থেকে পণ্য সংগ্রহ করা হবে</span>
-                </div>
-                <p className="text-[11px] leading-relaxed text-amber-800 font-medium">
-                  <strong>{closedStoreNames.join(', ')}</strong> বর্তমানে বন্ধ রয়েছে। তবে কোনো সমস্যা নেই, আমাদের হেলপার <strong>অন্য কোনো বিশ্বস্ত দোকান</strong> থেকে আপনার প্রয়োজনীয় পণ্যগুলো সংগ্রহ করে পৌঁছে দেবে।
-                </p>
-                <div className="pt-0.5 text-[10px] text-amber-700 font-semibold flex items-center gap-1">
-                  <span>* অন্য দোকানের বিক্রয়মূল্য অনুযায়ী মূল্যে পরিবর্তন হতে পারে।</span>
+              <div className="p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300/90 shadow-xs flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded-md">
+                      দোকান বন্ধ
+                    </span>
+                    <span className="text-sm font-black text-amber-950">
+                      {closedStoreNames.join(', ')}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-[13px] font-bold text-amber-900 leading-snug">
+                    দোকান বন্ধ থাকায় হেলপার অন্য দোকান থেকে সংগ্রহ করবে। মূল্য পরিবর্তন হতে পারে।
+                  </p>
                 </div>
               </div>
             )}
@@ -617,18 +660,21 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                   setEditingCustomItem(null);
                   setShowAddCustomModal(true);
                 }}
-                className={`w-full py-3 px-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-center gap-2 text-xs font-black ${
-                  highlightCustomItem
-                    ? 'border-amber-500 bg-amber-50 text-amber-900 ring-4 ring-amber-400/50 shadow-lg shadow-amber-300/40 scale-[1.01] animate-pulse'
-                    : 'border-dashed border-emerald-300 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-800'
-                }`}
+                className={`w-full py-3.5 px-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-center gap-2.5 text-xs sm:text-[13px] font-black shadow-sm ${highlightCustomItem
+                    ? 'border-amber-500 bg-amber-100 text-amber-950 ring-4 ring-amber-400/60 shadow-lg shadow-amber-300/40 scale-[1.01] animate-pulse'
+                    : 'border-amber-400 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50 hover:bg-amber-100/90 text-amber-950 hover:border-amber-500 hover:shadow-md active:scale-[0.99]'
+                  }`}
               >
-                <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
-                {highlightCustomItem && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-black uppercase">
+                <span className="w-6 h-6 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                </span>
+                <span className="leading-snug">প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
+                {highlightCustomItem ? (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-black uppercase">
                     HERE
                   </span>
+                ) : (
+                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
                 )}
               </button>
             </div>
@@ -654,7 +700,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                       if (loc?.lng !== undefined) setDeliveryLng(loc.lng);
                     }}
                     savedLocalAddresses={savedAddresses}
-                    placeholder="যেমন: বাসা #৪, রোড #২, সেক্টর #১০, উত্তরা..."
+                    placeholder="যেমন: বাসা #৪, রোড #২,  Model Twon..."
                   />
                 </div>
 
@@ -747,10 +793,54 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                     </div>
                   )}
 
+                  {/* Free Delivery Coin Claim Toggle */}
+                  {(() => {
+                    const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
+                    const userCoins = user?.coins || 0;
+                    const hasEnough = userCoins >= reqCoins;
+                    return (
+                      <div
+                        onClick={() => {
+                          if (!user || !hasEnough) {
+                            setShowInsufficientCoinsModal(true);
+                            return;
+                          }
+                          setUseFreeDelivery((prev) => !prev);
+                        }}
+                        className={`mt-1 p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${useFreeDelivery
+                            ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
+                            : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
+                          }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={useFreeDelivery}
+                            readOnly
+                            className="w-3.5 h-3.5 accent-amber-600 rounded pointer-events-none"
+                          />
+                          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                          <span className="text-[11px] font-bold text-gray-900">ফ্রি ডেলিভারি ক্লেম করুন!</span>
+                        </div>
+                        <span className="text-[10px] text-amber-700 font-extrabold">
+                          {userCoins}/{reqCoins} Coins
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                   <div className="pt-2 border-t border-emerald-200/60 flex items-center justify-between font-black text-emerald-950 text-sm">
                     <span>Total</span>
                     <span className="text-base text-emerald-700 font-black">
-                      ৳{subtotal + feeEst.deliverySubtotal + feeEst.processingFee}
+                      {useFreeDelivery ? (
+                        <>
+                          <span className="line-through text-gray-400 text-xs mr-1">৳{subtotal + feeEst.deliverySubtotal + feeEst.processingFee}</span>
+                          <span>৳{subtotal + feeEst.processingFee}</span>
+                          <span className="text-emerald-600 text-[10px] ml-1">(ফ্রি ডেলিভারি)</span>
+                        </>
+                      ) : (
+                        <>৳{subtotal + feeEst.deliverySubtotal + feeEst.processingFee}</>
+                      )}
                       {cartItems.some((i) => i.isCustom) && (
                         <span className="text-[10px] text-amber-700 ml-1 font-bold">
                           (+কাস্টম)
@@ -828,22 +918,41 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         }}
       />
 
-      {/* Store Off Warning Modal */}
-      {showStoreOffModal && (
-        <StoreOffWarningModal
-          isOpen={showStoreOffModal}
-          closedStoreNames={closedStoreNames}
-          onConfirm={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = true;
-            const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-            handleSubmitOrder(fakeEvent);
-          }}
-          onCancel={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = false;
-          }}
-        />
+
+      {/* Insufficient Coins Modal */}
+      {showInsufficientCoinsModal && (
+        <div
+          className="fixed inset-0 z-[100002] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+          onClick={() => setShowInsufficientCoinsModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shadow-sm">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="font-extrabold text-base text-gray-900">
+                {fallbackStore.pricingSettings?.insufficientCoinsTitle || 'ফ্রি ডেলিভারি'}
+              </h3>
+              <p className="text-xs text-gray-600 font-medium leading-relaxed">
+                {fallbackStore.pricingSettings?.insufficientCoinsMessage || 'আপনার অ্যাকাউন্টে পর্যাপ্ত কয়েন নেই। ফ্রি ডেলিভারি পেতে আরও অর্ডার সম্পন্ন করে কয়েন অর্জন করুন।'}
+              </p>
+              <div className="mt-2 py-2 px-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs font-semibold text-amber-900 flex items-center justify-between">
+                <span>প্রয়োজন: <strong>{fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50} Coins</strong></span>
+                <span>আপনার আছে: <strong className="text-emerald-700">{user?.coins || 0} Coins</strong></span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowInsufficientCoinsModal(false)}
+              className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer transition-colors shadow-sm"
+            >
+              ঠিক আছে
+            </button>
+          </div>
+        </div>
       )}
     </>
   );

@@ -5,7 +5,8 @@ import { useAuth } from '@/context/AuthContext';
 import { Wallet, WithdrawalRequest, Order, ShopOrder } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
-import { getDocs, getDoc } from '@/lib/firestoreMetered';
+import { getDocs, getDoc, onSnapshot } from '@/lib/firestoreMetered';
+import { getItemQuantityNum } from '@/lib/itemUtils';
 import { useModal } from './CustomModal';
 import {
   Wallet as WalletIcon,
@@ -64,7 +65,7 @@ export const StoreWallet: React.FC = () => {
   // Orders Breakdown Modal State
   const [showBreakdownModal, setShowBreakdownModal] = useState(false);
   const [breakdownType, setBreakdownType] = useState<'TODAY' | 'RANGE'>('TODAY');
-  const [breakdownFilter, setBreakdownFilter] = useState<'ALL' | 'DELIVERED' | 'ACTIVE' | 'CANCELED'>('ALL');
+  const [breakdownFilter, setBreakdownFilter] = useState<'ALL' | 'DISBURSED' | 'DUE' | 'DELIVERED' | 'ACTIVE' | 'CANCELED'>('ALL');
   const [breakdownSearch, setBreakdownSearch] = useState('');
 
   const storeId = useMemo(() => {
@@ -216,8 +217,12 @@ export const StoreWallet: React.FC = () => {
     }
   };
 
-  const fetchStoreWithdrawals = async () => {
+  useEffect(() => {
     const effectiveShopId = shopDoc?.id || storeId;
+    if (!effectiveShopId) return;
+
+    fetchCompletedPage(true);
+
     const idsToQuery = new Set<string>();
     if (user?.uid) {
       idsToQuery.add(user.uid);
@@ -239,30 +244,35 @@ export const StoreWallet: React.FC = () => {
     const idList = Array.from(idsToQuery).filter(Boolean);
     if (idList.length === 0) return;
 
-    for (const id of idList) {
-      try {
-        const q = query(
-          collection(db, 'withdrawals'),
-          where('helperId', '==', id),
-          limit(50)
-        );
-        const snap = await getDocs(q);
-        snap.docs.forEach((d) => {
-          fallbackStore.withdrawals.set(d.id, d.data() as WithdrawalRequest);
-        });
-      } catch (err) {
-        console.warn('Error fetching store withdrawals for id', id, err);
-      }
-    }
-    fallbackStore.notify();
-  };
+    const unsubs: (() => void)[] = [];
 
-  useEffect(() => {
-    const effectiveShopId = shopDoc?.id || storeId;
-    if (effectiveShopId) {
-      fetchCompletedPage(true);
-      fetchStoreWithdrawals();
-    }
+    idList.forEach((id) => {
+      try {
+        const qHelper = query(collection(db, 'withdrawals'), where('helperId', '==', id), limit(50));
+        const unsubHelper = onSnapshot(qHelper, (snap) => {
+          snap.docs.forEach((d) => {
+            fallbackStore.withdrawals.set(d.id, d.data() as WithdrawalRequest);
+          });
+          fallbackStore.notify();
+        });
+        unsubs.push(unsubHelper);
+
+        const qShop = query(collection(db, 'withdrawals'), where('shopId', '==', id), limit(50));
+        const unsubShop = onSnapshot(qShop, (snap) => {
+          snap.docs.forEach((d) => {
+            fallbackStore.withdrawals.set(d.id, d.data() as WithdrawalRequest);
+          });
+          fallbackStore.notify();
+        });
+        unsubs.push(unsubShop);
+      } catch (err) {
+        console.warn('Error listening to store withdrawals for id', id, err);
+      }
+    });
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
   }, [storeId, shopDoc, user]);
 
   useEffect(() => {
@@ -324,12 +334,15 @@ export const StoreWallet: React.FC = () => {
   const allOrderBreakdownItems = useMemo(() => {
     const list: WalletOrderBreakdownItem[] = [];
     const seenParentIds = new Set<string>();
+    const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
+    const ownerUserId = shopDoc?.ownerUserId || user?.uid || '';
+    const storeName = shopDoc?.name || '';
 
     combinedShopOrdersList.forEach((so) => {
       seenParentIds.add(so.parentOrderId);
       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
       const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parentOrder?.status === 'CANCELED' || (parentOrder?.status as string) === 'CANCELLED';
-      const isDelivered = parentOrder?.status === 'DELIVERED' || so.status === 'DELIVERED';
+      const isDelivered = parentOrder?.status === 'DELIVERED' || (parentOrder?.status as string) === 'COMPLETED' || so.status === 'DELIVERED' || so.status === 'HANDOVER';
       
       let breakdownStatus: 'DELIVERED' | 'ACTIVE' | 'CANCELED' = 'ACTIVE';
       if (isCanceled) {
@@ -338,7 +351,28 @@ export const StoreWallet: React.FC = () => {
         breakdownStatus = 'DELIVERED';
       }
 
-      const grossSales = (so.price && so.price > 0) ? so.price : (parentOrder?.productCost || 0);
+      // Compute gross sales with the same priority as firebase.ts getStoreFinancials:
+      // 1. so.price (if set and > 0)
+      // 2. sum of so.itemsWithPrice (per-item prices)
+      // 3. store-filtered items from parentOrder.items
+      // 4. parentOrder.productCost only if this order belongs to this shop
+      let grossSales = 0;
+      if (so.price && Number(so.price) > 0) {
+        grossSales = Number(so.price);
+      } else if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        grossSales = so.itemsWithPrice.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+      } else if (parentOrder?.items && parentOrder.items.length > 0) {
+        const storeItems = parentOrder.items.filter(
+          (it) => it.storeId === effectiveShopId || it.storeId === storeId || it.storeId === ownerUserId || (storeName && it.storeName === storeName)
+        );
+        if (storeItems.length > 0) {
+          grossSales = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+        } else if (parentOrder.shopId === effectiveShopId || parentOrder.shopId === storeId || parentOrder.shopId === ownerUserId) {
+          grossSales = parentOrder.productCost || 0;
+        }
+      } else if (parentOrder && (parentOrder.shopId === effectiveShopId || parentOrder.shopId === storeId || parentOrder.shopId === ownerUserId)) {
+        grossSales = parentOrder.productCost || 0;
+      }
       const commission = breakdownStatus === 'CANCELED' ? 0 : Math.round(grossSales * (commissionRate / 100));
       const netSales = breakdownStatus === 'CANCELED' ? 0 : Math.max(0, grossSales - commission);
       const orderDate = parentOrder?.deliveredAt || so.updatedAt || so.createdAt;
@@ -366,12 +400,18 @@ export const StoreWallet: React.FC = () => {
     });
 
     // Also check main orders directly matched to this shop without separate shopOrder doc
-    const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
     Array.from(fallbackStore.orders.values()).forEach((mo) => {
-      const matches = mo.shopId === effectiveShopId || mo.selectedShopIds?.includes(effectiveShopId) || (storeId && mo.selectedShopIds?.includes(storeId));
+      const matches =
+        mo.shopId === effectiveShopId ||
+        mo.shopId === storeId ||
+        mo.shopId === ownerUserId ||
+        mo.selectedShopIds?.includes(effectiveShopId) ||
+        (storeId && mo.selectedShopIds?.includes(storeId)) ||
+        (ownerUserId && mo.selectedShopIds?.includes(ownerUserId));
+
       if (matches && !seenParentIds.has(mo.id)) {
         const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
-        const isDelivered = mo.status === 'DELIVERED';
+        const isDelivered = mo.status === 'DELIVERED' || (mo.status as string) === 'COMPLETED';
         
         let breakdownStatus: 'DELIVERED' | 'ACTIVE' | 'CANCELED' = 'ACTIVE';
         if (isCanceled) {
@@ -380,7 +420,25 @@ export const StoreWallet: React.FC = () => {
           breakdownStatus = 'DELIVERED';
         }
 
-        const grossSales = mo.productCost || 0;
+        let grossSales = 0;
+        if (mo.items && mo.items.length > 0) {
+          const storeItems = mo.items.filter(
+            (it) => it.storeId === effectiveShopId || it.storeId === storeId || it.storeId === ownerUserId || (storeName && it.storeName === storeName)
+          );
+          if (storeItems.length > 0) {
+            grossSales = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
+          } else if (mo.shopId === effectiveShopId || mo.shopId === storeId || mo.shopId === ownerUserId) {
+            grossSales = mo.productCost || 0;
+          }
+        } else if (mo.shopId === effectiveShopId || mo.shopId === storeId || mo.shopId === ownerUserId) {
+          grossSales = mo.productCost || 0;
+        }
+
+        // If grossSales is 0 and shop doesn't own this order, skip it (unrelated multi-shop selection)
+        if (grossSales <= 0 && mo.shopId !== effectiveShopId && mo.shopId !== storeId && mo.shopId !== ownerUserId) {
+          return;
+        }
+
         const commission = breakdownStatus === 'CANCELED' ? 0 : Math.round(grossSales * (commissionRate / 100));
         const netSales = breakdownStatus === 'CANCELED' ? 0 : Math.max(0, grossSales - commission);
         const orderDate = mo.deliveredAt || mo.createdAt;
@@ -461,12 +519,21 @@ export const StoreWallet: React.FC = () => {
     });
   }, [allOrderBreakdownItems, startDate, endDate]);
 
-  // Range Metrics (Gross sales, Net sales, Commission)
+  // Range Metrics (Gross sales, Net sales, Commission, Disbursed vs Due)
   const rangeMetrics = useMemo(() => {
     let totalGrossSales = 0;
     let totalNetSales = 0;
     let commissionDue = 0;
     let canceledAmount = 0;
+    let disbursedGrossSales = 0;
+    let disbursedNetSales = 0;
+    let disbursedCommission = 0;
+    let unpaidGrossSales = 0;
+    let unpaidNetSales = 0;
+    let unpaidCommission = 0;
+    let deliveredCount = 0;
+    let disbursedCount = 0;
+    let unpaidCount = 0;
 
     rangeOrderBreakdownItems.forEach((item) => {
       if (item.status === 'CANCELED') {
@@ -475,10 +542,37 @@ export const StoreWallet: React.FC = () => {
         totalGrossSales += item.grossSales;
         commissionDue += item.commission;
         totalNetSales += item.netSales;
+        deliveredCount++;
+
+        if (item.isPaid) {
+          disbursedGrossSales += item.grossSales;
+          disbursedNetSales += item.netSales;
+          disbursedCommission += item.commission;
+          disbursedCount++;
+        } else {
+          unpaidGrossSales += item.grossSales;
+          unpaidNetSales += item.netSales;
+          unpaidCommission += item.commission;
+          unpaidCount++;
+        }
       }
     });
 
-    return { totalGrossSales, totalNetSales, commissionDue, canceledAmount };
+    return {
+      totalGrossSales,
+      totalNetSales,
+      commissionDue,
+      canceledAmount,
+      disbursedGrossSales,
+      disbursedNetSales,
+      disbursedCommission,
+      unpaidGrossSales,
+      unpaidNetSales,
+      unpaidCommission,
+      deliveredCount,
+      disbursedCount,
+      unpaidCount,
+    };
   }, [rangeOrderBreakdownItems]);
 
   // Approved Payouts (Fund Transfers from Admin)
@@ -486,18 +580,53 @@ export const StoreWallet: React.FC = () => {
     return withdrawals.filter((w) => w.status === 'APPROVED');
   }, [withdrawals]);
 
-  const totalDisbursedFunds = useMemo(() => {
-    return approvedPayouts.reduce((sum, w) => sum + w.amount, 0);
-  }, [approvedPayouts]);
-
-  // Available Payout Balance = Total Net Sales - Disbursed Funds
+  // Financials calculated dynamically based on order statuses "disbursed" or not:
   const allTimeDeliveredNetSales = useMemo(() => {
     return allOrderBreakdownItems
       .filter((item) => item.status === 'DELIVERED')
       .reduce((sum, item) => sum + item.netSales, 0);
   }, [allOrderBreakdownItems]);
 
-  const availableBalance = Math.max(0, allTimeDeliveredNetSales - totalDisbursedFunds);
+  const totalDisbursedFromOrders = useMemo(() => {
+    return allOrderBreakdownItems
+      .filter((item) => item.status === 'DELIVERED' && item.isPaid)
+      .reduce((sum, item) => sum + item.netSales, 0);
+  }, [allOrderBreakdownItems]);
+
+  const unpaidBalanceFromOrders = useMemo(() => {
+    return allOrderBreakdownItems
+      .filter((item) => item.status === 'DELIVERED' && !item.isPaid)
+      .reduce((sum, item) => sum + item.netSales, 0);
+  }, [allOrderBreakdownItems]);
+
+  const allTimeDisbursedCommission = useMemo(() => {
+    return allOrderBreakdownItems
+      .filter((item) => item.status === 'DELIVERED' && item.isPaid)
+      .reduce((sum, item) => sum + item.commission, 0);
+  }, [allOrderBreakdownItems]);
+
+  const allTimeUnpaidCommission = useMemo(() => {
+    return allOrderBreakdownItems
+      .filter((item) => item.status === 'DELIVERED' && !item.isPaid)
+      .reduce((sum, item) => sum + item.commission, 0);
+  }, [allOrderBreakdownItems]);
+
+  const allTimeDeliveredCommission = useMemo(() => {
+    return allOrderBreakdownItems
+      .filter((item) => item.status === 'DELIVERED')
+      .reduce((sum, item) => sum + item.commission, 0);
+  }, [allOrderBreakdownItems]);
+
+  const totalDisbursedFunds = useMemo(() => {
+    const fromWithdrawals = approvedPayouts.reduce((sum, w) => sum + w.amount, 0);
+    // Calculated dynamically based on order statuses "disbursed" or not
+    return (allOrderBreakdownItems.length > 0 || totalDisbursedFromOrders > 0)
+      ? totalDisbursedFromOrders
+      : fromWithdrawals;
+  }, [totalDisbursedFromOrders, approvedPayouts, allOrderBreakdownItems.length]);
+
+  const unpaidBalance = unpaidBalanceFromOrders;
+  const availableBalance = unpaidBalanceFromOrders;
 
 
 
@@ -524,6 +653,8 @@ export const StoreWallet: React.FC = () => {
 
     return sourceList.filter((item) => {
       if (breakdownFilter === 'DELIVERED' && item.status !== 'DELIVERED') return false;
+      if (breakdownFilter === 'DISBURSED' && (!item.isPaid || item.status !== 'DELIVERED')) return false;
+      if (breakdownFilter === 'DUE' && (item.isPaid || item.status !== 'DELIVERED')) return false;
       if (breakdownFilter === 'ACTIVE' && item.status !== 'ACTIVE') return false;
       if (breakdownFilter === 'CANCELED' && item.status !== 'CANCELED') return false;
 
@@ -571,7 +702,6 @@ export const StoreWallet: React.FC = () => {
     return filteredDisbursements.slice(startIdx, startIdx + DISBURSEMENT_PAGE_SIZE);
   }, [filteredDisbursements, disbursementPage]);
 
-  const unpaidBalance = Math.max(0, allTimeDeliveredNetSales - totalDisbursedFunds);
 
   return (
     <div className="space-y-6 pb-24 animate-in fade-in duration-200">
@@ -703,44 +833,79 @@ export const StoreWallet: React.FC = () => {
 
         {/* 3-WAY FINANCIAL OVERVIEW: Unpaid Balance, Total Disbursed, Commission */}
         <div className="grid grid-cols-3 gap-2 pt-1">
-          {/* Unpaid Balance */}
-          <div className="bg-emerald-500/20 border border-emerald-400/40 p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs">
-            <span className="text-[9px] sm:text-[10px] text-emerald-200 font-extrabold block uppercase tracking-wider">
-              Unpaid Balance
-            </span>
-            <span className="text-base sm:text-lg font-black text-white block">
-              ৳{wallet?.balance !== undefined ? wallet.balance : unpaidBalance}
-            </span>
-            <span className="text-[8px] sm:text-[9px] text-emerald-300/90 font-semibold block">
-              Due payout (Not yet disbursed by Admin)
-            </span>
-          </div>
+          {/* Unpaid Balance / Advance */}
+          {(() => {
+            const displayBal = activePreset === 'ALL_TIME' ? unpaidBalance : rangeMetrics.unpaidNetSales;
+            const dueCount = activePreset === 'ALL_TIME'
+              ? allOrderBreakdownItems.filter((i) => i.status === 'DELIVERED' && !i.isPaid).length
+              : rangeMetrics.unpaidCount;
+            const isNegative = displayBal < 0;
+            return (
+              <div className={`p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs border ${
+                isNegative ? 'bg-amber-500/25 border-amber-400/50' : 'bg-emerald-500/20 border-emerald-400/40'
+              }`}>
+                <span className={`text-[9px] sm:text-[10px] font-extrabold block uppercase tracking-wider ${
+                  isNegative ? 'text-amber-200' : 'text-emerald-200'
+                }`}>
+                  {isNegative ? 'Advance Balance' : 'Unpaid Balance'}
+                </span>
+                <span className={`text-base sm:text-lg font-black block font-mono ${
+                  isNegative ? 'text-amber-300' : 'text-white'
+                }`}>
+                  {isNegative ? `-৳${Math.abs(displayBal).toLocaleString('en-US')}` : `৳${displayBal.toLocaleString('en-US')}`}
+                </span>
+                <span className={`text-[8px] sm:text-[9px] font-semibold block ${
+                  isNegative ? 'text-amber-200/90' : 'text-emerald-300/90'
+                }`}>
+                  {isNegative ? 'Advance received from Platform' : `${dueCount} orders due`}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Total Disbursed */}
-          <div className="bg-white/10 border border-white/10 p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs">
-            <span className="text-[9px] sm:text-[10px] text-emerald-200/90 font-bold block uppercase tracking-wider">
-              Total Disbursed
-            </span>
-            <span className="text-base sm:text-lg font-black text-white block">
-              ৳{totalDisbursedFunds}
-            </span>
-            <span className="text-[8px] sm:text-[9px] text-white/70 font-medium block">
-              Paid by Admin
-            </span>
-          </div>
+          {(() => {
+            const displayDisbursed = activePreset === 'ALL_TIME' ? totalDisbursedFunds : rangeMetrics.disbursedNetSales;
+            const paidCount = activePreset === 'ALL_TIME'
+              ? allOrderBreakdownItems.filter((i) => i.status === 'DELIVERED' && i.isPaid).length
+              : rangeMetrics.disbursedCount;
+            return (
+              <div className="bg-white/10 border border-white/10 p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs">
+                <span className="text-[9px] sm:text-[10px] text-emerald-200/90 font-bold block uppercase tracking-wider">
+                  Total Disbursed
+                </span>
+                <span className="text-base sm:text-lg font-black text-white block font-mono">
+                  ৳{displayDisbursed.toLocaleString('en-US')}
+                </span>
+                <span className="text-[8px] sm:text-[9px] text-white/70 font-medium block">
+                  {paidCount > 0 ? `${paidCount} orders paid` : 'Paid by Admin'}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Total Commission */}
-          <div className="bg-white/10 border border-white/10 p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs">
-            <span className="text-[9px] sm:text-[10px] text-emerald-200/90 font-bold block uppercase tracking-wider">
-              Commission ({commissionRate}%)
-            </span>
-            <span className="text-base sm:text-lg font-black text-emerald-300 block">
-              ৳{rangeMetrics.commissionDue}
-            </span>
-            <span className="text-[8px] sm:text-[9px] text-white/60 font-medium block">
-              Platform fee
-            </span>
-          </div>
+          {(() => {
+            const displayComm = activePreset === 'ALL_TIME' ? allTimeDeliveredCommission : rangeMetrics.commissionDue;
+            const settledComm = activePreset === 'ALL_TIME' ? allTimeDisbursedCommission : rangeMetrics.disbursedCommission;
+            const dueComm = activePreset === 'ALL_TIME' ? allTimeUnpaidCommission : rangeMetrics.unpaidCommission;
+            return (
+              <div className="bg-white/10 border border-white/10 p-2.5 sm:p-3 rounded-2xl space-y-0.5 backdrop-blur-xs">
+                <span className="text-[9px] sm:text-[10px] text-emerald-200/90 font-bold block uppercase tracking-wider">
+                  Commission ({commissionRate}%)
+                </span>
+                <span className="text-base sm:text-lg font-black text-emerald-300 block font-mono">
+                  ৳{displayComm.toLocaleString('en-US')}
+                </span>
+                <div className="text-[8px] sm:text-[9px] text-white/70 font-medium leading-tight">
+                  <span className="block">Settled: ৳{settledComm.toLocaleString('en-US')}</span>
+                  {dueComm > 0 && (
+                    <span className="block text-amber-200/90 font-semibold">Due: ৳{dueComm.toLocaleString('en-US')}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -1000,9 +1165,11 @@ export const StoreWallet: React.FC = () => {
 
               {/* Status Filter Tabs */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-extrabold no-scrollbar">
-                {(['ALL', 'DELIVERED', 'ACTIVE', 'CANCELED'] as const).map((filter) => {
+                {(['ALL', 'DISBURSED', 'DUE', 'DELIVERED', 'ACTIVE', 'CANCELED'] as const).map((filter) => {
                   const labelMap = {
                     ALL: 'All',
+                    DISBURSED: 'ডিসবার্সড (Disbursed)',
+                    DUE: 'অপরিশোধিত (Due)',
                     DELIVERED: 'Delivered',
                     ACTIVE: 'In Progress',
                     CANCELED: 'Canceled',
@@ -1061,13 +1228,20 @@ export const StoreWallet: React.FC = () => {
                         </span>
                         {item.status === 'DELIVERED' && (
                           <span
-                            className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1 ${
                               item.isPaid
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                 : 'bg-amber-100 text-amber-800 border border-amber-300'
                             }`}
                           >
-                            {item.isPaid ? 'পরিশোধিত (Paid)' : 'অপরিশোধিত (Due)'}
+                            {item.isPaid ? (
+                              <>
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>ডিসবার্সড (Disbursed)</span>
+                              </>
+                            ) : (
+                              <span>অপরিশোধিত (Due)</span>
+                            )}
                           </span>
                         )}
                       </div>

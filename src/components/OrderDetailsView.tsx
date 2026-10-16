@@ -13,7 +13,8 @@ import {
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
   ShoppingBag, Store, AlertCircle,
 } from 'lucide-react';
-import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
+import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
+import { ServiceIcon } from './ServiceIcon';
 import { getStatusBadgeInfo } from './OrderCard';
 import { formatPlacedDateTime } from '@/lib/timeUtils';
 import { OrderFeedbackModal } from './OrderFeedbackModal';
@@ -179,6 +180,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
   const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
+  const customStorePricing = calculateCustomStoreFee(order, validShopOrders, fallbackStore.pricingSettings);
+  const effectiveCustomStoreFee = customStorePricing.totalFee;
   const unpricedItems = useMemo(() => {
     if (!order?.items) return [];
     return order.items.filter((it) => {
@@ -442,7 +445,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
   const effectiveReturnFee = (estdPricing && estdPricing.returnFee > 0) ? estdPricing.returnFee : 0;
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
-  const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment;
+  const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment + effectiveCustomStoreFee;
 
   return (
     <div className="w-full bg-gray-50 min-h-screen pb-24 animate-in fade-in duration-200">
@@ -480,7 +483,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               : 'bg-gradient-to-br from-gray-900 to-gray-800'
           }`}>
           <div className="flex items-center justify-between mb-1">
-            <h2 className="text-lg font-black">{order.service || order.title || 'Your Order'}</h2>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-white/20 shrink-0 flex items-center justify-center shadow-xs">
+                <ServiceIcon service={order.service} className="w-6 h-6 text-white" />
+              </span>
+              <h2 className="text-lg font-black">{order.service || order.title || 'Your Order'}</h2>
+            </div>
             {(order.status !== 'PENDING' || isCanceled) && (
               <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center space-x-1 ${isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
                 }`}>
@@ -853,7 +861,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           <div className={`w-full h-full flex items-center justify-center ${
                             isUnpriced ? 'bg-rose-100/60 text-rose-500' : 'bg-emerald-50/70 text-emerald-600'
                           }`}>
-                            <Package className="w-5 h-5 opacity-80" />
+                            <ServiceIcon service={order.service} className="w-6 h-6 opacity-100" />
                           </div>
                         )}
                       </div>
@@ -992,6 +1000,18 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                     {order.needDeliveryBack ? 'Two-Way Fee' : 'Return Fee'} ({estdPricing.returnPercent}%)
                   </span>
                   <span className="font-bold text-gray-900">৳{estdPricing.returnFee}</span>
+                </div>
+              )}
+
+              {effectiveCustomStoreFee > 0 && (
+                <div className="flex items-center justify-between text-indigo-900 font-bold">
+                  <span className="flex items-center space-x-1">
+                    <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>
+                      Custom Store Fee ({customStorePricing.count} {customStorePricing.count > 1 ? 'items' : 'item'} × ৳{customStorePricing.unitFee})
+                    </span>
+                  </span>
+                  <span className="font-extrabold text-sm text-indigo-700 font-mono">+৳{effectiveCustomStoreFee}</span>
                 </div>
               )}
 
