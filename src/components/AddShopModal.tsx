@@ -15,6 +15,10 @@ import {
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
 import { compressImage } from '@/lib/imageUtils';
+import { isExpiringImageUrl } from './ShopPhoto';
+
+const EXPIRING_PHOTO_MESSAGE =
+  'ফেসবুক/ইনস্টাগ্রামের ছবির লিংক কয়েক দিন পর কাজ করা বন্ধ করে দেয়। ছবিটি ডাউনলোড করে "ডিভাইস থেকে ছবি আপলোড" দিয়ে যুক্ত করুন।';
 
 interface AddShopModalProps {
   shopToEdit?: Shop | null;
@@ -282,6 +286,13 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
     const commPercent = commissionPercent !== '' ? parseFloat(commissionPercent) : 0;
     if (commissionPercent === '' || isNaN(commPercent) || commPercent < 0 || commPercent > 100) {
       setError('প্রতি অর্ডারে কমিশন শতাংশ ০% থেকে ১০০% এর মধ্যে হতে হবে।');
+      return;
+    }
+    // A newly entered Facebook/Instagram image link works today and breaks for
+    // everyone within days. A link already saved is left alone, so the rest of
+    // the store can still be edited; the field shows the warning either way.
+    if (isExpiringImageUrl(photoUrl) && photoUrl.trim() !== (shopToEdit?.photoUrl || '')) {
+      setError(EXPIRING_PHOTO_MESSAGE);
       return;
     }
 
@@ -927,6 +938,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                   placeholder="অথবা ছবির অনলাইন URL প্রবেশ করান..."
                   className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold placeholder:text-gray-400"
                 />
+                {isExpiringImageUrl(photoUrl) && (
+                  <p className="mt-1.5 text-[11px] font-bold text-rose-600">{EXPIRING_PHOTO_MESSAGE}</p>
+                )}
               </div>
 
               {photoUrl && (

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Shop } from '@/types';
+import { useBrokenImage } from './ShopPhoto';
 import { X, MapPin, Phone, User, Store, CheckCircle2, MessageSquare, Percent, Info, Navigation } from 'lucide-react';
 
 interface HelperRetailerDetailsModalProps {
@@ -21,6 +22,7 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
   onSelect,
   onDeselect,
 }) => {
+  const photo = useBrokenImage(shop?.photoUrl);
   if (!shop) return null;
 
   const commissionAmount =
@@ -48,15 +50,13 @@ export const HelperRetailerDetailsModal: React.FC<HelperRetailerDetailsModalProp
 
         {/* Shop Photo Header */}
         <div className="relative">
-          {shop.photoUrl ? (
+          {shop.photoUrl && !photo.broken ? (
             <div className="w-full h-44 overflow-hidden relative bg-gradient-to-br from-purple-900 to-indigo-900">
               <img
                 src={shop.photoUrl}
                 alt={shop.name}
                 className="w-full h-full object-cover opacity-90"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
+                onError={photo.onError}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
               {/* Name overlay */}

@@ -3,6 +3,7 @@
 import React from 'react';
 import { Shop } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { useBrokenImage } from '../ShopPhoto';
 import { useModal } from '../CustomModal';
 import {
   X,
@@ -54,6 +55,9 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   const [showBlockModal, setShowBlockModal] = React.useState(false);
   const [showDisburseModal, setShowDisburseModal] = React.useState(false);
   const [currentShop, setCurrentShop] = React.useState<Shop>(shop);
+  // A photo whose link has stopped working is shown as missing, with the upload
+  // button and a note — hiding it left the admin nothing to notice or fix.
+  const photo = useBrokenImage(currentShop?.photoUrl);
   const [currentStatus, setCurrentStatus] = React.useState<'Approved' | 'Pending' | 'Rejected'>(
     shop.status === 'Pending' || shop.status === 'PENDING'
       ? 'Pending'
@@ -372,13 +376,13 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
             />
 
             {/* Shop Photo Banner with Admin Upload/Edit Button */}
-            {currentShop.photoUrl ? (
+            {currentShop.photoUrl && !photo.broken ? (
               <div className="w-full h-44 overflow-hidden relative shrink-0 group bg-gray-900">
                 <img
                   src={currentShop.photoUrl}
                   alt={currentShop.name}
                   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                  onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none'; }}
+                  onError={photo.onError}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
                 
@@ -409,8 +413,14 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
                     <ImageIcon className="w-5 h-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs font-extrabold text-gray-900">দোকানের কোনো প্রোফাইল ছবি নেই</p>
-                    <p className="text-[10px] text-gray-500">গ্রাহক ও হেলপারদের সহজে চেনার জন্য ছবি যুক্ত করুন।</p>
+                    <p className="text-xs font-extrabold text-gray-900">
+                      {photo.broken ? 'দোকানের ছবিটি লোড হচ্ছে না' : 'দোকানের কোনো প্রোফাইল ছবি নেই'}
+                    </p>
+                    <p className="text-[10px] text-gray-500">
+                      {photo.broken
+                        ? 'ছবির লিংকটি আর কাজ করছে না (ফেসবুকের লিংকের মেয়াদ শেষ হয়ে যায়)। ডিভাইস থেকে ছবি আপলোড করুন।'
+                        : 'গ্রাহক ও হেলপারদের সহজে চেনার জন্য ছবি যুক্ত করুন।'}
+                    </p>
                   </div>
                 </div>
                 <button

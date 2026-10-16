@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ShopPhoto } from './ShopPhoto';
 import { createPortal } from 'react-dom';
 import { Map, List, X, Navigation, Maximize2, Minimize2, Check, MapPin, Filter, Search, Store, Phone, MessageSquare, ExternalLink, Percent, ArrowRight, CheckCircle2, Clock } from 'lucide-react';
 import { Order, LocationData, Shop, ShopOrder, AllowedAreaPolygon } from '@/types';
@@ -866,18 +867,16 @@ export const HelperOrderMapModal: React.FC<HelperOrderMapModalProps> = ({
                     >
                       {/* Name, type and distance */}
                       <div className="flex items-start gap-3">
-                        {shop.photoUrl ? (
-                          <img
-                            src={shop.photoUrl}
-                            alt={shop.name}
-                            className="w-11 h-11 rounded-xl object-cover border border-gray-100 shrink-0"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                          />
-                        ) : (
-                          <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-                            <Store className="w-5 h-5" />
-                          </div>
-                        )}
+                        <ShopPhoto
+                          src={shop.photoUrl}
+                          alt={shop.name}
+                          className="w-11 h-11 rounded-xl object-cover border border-gray-100 shrink-0"
+                          fallback={
+                            <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                              <Store className="w-5 h-5" />
+                            </div>
+                          }
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-2">
                             <h4 className="font-bold text-sm text-gray-900 leading-snug truncate">{shop.name}</h4>

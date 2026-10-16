@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { ShopPhoto } from './ShopPhoto';
 import { fallbackStore } from '@/lib/firebase';
 import { Shop, StoreProduct } from '@/types';
 import { useCart } from '@/context/CartContext';
@@ -545,12 +546,12 @@ export const HomeSearchBox: React.FC<HomeSearchBoxProps> = ({
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-700 border border-purple-100 flex items-center justify-center shrink-0 overflow-hidden">
-                            {shop.photoUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={shop.photoUrl} alt={shop.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <Store className="w-4 h-4" />
-                            )}
+                            <ShopPhoto
+                              src={shop.photoUrl}
+                              alt={shop.name}
+                              className="w-full h-full object-cover"
+                              fallback={<Store className="w-4 h-4" />}
+                            />
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-gray-900 group-hover:text-emerald-900 truncate">

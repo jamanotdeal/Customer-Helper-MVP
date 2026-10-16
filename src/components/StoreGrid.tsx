@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { ShopPhoto } from './ShopPhoto';
 import { Shop, StoreProduct } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { Clock, Store, CircleDot, X, Package, ArrowLeft, Plus, Minus, Check, Search, ChevronDown, Sparkles, Layers } from 'lucide-react';
@@ -346,21 +347,16 @@ const StoreCard: React.FC<StoreCardProps> = ({ shop, onClick }) => {
     >
       {/* Store Image */}
       <div className="w-full h-28 bg-gradient-to-br from-emerald-50 to-teal-50 overflow-hidden relative">
-        {shop.photoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={shop.photoUrl}
-            alt={shop.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <Store className="w-10 h-10 text-emerald-300" />
-          </div>
-        )}
+        <ShopPhoto
+          src={shop.photoUrl}
+          alt={shop.name}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+          fallback={
+            <div className="w-full h-full flex items-center justify-center">
+              <Store className="w-10 h-10 text-emerald-300" />
+            </div>
+          }
+        />
 
         {/* Only show badge when store is CLOSED */}
         {!isOpen && (
@@ -445,19 +441,16 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
       <div className="mt-auto bg-white rounded-t-3xl w-full max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
         {/* Header */}
         <div className="flex items-start gap-3 p-4 pb-3 border-b border-gray-100">
-          {shop.photoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={shop.photoUrl}
-              alt={shop.name}
-              className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-gray-100"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-            />
-          ) : (
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center shrink-0 border border-emerald-100">
-              <Store className="w-7 h-7 text-emerald-400" />
-            </div>
-          )}
+          <ShopPhoto
+            src={shop.photoUrl}
+            alt={shop.name}
+            className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-gray-100"
+            fallback={
+              <div className="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center shrink-0 border border-emerald-100">
+                <Store className="w-7 h-7 text-emerald-400" />
+              </div>
+            }
+          />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-extrabold text-base text-gray-900 truncate">{shop.name}</h2>
