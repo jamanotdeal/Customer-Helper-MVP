@@ -266,8 +266,8 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       return;
     }
 
-      setSubmittingOrder(true);
-      setFormError('');
+    setSubmittingOrder(true);
+    setFormError('');
 
     try {
       const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
@@ -379,7 +379,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
           saveDefaultDeliveryLocation(delivLoc);
           if (user.uid) {
             addSavedDeliveryAddress(user.uid, delivLoc);
-            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => {});
+            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
           }
         }
         updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
@@ -387,7 +387,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         showAlert(
           'রিকোয়েস্ট শিডিউল হয়েছে!',
           (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-            ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+          ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
           'info'
         );
         clearCart();
@@ -406,7 +406,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         saveDefaultDeliveryLocation(delivLoc);
         if (user.uid) {
           addSavedDeliveryAddress(user.uid, delivLoc);
-          saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => {});
+          saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
         }
       }
       updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
@@ -477,11 +477,21 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
 
             {/* Closed Store Notice */}
             {closedStoreNames.length > 0 && (
-              <div className="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 flex items-center gap-2">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                <p className="text-[11px] font-bold text-amber-900">
-                  দোকান বন্ধ — হেলপার অন্য দোকান থেকে সংগ্রহ করবে। মূল্য পরিবর্তন হতে পারে।
-                </p>
+              <div className="p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300/90 shadow-xs flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded-md">
+                      দোকান বন্ধ
+                    </span>
+                    <span className="text-sm font-black text-amber-950">
+                      {closedStoreNames.join(', ')}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-[13px] font-bold text-amber-900 leading-snug">
+                    দোকান বন্ধ থাকায় হেলপার অন্য দোকান থেকে সংগ্রহ করবে। মূল্য পরিবর্তন হতে পারে।
+                  </p>
+                </div>
               </div>
             )}
 
@@ -650,18 +660,21 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                   setEditingCustomItem(null);
                   setShowAddCustomModal(true);
                 }}
-                className={`w-full py-3 px-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-center gap-2 text-xs font-black ${
-                  highlightCustomItem
-                    ? 'border-amber-500 bg-amber-50 text-amber-900 ring-4 ring-amber-400/50 shadow-lg shadow-amber-300/40 scale-[1.01] animate-pulse'
-                    : 'border-dashed border-emerald-300 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-800'
-                }`}
+                className={`w-full py-3.5 px-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-center gap-2.5 text-xs sm:text-[13px] font-black shadow-sm ${highlightCustomItem
+                    ? 'border-amber-500 bg-amber-100 text-amber-950 ring-4 ring-amber-400/60 shadow-lg shadow-amber-300/40 scale-[1.01] animate-pulse'
+                    : 'border-amber-400 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50 hover:bg-amber-100/90 text-amber-950 hover:border-amber-500 hover:shadow-md active:scale-[0.99]'
+                  }`}
               >
-                <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
-                {highlightCustomItem && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-black uppercase">
+                <span className="w-6 h-6 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                </span>
+                <span className="leading-snug">প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
+                {highlightCustomItem ? (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-black uppercase">
                     HERE
                   </span>
+                ) : (
+                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
                 )}
               </button>
             </div>
@@ -687,7 +700,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                       if (loc?.lng !== undefined) setDeliveryLng(loc.lng);
                     }}
                     savedLocalAddresses={savedAddresses}
-                    placeholder="যেমন: বাসা #৪, রোড #২, সেক্টর #১০, উত্তরা..."
+                    placeholder="যেমন: বাসা #৪, রোড #২,  Model Twon..."
                   />
                 </div>
 
@@ -794,11 +807,10 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                           }
                           setUseFreeDelivery((prev) => !prev);
                         }}
-                        className={`mt-1 p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${
-                          useFreeDelivery
+                        className={`mt-1 p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${useFreeDelivery
                             ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
                             : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
-                        }`}
+                          }`}
                       >
                         <div className="flex items-center gap-2">
                           <input

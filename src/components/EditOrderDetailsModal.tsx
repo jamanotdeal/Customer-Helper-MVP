@@ -887,10 +887,13 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
                 type="button"
                 id="edit-order-add-custom-item-btn"
                 onClick={handleOpenAddCustomModal}
-                className="w-full py-3 px-3 rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-800 transition-all cursor-pointer flex items-center justify-center gap-2 text-xs font-black"
+                className="w-full py-3.5 px-3.5 rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50 hover:bg-amber-100/90 text-amber-950 hover:border-amber-500 hover:shadow-md active:scale-[0.99] transition-all cursor-pointer flex items-center justify-center gap-2.5 text-xs sm:text-[13px] font-black shadow-sm"
               >
-                <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
+                <span className="w-6 h-6 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                </span>
+                <span className="leading-snug">প্ল্যাটফর্মে নেই এমন কাস্টম পণ্য বা সার্ভিস যোগ করুন</span>
+                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
               </button>
             </div>
 

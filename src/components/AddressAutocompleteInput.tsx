@@ -316,7 +316,12 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     const newVal = e.target.value;
     onChange(newVal);
     setSelectedIndex(-1);
-    if (!isOpen) setIsOpen(true);
+    // Only open dropdown when user is actually typing
+    if (newVal.trim()) {
+      if (!isOpen) setIsOpen(true);
+    } else {
+      setIsOpen(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -349,7 +354,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
     setSelectedIndex(-1);
     setServerSearchResults([]);
     inputRef.current?.focus();
-    setIsOpen(true);
+    setIsOpen(false);
   };
 
   return (
@@ -374,7 +379,7 @@ export const AddressAutocompleteInput: React.FC<AddressAutocompleteInputProps> =
           value={value}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          onFocus={() => setIsOpen(true)}
+          onFocus={() => { if (value.trim()) setIsOpen(true); }}
           placeholder={placeholder}
           maxLength={maxLength}
           autoComplete="off"

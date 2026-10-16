@@ -221,12 +221,17 @@ export const StorePage: React.FC<StorePageProps> = ({
 
       {/* Notice if store is closed */}
       {!isOpen && (
-        <div className="mb-3 p-3 rounded-2xl bg-amber-50 border border-amber-200/90 flex items-start gap-2.5 text-xs shadow-2xs">
-          <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-          <div className="space-y-0.5 text-amber-900">
-            <p className="font-extrabold text-xs">দোকানটি বর্তমানে বন্ধ রয়েছে (Store is Closed)</p>
-            <p className="text-[11px] text-amber-800 font-medium leading-snug">
-              পছন্দের পণ্য কার্টে যোগ করে এখনই অর্ডার করতে পারেন — আমাদের ডেডিকেটেড হেলপার অন্য কোনো বিশ্বস্ত দোকান থেকে পণ্যগুলো সংগ্রহ করে পৌঁছে দেবে।
+        <div className="mb-3 p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300/90 flex items-start gap-3 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0 space-y-1 text-amber-900">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded-md">
+                দোকান বন্ধ
+              </span>
+              <p className="text-sm font-black text-amber-950">{shop.name}</p>
+            </div>
+            <p className="text-xs sm:text-[13px] font-bold text-amber-800 leading-snug">
+              পছন্দের পণ্য কার্টে যোগ করে এখনই অর্ডার করতে পারেন — হেলপার অন্য কোনো বিশ্বস্ত দোকান থেকে পণ্যগুলো সংগ্রহ করে পৌঁছে দেবে।
             </p>
           </div>
         </div>
@@ -447,7 +452,7 @@ export const StorePage: React.FC<StorePageProps> = ({
                         className="w-full py-2 sm:py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
                       >
                         <Plus className="w-4 h-4 stroke-[3]" />
-                        <span>+ Buy</span>
+                        <span>Buy</span>
                       </button>
                     ) : (
                       <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-md">
