@@ -1,16 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-
-// Initialize Firebase Admin using the same project credentials
-function getAdminDb() {
-  if (!getApps().length) {
-    // Use Application Default Credentials or service account
-    // Since we don't have a service account file here, we use the REST API approach below
-    throw new Error('Use the client-side reset instead');
-  }
-  return getFirestore();
-}
 
 export async function POST(req: NextRequest) {
   // Simple secret check to avoid accidental calls
