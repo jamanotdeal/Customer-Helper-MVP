@@ -85,17 +85,72 @@ const TAKEN_TITLE = 'দুঃখিত!';
 const TAKEN_MESSAGE =
   'এই অর্ডারটি ইতিমধ্যে অন্য কোনো হেলপার গ্রহণ করেছেন অথবা এডমিন কর্তৃক অন্য কাউকে অ্যাসাইন করা হয়েছে।';
 
+// ─── Claims in flight ────────────────────────────────────────────────────────
+// The claim is a round trip to the server, and on a poor connection it can take
+// a while. Every accept button used to show nothing in the meantime — the popup
+// even closed itself first — so the order just sat there looking unaccepted,
+// and a second tap started a second claim that came back "already taken" (by
+// the first one). Screens read this to show progress and refuse repeats.
+
+const claiming = new Map<string, number>(); // orderId → when the claim started
+const claimListeners = new Set<() => void>();
+let claimingIds: string[] = [];
+
+function setClaiming(orderId: string, on: boolean) {
+  if (on) claiming.set(orderId, Date.now());
+  else if (!claiming.delete(orderId)) return;
+  claimingIds = Array.from(claiming.keys());
+  claimListeners.forEach((l) => l());
+}
+
+export const acceptClaims = {
+  subscribe(listener: () => void): () => void {
+    claimListeners.add(listener);
+    return () => {
+      claimListeners.delete(listener);
+    };
+  },
+  /** Stable between changes, for useSyncExternalStore. */
+  getIds(): string[] {
+    return claimingIds;
+  },
+  startedAt(orderId: string): number | undefined {
+    return claiming.get(orderId);
+  },
+};
+
+// One accept per order at a time: a second tap (or the popup and the list both
+// firing) joins the run already going instead of claiming again.
+const acceptsInFlight = new Map<string, Promise<AcceptOutcome>>();
+
 /**
  * The one accept flow, used by the new-order popup, the New list and the
  * Explore map: checks, confirmation, then an atomic claim on the server (see
  * fallbackStore.claimOrderForHelper), so two helpers can never both get it.
  */
-export async function acceptOrderAsHelper(
+export function acceptOrderAsHelper(
   orderId: string,
   user: UserProfile | null,
   ui: AcceptOrderUi,
   note = 'Accepted request',
   opts: { skipConfirm?: boolean } = {}
+): Promise<AcceptOutcome> {
+  const running = acceptsInFlight.get(orderId);
+  if (running) return running;
+  const run = runAccept(orderId, user, ui, note, opts).finally(() => {
+    acceptsInFlight.delete(orderId);
+    setClaiming(orderId, false);
+  });
+  acceptsInFlight.set(orderId, run);
+  return run;
+}
+
+async function runAccept(
+  orderId: string,
+  user: UserProfile | null,
+  ui: AcceptOrderUi,
+  note: string,
+  opts: { skipConfirm?: boolean }
 ): Promise<AcceptOutcome> {
   if (!user || !user.uid || (!user.email && (!user.displayName || user.displayName === '?'))) {
     ui.openAuthModal();
@@ -134,10 +189,12 @@ export async function acceptOrderAsHelper(
   }
 
   let outcome: 'accepted' | 'taken';
+  setClaiming(orderId, true);
   try {
     outcome = await fallbackStore.claimOrderForHelper(orderId, user, note);
   } catch (e: any) {
     console.warn('[acceptOrderAsHelper] claim failed:', e?.message || e);
+    setClaiming(orderId, false);
     await ui.showAlert(
       'অর্ডার গ্রহণ করা যায়নি',
       'ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।',
@@ -145,6 +202,7 @@ export async function acceptOrderAsHelper(
     );
     return 'failed';
   }
+  setClaiming(orderId, false);
 
   if (outcome === 'taken') {
     await ui.showAlert(TAKEN_TITLE, TAKEN_MESSAGE, 'error');

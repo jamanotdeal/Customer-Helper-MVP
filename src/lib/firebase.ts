@@ -396,6 +396,21 @@ const NOTIF_COALESCE_WINDOW_MS = 2 * 60 * 1000;
  * `key` scopes it to the thing being edited — the order or shop order — so two
  * orders edited at once never collapse into each other.
  */
+/** One accept, timed — see FallbackStore.logAccept. Durations in ms from the claim starting. */
+interface AcceptTiming {
+  startedMs: number;
+  note: string;
+  networkReadyMs?: number;
+  authMs?: number;
+  /** Transaction attempts, and how long each one's read of the order took. */
+  attempts: number;
+  attemptMs: number[];
+  committedMs?: number;
+  totalMs?: number;
+  outcome?: 'claimed' | 'landed' | 'mine' | 'taken' | 'failed';
+  error?: string;
+}
+
 function coalescedNotifId(kind: string, key: string, at: number = Date.now()): string {
   const bucket = Math.floor(at / NOTIF_COALESCE_WINDOW_MS) * NOTIF_COALESCE_WINDOW_MS;
   const safeKey = String(key).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -2195,7 +2210,9 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+                const incoming = this.resolveOrderLocations(change.doc.data() as Order);
+                this.noteAcceptSeen(this.orders.get(change.doc.id), incoming, 'store');
+                this.orders.set(change.doc.id, incoming);
               }
             });
             this.notify();
@@ -2218,7 +2235,9 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.orders.delete(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+                const incoming = this.resolveOrderLocations(change.doc.data() as Order);
+                this.noteAcceptSeen(this.orders.get(change.doc.id), incoming, 'store');
+                this.orders.set(change.doc.id, incoming);
               }
             });
             this.notify();
@@ -2337,6 +2356,7 @@ class FallbackStore {
                   }).catch(() => { });
                 }
 
+                this.noteAcceptSeen(previous, incoming, 'customer');
                 this.orders.set(change.doc.id, incoming);
               }
             });
@@ -2675,7 +2695,9 @@ class FallbackStore {
               if (change.type === 'removed') {
                 this.recheckOrder(change.doc.id);
               } else {
-                this.orders.set(change.doc.id, this.resolveOrderLocations(change.doc.data() as Order));
+                const incoming = this.resolveOrderLocations(change.doc.data() as Order);
+                this.noteAcceptSeen(this.orders.get(change.doc.id), incoming, 'admin');
+                this.orders.set(change.doc.id, incoming);
               }
             });
             this.notify();
@@ -3928,6 +3950,13 @@ class FallbackStore {
    * The usual side effects (customer notification, shop-order reassignment)
    * then run against the pre-claim document, so they fire even if our own
    * listener has already delivered the claim.
+   *
+   * On a bad connection the SDK gives each request 15 s and retries the whole
+   * transaction up to five times, so a claim can take a minute. Two things keep
+   * that from misreporting: a retry that finds this very claim already
+   * committed (the reply was lost, not the write) counts as accepted rather than
+   * "taken", and so does a final error when the server turns out to hold it.
+   * Every run is timed phase by phase into acceptLog/{orderId} — see logAccept.
    */
   public async claimOrderForHelper(
     orderId: string,
@@ -3935,9 +3964,10 @@ class FallbackStore {
     note: string
   ): Promise<'accepted' | 'taken'> {
     const ref = doc(db, 'orders', orderId);
-    const now = new Date().toISOString();
+    const startedMs = Date.now();
+    const now = new Date(startedMs).toISOString();
     const historyEntry = {
-      id: `sh-${Date.now()}`,
+      id: `sh-${startedMs}`,
       status: 'ACCEPTED' as const,
       timestamp: now,
       actor: `Helper (${helper.displayName})`,
@@ -3952,27 +3982,96 @@ class FallbackStore {
       acceptedAt: now,
       statusHistory: [...(o.statusHistory || []), historyEntry],
     });
-
-    await this.whenNetworkReady();
-    const before = await runTransaction(db, async (tx): Promise<Order | null> => {
-      const snap = await tx.get(ref);
-      if (!snap.exists()) return null;
-      const current = snap.data() as Order;
-      if (!isOrderOpen(current)) return null;
-      tx.set(ref, cleanForFirestore({ ...claim(current), updatedAt: now }), { merge: true });
-      return current;
+    // `now` is unique to this run, so a server copy carrying it is this run's
+    // own commit — not an order the helper took some other time.
+    const isThisClaim = (o: Order) => o.helperId === helper.uid && o.acceptedAt === now;
+    // The order as it was before a commit whose reply never arrived.
+    const unclaimed = (o: Order): Order => ({
+      ...o,
+      status: 'PENDING',
+      helperId: undefined,
+      helperName: undefined,
+      helperPhone: undefined,
+      acceptedAt: undefined,
+      statusHistory: (o.statusHistory || []).filter((h) => h.id !== historyEntry.id),
     });
 
-    if (!before) {
+    const timing: AcceptTiming = { startedMs, note, attempts: 0, attemptMs: [] };
+    const mark = () => Date.now() - startedMs;
+
+    await this.whenNetworkReady();
+    timing.networkReadyMs = mark();
+    // Every request waits for the sign-in token, and one that expired while
+    // the phone slept is refreshed over the network first. Fetched here so its
+    // share of the wait shows up on its own.
+    try {
+      await auth.currentUser?.getIdToken();
+    } catch {
+      /* the transaction will report it */
+    }
+    timing.authMs = mark();
+
+    type Claimed =
+      | { kind: 'claimed'; before: Order }
+      | { kind: 'landed'; before: Order }
+      | { kind: 'mine'; current: Order }
+      | { kind: 'taken'; current: Order | null };
+    let result: Claimed;
+    try {
+      result = await runTransaction(db, async (tx): Promise<Claimed> => {
+        const attemptStart = Date.now();
+        timing.attempts++;
+        const snap = await tx.get(ref);
+        timing.attemptMs.push(Date.now() - attemptStart);
+        if (!snap.exists()) return { kind: 'taken', current: null };
+        const current = snap.data() as Order;
+        if (isThisClaim(current)) return { kind: 'landed', before: unclaimed(current) };
+        if (!isOrderOpen(current)) {
+          return { kind: current.helperId === helper.uid ? 'mine' : 'taken', current };
+        }
+        tx.set(ref, cleanForFirestore({ ...claim(current), updatedAt: now }), { merge: true });
+        return { kind: 'claimed', before: current };
+      });
+    } catch (e: any) {
+      timing.error = String(e?.code || e?.message || e);
+      // The write may have landed and only its reply been lost. Asked with a
+      // deadline: on the same dead connection the answer may never come, and
+      // the helper must not be left waiting on it.
+      const server = await Promise.race([
+        this.getOrderFromServer(orderId).catch(() => undefined),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000)),
+      ]);
+      if (!server || !isThisClaim(server)) {
+        timing.outcome = 'failed';
+        timing.totalMs = mark();
+        this.logAccept(orderId, helper.uid, timing);
+        throw e;
+      }
+      result = { kind: 'landed', before: unclaimed(server) };
+    }
+    timing.committedMs = mark();
+
+    if (result.kind === 'taken' || result.kind === 'mine') {
       // Make the cache agree with the server at once, so every list and popup
       // on this device drops it without waiting for the listener.
-      this.getOrderFromServer(orderId).catch(() => {});
-      return 'taken';
+      if (result.current) {
+        this.orders.set(orderId, this.resolveOrderLocations(result.current));
+        this.notify();
+      } else if (this.orders.delete(orderId)) {
+        this.notify();
+      }
+      timing.outcome = result.kind;
+      timing.totalMs = mark();
+      this.logAccept(orderId, helper.uid, timing);
+      // Already this helper's from an earlier accept: nothing to announce again.
+      return result.kind === 'mine' ? 'accepted' : 'taken';
     }
 
+    const { before } = result;
     const claimed: Order = { ...claim(before), updatedAt: now };
     this.orders.set(orderId, this.resolveOrderLocations(claimed));
     this.notify();
+    timing.outcome = result.kind;
     // The order is this helper's from here on, whatever becomes of the
     // notifications below — a failure there must not read as a failed accept.
     try {
@@ -3980,7 +4079,52 @@ class FallbackStore {
     } catch (e: any) {
       console.warn('[Firestore] claimOrderForHelper side effects note:', e?.message || e);
     }
+    timing.totalMs = mark();
+    this.logAccept(orderId, helper.uid, timing);
     return 'accepted';
+  }
+
+  /**
+   * Where the time of one accept went, in ms from the tap's claim starting:
+   * network ready → sign-in token → transaction (per attempt: the read) →
+   * committed → side effects queued. Logged to the console and saved to
+   * acceptLog/{orderId}, together with the server's clock at the time, so the
+   * other devices' receipts (noteAcceptSeen) can be compared without skew.
+   * Never awaited, and a failure to save is ignored.
+   */
+  private logAccept(orderId: string, uid: string, timing: AcceptTiming) {
+    const line =
+      `[accept] #${orderId} ${timing.outcome} in ${timing.totalMs}ms — network ${timing.networkReadyMs}ms, ` +
+      `token ${timing.authMs}ms, committed ${timing.committedMs ?? '-'}ms, ` +
+      `${timing.attempts} attempt(s) [${timing.attemptMs.join(', ')}]${timing.error ? `, error ${timing.error}` : ''}`;
+    if (timing.outcome === 'failed' || (timing.totalMs || 0) > 5000) console.warn(line);
+    else console.info(line);
+    // cleanForFirestore goes through JSON, which would destroy the timestamp
+    // sentinel — so it is added afterwards.
+    const entry = {
+      ...cleanForFirestore({ uid, ...timing, startedAt: new Date(timing.startedMs).toISOString() }),
+      loggedAt: serverTimestamp(),
+    };
+    setDoc(doc(db, 'acceptLog', orderId), { claims: { [`${uid}_${timing.startedMs}`]: entry } }, { merge: true }).catch(() => {});
+  }
+
+  /**
+   * Records when this device first showed an order as accepted, for the
+   * accept-latency log (see logAccept). Only a change seen live counts — an
+   * order that was open here and now has a helper — and only for a recent
+   * accept, so loading old orders writes nothing.
+   */
+  private noteAcceptSeen(previous: Order | undefined, incoming: Order, role: string) {
+    if (!previous || !isOrderOpen(previous) || isOrderOpen(incoming) || !incoming.helperId || !incoming.acceptedAt) return;
+    const sinceAccept = Date.now() - Date.parse(incoming.acceptedAt);
+    if (!(sinceAccept >= 0 && sinceAccept < 10 * 60 * 1000)) return;
+    const who = `${role}_${this.currentUserId || 'anon'}`;
+    console.info(`[accept] #${incoming.id} shown as accepted on this ${role} device ${sinceAccept}ms after the tap`);
+    setDoc(
+      doc(db, 'acceptLog', incoming.id),
+      { seen: { [who]: { sinceAcceptMs: sinceAccept, at: serverTimestamp() } } },
+      { merge: true }
+    ).catch(() => {});
   }
 
   /**

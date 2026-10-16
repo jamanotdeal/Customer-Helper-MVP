@@ -208,7 +208,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     }
   }, [order?.id, order?.productCost, effectiveProductCost]);
 
-  // Timer: check every 30s if the customer should see "Admin Accepted" banner
+  // Timer: check every 30s if the customer should see "Admin Accepted" banner.
+  // Also re-checked the moment the order changes: a helper accepting it used to
+  // leave "Admin finding helper for you..." up until the next tick.
   useEffect(() => {
     const checkAdminAccepted = () => {
       const current = fallbackStore.orders.get(orderId);
@@ -224,7 +226,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     checkAdminAccepted(); // run immediately
     const interval = setInterval(checkAdminAccepted, 30000);
     return () => clearInterval(interval);
-  }, [orderId]);
+  }, [orderId, order?.status, order?.helperId]);
 
   // If user is not logged in or logs out, automatically close all modals and exit details view
   useEffect(() => {

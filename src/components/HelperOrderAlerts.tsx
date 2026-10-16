@@ -8,12 +8,50 @@ import { setOrderAlarm } from '@/lib/orderAlarm';
 import { onOrderAlertCleared } from '@/lib/native';
 import { isOrderOpen } from '@/lib/orderStatus';
 import { acceptOrderAsHelper, isOrderAvailableToHelper, isOrderRoutedToHelperType } from '@/lib/helperOrders';
+import { useAcceptClaims } from '@/hooks/useAcceptClaims';
+import { Loader2 } from 'lucide-react';
 import { useModal } from './CustomModal';
 import { NewOrderAlertOverlay } from './NewOrderAlertOverlay';
 import { BlockedUserModal } from './BlockedUserModal';
 
 /** Retry delay for an alerted order whose details couldn't be fetched. */
 const REFETCH_DELAY_MS = 3000;
+
+/** How long a claim may take before the helper is told the connection is slow. */
+const SLOW_CLAIM_MS = 5000;
+
+/**
+ * Shown while an accept is on its way to the server, from whichever screen it
+ * was tapped on. The popup closes as soon as Accept is pressed, so without this
+ * a slow claim looked like nothing had happened at all.
+ */
+const AcceptProgress: React.FC = () => {
+  const claiming = useAcceptClaims();
+  const [slow, setSlow] = useState(false);
+  const active = claiming.length > 0;
+
+  useEffect(() => {
+    setSlow(false);
+    if (!active) return;
+    const t = setTimeout(() => setSlow(true), SLOW_CLAIM_MS);
+    return () => clearTimeout(t);
+  }, [active]);
+
+  if (!active) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed left-4 right-4 bottom-24 z-[10000] mx-auto max-w-sm rounded-2xl bg-slate-900/95 text-white shadow-xl px-4 py-3 flex items-center gap-3"
+    >
+      <Loader2 className="w-5 h-5 animate-spin shrink-0 text-emerald-400" />
+      <div className="min-w-0">
+        <p className="text-sm font-extrabold">অর্ডার গ্রহণ করা হচ্ছে…</p>
+        {slow && <p className="text-xs text-slate-300">ইন্টারনেট ধীর — চেষ্টা চলছে, অ্যাপ বন্ধ করবেন না।</p>}
+      </div>
+    </div>
+  );
+};
 
 interface HelperOrderAlertsProps {
   /** Opens an order's detail screen in the helper dashboard. */
@@ -178,6 +216,7 @@ export const HelperOrderAlerts: React.FC<HelperOrderAlertsProps> = ({ onOpenOrde
 
   return (
     <>
+      <AcceptProgress />
       {alertIds.length > 0 && (
         <NewOrderAlertOverlay
           orderIds={alertIds}

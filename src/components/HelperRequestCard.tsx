@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '@/types';
-import { Clock, Sparkles, MapPin, Edit2, Store } from 'lucide-react';
+import { Clock, Sparkles, MapPin, Edit2, Store, Loader2 } from 'lucide-react';
+import { useIsAccepting } from '@/hooks/useAcceptClaims';
 import { getDeliveryDurationText, getElapsedTime, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { getOrderMinDistanceKm } from '@/lib/pricing';
 import { useSecondTick } from '@/hooks/useSecondTick';
@@ -41,6 +42,7 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
   const urgency = getHelperUrgencyBgClass(order, isDone);
   const fromStore = isOrderFromStore(order);
   const serviceInfo = getServiceIconInfo(order.service);
+  const isAccepting = useIsAccepting(order.id);
 
   // Shared 1-second clock — see useSecondTick.
   const tick = useSecondTick(!isDone);
@@ -157,13 +159,14 @@ export const HelperRequestCard: React.FC<HelperRequestCardProps> = ({
         </button>
         <button
           onClick={() => onAccept(order.id)}
-          disabled={isCapReached}
-          className={`flex-1 py-2.5 rounded-2xl font-extrabold text-xs shadow-md transition-all ${isCapReached
+          disabled={isCapReached || isAccepting}
+          className={`flex-1 py-2.5 rounded-2xl font-extrabold text-xs shadow-md transition-all inline-flex items-center justify-center ${isCapReached
               ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98'
+              : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98 disabled:opacity-70'
             }`}
         >
-          {isCapReached ? `Limit (${activeOrderLimit})` : 'Accept Request'}
+          {isAccepting && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+          {isCapReached ? `Limit (${activeOrderLimit})` : isAccepting ? 'Accepting…' : 'Accept Request'}
         </button>
       </div>
     </div>

@@ -4,10 +4,11 @@ import { fallbackStore, ShopOrderError } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
 import { ServiceIcon } from './ServiceIcon';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map as MapIcon, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map as MapIcon, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search, Loader2 } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
+import { useIsAccepting } from '@/hooks/useAcceptClaims';
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from './CustomModal';
 import { MapPickerModal } from './MapPickerModal';
@@ -54,6 +55,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const order = liveOrder;
   const { user, openAuthModal } = useAuth();
   const isAcceptedByThisHelper = !!order.helperId && user?.uid === order.helperId;
+  const isAccepting = useIsAccepting(order.id);
   const [productCostInput, setProductCostInput] = useState(order.productCost !== undefined ? String(order.productCost) : '');
   const [showCostModal, setShowCostModal] = useState(false);
   const [feeInput, setFeeInput] = useState(order.deliveryFee ? String(order.deliveryFee) : '');
@@ -3957,11 +3959,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     }
                     onAccept(order.id);
                   }}
-                  disabled={activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit}
+                  disabled={isAccepting || (activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit)}
                   className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-5 h-5" />
-                  <span>{activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit ? `Limit Reached (${activeOrderLimit} Max)` : 'Accept Request'}</span>
+                  {isAccepting ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
+                  <span>{activeOrdersCount !== undefined && activeOrderLimit !== undefined && activeOrdersCount >= activeOrderLimit ? `Limit Reached (${activeOrderLimit} Max)` : isAccepting ? 'Accepting…' : 'Accept Request'}</span>
                 </button>
               </div>
             )}
