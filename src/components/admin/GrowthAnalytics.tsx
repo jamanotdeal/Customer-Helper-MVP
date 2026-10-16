@@ -17,7 +17,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Download,
-  Check
+  Check,
+  PieChart,
 } from 'lucide-react';
 
 interface GrowthAnalyticsProps {
@@ -80,6 +81,7 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
   const [startDate, setStartDate] = useState<string>(getDaysAgoStr(6));
   const [endDate, setEndDate] = useState<string>(getTodayStr());
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
 
   // Active Series Toggles for Single Combined Chart
   const [activeSeries, setActiveSeries] = useState<{ [key: string]: boolean }>({
@@ -198,6 +200,17 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
     let prevPeriodReviewCount = 0;
     let prevPeriodRatingSum = 0;
 
+    // Service Categories Breakdown
+    const serviceCategoryMap: {
+      [name: string]: {
+        name: string;
+        orderCount: number;
+        revenue: number;
+        totalValue: number;
+      };
+    } = {};
+    let totalCategoryOrders = 0;
+
     // 1. Process Orders & Revenue
     orders.forEach((o) => {
       const createdTime = getTimestamp(o.createdAt);
@@ -216,6 +229,23 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
         currentPeriodOrderValue += orderTotalVal;
         if (orderDateStr && dayMetricsMap[orderDateStr]) {
           dayMetricsMap[orderDateStr].totalOrders++;
+        }
+
+        // Service Category Accounting
+        totalCategoryOrders++;
+        const categoryName = (o.service || o.title || 'অন্যান্য ডেলিভারি').trim() || 'অন্যান্য ডেলিভারি';
+        if (!serviceCategoryMap[categoryName]) {
+          serviceCategoryMap[categoryName] = {
+            name: categoryName,
+            orderCount: 0,
+            revenue: 0,
+            totalValue: 0,
+          };
+        }
+        serviceCategoryMap[categoryName].orderCount++;
+        serviceCategoryMap[categoryName].totalValue += orderTotalVal;
+        if (o.status === 'DELIVERED') {
+          serviceCategoryMap[categoryName].revenue += orderFee;
         }
       } else if (createdTime >= prevStartMs && createdTime <= prevEndMs) {
         prevPeriodOrders++;
@@ -360,8 +390,35 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
     const currentAvgRating = currentPeriodReviewCount > 0 ? parseFloat((currentPeriodRatingSum / currentPeriodReviewCount).toFixed(1)) : 0;
     const prevAvgRating = prevPeriodReviewCount > 0 ? parseFloat((prevPeriodRatingSum / prevPeriodReviewCount).toFixed(1)) : 0;
 
+    const CATEGORY_PALETTE = [
+      { color: '#6366f1', bg: 'bg-indigo-500', text: 'text-indigo-600', light: 'bg-indigo-50/80', border: 'border-indigo-200' },
+      { color: '#10b981', bg: 'bg-emerald-500', text: 'text-emerald-600', light: 'bg-emerald-50/80', border: 'border-emerald-200' },
+      { color: '#f59e0b', bg: 'bg-amber-500', text: 'text-amber-600', light: 'bg-amber-50/80', border: 'border-amber-200' },
+      { color: '#0ea5e9', bg: 'bg-sky-500', text: 'text-sky-600', light: 'bg-sky-50/80', border: 'border-sky-200' },
+      { color: '#f43f5e', bg: 'bg-rose-500', text: 'text-rose-600', light: 'bg-rose-50/80', border: 'border-rose-200' },
+      { color: '#8b5cf6', bg: 'bg-purple-500', text: 'text-purple-600', light: 'bg-purple-50/80', border: 'border-purple-200' },
+      { color: '#14b8a6', bg: 'bg-teal-500', text: 'text-teal-600', light: 'bg-teal-50/80', border: 'border-teal-200' },
+      { color: '#ec4899', bg: 'bg-pink-500', text: 'text-pink-600', light: 'bg-pink-50/80', border: 'border-pink-200' },
+      { color: '#f97316', bg: 'bg-orange-500', text: 'text-orange-600', light: 'bg-orange-50/80', border: 'border-orange-200' },
+      { color: '#64748b', bg: 'bg-slate-500', text: 'text-slate-600', light: 'bg-slate-50/80', border: 'border-slate-200' },
+    ];
+
+    const serviceCategories = Object.values(serviceCategoryMap)
+      .sort((a, b) => b.orderCount - a.orderCount)
+      .map((item, index) => {
+        const theme = CATEGORY_PALETTE[index % CATEGORY_PALETTE.length];
+        const percentage = totalCategoryOrders > 0 ? (item.orderCount / totalCategoryOrders) * 100 : 0;
+        return {
+          ...item,
+          percentage: Number(percentage.toFixed(1)),
+          theme,
+        };
+      });
+
     return {
       dailyPoints,
+      serviceCategories,
+      totalCategoryOrders,
       totals: {
         orders: {
           current: currentPeriodOrders,
@@ -674,6 +731,229 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
             </div>
           </div>
         )}
+      </div>
+    );
+  };
+
+  // ── Service Categories Percentage Chart Component ──
+  const renderServiceCategoriesChart = () => {
+    const categories = analytics.serviceCategories;
+    const totalOrders = analytics.totalCategoryOrders;
+
+    if (!categories || categories.length === 0 || totalOrders === 0) {
+      return (
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-soft p-8 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 mx-auto flex items-center justify-center mb-3">
+            <PieChart className="w-6 h-6" />
+          </div>
+          <h4 className="text-base font-extrabold text-gray-900">সার্ভিস ক্যাটাগরি তথ্য পাওয়া যায়নি</h4>
+          <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+            নির্বাচিত সময়সীমার মধ্যে কোনো সার্ভিস অর্ডারের রেকর্ড নেই। অন্য কোনো তারিখ ফিল্টার নির্বাচন করুন।
+          </p>
+        </div>
+      );
+    }
+
+    // Circumference for Donut Chart
+    const R = 75;
+    const C = 2 * Math.PI * R; // ~471.24
+    let accumulatedPct = 0;
+
+    const hoveredItem = categories.find((c) => c.name === hoveredCategory) || null;
+
+    return (
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-soft p-6 space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-4">
+          <div className="flex items-start space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md">
+              <PieChart className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2 flex-wrap">
+                <h3 className="font-black text-base sm:text-lg text-gray-900">
+                  Everyday Service Categories Distribution
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
+                  {categories.length} টি ক্যাটাগরি
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 font-medium mt-0.5">
+                অর্ডারসমূহের সার্ভিস ক্যাটাগরি অনুযায়ী শতকরা অনুপাত (Percentage %) ও অর্ডার বিভাজন
+              </p>
+            </div>
+          </div>
+
+          <div className="text-left sm:text-right">
+            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+              মোট ক্যাটাগরি অর্ডার
+            </span>
+            <span className="text-xl sm:text-2xl font-black text-gray-900">
+              {totalOrders} <span className="text-xs font-bold text-gray-500">টি সম্পন্ন/চলমান</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Proportional Segmented Progress Bar */}
+        <div>
+          <div className="flex items-center justify-between text-xs font-extrabold text-gray-500 mb-2">
+            <span>শতকরা অনুপাত বার (Distribution Bar)</span>
+            <span>১০০%</span>
+          </div>
+          <div className="w-full h-4 bg-gray-100 rounded-full overflow-hidden flex shadow-inner p-0.5">
+            {categories.map((cat) => (
+              <div
+                key={cat.name}
+                onMouseEnter={() => setHoveredCategory(cat.name)}
+                onMouseLeave={() => setHoveredCategory(null)}
+                className={`h-full transition-all duration-300 cursor-pointer first:rounded-l-full last:rounded-r-full relative ${
+                  hoveredCategory && hoveredCategory !== cat.name ? 'opacity-40' : 'opacity-100'
+                }`}
+                style={{
+                  width: `${Math.max(cat.percentage, 1.5)}%`,
+                  backgroundColor: cat.theme.color,
+                }}
+                title={`${cat.name}: ${cat.percentage}% (${cat.orderCount} টি অর্ডার)`}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Center Grid: Donut Chart on Left & Categories Cards on Right */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          {/* Donut SVG Visual */}
+          <div className="lg:col-span-5 flex flex-col items-center justify-center p-2">
+            <div className="relative w-64 h-64 flex items-center justify-center">
+              <svg className="w-full h-full -rotate-90" viewBox="0 0 220 220">
+                {/* Background Ring */}
+                <circle
+                  cx="110"
+                  cy="110"
+                  r={R}
+                  fill="transparent"
+                  stroke="#f3f4f6"
+                  strokeWidth="20"
+                />
+
+                {/* Slices */}
+                {categories.map((cat) => {
+                  const strokeLength = (cat.percentage / 100) * C;
+                  const strokeOffset = -(accumulatedPct / 100) * C;
+                  accumulatedPct += cat.percentage;
+                  const isHovered = hoveredCategory === cat.name;
+
+                  return (
+                    <circle
+                      key={cat.name}
+                      cx="110"
+                      cy="110"
+                      r={R}
+                      fill="transparent"
+                      stroke={cat.theme.color}
+                      strokeWidth={isHovered ? 26 : 20}
+                      strokeDasharray={`${strokeLength} ${C}`}
+                      strokeDashoffset={strokeOffset}
+                      strokeLinecap="butt"
+                      className="cursor-pointer transition-all duration-200"
+                      onMouseEnter={() => setHoveredCategory(cat.name)}
+                      onMouseLeave={() => setHoveredCategory(null)}
+                    />
+                  );
+                })}
+              </svg>
+
+              {/* Inside Donut Center Badge */}
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4 pointer-events-none">
+                {hoveredItem ? (
+                  <>
+                    <span className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider line-clamp-1 max-w-[130px]">
+                      {hoveredItem.name}
+                    </span>
+                    <span className="text-3xl font-black text-gray-900 tracking-tight" style={{ color: hoveredItem.theme.color }}>
+                      {hoveredItem.percentage}%
+                    </span>
+                    <span className="text-xs font-bold text-gray-500">
+                      {hoveredItem.orderCount} টি অর্ডার
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider">
+                      শীর্ষ সার্ভিস
+                    </span>
+                    <span className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                      {categories[0]?.percentage}%
+                    </span>
+                    <span className="text-xs font-bold text-indigo-600 line-clamp-1 max-w-[130px]">
+                      {categories[0]?.name}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <p className="text-[11px] text-gray-400 font-medium text-center mt-1">
+              মাউস নিয়ে গিয়ে নির্দিষ্ট সার্ভিসের অনুপাত দেখুন
+            </p>
+          </div>
+
+          {/* Right Side Category Cards Grid */}
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
+            {categories.map((cat) => {
+              const isHovered = hoveredCategory === cat.name;
+              return (
+                <div
+                  key={cat.name}
+                  onMouseEnter={() => setHoveredCategory(cat.name)}
+                  onMouseLeave={() => setHoveredCategory(null)}
+                  className={`p-3.5 rounded-2xl border transition-all duration-200 cursor-pointer ${
+                    isHovered
+                      ? `${cat.theme.light} ${cat.theme.border} shadow-md scale-[1.02]`
+                      : 'bg-gray-50/70 border-gray-100 hover:border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <span
+                        className="w-3 h-3 rounded-full shrink-0 shadow-xs"
+                        style={{ backgroundColor: cat.theme.color }}
+                      />
+                      <span className="font-black text-xs text-gray-900 truncate" title={cat.name}>
+                        {cat.name}
+                      </span>
+                    </div>
+
+                    <span className="text-sm font-black shrink-0" style={{ color: cat.theme.color }}>
+                      {cat.percentage}%
+                    </span>
+                  </div>
+
+                  {/* Progress Line */}
+                  <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden mb-2">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${cat.percentage}%`,
+                        backgroundColor: cat.theme.color,
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-gray-500 font-semibold">
+                    <span>
+                      অর্ডার: <strong className="text-gray-800">{cat.orderCount} টি</strong>
+                    </span>
+                    {cat.revenue > 0 && (
+                      <span>
+                        ডেলিভারি ফি: <strong className="text-emerald-600">৳{cat.revenue.toLocaleString()}</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
   };
@@ -1006,6 +1286,9 @@ export const GrowthAnalytics: React.FC<GrowthAnalyticsProps> = ({
         {/* Combined SVG Chart */}
         {renderCombinedChart()}
       </div>
+
+      {/* 🌟 NEW: Service Categories Distribution & Percentage Chart */}
+      {renderServiceCategoriesChart()}
     </div>
   );
 };

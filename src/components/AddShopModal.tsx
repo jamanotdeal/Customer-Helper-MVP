@@ -9,9 +9,10 @@ import { parseStoreTypes } from '@/lib/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { MapPickerModal } from './MapPickerModal';
 import {
-  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle, ChevronDown, User as UserIcon,
+  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle, ChevronDown, User as UserIcon, Upload, Image as ImageIcon, Trash2, Sparkles,
 } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
+import { compressImage } from '@/lib/imageUtils';
 
 interface AddShopModalProps {
   shopToEdit?: Shop | null;
@@ -52,11 +53,32 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
   const [canReceiveOrders, setCanReceiveOrders] = useState<boolean>(
     shopToEdit?.canReceiveOrders !== undefined ? shopToEdit.canReceiveOrders : true
   );
+  const [isFeatured, setIsFeatured] = useState<boolean>(Boolean(shopToEdit?.isFeatured));
+  const [featuredOrder, setFeaturedOrder] = useState<string>(
+    shopToEdit?.featuredOrder !== undefined ? String(shopToEdit.featuredOrder) : '1'
+  );
   const [storeDescription, setStoreDescription] = useState(shopToEdit?.description || '');
   const [location, setLocation] = useState<LocationData>(
     shopToEdit?.location || { address: '', lat: 23.8103, lng: 90.4125 }
   );
   const [photoUrl, setPhotoUrl] = useState(shopToEdit?.photoUrl || '');
+  const photoFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('অনুগ্রহ করে একটি ছবি ফাইল নির্বাচন করুন।');
+      return;
+    }
+    try {
+      const compressed = await compressImage(file, 700, 700, 0.85);
+      setPhotoUrl(compressed);
+      setError('');
+    } catch {
+      setError('ছবি প্রসেস করতে ব্যর্থ হয়েছে।');
+    }
+  };
 
   // Eligible users: not admin, not helper, not assigned to a DIFFERENT shop
   const allUsersList = Array.from(fallbackStore.users.values());
@@ -299,6 +321,9 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         photoUrl: photoUrl.trim() || undefined,
         commissionPercent: commPercent,
         canReceiveOrders,
+        isFeatured,
+        featuredOrder: isFeatured && featuredOrder.trim() !== '' ? parseInt(featuredOrder.trim(), 10) : undefined,
+        featuredAt: isFeatured ? (shopToEdit?.featuredAt || new Date().toISOString()) : undefined,
         isOpen: shopToEdit?.isOpen !== undefined ? shopToEdit.isOpen : true,
         openingTime: shopToEdit?.openingTime,
         closingTime: shopToEdit?.closingTime,
@@ -685,6 +710,54 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               </div>
             </div>
 
+            {/* 5c. Top Featured Store Toggle */}
+            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/90 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center space-x-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+                    <span className="text-xs font-extrabold text-amber-950 block">শীর্ষে ফিচার করুন (Feature at Top)</span>
+                  </div>
+                  <span className="text-[10px] font-semibold text-amber-900 block mt-0.5">
+                    {isFeatured
+                      ? 'ক্যাটাগরি নির্বাচনের সময় এই দোকানটি শীর্ষে (টপে) প্রদর্শিত হবে। গ্রাহকদের কোনো ফিচার্ড স্ট্যাটাস দেখানো হবে না।'
+                      : 'সাধারণ নিয়মে প্রদর্শিত হবে (টপে ফিচার্ড নয়)।'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isFeatured}
+                  onClick={() => setIsFeatured(!isFeatured)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 cursor-pointer ${
+                    isFeatured ? 'bg-amber-500' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200 ${
+                      isFeatured ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {isFeatured && (
+                <div className="pt-2 border-t border-amber-200/60 flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-amber-900">
+                    অগ্রাধিকার ক্রম (Priority Order):
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={featuredOrder}
+                    onChange={(e) => setFeaturedOrder(e.target.value)}
+                    placeholder="1"
+                    className="w-20 p-1.5 px-2.5 rounded-xl border border-amber-300 text-xs font-black text-amber-950 bg-white text-center focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                </div>
+              )}
+            </div>
+
             {/* 6. পণ্য/সেবা */}
             <div className="space-y-1 pt-2 border-t border-gray-100">
               <label className="text-xs font-bold text-gray-600 block">দোকানে কী কী পণ্য/সেবা পাওয়া যায়?</label>
@@ -805,20 +878,54 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
               )}
             </div>
 
-            {/* 8. ছবির URL (optional) */}
-            <div className="space-y-1 pt-2 border-t border-gray-100">
+            {/* 8. দোকানের প্রোফাইল ছবি (Upload or URL) */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
               <label className="text-xs font-bold text-gray-700 block">
-                দোকানের ছবির URL <span className="text-gray-400 font-medium">(ঐচ্ছিক)</span>
+                দোকানের প্রোফাইল ছবি <span className="text-gray-400 font-medium">(ঐচ্ছিক)</span>
               </label>
-              <input
-                type="url"
-                value={photoUrl}
-                onChange={(e) => setPhotoUrl(e.target.value)}
-                placeholder="https://example.com/shop-photo.jpg"
-                className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold"
-              />
+
+              {/* Upload from device */}
+              <div className="flex items-center space-x-3">
+                <input
+                  ref={photoFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoFileChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => photoFileInputRef.current?.click()}
+                  className="px-3.5 py-2.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 active:scale-95 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>{photoUrl ? 'ডিভাইস থেকে ছবি পরিবর্তন' : 'ডিভাইস থেকে ছবি আপলোড'}</span>
+                </button>
+                {photoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setPhotoUrl('')}
+                    className="px-3 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>ছবি মুছুন</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Or manual URL */}
+              <div className="pt-1">
+                <input
+                  type="url"
+                  value={photoUrl.startsWith('data:') ? '' : photoUrl}
+                  onChange={(e) => setPhotoUrl(e.target.value)}
+                  placeholder="অথবা ছবির অনলাইন URL প্রবেশ করান..."
+                  className="w-full p-3 rounded-2xl border border-gray-200 focus:border-purple-500 outline-none text-xs font-semibold placeholder:text-gray-400"
+                />
+              </div>
+
               {photoUrl && (
-                <div className="mt-2 rounded-2xl overflow-hidden border border-gray-200 h-28 bg-gray-50">
+                <div className="mt-2 rounded-2xl overflow-hidden border border-gray-200 h-32 bg-gray-50 relative group">
                   <img
                     src={photoUrl}
                     alt="Shop preview"

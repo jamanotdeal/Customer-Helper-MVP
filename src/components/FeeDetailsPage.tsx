@@ -17,6 +17,7 @@ import {
   MessageSquare,
   ShoppingBag,
   AlertTriangle,
+  Store,
 } from 'lucide-react';
 import { useModal } from './CustomModal';
 
@@ -35,6 +36,7 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
   const [weightKg, setWeightKg] = useState<string>('0');
   const [productPrice, setProductPrice] = useState<string>('');
   const [isReturnRequested, setIsReturnRequested] = useState<boolean>(false);
+  const [customStoreItemCount, setCustomStoreItemCount] = useState<string>('0');
 
 
   // Map focus & Modal
@@ -66,6 +68,7 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
       isReturnRequested,
       productPrice: parseFloat(productPrice) || 0,
       discountAmount: 0,
+      customStoreItemCount: parseInt(customStoreItemCount, 10) || 0,
     },
     pricingSettings
   );
@@ -250,6 +253,56 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
           </label>
         )}
 
+        {/* Row 4: Custom Store Item Counter (Shown only if admin enabled custom store pricing) */}
+        {pricingSettings.customStorePricingEnabled && (
+          <div className="space-y-1.5 p-3 rounded-xl bg-indigo-50/50 border border-indigo-100">
+            <div className="flex items-center justify-between text-xs font-bold text-gray-800">
+              <span className="flex items-center space-x-1.5">
+                <Store className="w-3.5 h-3.5 text-indigo-600" />
+                <span>কাস্টম স্টোর পণ্য (Custom Store Items)</span>
+              </span>
+              <span className="text-[10px] text-indigo-700 font-extrabold bg-indigo-100/80 px-2 py-0.5 rounded-full">
+                +৳{pricingSettings.customStorePricingAmount ?? 15}/আইটেম
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 pt-0.5">
+              <div className="relative flex-1">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={customStoreItemCount}
+                  onChange={(e) => setCustomStoreItemCount(e.target.value)}
+                  className="w-full pl-3 pr-14 py-2 bg-white border border-indigo-200 rounded-xl text-xs font-bold text-gray-900 focus:outline-none focus:border-indigo-500 transition-all"
+                  placeholder="0"
+                />
+                <span className="absolute right-2.5 top-2 text-[11px] font-semibold text-gray-400">টি আইটেম</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <button
+                  type="button"
+                  onClick={() => setCustomStoreItemCount((prev) => Math.max(0, (parseInt(prev, 10) || 0) - 1).toString())}
+                  className="w-8 h-8 rounded-xl bg-white border border-gray-200 text-gray-700 font-bold hover:bg-gray-50 flex items-center justify-center transition-all cursor-pointer"
+                  title="কমিয়ে দিন"
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCustomStoreItemCount((prev) => ((parseInt(prev, 10) || 0) + 1).toString())}
+                  className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 flex items-center justify-center transition-all shadow-xs cursor-pointer"
+                  title="বাড়িয়ে দিন"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-500">
+              তালিকাভুক্ত স্টোর ছাড়া অন্য কোনো দোকান থেকে হেলপার পণ্য ক্রয় করলে এই চার্জ যুক্ত হয়।
+            </p>
+          </div>
+        )}
+
         {/* Divider */}
         <div className="border-t border-dashed border-gray-200" />
 
@@ -270,6 +323,12 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
               <div className="flex items-center justify-between text-purple-200">
                 <span>প্রসেসিং ফি:</span>
                 <span className="font-bold">+৳{calculation.processingFee}</span>
+              </div>
+            )}
+            {calculation.customStoreFee > 0 && (
+              <div className="flex items-center justify-between text-indigo-200">
+                <span>কাস্টম স্টোর চার্জ ({calculation.customStoreItemCount} × ৳{calculation.customStoreUnitFee}):</span>
+                <span className="font-bold">+৳{calculation.customStoreFee}</span>
               </div>
             )}
           </div>
@@ -307,6 +366,16 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
           {pricingSettings.feeCalculatorCompanyDetails ||
             'কোম্পানির পক্ষ থেকে সব সময় দূরত্ব ও কাজের পরিমাণের ভিত্তিতে যৌক্তিক ডেলিভারি ফি নির্ধারিত হয়।'}
         </p>
+
+        {pricingSettings.customStorePricingEnabled && (
+          <div className="flex items-start space-x-2 bg-indigo-50/70 p-3 rounded-xl border border-indigo-100 text-xs text-indigo-950 font-medium leading-relaxed">
+            <Store className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+            <div>
+              <strong className="block font-bold text-indigo-900 mb-0.5">কাস্টম স্টোর কেনাকাটা চার্জ:</strong>
+              গ্রাহকের অর্ডার করা পণ্যসমূহ যদি তালিকাভুক্ত স্টোর থেকে পাওয়া না যায় এবং হেলপারকে আলাদা কোনো কাস্টম দোকান থেকে কিনতে হয়, তবে প্রতি কাস্টম পণ্যে ৳{pricingSettings.customStorePricingAmount ?? 15} টাকা অতিরিক্ত চার্জ যুক্ত হবে।
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── MINIMALIST SUGGESTION FORM (TEXTBOX & SUBMIT BUTTON ONLY) ── */}

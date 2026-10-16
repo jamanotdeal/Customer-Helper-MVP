@@ -5,6 +5,7 @@ import { Shop, StoreProduct } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { Clock, Store, CircleDot, X, Package, ArrowLeft, Plus, Minus, Check, Search, ChevronDown, Sparkles, Layers } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useCart } from '@/context/CartContext';
 import { StoreProductManager } from './StoreProductManager';
 import { DEFAULT_SERVICES, isShopMatchingService } from '@/lib/pricing';
 import { hapticFeedback } from '@/lib/native';
@@ -73,7 +74,7 @@ export function isShopOpenNow(shop: Shop): boolean {
 export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustomRequest }) => {
   const [shops, setShops] = useState<Shop[]>(() => {
     return Array.from(fallbackStore.shops.values()).filter(
-      (s) => !s.isBlocked && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+      (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
     );
   });
   const [isLoading, setIsLoading] = useState(() => fallbackStore.shops.size === 0);
@@ -109,23 +110,27 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
   useEffect(() => {
     const sync = () => {
       const all = Array.from(fallbackStore.shops.values()).filter(
-        (s) => !s.isBlocked && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+        (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
       );
       setShops(all);
       setIsLoading(false);
-      const svcs = fallbackStore.pricingSettings?.services || DEFAULT_SERVICES;
+      const adminServices = fallbackStore.pricingSettings?.services;
+      const svcs = adminServices && adminServices.length > 0 ? adminServices : DEFAULT_SERVICES;
       setServicesList(svcs);
       setServiceStoreTypeMap(fallbackStore.pricingSettings?.serviceStoreTypeMap);
-      if (!selectedService && svcs.length > 0) {
-        setSelectedService(svcs[0]);
-      }
+      setSelectedService((prev) => {
+        if (!prev || !svcs.includes(prev) || prev === 'Bazar-sodai korte hobe') {
+          return svcs[0] || '';
+        }
+        return prev;
+      });
     };
     sync();
     fallbackStore.loadShops();
-    fallbackStore.getAllOrderFeedbacks().catch(() => {});
+    fallbackStore.getAllOrderFeedbacks().catch(() => { });
     const unsub = fallbackStore.subscribe(sync);
     return () => unsub();
-  }, [selectedService]);
+  }, []);
 
   const filteredShops = useMemo(() => {
     const matched = shops.filter((s) =>
@@ -184,11 +189,10 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
               hapticFeedback('selection');
               setIsDropdownOpen((prev) => !prev);
             }}
-            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20 active:scale-[0.99] ${
-              isDropdownOpen
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20 active:scale-[0.99] ${isDropdownOpen
                 ? 'border-emerald-300 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-600/30'
                 : 'border-emerald-500/80 hover:border-emerald-400 hover:shadow-lg'
-            }`}
+              }`}
             aria-expanded={isDropdownOpen}
             aria-haspopup="listbox"
           >
@@ -213,11 +217,10 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
             </div>
 
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${
-                isDropdownOpen
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${isDropdownOpen
                   ? 'bg-white text-emerald-700 rotate-180 shadow-xs'
                   : 'bg-white/20 border border-white/25 text-white'
-              }`}
+                }`}
             >
               <ChevronDown className="w-4 h-4 stroke-[2.5]" />
             </div>
@@ -239,19 +242,17 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
                         setVisibleCount(INITIAL_COUNT);
                         setIsDropdownOpen(false);
                       }}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${
-                        isSelected
+                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${isSelected
                           ? 'bg-emerald-50 text-emerald-950 font-black'
                           : 'hover:bg-gray-50 text-gray-800 font-bold'
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center gap-2.5 truncate">
                         <div
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                            isSelected
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${isSelected
                               ? 'bg-emerald-600 ring-4 ring-emerald-200'
                               : 'bg-gray-300'
-                          }`}
+                            }`}
                         />
                         <span className="text-xs sm:text-sm truncate">{svc}</span>
                       </div>
@@ -494,8 +495,8 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
               type="button"
               onClick={() => setActiveTab('products')}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${activeTab === 'products'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
             >
               পণ্য তালিকা
@@ -504,8 +505,8 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
               type="button"
               onClick={() => setActiveTab('manage')}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${activeTab === 'manage'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
             >
               পণ্য ব্যবস্থাপনা
@@ -575,7 +576,13 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
                         )}
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                           {catProducts.map((p) => (
-                            <ProductCard key={p.id} product={p} isStoreOpen={isOpen} shopName={shop.name} />
+                            <ProductCard
+                              key={p.id}
+                              product={p}
+                              isStoreOpen={isOpen}
+                              shopName={shop.name}
+                              shop={shop}
+                            />
                           ))}
                         </div>
                       </div>
@@ -591,26 +598,72 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
   );
 };
 
-// ─── Read-only Product Card ───────────────────────────────────────────────────
+// ─── Product Card with + and Quantity Controls on Image ─────────────────────────
 interface ProductCardProps {
   product: StoreProduct;
   isStoreOpen: boolean;
   shopName?: string;
+  shop?: Shop;
 }
 
-const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shopName }) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shopName, shop }) => {
+  const { cartItems, addToCart, updateQuantity } = useCart();
+  const cartItem = cartItems.find((item) => item.id === p.id);
+  const qty = cartItem?.quantity ?? 0;
+
   const hasDiscount = Boolean(p.discountRate && p.discountRate > 0);
   const discountedPrice = hasDiscount
     ? Math.round(p.price * (1 - (p.discountRate || 0) / 100))
     : p.price;
   const unavailable = !p.inStock;
 
+  const handleIncrease = () => {
+    hapticFeedback('selection');
+    const storeObj = shop || (p.storeId ? fallbackStore.shops.get(p.storeId) : undefined) || ({
+      id: p.storeId || 'unknown',
+      name: shopName || p.storeName || 'Store',
+      type: 'অন্যান্য',
+      address: '',
+      phone: '',
+      photoUrl: '',
+      status: 'Approved',
+      isActive: true,
+      isOpen: isStoreOpen,
+      createdAt: new Date().toISOString(),
+    } as unknown as Shop);
+
+    addToCart(
+      {
+        id: p.id,
+        name: p.name,
+        unit: p.unit,
+        price: discountedPrice,
+        photoUrl: p.photoUrl,
+        quantity: 1,
+        qty: '1',
+        storeId: storeObj.id,
+        storeName: storeObj.name,
+        discountRate: p.discountRate,
+      },
+      storeObj
+    );
+  };
+
+  const handleDecrease = () => {
+    hapticFeedback('selection');
+    updateQuantity(p.id, -1);
+  };
+
   return (
     <div
-      className={`bg-white rounded-2xl border p-3 flex flex-col transition-all shadow-xs ${unavailable ? 'opacity-60 border-gray-100' : 'border-gray-100 hover:border-emerald-200'
+      className={`bg-white rounded-2xl border p-2.5 sm:p-3 flex flex-col justify-between transition-all shadow-xs ${qty > 0
+          ? 'border-emerald-500 ring-2 ring-emerald-500/10'
+          : unavailable
+            ? 'opacity-60 border-gray-100'
+            : 'border-gray-100 hover:border-emerald-200'
         }`}
     >
-      {/* Photo */}
+      {/* Photo & Badges */}
       <div className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center">
         {p.photoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -638,6 +691,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shop
             দোকান বন্ধ
           </span>
         )}
+
       </div>
 
       {/* Info */}
@@ -658,14 +712,50 @@ const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shop
         </div>
       </div>
 
-      {/* Availability label */}
-      <div className={`text-center py-1 rounded-xl text-[10px] font-bold ${unavailable
-          ? 'bg-gray-100 text-gray-400'
-          : !isStoreOpen
-            ? 'bg-amber-50 text-amber-800 border border-amber-200'
-            : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-        }`}>
-        {unavailable ? 'অনুপলব্ধ' : !isStoreOpen ? 'অন্য দোকান থেকে সংগ্রহ হবে' : 'পাওয়া যাচ্ছে'}
+      {/* Right after pricing: "+ Buy" or Increment/Decrement */}
+      <div>
+        {unavailable ? (
+          <button
+            type="button"
+            disabled
+            className="w-full py-2 rounded-xl bg-gray-100 text-gray-400 font-extrabold text-[11px] cursor-not-allowed"
+          >
+            অনুপলব্ধ (স্টক শেষ)
+          </button>
+        ) : qty === 0 ? (
+          <button
+            type="button"
+            onClick={() => handleIncrease()}
+            className="w-full py-2 sm:py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>Buy</span>
+          </button>
+        ) : (
+          <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-md">
+            <button
+              type="button"
+              onClick={() => handleDecrease()}
+              className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+              aria-label="Decrease quantity"
+            >
+              <Minus className="w-4 h-4 stroke-[3]" />
+            </button>
+
+            <span className="font-black text-xs sm:text-sm px-2 text-white text-center select-none flex-1">
+              {qty}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => handleIncrease()}
+              className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+              aria-label="Increase quantity"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

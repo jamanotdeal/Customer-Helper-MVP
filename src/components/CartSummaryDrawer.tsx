@@ -12,7 +12,6 @@ import { hapticFeedback } from '@/lib/native';
 import { AddCustomItemModal } from './AddCustomItemModal';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { isShopOpenNow } from './StoreGrid';
-import { StoreOffWarningModal } from './StoreOffWarningModal';
 import {
   saveAltPhone,
   saveDefaultDeliveryLocation,
@@ -100,8 +99,6 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
   const [orderNotes, setOrderNotes] = useState('');
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [formError, setFormError] = useState('');
-  const [showStoreOffModal, setShowStoreOffModal] = useState(false);
-  const isStoreWarningAcceptedRef = useRef(false);
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
 
@@ -257,12 +254,6 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       return;
     }
 
-    // Check if store is closed before placing order
-    if (!isStoreWarningAcceptedRef.current && closedStoreNames.length > 0) {
-      setShowStoreOffModal(true);
-      return;
-    }
-    isStoreWarningAcceptedRef.current = false;
 
     const totalPayable = subtotal + feeEst.deliverySubtotal + feeEst.processingFee;
     const confirmed = await showConfirm(
@@ -343,6 +334,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         shopId: cartShop?.id,
         selectedShopIds: cartShop?.id ? [cartShop.id] : [],
         isStoreOrder: true,
+        creatorRole: 'customer',
         isStoreClosedAtOrder: isStoreCurrentlyClosed || undefined,
         items: finalItems,
         pickupLocation: pickupLoc,
@@ -485,17 +477,11 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
 
             {/* Closed Store Notice */}
             {closedStoreNames.length > 0 && (
-              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/90 text-amber-900 space-y-1.5 shadow-2xs">
-                <div className="flex items-center gap-2 font-black text-xs text-amber-900">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>দোকান বন্ধ: অন্য দোকান থেকে পণ্য সংগ্রহ করা হবে</span>
-                </div>
-                <p className="text-[11px] leading-relaxed text-amber-800 font-medium">
-                  <strong>{closedStoreNames.join(', ')}</strong> বর্তমানে বন্ধ রয়েছে। তবে কোনো সমস্যা নেই, আমাদের হেলপার <strong>অন্য কোনো বিশ্বস্ত দোকান</strong> থেকে আপনার প্রয়োজনীয় পণ্যগুলো সংগ্রহ করে পৌঁছে দেবে।
+              <div className="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <p className="text-[11px] font-bold text-amber-900">
+                  দোকান বন্ধ — হেলপার অন্য দোকান থেকে সংগ্রহ করবে। মূল্য পরিবর্তন হতে পারে।
                 </p>
-                <div className="pt-0.5 text-[10px] text-amber-700 font-semibold flex items-center gap-1">
-                  <span>* অন্য দোকানের বিক্রয়মূল্য অনুযায়ী মূল্যে পরিবর্তন হতে পারে।</span>
-                </div>
               </div>
             )}
 
@@ -920,23 +906,6 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         }}
       />
 
-      {/* Store Off Warning Modal */}
-      {showStoreOffModal && (
-        <StoreOffWarningModal
-          isOpen={showStoreOffModal}
-          closedStoreNames={closedStoreNames}
-          onConfirm={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = true;
-            const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-            handleSubmitOrder(fakeEvent);
-          }}
-          onCancel={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = false;
-          }}
-        />
-      )}
 
       {/* Insufficient Coins Modal */}
       {showInsufficientCoinsModal && (

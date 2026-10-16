@@ -82,6 +82,20 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     }
   }, [resetTrigger]);
 
+  // If currently selected shop is blocked, clear it immediately
+  useEffect(() => {
+    if (!selectedShop) return;
+    const checkBlocked = () => {
+      const live = fallbackStore.shops.get(selectedShop.id);
+      if (live && (live.isBlocked || live.status === 'Rejected' || live.status === 'REJECTED')) {
+        setSelectedShop(null);
+      }
+    };
+    checkBlocked();
+    const unsub = fallbackStore.subscribe(checkBlocked);
+    return () => unsub();
+  }, [selectedShop]);
+
   // Sync admin services in real time from store
   useEffect(() => {
     const sync = () => {

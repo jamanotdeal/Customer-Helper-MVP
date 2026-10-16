@@ -1,4 +1,4 @@
-import { PricingSettings, Shop } from '@/types';
+import { PricingSettings, Shop, Order, ShopOrder } from '@/types';
 
 export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
   'বাজার-সদাই করে দিতে হবে (গ্যাস, চাল-ডাল, মাছ-মাংস, শাকসবজি)?',
@@ -26,8 +26,14 @@ export const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
 
   // Bengali service names (admin may configure these)
   'বাজার-সদাই করে দিন': '(গ্যাস, শাকসবজি, মাছ-মাংস, চাল, ডাল, তেল, পেঁয়াজ ইত্যাদি — যা যা লাগবে লিখুন)',
+  'লন্ড্রির কাপড় দিয়ে আসুন': '(কোথা থেকে কাপড় নিতে হবে এবং কোন লন্ড্রিতে দিতে হবে বিস্তারিত লিখুন)',
+  'লন্ড্রির দোকান থেকে কাপড় এনে দিন': '(কোন লন্ড্রি থেকে কাপড় আনতে হবে ও মানি রিসিট নম্বর লিখুন)',
   'খাবার এনে দিন': '(কোন রেস্তোরাঁ থেকে, কোন খাবার, কত পিস বা পরিমাণ — বিস্তারিত লিখুন)',
+  'আমার পার্সেল রিসিভ করে দিন': '(কোথায় পার্সেল আছে, কোন নাম বা অর্ডার নম্বরে, ডেলিভারি কোথায় দিতে হবে)',
   'ওষুধ এনে দিন': '(ওষুধের নাম, পরিমাণ, ফার্মেসির নাম বা এলাকা উল্লেখ করুন)',
+  'আমার একটা জিনিস দিয়ে আসুন': '(জিনিসটি কী, কোথা থেকে নিয়ে কোথায় দিতে হবে বিস্তারিত বলুন)',
+  'মিক্স কিছু কাজ করে দিন': '(সব কাজের বিস্তারিত একটি একটি করে লিখুন)',
+  'না, অন্য একটা কাজ করে দিন': '(আপনার কাজটি যতটা সম্ভব বিস্তারিতভাবে বলুন)',
   'জুতা সেলাই করে দিন': '(কোন ধরনের জুতা, কী সমস্যা আছে, বিস্তারিত বলুন)',
   'পার্সেল রিসিভ করে দিন': '(কোথায় পার্সেল আছে, কোন নাম বা অর্ডার নম্বরে, ডেলিভারি কোথায় দিতে হবে)',
   'মিক্স / একাধিক কাজ': '(সব কাজের বিস্তারিত একটি একটি করে লিখুন)',
@@ -59,13 +65,15 @@ export function getServiceDescriptionHint(service: string, settings?: PricingSet
 }
 
 export const DEFAULT_SERVICES: string[] = [
-  'Bazar-sodai korte hobe',
-  'Khabar ante hobe',
-  'Medicine ante hobe',
-  'zuta selai korte hobe',
-  'amar parcel recive kore dite hobe',
-  'mix',
-  'onno kicu',
+  'বাজার-সদাই করে দিন',
+  'লন্ড্রির কাপড় দিয়ে আসুন',
+  'লন্ড্রির দোকান থেকে কাপড় এনে দিন',
+  'খাবার এনে দিন',
+  'আমার পার্সেল রিসিভ করে দিন',
+  'ওষুধ এনে দিন',
+  'আমার একটা জিনিস দিয়ে আসুন',
+  'মিক্স কিছু কাজ করে দিন',
+  'না, অন্য একটা কাজ করে দিন',
 ];
 
 export const DEFAULT_STORE_TYPES: string[] = [
@@ -324,6 +332,8 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   blockedUserModalMessage: 'নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। এই মুহূর্তে নতুন সার্ভিস রিকোয়েস্ট তৈরি বা নতুন অর্ডার গ্রহণ করা যাবে না। বিস্তারিত তথ্য বা সহায়তার জন্য অনুগ্রহ করে অ্যাডমিন বা সাপোর্টে যোগাযোগ করুন।',
   blockedUserModalButtonText: 'সাপোর্টে যোগাযোগ করুন (Contact Support)',
   blockedUserModalContactUrl: 'https://wa.me/8801800000000',
+  customStorePricingEnabled: false,
+  customStorePricingAmount: 15,
 };
 
 /**
@@ -356,6 +366,7 @@ export function calculateEstimatedFee(
     isReturnRequested: boolean;
     productPrice?: number;
     discountAmount?: number;
+    customStoreItemCount?: number;
   },
   settings: PricingSettings = DEFAULT_PRICING_SETTINGS
 ) {
@@ -390,9 +401,17 @@ export function calculateEstimatedFee(
     }
   }
 
+  // Custom Store fee calculation
+  let customStoreFee = 0;
+  const customStoreItemCount = Math.max(0, Number(params.customStoreItemCount) || 0);
+  const customStoreUnitFee = Number(settings.customStorePricingAmount ?? 15) || 0;
+  if (settings.customStorePricingEnabled && customStoreItemCount > 0) {
+    customStoreFee = customStoreItemCount * customStoreUnitFee;
+  }
+
   const discount = Math.max(0, Number(params.discountAmount) || 0);
 
-  const rawTotal = deliverySubtotal + returnFee + processingFee - discount;
+  const rawTotal = deliverySubtotal + returnFee + processingFee + customStoreFee - discount;
   const totalFee = Math.max(0, Math.round(rawTotal));
 
   return {
@@ -403,6 +422,9 @@ export function calculateEstimatedFee(
     returnFee,
     returnPercent,
     processingFee,
+    customStoreFee,
+    customStoreItemCount,
+    customStoreUnitFee,
     productPrice,
     discount,
     totalFee,
@@ -410,6 +432,76 @@ export function calculateEstimatedFee(
     perKgRate,
     minFee,
   };
+}
+
+/**
+ * Counts how many custom store items are in an order.
+ * This includes:
+ * - Items included in helper's custom cost (ShopOrder with shopId === 'myself')
+ * - Items marked isCustom that have price or buyFrom or were purchased from outside stores
+ */
+export function getCustomStoreItemCount(order?: Order | null, shopOrders: ShopOrder[] = []): number {
+  if (!order) return 0;
+
+  // 1. Check helper custom cost shop orders (shopId: 'myself')
+  const myselfSOs = (shopOrders || []).filter(
+    (so) => so.parentOrderId === order.id && so.shopId === 'myself' && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+  );
+
+  const myselfItemIds = new Set<string>();
+  let myselfItemCount = 0;
+  for (const so of myselfSOs) {
+    if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+      for (const it of so.itemsWithPrice) {
+        if (it.itemId) myselfItemIds.add(it.itemId);
+        if (it.originalId) myselfItemIds.add(it.originalId);
+        myselfItemCount++;
+      }
+    } else {
+      myselfItemCount++;
+    }
+  }
+
+  // 2. Check items in order that were bought from custom / non-listed store
+  let directCustomCount = 0;
+  if (order.items && order.items.length > 0) {
+    for (const it of order.items) {
+      if (myselfItemIds.has(it.id)) {
+        continue; // Already counted via myself shop order
+      }
+      // If it has buyFrom (bought by helper from custom/external store)
+      if (it.buyFrom && !it.storeId) {
+        directCustomCount++;
+      } else if (it.isCustom && ((typeof it.price === 'number' && it.price > 0) || it.purchased)) {
+        directCustomCount++;
+      }
+    }
+  }
+
+  const count = myselfItemCount + directCustomCount;
+  return count;
+}
+
+/**
+ * Calculates custom store fee for an order based on admin settings.
+ * If setting is enabled and there are custom cost items, returns count, unitFee, and totalFee.
+ */
+export function calculateCustomStoreFee(
+  order?: Order | null,
+  shopOrders: ShopOrder[] = [],
+  settings: PricingSettings = DEFAULT_PRICING_SETTINGS
+): { count: number; unitFee: number; totalFee: number } {
+  if (!order || !settings?.customStorePricingEnabled) {
+    return { count: 0, unitFee: 0, totalFee: 0 };
+  }
+  const unitFee = Number(settings.customStorePricingAmount ?? 15) || 0;
+  const count = getCustomStoreItemCount(order, shopOrders);
+  const computedFee = count * unitFee;
+  const storedFee = (typeof order?.customStoreFee === 'number' && order.customStoreFee > 0) ? order.customStoreFee : 0;
+  const finalTotal = Math.max(computedFee, storedFee);
+  const finalCount = count > 0 ? count : (finalTotal > 0 ? Math.ceil(finalTotal / (unitFee || 1)) : 0);
+
+  return { count: finalCount, unitFee, totalFee: finalTotal };
 }
 
 

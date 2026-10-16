@@ -26,7 +26,10 @@ import {
   Mail,
   Clock,
   AlertTriangle,
+  Upload,
+  Image as ImageIcon,
 } from 'lucide-react';
+import { compressImage } from '@/lib/imageUtils';
 
 interface AdminStoreAppDetailsModalProps {
   application: StoreApplication;
@@ -61,6 +64,23 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
   const [locationAddress, setLocationAddress] = useState(application.location?.address || '');
   const [locationLat, setLocationLat] = useState<string>(application.location?.lat?.toString() || '');
   const [locationLng, setLocationLng] = useState<string>(application.location?.lng?.toString() || '');
+  const [photoUrl, setPhotoUrl] = useState(application.photoUrl || '');
+  const photoFileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showAlert('ভুল ফাইল', 'অনুগ্রহ করে একটি ছবি ফাইল নির্বাচন করুন।', 'warning');
+      return;
+    }
+    try {
+      const compressed = await compressImage(file, 600, 600, 0.8);
+      setPhotoUrl(compressed);
+    } catch {
+      showAlert('ব্যর্থ', 'ছবি প্রসেস করতে ব্যর্থ হয়েছে।', 'error');
+    }
+  };
 
   const [saving, setSaving] = useState(false);
 
@@ -169,6 +189,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
           lat: locationLat ? parseFloat(locationLat) : application.location?.lat,
           lng: locationLng ? parseFloat(locationLng) : application.location?.lng,
         },
+        photoUrl: photoUrl.trim() || undefined,
       });
       showAlert('সফল', 'স্টোর আবেদনের তথ্য আপডেট হয়েছে।', 'success');
       onSaved();
@@ -248,6 +269,36 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
 
           {mode === 'VIEW' ? (
             <>
+              {/* Store Profile Photo Card */}
+              <div className="bg-orange-50/60 rounded-2xl p-4 border border-orange-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-orange-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5" /> Store Profile Photo
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setMode('EDIT')}
+                    className="text-[11px] font-bold text-orange-700 hover:text-orange-900 flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-orange-200/80 shadow-xs cursor-pointer"
+                  >
+                    <Edit className="w-3 h-3" />
+                    <span>{photoUrl ? 'ছবি পরিবর্তন করুন' : 'ছবি যোগ করুন'}</span>
+                  </button>
+                </div>
+                {photoUrl ? (
+                  <div className="w-full h-44 rounded-2xl overflow-hidden border border-orange-200 bg-gray-50 relative shadow-sm">
+                    <img
+                      src={photoUrl}
+                      alt={application.storeName}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl border border-dashed border-orange-200 text-center bg-white/60">
+                    <p className="text-xs text-gray-500 font-medium">কোনো ছবি আপলোড করা হয়নি।</p>
+                  </div>
+                )}
+              </div>
+
               {/* Store Info */}
               <div className="bg-orange-50/60 rounded-2xl p-4 border border-orange-100 space-y-3">
                 <h4 className="text-xs font-black text-orange-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -428,6 +479,56 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                     <option value={storeType}>{storeType} (current)</option>
                   )}
                 </select>
+              </div>
+
+              {/* Store Profile Photo Upload / Edit */}
+              <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                <label className="text-xs font-bold text-gray-700 block">
+                  দোকানের প্রোফাইল ছবি (Store Profile Photo)
+                </label>
+                <div className="flex items-center space-x-3.5">
+                  <div className="w-20 h-20 rounded-2xl bg-gray-50 border-2 border-dashed border-gray-200 overflow-hidden shrink-0 flex items-center justify-center relative group">
+                    {photoUrl ? (
+                      <img
+                        src={photoUrl}
+                        alt="Store preview"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <ImageIcon className="w-8 h-8 text-gray-300" />
+                    )}
+                    {photoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setPhotoUrl('')}
+                        className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5 flex-1">
+                    <input
+                      ref={photoFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoUpload}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRef.current?.click()}
+                      className="px-3.5 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 active:scale-95 text-orange-700 border border-orange-200 font-bold text-xs flex items-center space-x-1.5 transition-all cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{photoUrl ? 'ছবি পরিবর্তন করুন' : 'ছবি আপলোড করুন'}</span>
+                    </button>
+                    <p className="text-[10px] text-gray-400 leading-tight">
+                      ডিভাইস থেকে দোকানের যেকোনো ছবি নির্বাচন করুন।
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Owner Info */}

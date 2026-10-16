@@ -70,6 +70,20 @@ export const StorePage: React.FC<StorePageProps> = ({
 
   const isOpen = isShopOpenNow(shop);
 
+  // Guard against blocked shops
+  useEffect(() => {
+    const checkBlocked = () => {
+      const live = fallbackStore.shops.get(shop.id) || shop;
+      if (live.isBlocked || live.status === 'Rejected' || live.status === 'REJECTED') {
+        showAlert('দোকানটি পাওয়া যায়নি', 'এই দোকানটি বর্তমানে বন্ধ বা অনুপলব্ধ রয়েছে।', 'error');
+        onBack();
+      }
+    };
+    checkBlocked();
+    const unsub = fallbackStore.subscribe(checkBlocked);
+    return () => unsub();
+  }, [shop, onBack, showAlert]);
+
   // Sync products for this store
   useEffect(() => {
     const sync = () => {
@@ -389,10 +403,11 @@ export const StorePage: React.FC<StorePageProps> = ({
                         </span>
                       </div>
                     )}
+
                   </div>
 
                   {/* Title & Unit & Price */}
-                  <div className="space-y-0.5 mb-2.5">
+                  <div className="space-y-0.5 mb-2">
                     <p className="text-[9px] font-semibold text-emerald-700/80 truncate flex items-center gap-1">
                       <Store className="w-2.5 h-2.5 text-emerald-600/80 shrink-0" />
                       <span className="truncate">{shop.name}</span>
@@ -415,13 +430,13 @@ export const StorePage: React.FC<StorePageProps> = ({
                     </div>
                   </div>
 
-                  {/* Add to Cart Actions with + and - */}
+                  {/* Right after pricing: "+ Buy" or Increment/Decrement */}
                   <div>
                     {isOutOfStock ? (
                       <button
                         type="button"
                         disabled
-                        className="w-full py-1.5 rounded-xl bg-gray-100 text-gray-400 font-extrabold text-[11px] cursor-not-allowed"
+                        className="w-full py-2 rounded-xl bg-gray-100 text-gray-400 font-extrabold text-[11px] cursor-not-allowed"
                       >
                         অনুপলব্ধ (স্টক শেষ)
                       </button>
@@ -429,31 +444,33 @@ export const StorePage: React.FC<StorePageProps> = ({
                       <button
                         type="button"
                         onClick={() => handleIncrease(product)}
-                        className="w-full py-1.5 sm:py-2 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white font-extrabold text-xs flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border border-emerald-200 hover:border-emerald-600 shadow-2xs"
+                        className="w-full py-2 sm:py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
                       >
-                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                        <span>Add</span>
+                        <Plus className="w-4 h-4 stroke-[3]" />
+                        <span>+ Buy</span>
                       </button>
                     ) : (
-                      <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-xs">
+                      <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-md">
                         <button
                           type="button"
                           onClick={() => handleDecrease(product.id)}
-                          className="w-7 h-7 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center transition-all active:scale-90 cursor-pointer"
+                          className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
                           aria-label="Decrease quantity"
                         >
-                          <Minus className="w-3.5 h-3.5 stroke-[3]" />
+                          <Minus className="w-4 h-4 stroke-[3]" />
                         </button>
 
-                        <span className="font-black text-xs px-2 text-white">{qty}</span>
+                        <span className="font-black text-xs sm:text-sm px-2 text-white text-center select-none flex-1">
+                          {qty}
+                        </span>
 
                         <button
                           type="button"
                           onClick={() => handleIncrease(product)}
-                          className="w-7 h-7 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center transition-all active:scale-90 cursor-pointer"
+                          className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
                           aria-label="Increase quantity"
                         >
-                          <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                          <Plus className="w-4 h-4 stroke-[3]" />
                         </button>
                       </div>
                     )}

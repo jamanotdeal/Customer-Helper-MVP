@@ -15,8 +15,6 @@ import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
-import { StoreOffWarningModal } from './StoreOffWarningModal';
-import { isShopOpenNow } from './StoreGrid';
 import { saveScheduledOrder } from '@/utils/scheduledOrders';
 
 interface RequestComposerProps {
@@ -58,9 +56,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
-  const [showStoreOffModal, setShowStoreOffModal] = useState(false);
-  const [closedStoreNames, setClosedStoreNames] = useState<string[]>([]);
-  const isStoreWarningAcceptedRef = useRef(false);
 
   // Auto-expand when items are added from store or custom item
   useEffect(() => {
@@ -446,27 +441,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       setErrors(newErrors);
       return;
     }
-
-    // Requirement 3: Check if any item belongs to a store that is off/closed
-    if (!isStoreWarningAcceptedRef.current && activeItems.length > 0) {
-      const closedStores: string[] = [];
-      for (const it of activeItems) {
-        if (it.storeId) {
-          const sh = fallbackStore.shops.get(it.storeId);
-          if (sh && !isShopOpenNow(sh)) {
-            if (!closedStores.includes(sh.name)) {
-              closedStores.push(sh.name);
-            }
-          }
-        }
-      }
-      if (closedStores.length > 0) {
-        setClosedStoreNames(closedStores);
-        setShowStoreOffModal(true);
-        return;
-      }
-    }
-    isStoreWarningAcceptedRef.current = false;
 
     setErrors({});
 
@@ -1356,23 +1330,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         />
       )}
 
-      {/* Store Off Warning Modal */}
-      {showStoreOffModal && (
-        <StoreOffWarningModal
-          isOpen={showStoreOffModal}
-          closedStoreNames={closedStoreNames}
-          onConfirm={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = true;
-            const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-            handleSubmit(fakeEvent);
-          }}
-          onCancel={() => {
-            setShowStoreOffModal(false);
-            isStoreWarningAcceptedRef.current = false;
-          }}
-        />
-      )}
     </div>
   );
 };

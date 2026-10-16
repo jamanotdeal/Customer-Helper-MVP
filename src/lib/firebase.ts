@@ -1166,9 +1166,16 @@ class FallbackStore {
     if (Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
     getDocs(collection(db, 'store_products'))
       .then((snapshot) => {
+        // Full replacement — ensures deleted products are purged from local cache
+        const freshMap = new Map<string, StoreProduct>();
         snapshot.forEach((docSnap) => {
-          this.storeProducts.set(docSnap.id, docSnap.data() as StoreProduct);
+          const p = docSnap.data() as StoreProduct;
+          const id = p.id || docSnap.id;
+          freshMap.set(id, { ...p, id });
         });
+        // Clear then repopulate so deleted products don't linger
+        this.storeProducts.clear();
+        freshMap.forEach((p, id) => this.storeProducts.set(id, p));
         this._storeProductsCachedAt = Date.now();
         this.scheduleLocalStoreSave();
         this.notify();
@@ -2746,6 +2753,7 @@ class FallbackStore {
     const updated: Shop = {
       ...existing,
       isBlocked,
+      status: isBlocked ? 'Rejected' : (existing.status === 'Rejected' ? 'Approved' : existing.status || 'Approved'),
       blockedReason: isBlocked ? reason || 'Blocked by administrator' : undefined,
       adminBlockNote: isBlocked ? reason || 'Blocked by administrator' : undefined,
       blockedAt: isBlocked ? new Date().toISOString() : undefined,
@@ -2754,6 +2762,7 @@ class FallbackStore {
       updatedAt: new Date().toISOString(),
     };
     this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
     this.notify();
     try {
       await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updated), { merge: true });
@@ -5942,6 +5951,29 @@ class FallbackStore {
     return this.toggleShopOpenStatus(shopId, isActive);
   }
 
+  public async toggleShopFeaturedStatus(shopId: string, isFeatured: boolean, featuredOrder?: number) {
+    const existing = this.shops.get(shopId);
+    if (!existing) return;
+    const now = new Date().toISOString();
+    const updates: Partial<Shop> = {
+      isFeatured,
+      updatedAt: now,
+      featuredAt: isFeatured ? (existing.featuredAt || now) : undefined,
+    };
+    if (featuredOrder !== undefined) {
+      updates.featuredOrder = featuredOrder;
+    }
+    const updated: Shop = { ...existing, ...updates };
+    this.shops.set(shopId, updated);
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'shops', shopId), cleanForFirestore(updates), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] toggleShopFeaturedStatus note (saved locally):', e?.message || e);
+    }
+  }
+
   public async saveStoreProduct(product: StoreProduct) {
     this.storeProducts.set(product.id, product);
     this.scheduleLocalStoreSave();
@@ -5955,6 +5987,7 @@ class FallbackStore {
 
   public async deleteStoreProduct(productId: string) {
     this.storeProducts.delete(productId);
+    this._storeProductsCachedAt = 0; // force fresh Firestore fetch on next loadStoreProducts()
     this.scheduleLocalStoreSave();
     this.notify();
     try {
@@ -6655,6 +6688,13 @@ class FallbackStore {
     if (!existing) return;
     const updated = { ...existing, ...updatedFields };
     this.storeApplications.set(appId, updated);
+    if (updatedFields.photoUrl !== undefined) {
+      const shopId = `store-${existing.userId}`;
+      const shop = this.shops.get(shopId) || Array.from(this.shops.values()).find(s => s.applicationId === appId || s.ownerUserId === existing.userId);
+      if (shop) {
+        this.updateShop(shop.id, { photoUrl: updatedFields.photoUrl });
+      }
+    }
     this.notify();
     try {
       await setDoc(doc(db, 'storeApplications', appId), cleanForFirestore(updated), { merge: true });
@@ -6694,6 +6734,7 @@ class FallbackStore {
       name: existing.storeName,
       type: existing.storeType,
       description: existing.storeDescription,
+      photoUrl: existing.photoUrl,
       contactPerson: existing.ownerName,
       whatsapp: existing.ownerWhatsapp,
       managerName: existing.managerName,
@@ -6835,6 +6876,12 @@ class FallbackStore {
       isStoreApproved: false,
     };
     this.users.set(userId, updatedUser);
+    // Also block any shops owned by this user
+    Array.from(this.shops.entries()).forEach(([id, s]) => {
+      if (s.ownerUserId === userId || id === `store-${userId}`) {
+        this.blockShop(id, true, reason, 'Admin');
+      }
+    });
     this.scheduleLocalStoreSave();
     this.notify();
     try { await this.saveUser(updatedUser); } catch (_) { }

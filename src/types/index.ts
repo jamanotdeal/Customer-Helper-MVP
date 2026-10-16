@@ -119,6 +119,7 @@ export interface Order {
   feeAdjustment?: FeeAdjustment;
   productCost?: number;
   processingFee?: number;
+  customStoreFee?: number;
   
   helperId?: string;
   helperName?: string;
@@ -279,6 +280,7 @@ export interface StoreApplication {
   createdAt: string;
   reviewedAt?: string;
   reviewNote?: string;
+  photoUrl?: string;          // Store profile photo (base64 or URL)
 }
 
 export interface Shop {
@@ -314,6 +316,9 @@ export interface Shop {
   openingTime?: string;       // e.g. "9:00 AM"
   closingTime?: string;       // e.g. "10:00 PM"
   category?: string;          // e.g. "Grocery", "Pharmacy", "Restaurant"
+  isFeatured?: boolean;       // Admin-selected featured store shown at the top
+  featuredOrder?: number;     // Optional custom order/priority for featured stores (lower number = higher priority)
+  featuredAt?: string;        // Timestamp when marked as featured
 }
 
 export interface StoreProduct {
@@ -616,6 +621,10 @@ export interface PricingSettings {
 
   // Custom service category to store type mapping (admin-controlled)
   serviceStoreTypeMap?: Record<string, string[]>;
+
+  // Custom Store pricing settings (admin-controlled)
+  customStorePricingEnabled?: boolean;
+  customStorePricingAmount?: number;
 }
 
 export type ShopOrderStatus = 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'HANDOVER' | 'DELIVERED' | 'CANCELED';

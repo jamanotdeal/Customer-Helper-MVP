@@ -455,25 +455,6 @@ export default function PageClient() {
 
     // 3. Store view check: Store type users ONLY see Store views
     if (isStoreUser) {
-      // Wallet page
-      if (activeTab === 'wallet') {
-        return <StoreWallet />;
-      }
-      // Products page — accessible even when store is offline
-      if (activeTab === 'store_products') {
-        const storeId =
-          (user.storeId && fallbackStore.shops.has(user.storeId) ? user.storeId : undefined) ||
-          Array.from(fallbackStore.shops.values()).find(
-            (s) => s.ownerUserId === user.uid || (s.assignedUserIds && s.assignedUserIds.includes(user.uid)) || s.id === `store-${user.uid}`
-          )?.id || user.storeId || `store-${user.uid}`;
-        const shopName = storeId ? fallbackStore.shops.get(storeId)?.name || '' : '';
-        return (
-          <StoreProductManager
-            storeId={storeId}
-            storeName={shopName}
-          />
-        );
-      }
       return (
         <StoreDashboard
           activeTab={activeTab}
@@ -629,8 +610,8 @@ export default function PageClient() {
         />
       )}
 
-      {/* Global Missing Item Floating Button (visible on all customer pages when footer nav is shown) */}
-      {user && !isAdminView && (
+      {/* Global Missing Item Floating Button (visible even when logged out for customers) */}
+      {!isAdminView && (
         <MissingItemFloatingButton
           onOpenCustomRequest={() => {
             setShowGlobalCustomRequestModal(true);

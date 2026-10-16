@@ -155,6 +155,7 @@ export function calculateShopFeedbackStats(
 
 /**
  * Sorts stores based on customer criteria:
+ * 0. Featured stores selected by admin (at the top order).
  * 1. Positive feedback stores first (>= 90% positive feedback).
  * 2. New stores right after the positive feedback stores.
  * 3. Other stores.
@@ -167,6 +168,36 @@ export function sortShopsByFeedbackAndNew(
   const statsMap = calculateShopFeedbackStats(shops, feedbacksInput, ordersInput);
 
   return [...shops].sort((a, b) => {
+    // 0. Featured stores to the top!
+    const isFeatA = Boolean(a.isFeatured);
+    const isFeatB = Boolean(b.isFeatured);
+    if (isFeatA !== isFeatB) {
+      return isFeatA ? -1 : 1;
+    }
+
+    // If both are featured, sort among featured stores:
+    if (isFeatA && isFeatB) {
+      const orderA = typeof a.featuredOrder === 'number' && !isNaN(a.featuredOrder) ? a.featuredOrder : null;
+      const orderB = typeof b.featuredOrder === 'number' && !isNaN(b.featuredOrder) ? b.featuredOrder : null;
+      if (orderA !== null && orderB !== null && orderA !== orderB) {
+        return orderA - orderB;
+      }
+      if (orderA !== null && orderB === null) return -1;
+      if (orderA === null && orderB !== null) return 1;
+
+      // Prioritize open featured store
+      const openA = isShopOpenNow(a) ? 1 : 0;
+      const openB = isShopOpenNow(b) ? 1 : 0;
+      if (openA !== openB) {
+        return openB - openA;
+      }
+
+      // Fallback: newest featured/created store
+      const timeA = new Date(a.featuredAt || a.createdAt || 0).getTime();
+      const timeB = new Date(b.featuredAt || b.createdAt || 0).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+    }
+
     const statsA = statsMap.get(a.id);
     const statsB = statsMap.get(b.id);
 

@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderStatus, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
-import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee } from '@/lib/pricing';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search } from 'lucide-react';
+import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
+import { ServiceIcon } from './ServiceIcon';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map as MapIcon, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useModal } from './CustomModal';
@@ -340,6 +341,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [storePickerCategory, setStorePickerCategory] = useState('ALL');
   const [cancellingShopOrderId, setCancellingShopOrderId] = useState<string | null>(null);
   const [convertConfirmTarget, setConvertConfirmTarget] = useState<{ sid: string; storeName: string; itemCount: number } | null>(null);
+  const [orderNowConfirmTarget, setOrderNowConfirmTarget] = useState<{
+    sid: string;
+    storeName: string;
+    storeAddress?: string;
+    items: any[];
+    totalOrdered: number;
+    itemsText: string;
+  } | null>(null);
+  const [cancelShopOrderConfirmTarget, setCancelShopOrderConfirmTarget] = useState<{
+    shopOrderId: string;
+    storeName: string;
+  } | null>(null);
+  // Modal shown when helper tries to interact with a store item before store has accepted
+  const [storeOrderRequiredTarget, setStoreOrderRequiredTarget] = useState<{
+    sid: string;
+    storeName: string;
+    storeAddress?: string;
+    items: any[];
+    totalOrdered: number;
+    itemsText: string;
+  } | null>(null);
   // Edit history accordion (collapsed by default)
   const [showEditHistory, setShowEditHistory] = useState(false);
 
@@ -611,7 +633,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         return noteParts.map((part, idx) => {
           const subId = `note-item-${idx}`;
           const isConnected = getItemConnectedOrder(part, subId) !== null;
-          const isSubChecked = isConnected ? true : (checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : false);
+          const isSubChecked = checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : (isConnected ? true : false);
           return {
             id: subId,
             originalId: subId,
@@ -633,7 +655,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         parts.forEach((part, index) => {
           const subId = `${item.id}-${index}`;
           const isConnected = getItemConnectedOrder(part, subId) !== null;
-          const isSubChecked = isConnected ? true : (checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : !!item.purchased);
+          const isSubChecked = checkedSubItems[subId] !== undefined ? checkedSubItems[subId] : (isConnected ? true : !!item.purchased);
           result.push({
             id: subId,
             originalId: item.id,
@@ -646,7 +668,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         });
       } else {
         const isConnected = getItemConnectedOrder(item.name, item.id) !== null;
-        const isSubChecked = isConnected ? true : (checkedSubItems[item.id] !== undefined ? checkedSubItems[item.id] : !!item.purchased);
+        const isSubChecked = checkedSubItems[item.id] !== undefined ? checkedSubItems[item.id] : (isConnected ? true : !!item.purchased);
         result.push({
           id: item.id,
           originalId: item.id,
@@ -1247,17 +1269,222 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }
   };
 
+  const orderStoresList = useMemo(() => {
+    const storeMap = new Map<string, {
+      id: string;
+      name: string;
+      address?: string;
+      lat?: number;
+      lng?: number;
+      isClosed?: boolean;
+      distanceKm?: number;
+      source: 'item' | 'request';
+    }>();
+
+    const dLat = order.deliveryLocation?.lat;
+    const dLng = order.deliveryLocation?.lng;
+    const hasDelivery = typeof dLat === 'number' && typeof dLng === 'number';
+
+    // 1. Direct items with storeId
+    (order.items || []).forEach((it) => {
+      if (it.storeId) {
+        const shop = fallbackStore.shops.get(it.storeId);
+        const name = shop?.name || it.storeName || it.storeId;
+        const address = shop?.location?.address || (shop as any)?.address;
+        const lat = shop?.location?.lat;
+        const lng = shop?.location?.lng;
+        const isClosed = !!order.isStoreClosedAtOrder || (!!shop && (shop.isOpen === false || shop.isBlocked === true));
+
+        let dist: number | undefined = undefined;
+        if (hasDelivery && typeof lat === 'number' && typeof lng === 'number') {
+          dist = parseFloat(calculateDistanceKm(lat, lng, dLat!, dLng!).toFixed(2));
+        }
+
+        if (!storeMap.has(it.storeId)) {
+          storeMap.set(it.storeId, {
+            id: it.storeId,
+            name,
+            address,
+            lat,
+            lng,
+            isClosed,
+            distanceKm: dist,
+            source: 'item',
+          });
+        }
+      }
+    });
+
+    // 2. Active shop orders (store requests)
+    shopOrders.forEach((so) => {
+      if (
+        so.parentOrderId === order.id &&
+        so.shopId &&
+        so.shopId !== 'myself' &&
+        so.status !== 'CANCELED' &&
+        (so.status as string) !== 'CANCELLED'
+      ) {
+        const shop = fallbackStore.shops.get(so.shopId);
+        const name = shop?.name || so.shopName || so.shopId;
+        const address = shop?.location?.address || (shop as any)?.address;
+        const lat = shop?.location?.lat;
+        const lng = shop?.location?.lng;
+        const isClosed = !!shop && (shop.isOpen === false || shop.isBlocked === true);
+
+        let dist: number | undefined = undefined;
+        if (hasDelivery && typeof lat === 'number' && typeof lng === 'number') {
+          dist = parseFloat(calculateDistanceKm(lat, lng, dLat!, dLng!).toFixed(2));
+        }
+
+        if (!storeMap.has(so.shopId)) {
+          storeMap.set(so.shopId, {
+            id: so.shopId,
+            name,
+            address,
+            lat,
+            lng,
+            isClosed,
+            distanceKm: dist,
+            source: 'request',
+          });
+        } else {
+          const existing = storeMap.get(so.shopId)!;
+          if (existing.lat === undefined && lat !== undefined) existing.lat = lat;
+          if (existing.lng === undefined && lng !== undefined) existing.lng = lng;
+          if (!existing.address && address) existing.address = address;
+          if (existing.distanceKm === undefined && dist !== undefined) existing.distanceKm = dist;
+        }
+      }
+    });
+
+    return Array.from(storeMap.values());
+  }, [order.items, order.isStoreClosedAtOrder, order.deliveryLocation, shopOrders, fallbackStore.shops]);
+
+  const basePickupDistance = useMemo(() => {
+    if (order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
+      return parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2));
+    }
+    return 0;
+  }, [order.pickupLocation, order.deliveryLocation]);
+
+  const furthestPickupInfo = useMemo(() => {
+    let maxDist = basePickupDistance;
+    let furthestStoreId: string | null = null;
+    let furthestLabel = order.pickupLocation?.address || 'Pickup';
+
+    orderStoresList.forEach((s) => {
+      if (s.distanceKm !== undefined && s.distanceKm > maxDist) {
+        maxDist = s.distanceKm;
+        furthestStoreId = s.id;
+        furthestLabel = `${s.name}${s.address ? ` (${s.address})` : ''}`;
+      }
+    });
+
+    return { maxDist, furthestStoreId, furthestLabel };
+  }, [basePickupDistance, orderStoresList, order.pickupLocation?.address]);
+
+  // For distance calculation, count the most far / longest pickup address
+  const distanceKm = furthestPickupInfo.maxDist;
+
+  const handleOpenStoreDirection = (st: { lat?: number; lng?: number; address?: string; name: string }) => {
+    let destStr = '';
+    if (st.lat && st.lng) {
+      destStr = `${st.lat},${st.lng}`;
+    } else if (st.address) {
+      destStr = encodeURIComponent(st.address);
+    } else {
+      destStr = encodeURIComponent(st.name);
+    }
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${destStr}&travelmode=driving`;
+    window.open(url, '_blank');
+  };
+
+  const renderStoresAddressList = () => {
+    if (orderStoresList.length === 0) return null;
+    return (
+      <div className="space-y-1.5 animate-in fade-in pb-1">
+        <div className="flex items-center justify-between text-[10px] font-black uppercase text-gray-500 tracking-wider">
+          <span className="flex items-center gap-1">
+            <Store className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Stores & Pickup Addresses ({orderStoresList.length}):</span>
+          </span>
+          {distanceKm > 0 && (
+            <span className="text-[9px] font-black text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded border border-emerald-200">
+              Max: {distanceKm.toFixed(2)} km
+            </span>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          {orderStoresList.map((st) => {
+            const isFurthest = st.id === furthestPickupInfo.furthestStoreId;
+            return (
+              <div
+                key={st.id}
+                className={`p-2.5 rounded-xl border space-y-1.5 transition-all ${
+                  isFurthest
+                    ? 'bg-emerald-50/80 border-emerald-300 ring-1 ring-emerald-200'
+                    : 'bg-white border-gray-200'
+                }`}
+              >
+                {/* Top Row: Store Info & Top-Right Merged Distance / Direction Button */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
+                    <Store className={`w-3.5 h-3.5 shrink-0 ${isFurthest ? 'text-emerald-700' : 'text-gray-500'}`} />
+                    <span className="font-extrabold text-xs text-gray-900 break-words">{st.name}</span>
+                    {st.isClosed && (
+                      <span className="text-[8px] font-black bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200 uppercase shrink-0">
+                        বন্ধ
+                      </span>
+                    )}
+                    {isFurthest && orderStoresList.length > 1 && (
+                      <span className="text-[8px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shadow-2xs uppercase tracking-wider shrink-0">
+                        Longest Pickup (গণনা করা হয়েছে)
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Top-Right Merged Button (Distance + Direction) */}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenStoreDirection(st)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] shadow-2xs transition-all active:scale-95 cursor-pointer shrink-0"
+                    title={`Google Maps Direction to ${st.name}${st.distanceKm ? ` (${st.distanceKm.toFixed(2)} km)` : ''}`}
+                  >
+                    <Navigation className="w-3 h-3" />
+                    <span>
+                      {st.distanceKm !== undefined && st.distanceKm > 0
+                        ? `${st.distanceKm.toFixed(2)} km`
+                        : 'Direction'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Bottom Row: Store Address */}
+                <p className="text-[11px] text-gray-600 flex items-start gap-1 break-words">
+                  <MapPin className="w-3 h-3 text-gray-400 shrink-0 mt-0.5" />
+                  <span>{st.address || 'ঠিকানা দেওয়া নেই (Address not set)'}</span>
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const handleOpenGoogleMapsDirection = () => {
-    const pLat = order.pickupLocation?.lat;
-    const pLng = order.pickupLocation?.lng;
+    const furthestStore = orderStoresList.find((s) => s.id === furthestPickupInfo.furthestStoreId);
+    const pLat = furthestStore?.lat ?? order.pickupLocation?.lat;
+    const pLng = furthestStore?.lng ?? order.pickupLocation?.lng;
+    const pAddr = furthestStore?.address ?? order.pickupLocation?.address;
     const destLat = order.deliveryLocation?.lat;
     const destLng = order.deliveryLocation?.lng;
 
     let originStr = '';
     if (pLat && pLng) {
       originStr = `&origin=${pLat},${pLng}`;
-    } else if (order.pickupLocation?.address) {
-      originStr = `&origin=${encodeURIComponent(order.pickupLocation.address)}`;
+    } else if (pAddr) {
+      originStr = `&origin=${encodeURIComponent(pAddr)}`;
     }
 
     const destStr = destLat && destLng ? `${destLat},${destLng}` : encodeURIComponent(order.deliveryLocation?.address || '');
@@ -1268,10 +1495,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const customerProfile = fallbackStore.users.get(order.customerId);
   const customerLabels = customerProfile?.labels || [];
-
-  const distanceKm = (order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng)
-    ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
-    : 0;
 
   const activeProductCost = useMemo(() => {
     return calculateOrderProductCost(order, shopOrders);
@@ -1340,15 +1563,53 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const toggleParsedItemPurchased = (subId: string, originalId: string, itemName?: string) => {
     if (isDone) return;
-    const nameToCheck = itemName || parsedItems.find((i) => i.id === subId)?.name || '';
-    if (nameToCheck && getItemConnectedOrder(nameToCheck, originalId)) {
-      // Locked: cost or shop order is already placed for this item
-      return;
+    const currentParsed = parsedItems.find((i) => i.id === subId);
+    const currentlyChecked = checkedSubItems[subId] !== undefined
+      ? !!checkedSubItems[subId]
+      : (currentParsed ? currentParsed.purchased : false);
+    const nextVal = !currentlyChecked;
+
+    // Check store requirements: if trying to check a store item, helper must place request first and store must respond (accept or reject)
+    if (nextVal) {
+      const storeItem = (order.items || []).find(
+        (it) => (it.id === originalId || it.id === subId) && !it.isCustom && it.storeId && !order.isStoreClosedAtOrder
+      );
+      if (storeItem && storeItem.storeId) {
+        const storeOrders = shopOrders.filter(
+          (so) => so.shopId === storeItem.storeId && so.shopId !== 'myself' && so.parentOrderId === order.id
+        );
+        const activeOrLatestSO =
+          storeOrders.find((so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED') ||
+          storeOrders.sort(
+            (a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+          )[0];
+
+        if (!activeOrLatestSO) {
+          showAlert(
+            'দোকানে অর্ডার পাঠানো আবশ্যক',
+            `এই পণ্যটি নির্দিষ্ট দোকানের। প্রথমে উপরে "Order Now" বাটনে ক্লিক করে দোকানে রিকোয়েস্ট পাঠান। দোকান একসেপ্ট বা রিজেক্ট করলে আপনি চেক করে এগিয়ে যেতে পারবেন।`,
+            'info'
+          );
+          return;
+        }
+        if (activeOrLatestSO.status === 'PENDING') {
+          showAlert(
+            'দোকানের রেসপন্সের অপেক্ষা',
+            `দোকানে রিকোয়েস্ট পাঠানো হয়েছে এবং বর্তমানে পেন্ডিং রয়েছে। দোকান অর্ডারটি একসেপ্ট বা রিজেক্ট করার পর আপনি চেক করে কাজ করতে পারবেন।`,
+            'info'
+          );
+          return;
+        }
+      }
     }
-    setCheckedSubItems((prev) => {
-      const currentVal = !!prev[subId];
-      return { ...prev, [subId]: !currentVal };
-    });
+
+    setCheckedSubItems((prev) => ({ ...prev, [subId]: nextVal }));
+
+    fallbackStore.updateOrder(order.id, (o) => ({
+      ...o,
+      items: (o.items || []).map((it) => (it.id === originalId ? { ...it, purchased: nextVal } : it)),
+      updatedAt: new Date().toISOString(),
+    }));
   };
 
   const [showUncheckedModal, setShowUncheckedModal] = useState(false);
@@ -1357,7 +1618,52 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [uncheckedError, setUncheckedError] = useState('');
 
   const handleUpdateStatusWithCheck = (newStatus: OrderStatus, note?: string) => {
-    // Helper can freely transition to Processing (PURCHASED_EXECUTED) before adding costs/items
+    // 1. Store items requirement check: helper must place request to store, and store must accept or reject before going ahead
+    const storeItemGroups = (order.items || []).filter((it) => !it.isCustom && it.storeId && !order.isStoreClosedAtOrder);
+    const uniqueStoreIds = Array.from(new Set(storeItemGroups.map((it) => it.storeId!)));
+
+    const unrequestedStores: string[] = [];
+    const pendingStores: string[] = [];
+
+    uniqueStoreIds.forEach((sid) => {
+      const storeOrders = shopOrders.filter(
+        (so) => so.shopId === sid && so.shopId !== 'myself' && so.parentOrderId === order.id
+      );
+      const activeOrLatestSO =
+        storeOrders.find((so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED') ||
+        storeOrders.sort(
+          (a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+        )[0];
+
+      const shopObj = fallbackStore.shops.get(sid);
+      const sName = shopObj?.name || storeItemGroups.find((it) => it.storeId === sid)?.storeName || sid;
+
+      if (!activeOrLatestSO) {
+        unrequestedStores.push(sName);
+      } else if (activeOrLatestSO.status === 'PENDING') {
+        pendingStores.push(sName);
+      }
+    });
+
+    if (unrequestedStores.length > 0) {
+      showAlert(
+        'দোকানে অর্ডার রিকোয়েস্ট পাঠান',
+        `দোকানের পণ্য সংগ্রহের জন্য প্রথমে দোকানে "Order Now" দিয়ে রিকোয়েস্ট পাঠাতে হবে:\n• ${unrequestedStores.join('\n• ')}\n\nদোকান অর্ডারটি গ্রহণ (Accept) বা বাতিল (Reject) করলে আপনি পরবর্তী ধাপে যেতে পারবেন।`,
+        'warning'
+      );
+      return;
+    }
+
+    if (pendingStores.length > 0) {
+      showAlert(
+        'দোকানের উত্তরের জন্য অপেক্ষা করুন',
+        `নিম্নলিখিত দোকান এখনো রিকোয়েস্ট গ্রহণ বা বাতিল করেনি:\n• ${pendingStores.join('\n• ')}\n\nদোকান একসেপ্ট বা রিজেক্ট করার পর আপনি পরবর্তী ধাপে যেতে পারবেন।`,
+        'warning'
+      );
+      return;
+    }
+
+    // Helper can freely transition to Processing (PURCHASED_EXECUTED) once store checks pass
     if (newStatus === 'PURCHASED_EXECUTED') {
       handleUpdateStatus(newStatus, note);
       return;
@@ -1640,6 +1946,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             <span className="text-xs font-bold">Back</span>
           </button>
           <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-1">
+            <span className="p-1.5 rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0 flex items-center justify-center shadow-xs">
+              <ServiceIcon service={order.service} className="w-5 h-5 text-emerald-700" />
+            </span>
             <span className="font-extrabold text-sm text-gray-800 truncate min-w-0">{order.service || order.title || 'Helper Order'}</span>
             <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded-md border border-slate-200 shrink-0">#{order.id}</span>
           </div>
@@ -1677,6 +1986,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           <span className="text-xs font-bold">Back</span>
         </button>
         <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-1">
+          <span className="p-1.5 rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0 flex items-center justify-center shadow-xs">
+            <ServiceIcon service={order.service} className="w-5 h-5 text-emerald-700" />
+          </span>
           <span className="font-extrabold text-sm text-gray-800 truncate min-w-0">{order.service || order.title || 'Helper Order'}</span>
           <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded-md border border-slate-200 shrink-0">#{order.id}</span>
         </div>
@@ -1990,13 +2302,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 return (
                                   <div key={it.id} className="px-3 py-2 space-y-1">
                                     <div className="flex items-center justify-between gap-2">
-                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                      <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                                         <Package className="w-3 h-3 text-amber-600 shrink-0" />
                                         <span className="text-sm font-extrabold text-gray-900 break-words">
                                           {it.name}{getItemQtyDisplay(it)}
                                         </span>
+                                        <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0">
+                                          Custom
+                                        </span>
                                       </div>
-                                      {priceDetails ? (
+                                      {priceDetails && priceDetails.totalPrice > 0 ? (
                                         <div className="text-right shrink-0">
                                           <span className="text-sm font-black text-amber-700 font-mono">৳{priceDetails.totalPrice}</span>
                                           {priceDetails.qty > 1 ? (
@@ -2009,7 +2324,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                             </span>
                                           )}
                                         </div>
-                                      ) : null}
+                                      ) : (
+                                        <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] shrink-0">
+                                          মূল্য বাকি
+                                        </span>
+                                      )}
                                     </div>
                                     {/* Buy from hint */}
                                     {it.buyFrom && (
@@ -2156,13 +2475,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <MapPin className="w-4 h-4 text-emerald-600" />
                     <span>Addresses & Distance</span>
                   </h4>
-                  {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                  {distanceKm > 0 && (
                     <span className="text-[11px] font-black text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-200">
-                      📍 {calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2)} km
+                      📍 {distanceKm.toFixed(2)} km {furthestPickupInfo.furthestStoreId ? '(Longest)' : ''}
                     </span>
                   )}
                 </div>
                 <div className="space-y-2 text-xs">
+                  {renderStoresAddressList()}
                   {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
                     <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 shadow-xs space-y-2">
                       <div className="flex items-start gap-2">
@@ -2204,15 +2524,31 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             <span className="ml-1.5 text-[9px] bg-amber-100 text-amber-700 font-black px-1.5 py-0.5 rounded-md border border-amber-200 uppercase">বন্ধ</span>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setActiveMapPicker('pickup')}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                          title="Edit pickup address"
-                        >
-                          <FileEdit className="w-3 h-3 text-gray-700" />
-                          <span>Edit</span>
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenStoreDirection({
+                              lat: order.pickupLocation?.lat,
+                              lng: order.pickupLocation?.lng,
+                              address: order.pickupLocation?.address,
+                              name: 'Pickup Location',
+                            })}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            title="Google Maps Direction"
+                          >
+                            <Navigation className="w-3 h-3" />
+                            <span>Direction</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMapPicker('pickup')}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                            title="Edit pickup address"
+                          >
+                            <FileEdit className="w-3 h-3 text-gray-700" />
+                            <span>Edit</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2221,6 +2557,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       <strong className="font-extrabold text-emerald-800">Delivery: </strong>
                       <span className="break-words">{order.deliveryLocation?.address || 'N/A'}</span>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dLat = order.deliveryLocation?.lat;
+                        const dLng = order.deliveryLocation?.lng;
+                        const dAddr = order.deliveryLocation?.address;
+                        const destStr = dLat && dLng ? `${dLat},${dLng}` : encodeURIComponent(dAddr || '');
+                        window.open(`https://www.google.com/maps/dir/?api=1&destination=${destStr}&travelmode=driving`, '_blank');
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0"
+                      title="Google Maps Direction"
+                    >
+                      <Navigation className="w-3 h-3" />
+                      <span>Direction</span>
+                    </button>
                   </div>
                 </div>
                 {/* Visual Map */}
@@ -2313,25 +2664,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     const customItems: typeof allItems = [];
 
                     allItems.forEach((it) => {
-                      const parsed = parsedItems.find((p) => p.originalId === it.id || p.id === it.id);
-                      const connectedSO = parsed ? getItemConnectedOrder(parsed.name, parsed.id) : getItemConnectedOrder(it.name, it.id);
-
-                      // If item is ordered / connected with a specific store (not 'myself')
-                      if (connectedSO?.shopId && connectedSO.shopId !== 'myself') {
-                        const sid = connectedSO.shopId;
-                        if (!byStore[sid]) byStore[sid] = [];
-                        byStore[sid].push(it);
-                      } else if (!it.isCustom && it.storeId && !order.isStoreClosedAtOrder) {
-                        const s = fallbackStore.shops.get(it.storeId);
+                      const isCustom = it.isCustom || !it.storeId || !!order.isStoreClosedAtOrder;
+                      if (isCustom) {
+                        customItems.push(it);
+                      } else {
+                        const s = fallbackStore.shops.get(it.storeId!);
                         if (s && (s.isOpen === false || s.isBlocked === true)) {
                           customItems.push(it);
                         } else {
-                          const sid = it.storeId;
+                          const sid = it.storeId!;
                           if (!byStore[sid]) byStore[sid] = [];
                           byStore[sid].push(it);
                         }
-                      } else {
-                        customItems.push(it);
                       }
                     });
 
@@ -2403,7 +2747,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       isStoreBlock: boolean = false
                     ) => {
                       const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
-                      const connectedSO = parsed ? getItemConnectedOrder(parsed.name, parsed.id) : null;
+                      const connectedSO = parsed ? getItemConnectedOrder(parsed.name, parsed.id) : getItemConnectedOrder(it.name, it.id);
                       const effectiveSO = groupSO || connectedSO || undefined;
                       const isPurchased = parsed?.purchased ?? !!it.purchased;
                       const itemPrice = parsed ? getItemIndividualPrice(parsed.name, connectedSO) : (it.price || undefined);
@@ -2418,35 +2762,60 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       const sAddr = shop?.location?.address;
                       const customPlace = effectiveSO?.shopId === 'myself' ? (effectiveSO.sellerName || it.buyFrom) : it.buyFrom;
 
+                      const isClosedStore = !!order.isStoreClosedAtOrder || (!!shop && (shop.isOpen === false || shop.isBlocked === true));
+                      const isCustomItem = it.isCustom || !it.storeId || isCustomBlock || !!order.isStoreClosedAtOrder;
+
+                      const groupSOActive = groupSO && groupSO.status !== 'CANCELED' && (groupSO.status as string) !== 'CANCELLED';
+                      const groupSOAccepted = groupSOActive && (groupSO.status === 'ACCEPTED' || groupSO.status === 'PREPARING' || groupSO.status === 'READY' || groupSO.status === 'HANDOVER');
+
+                      const hasPrice = (priceDetails && priceDetails.totalPrice > 0) || (effectiveSO?.price && Number(effectiveSO.price) > 0) || (it.price && Number(it.price) > 0);
+
                       return (
                         <div
                           key={key}
                           onClick={() => {
                             if (isDone) return;
-                            if (connectedSO) {
+                            if (isCustomBlock) {
+                              if (connectedSO) {
+                                openViewRequestDetails(connectedSO);
+                              } else {
+                                handleToggleCustomItemSelection(it.id);
+                              }
+                            } else if (isStoreBlock) {
+                              // Store block: only allow purchased toggle if store has accepted
+                              if (groupSOAccepted) {
+                                if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                              } else {
+                                // No active/accepted store order — show the mandatory modal
+                                const sid = it.storeId || groupSO?.shopId || '';
+                                const storeName = groupSO?.shopName || it.storeName || sid;
+                                const storeAddress = fallbackStore.shops.get(sid)?.location?.address;
+                                const storeItems = (order.items || []).filter(i => i.storeId === sid);
+                                const totalOrdered = storeItems.reduce((sum, i) => sum + ((Number(i.price) || 0) * (typeof i.quantity === 'number' ? i.quantity : parseFloat(String(i.qty || '1')) || 1)), 0);
+                                const itemsText = storeItems.map(i => `${i.name}`).join(', ');
+                                setStoreOrderRequiredTarget({ sid, storeName, storeAddress, items: storeItems, totalOrdered, itemsText });
+                              }
+                            } else if (connectedSO && !isStoreBlock) {
                               openViewRequestDetails(connectedSO);
-                            } else if (isCustomBlock) {
-                              handleToggleCustomItemSelection(it.id);
-                            } else if (!it.storeId || it.isCustom) {
+                            } else {
                               if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
                             }
                           }}
-                          className={`flex items-center gap-3 p-3 rounded-2xl border transition-all select-none ${
-                            isSelected
+                          className={`flex items-center gap-3 p-3 rounded-2xl border transition-all select-none ${isSelected
                               ? 'bg-amber-100/90 border-amber-400 ring-2 ring-amber-300'
                               : 'bg-white/95 border-gray-200/80 hover:border-gray-300'
-                          } ${isDone ? 'cursor-default' : 'cursor-pointer active:scale-[0.99]'}`}
+                            } ${isDone ? 'cursor-default' : 'cursor-pointer active:scale-[0.99]'}`}
                         >
                           <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden bg-gray-100 border-gray-200 text-gray-700">
                             {hasPhoto ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={it.photoUrl!} alt={it.name} className="w-full h-full object-cover" />
-                            ) : it.isCustom ? (
+                            ) : isCustomItem ? (
                               <Sparkles className="w-4.5 h-4.5 text-amber-600" />
                             ) : isPurchased ? (
                               <Check className="w-4.5 h-4.5 text-emerald-600" />
                             ) : (
-                              <Package className="w-4.5 h-4.5 text-gray-600" />
+                              <ServiceIcon service={order.service} className="w-6 h-6 text-emerald-600" />
                             )}
                           </div>
 
@@ -2455,8 +2824,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               <span className={`font-black text-sm ${isPurchased ? 'line-through opacity-50' : ''} text-gray-900`}>
                                 {it.name}{getItemQtyDisplay(it)}
                               </span>
-                              {it.isCustom && (
-                                <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full">Custom</span>
+                              {isCustomItem && (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0">Custom</span>
                               )}
                             </div>
 
@@ -2466,13 +2835,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </p>
                             )}
 
-                            {(!isStoreBlock && (sName || sAddr)) ? (
+                            {/* Under each custom order item if helper requested to store or add custom cost then the store name should show */}
+                            {isCustomItem ? (
+                              connectedSO?.shopId && connectedSO.shopId !== 'myself' ? (
+                                <div className="flex items-center gap-1 text-[11px] text-purple-700 font-bold mt-0.5 flex-wrap">
+                                  <Store className="w-3 h-3 text-purple-600 shrink-0" />
+                                  <span>দোকান: {shop?.name || connectedSO.shopName || connectedSO.shopId}</span>
+                                  {sAddr && <span className="text-gray-400 font-normal truncate">({sAddr})</span>}
+                                </div>
+                              ) : (connectedSO?.shopId === 'myself' || (customPlace && customPlace !== 'Custom Cost')) ? (
+                                <div className="flex items-center gap-1 text-[11px] text-amber-800 font-bold mt-0.5 flex-wrap">
+                                  <Store className="w-3 h-3 text-amber-600 shrink-0" />
+                                  <span>দোকান: {connectedSO?.sellerName || customPlace || 'Custom Seller'}</span>
+                                </div>
+                              ) : it.buyFrom ? (
+                                <div className="flex items-center gap-1 text-[10px] text-gray-500 mt-0.5 flex-wrap">
+                                  <Store className="w-2.5 h-2.5 text-gray-400 shrink-0" />
+                                  <span>পছন্দের দোকান: {it.buyFrom}</span>
+                                </div>
+                              ) : null
+                            ) : (!isStoreBlock && !isClosedStore && (sName || sAddr)) ? (
                               <div className="flex items-center gap-1 text-[10px] text-gray-500 mt-0.5 flex-wrap">
                                 <MapPin className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
                                 {sName && <span className="font-bold text-gray-700">দোকান: {sName}</span>}
                                 {sAddr && <span className="text-gray-400 truncate">({sAddr})</span>}
                               </div>
-                            ) : (!isStoreBlock && customPlace) ? (
+                            ) : (!isStoreBlock && !isClosedStore && customPlace) ? (
                               <div className="flex items-center gap-1 text-[10px] text-amber-700 mt-0.5">
                                 <Store className="w-2.5 h-2.5 text-amber-600 shrink-0" />
                                 <span>কোথা থেকে: {customPlace}</span>
@@ -2481,57 +2869,81 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                             {soStatus && (
                               <div className="mt-1">
-                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${
-                                  soStatus === 'PENDING'
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${soStatus === 'PENDING'
                                     ? 'bg-amber-100 text-amber-900 border border-amber-200'
                                     : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY'
-                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                                    : 'bg-rose-100 text-rose-900 border border-rose-200'
-                                }`}>
+                                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                      : 'bg-rose-100 text-rose-900 border border-rose-200'
+                                  }`}>
                                   {soStatus === 'PENDING' ? '⏳ Pending' :
-                                   soStatus === 'ACCEPTED' ? '✓ Accepted' :
-                                   soStatus === 'PREPARING' ? '🍳 Preparing' :
-                                   soStatus === 'READY' ? '✅ Ready' :
-                                   soStatus === 'CANCELED' || (soStatus as string) === 'CANCELLED' ? '✕ Cancelled' :
-                                   soStatus}
+                                    soStatus === 'ACCEPTED' ? '✓ Accepted' :
+                                      soStatus === 'PREPARING' ? '🍳 Preparing' :
+                                        soStatus === 'READY' ? '✅ Ready' :
+                                          soStatus === 'CANCELED' || (soStatus as string) === 'CANCELLED' ? '✕ Cancelled' :
+                                            soStatus}
                                 </span>
                               </div>
                             )}
                           </div>
 
                           <div className="flex items-center gap-2.5 shrink-0">
-                            {priceDetails ? (
+                            {hasPrice ? (
                               <div className="text-right">
                                 <span className="font-mono font-black text-gray-900 text-sm sm:text-base block">
-                                  ৳{priceDetails.totalPrice}
+                                  ৳{priceDetails?.totalPrice ?? (effectiveSO?.price ? Number(effectiveSO.price) : (Number(it.price) * getItemQuantityNum(it)))}
                                 </span>
                               </div>
-                            ) : effectiveSO?.price ? (
-                              <div className="text-right">
-                                <span className="font-mono font-black text-emerald-700 text-sm block">
-                                  ৳{effectiveSO.price}
-                                </span>
-                              </div>
-                            ) : it.isCustom ? (
-                              <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px]">
+                            ) : isCustomItem ? (
+                              <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] shrink-0">
                                 মূল্য বাকি
                               </span>
                             ) : null}
 
                             <div onClick={(e) => e.stopPropagation()}>
                               {isPurchased ? (
-                                <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
-                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                </div>
-                              ) : !isDone && !connectedSO && !isCustomBlock ? (
-                                <div
-                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-emerald-50 border border-gray-300 hover:border-emerald-400 flex items-center justify-center transition-all cursor-pointer"
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!isDone && parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                                  }}
+                                  title="আনচেক করতে ক্লিক করুন (Click to uncheck)"
+                                  className="w-6 h-6 rounded-full bg-emerald-500/20 hover:bg-rose-500/20 border border-emerald-500/40 hover:border-rose-400 flex items-center justify-center transition-all cursor-pointer group/uncheck"
+                                >
+                                  <Check className="w-3.5 h-3.5 text-emerald-600 group-hover/uncheck:hidden" />
+                                  <X className="w-3.5 h-3.5 text-rose-600 hidden group-hover/uncheck:block" />
+                                </button>
+                              ) : isStoreBlock && !isDone ? (
+                                // Store block: show check button only if store accepted; else show a locked icon
+                                groupSOAccepted ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                                    }}
+                                    title="চেক করতে ক্লিক করুন (Click to check)"
+                                    className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-emerald-50 border border-gray-300 hover:border-emerald-400 flex items-center justify-center transition-all cursor-pointer"
+                                  >
+                                    <Check className="w-3 h-3 text-gray-400 hover:text-emerald-600" />
+                                  </button>
+                                ) : (
+                                  <span
+                                    title="দোকানের অর্ডার আগে পাঠান / Accept হওয়ার পর চেক করা যাবে"
+                                    className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-300 flex items-center justify-center"
+                                  >
+                                    <Clock className="w-3 h-3 text-amber-500" />
+                                  </span>
+                                )
+                              ) : !isDone && !isCustomBlock ? (
+                                <button
+                                  type="button"
                                   onClick={() => {
                                     if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
                                   }}
+                                  title="চেক করতে ক্লিক করুন (Click to check)"
+                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-emerald-50 border border-gray-300 hover:border-emerald-400 flex items-center justify-center transition-all cursor-pointer"
                                 >
                                   <Check className="w-3 h-3 text-gray-400 hover:text-emerald-600" />
-                                </div>
+                                </button>
                               ) : isCustomBlock && !isDone && !connectedSO ? (
                                 <input
                                   type="checkbox"
@@ -2539,6 +2951,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                   onChange={() => handleToggleCustomItemSelection(it.id)}
                                   className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
                                 />
+                              ) : isCustomBlock && !isDone && connectedSO ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openViewRequestDetails(connectedSO)}
+                                  className="p-1 px-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-bold border border-gray-300 transition-all cursor-pointer"
+                                >
+                                  Details
+                                </button>
                               ) : null}
                             </div>
                           </div>
@@ -2599,39 +3019,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                       <button
                                         type="button"
                                         disabled={isLoading}
-                                        onClick={async (e) => {
+                                        onClick={(e) => {
                                           e.stopPropagation();
-                                          setOrderNowLoading(prev => ({ ...prev, [sid]: true }));
-                                          try {
-                                            const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
-                                            const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
-                                            const newSO: ShopOrder = {
-                                              id: `so-${sid}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                                              parentOrderId: order.id,
-                                              shopId: sid,
-                                              shopName: storeName,
-                                              helperId: order.helperId || '',
-                                              helperName: order.helperName || 'Helper',
-                                              requestText: itemsText,
-                                              sellerName: storeName,
-                                              status: 'PENDING',
-                                              viewedByStore: false,
-                                              price: totalOrdered,
-                                              itemsWithPrice: items.map(i => ({
-                                                name: i.name,
-                                                unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
-                                                itemId: i.id,
-                                                originalId: i.id,
-                                                price: i.price ? Number(i.price) : undefined,
-                                              })),
-                                              createdAt: new Date().toISOString(),
-                                              updatedAt: new Date().toISOString(),
-                                              statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
-                                            };
-                                            await fallbackStore.addShopOrder(newSO);
-                                          } finally {
-                                            setOrderNowLoading(prev => ({ ...prev, [sid]: false }));
-                                          }
+                                          const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
+                                          const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
+                                          setOrderNowConfirmTarget({
+                                            sid,
+                                            storeName,
+                                            storeAddress,
+                                            items,
+                                            totalOrdered,
+                                            itemsText,
+                                          });
                                         }}
                                         className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white rounded-lg text-[10px] font-extrabold transition-all active:scale-95 shadow-xs cursor-pointer"
                                       >
@@ -2651,7 +3050,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                           disabled={cancellingShopOrderId === groupSO?.id}
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            if (groupSO) handleCancelShopOrder(groupSO.id);
+                                            if (groupSO) {
+                                              setCancelShopOrderConfirmTarget({
+                                                shopOrderId: groupSO.id,
+                                                storeName,
+                                              });
+                                            }
                                           }}
                                           title="রিকোয়েস্ট বাতিল করুন (Cancel Request)"
                                           className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer"
@@ -2693,17 +3097,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                   </span>
 
                                   {groupStatus && (
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
-                                      groupStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
-                                      isAcceptedGroup ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
-                                      isCancelledGroup ? 'bg-rose-200 text-rose-900 border border-rose-300' :
-                                      'bg-gray-200 text-gray-700'
-                                    }`}>
+                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${groupStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
+                                        isAcceptedGroup ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
+                                          isCancelledGroup ? 'bg-rose-200 text-rose-900 border border-rose-300' :
+                                            'bg-gray-200 text-gray-700'
+                                      }`}>
                                       {groupStatus === 'PENDING' ? '⏳ Pending' :
-                                       groupStatus === 'ACCEPTED' ? '✓ Accepted' :
-                                       groupStatus === 'PREPARING' ? '🍳 Preparing' :
-                                       isCancelledGroup ? '✕ Cancelled' :
-                                       groupStatus}
+                                        groupStatus === 'ACCEPTED' ? '✓ Accepted' :
+                                          groupStatus === 'PREPARING' ? '🍳 Preparing' :
+                                            isCancelledGroup ? '✕ Cancelled' :
+                                              groupStatus}
                                     </span>
                                   )}
 
@@ -2764,11 +3167,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                     {order.isStoreClosedAtOrder ? 'দোকান বন্ধ ছিল / Custom' : 'Custom / Any Store'}
                                   </span>
                                   {customBlockStatus && (
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
-                                      customBlockStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
-                                      customBlockStatus === 'ACCEPTED' ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
-                                      'bg-rose-200 text-rose-900 border border-rose-300'
-                                    }`}>
+                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${customBlockStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
+                                        customBlockStatus === 'ACCEPTED' ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
+                                          'bg-rose-200 text-rose-900 border border-rose-300'
+                                      }`}>
                                       {customBlockStatus === 'PENDING' ? '⏳ Pending' : customBlockStatus === 'ACCEPTED' ? '✓ Accepted' : '✕ Cancelled'}
                                     </span>
                                   )}
@@ -3074,13 +3476,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <MapPin className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Addresses & Distance</span>
                   </h4>
-                  {order.pickupLocation?.lat && order.pickupLocation?.lng && order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                  {distanceKm > 0 && (
                     <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
-                      📍 {distanceKm.toFixed(2)} km
+                      📍 {distanceKm.toFixed(2)} km {furthestPickupInfo.furthestStoreId ? '(Longest)' : ''}
                     </span>
                   )}
                 </div>
                 <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
+                  {renderStoresAddressList()}
                   {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
                     <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
                       <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
@@ -3116,16 +3519,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 font-black px-1 py-0.5 rounded border border-amber-200 uppercase">বন্ধ</span>
                           )}
                         </p>
-                        {!isDone && (
+                        <div className="flex items-center gap-1 shrink-0">
                           <button
-                            onClick={() => setActiveMapPicker('pickup')}
-                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                            title="Edit pickup address"
+                            type="button"
+                            onClick={() => handleOpenStoreDirection({
+                              lat: order.pickupLocation?.lat,
+                              lng: order.pickupLocation?.lng,
+                              address: order.pickupLocation?.address,
+                              name: 'Pickup Location',
+                            })}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            title="Direction to pickup location"
                           >
-                            <FileEdit className="w-3 h-3 text-gray-700" />
-                            <span>Edit</span>
+                            <Navigation className="w-3 h-3" />
+                            <span>Direction</span>
                           </button>
-                        )}
+                          {!isDone && (
+                            <button
+                              onClick={() => setActiveMapPicker('pickup')}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                              title="Edit pickup address"
+                            >
+                              <FileEdit className="w-3 h-3 text-gray-700" />
+                              <span>Edit</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -3134,16 +3553,33 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       <strong className="font-extrabold text-emerald-800">Delivery: </strong>
                       <span>{order.deliveryLocation?.address || 'N/A'}</span>
                     </p>
-                    {!isDone && (
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() => setActiveMapPicker('delivery')}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
-                        title="Edit delivery address"
+                        type="button"
+                        onClick={() => {
+                          const dLat = order.deliveryLocation?.lat;
+                          const dLng = order.deliveryLocation?.lng;
+                          const dAddr = order.deliveryLocation?.address;
+                          const destStr = dLat && dLng ? `${dLat},${dLng}` : encodeURIComponent(dAddr || '');
+                          window.open(`https://www.google.com/maps/dir/?api=1&destination=${destStr}&travelmode=driving`, '_blank');
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
+                        title="Direction to delivery"
                       >
-                        <FileEdit className="w-3 h-3 text-emerald-700" />
-                        <span>Edit</span>
+                        <Navigation className="w-3 h-3" />
+                        <span>Direction</span>
                       </button>
-                    )}
+                      {!isDone && (
+                        <button
+                          onClick={() => setActiveMapPicker('delivery')}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
+                          title="Edit delivery address"
+                        >
+                          <FileEdit className="w-3 h-3 text-emerald-700" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="pt-1">
                     <button
@@ -3241,6 +3677,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </div>
                   )}
 
+                  {/* Custom Store Fee (shown if helper bought from outside stores) */}
+                  {(() => {
+                    const customStorePricing = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings);
+                    if (customStorePricing.totalFee <= 0) return null;
+                    return (
+                      <div className="flex items-center justify-between text-indigo-900 font-bold">
+                        <span className="flex items-center space-x-1">
+                          <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <span>
+                            Custom Store Fee ({customStorePricing.count} {customStorePricing.count > 1 ? 'items' : 'item'} × ৳{customStorePricing.unitFee})
+                          </span>
+                        </span>
+                        <span className="text-xs sm:text-sm font-extrabold text-indigo-700 font-mono">
+                          +৳{customStorePricing.totalFee}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                   {/* Previous Order Due Payment Line Item */}
                   {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
                     <div className="border-t border-amber-200 pt-2 space-y-1">
@@ -3291,7 +3746,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
                     <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
                     <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
-                      ৳{activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0)}
+                      ৳{activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings).totalFee)}
                     </span>
                   </div>
 
@@ -3490,7 +3945,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 {/* Main Action (Forward) */}
                 {(order.status === 'ACCEPTED' || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
                   <button
-                    onClick={() => handleUpdateStatus('PURCHASED_EXECUTED')}
+                    onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
                     className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
                   >
                     <PackageCheck className="w-5 h-5" />
@@ -4061,6 +4516,278 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         </div>
       )}
 
+      {/* ── Order Now Confirmation Custom Modal ── */}
+      {orderNowConfirmTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-emerald-200">
+            <button
+              type="button"
+              onClick={() => setOrderNowConfirmTarget(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-3 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <ShoppingCart className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-black text-base text-gray-900 leading-tight">দোকানে অর্ডার নিশ্চিতকরণ</h3>
+                <span className="text-[11px] text-emerald-700 font-bold">দোকানে সরাসরি রিকোয়েস্ট পাঠান</span>
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/70 p-3.5 rounded-2xl border border-emerald-200/80 space-y-2">
+              <div className="flex items-start gap-2">
+                <Store className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">দোকানের নাম:</span>
+                  <span className="text-sm font-black text-gray-900 break-words block leading-snug">
+                    {orderNowConfirmTarget.storeName}
+                  </span>
+                  {orderNowConfirmTarget.storeAddress && (
+                    <div className="flex items-center gap-1 text-[11px] text-emerald-800/80 mt-0.5">
+                      <MapPin className="w-2.5 h-2.5 shrink-0 text-emerald-600" />
+                      <span className="truncate">{orderNowConfirmTarget.storeAddress}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Items preview */}
+              <div className="pt-2 border-t border-emerald-200/60 space-y-1 max-h-36 overflow-y-auto">
+                <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">আইটেম তালিকা ({orderNowConfirmTarget.items.length} টি):</span>
+                {orderNowConfirmTarget.items.map((it, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs font-semibold text-gray-800">
+                    <span className="truncate mr-2">• {it.name}{getItemQtyDisplay(it)}</span>
+                    {it.price ? <span className="font-mono text-emerald-800 shrink-0">৳{(Number(it.price) || 0) * getItemQuantityNum(it)}</span> : null}
+                  </div>
+                ))}
+              </div>
+
+              {orderNowConfirmTarget.totalOrdered > 0 && (
+                <div className="flex items-center justify-between pt-2 border-t border-emerald-200 text-xs font-black text-gray-900">
+                  <span>মোট প্রাক্কলিত মূল্য:</span>
+                  <span className="font-mono text-base text-emerald-700">৳{orderNowConfirmTarget.totalOrdered}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="p-2.5 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-2">
+              <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-900 font-semibold leading-relaxed">
+                দোকান এই অর্ডারটি গ্রহণ (Accept) বা বাতিল (Reject) করার পর আপনি পরবর্তী ধাপে যেতে পারবেন।
+              </p>
+            </div>
+
+            <div className="flex space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setOrderNowConfirmTarget(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-colors cursor-pointer"
+              >
+                বাতিল
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = orderNowConfirmTarget;
+                  setOrderNowConfirmTarget(null);
+                  if (!target) return;
+                  setOrderNowLoading((prev) => ({ ...prev, [target.sid]: true }));
+                  try {
+                    const newSO: ShopOrder = {
+                      id: `so-${target.sid}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                      parentOrderId: order.id,
+                      shopId: target.sid,
+                      shopName: target.storeName,
+                      helperId: order.helperId || '',
+                      helperName: order.helperName || 'Helper',
+                      requestText: target.itemsText,
+                      sellerName: target.storeName,
+                      status: 'PENDING',
+                      viewedByStore: false,
+                      price: target.totalOrdered,
+                      itemsWithPrice: target.items.map((i) => ({
+                        name: i.name,
+                        unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
+                        itemId: i.id,
+                        originalId: i.id,
+                        price: i.price ? Number(i.price) : undefined,
+                      })),
+                      createdAt: new Date().toISOString(),
+                      updatedAt: new Date().toISOString(),
+                      statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+                    };
+                    await fallbackStore.addShopOrder(newSO);
+                    showAlert('অর্ডার পাঠানো হয়েছে', `"${target.storeName}" দোকানে সফলভাবে অর্ডার পাঠানো হয়েছে। দোকান একসেপ্ট করলে আপনাকে জানানো হবে।`, 'success');
+                  } finally {
+                    setOrderNowLoading((prev) => ({ ...prev, [target.sid]: false }));
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span>হ্যাঁ, অর্ডার পাঠান</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Store Order Required Modal ── */}
+      {storeOrderRequiredTarget && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-amber-200">
+            <button
+              type="button"
+              onClick={() => setStoreOrderRequiredTarget(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-3 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0">
+                <Clock className="w-6 h-6 text-amber-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-black text-base text-gray-900 leading-tight">দোকানের অর্ডার প্রয়োজন</h3>
+                <span className="text-[11px] text-amber-700 font-bold">Store Order Required</span>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/80 p-3.5 rounded-2xl border border-amber-200/80 space-y-2">
+              <div className="flex items-start gap-2">
+                <Store className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block">দোকানের নাম:</span>
+                  <span className="text-sm font-black text-gray-900 break-words block leading-snug">
+                    {storeOrderRequiredTarget.storeName}
+                  </span>
+                  {storeOrderRequiredTarget.storeAddress && (
+                    <div className="flex items-center gap-1 text-[11px] text-amber-800/80 mt-0.5">
+                      <MapPin className="w-2.5 h-2.5 shrink-0 text-amber-600" />
+                      <span className="truncate">{storeOrderRequiredTarget.storeAddress}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <p className="text-[12px] text-rose-900 font-semibold leading-relaxed">
+                এই আইটেমগুলো মার্ক করতে হলে আগে দোকানে অর্ডার পাঠাতে হবে এবং দোকানকে সেটি <strong>Accept</strong> করতে হবে।
+              </p>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-blue-50 border border-blue-200 flex items-start gap-2">
+              <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <p className="text-[12px] text-blue-900 font-semibold leading-relaxed">
+                অর্ডার পাঠানোর পর দোকান Accept করলে আপনি আইটেমগুলো চেক করতে পারবেন।
+              </p>
+            </div>
+
+            <div className="flex space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setStoreOrderRequiredTarget(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-colors cursor-pointer"
+              >
+                অপেক্ষা করুন
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = storeOrderRequiredTarget;
+                  setStoreOrderRequiredTarget(null);
+                  if (!target) return;
+                  // Pre-fill and open the Order Now confirm modal
+                  setOrderNowConfirmTarget({
+                    sid: target.sid,
+                    storeName: target.storeName,
+                    storeAddress: target.storeAddress,
+                    items: target.items,
+                    totalOrdered: target.totalOrdered,
+                    itemsText: target.itemsText,
+                  });
+                }}
+                className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span>অর্ডার পাঠান</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel Shop Order Confirmation Custom Modal ── */}
+      {cancelShopOrderConfirmTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-rose-200">
+            <button
+              type="button"
+              onClick={() => setCancelShopOrderConfirmTarget(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-3 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6 text-rose-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-black text-base text-gray-900 leading-tight">রিকোয়েস্ট বাতিল নিশ্চিতকরণ</h3>
+                <span className="text-[11px] text-rose-600 font-bold">দোকান অর্ডার প্রত্যাহার</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/80 p-3.5 rounded-2xl border border-rose-200/80 space-y-2">
+              <div className="flex items-start gap-2">
+                <Store className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-black text-rose-800 uppercase tracking-wider block">দোকানের নাম:</span>
+                  <span className="text-sm font-black text-gray-900 break-words block leading-snug">
+                    {cancelShopOrderConfirmTarget.storeName}
+                  </span>
+                </div>
+              </div>
+              <div className="text-[11px] font-semibold text-rose-900/90 leading-relaxed pt-1.5 border-t border-rose-200/60">
+                আপনি কি নিশ্চিতভাবে এই দোকানে পাঠানো অর্ডার রিকোয়েস্টটি বাতিল করতে চান? বাতিল করার পর আপনি আবার নতুন করে রিকোয়েস্ট পাঠাতে পারবেন।
+              </div>
+            </div>
+
+            <div className="flex space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setCancelShopOrderConfirmTarget(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-colors cursor-pointer"
+              >
+                না, ফিরে যান
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = cancelShopOrderConfirmTarget;
+                  setCancelShopOrderConfirmTarget(null);
+                  if (target) {
+                    await handleCancelShopOrder(target.shopOrderId);
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-rose-600/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                <span>হ্যাঁ, বাতিল করুন</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Items: Store Picker Modal */}
       {showStorePickerForCustom && (() => {
         const pickerShops = allShops.filter((shop) => {
@@ -4134,11 +4861,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         key={cat}
                         type="button"
                         onClick={() => setStorePickerCategory(cat)}
-                        className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider shrink-0 transition-all ${
-                          storePickerCategory === cat
+                        className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider shrink-0 transition-all ${storePickerCategory === cat
                             ? 'bg-purple-700 text-white shadow-xs'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                          }`}
                       >
                         {cat === 'ALL' ? 'সব' : cat}
                       </button>
@@ -4337,10 +5063,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         <div
                           key={item.id}
                           className={`p-2.5 rounded-xl border text-xs transition-all ${item.isChecked
-                              ? isCustomUnattached
-                                ? 'bg-amber-50/80 border-amber-200 text-amber-950 font-bold'
-                                : 'bg-purple-50/80 border-purple-200 text-purple-950 font-bold'
-                              : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
+                            ? isCustomUnattached
+                              ? 'bg-amber-50/80 border-amber-200 text-amber-950 font-bold'
+                              : 'bg-purple-50/80 border-purple-200 text-purple-950 font-bold'
+                            : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
                             }`}
                         >
                           {/* Badge for custom/unattached items */}
@@ -4569,8 +5295,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <div
                       key={item.id}
                       className={`p-2.5 rounded-xl border text-xs transition-all ${item.isChecked
-                          ? (isMyself ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold' : 'bg-purple-50/70 border-purple-200 text-purple-950 font-bold')
-                          : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
+                        ? (isMyself ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold' : 'bg-purple-50/70 border-purple-200 text-purple-950 font-bold')
+                        : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
                         }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -4602,8 +5328,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 onChange={(e) => handleViewRequestItemPriceChange(item.id, e.target.value)}
                                 placeholder="একক মূল্য"
                                 className={`w-20 p-1.5 rounded-lg border bg-white text-xs font-bold text-gray-900 outline-none disabled:bg-gray-100 ${isMyself
-                                    ? 'border-amber-300 focus:border-amber-500'
-                                    : 'border-purple-300 focus:border-purple-500'
+                                  ? 'border-amber-300 focus:border-amber-500'
+                                  : 'border-purple-300 focus:border-purple-500'
                                   }`}
                               />
                             </div>
@@ -4649,8 +5375,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 const payable = hasComm ? Math.max(0, total - commAmt) : total;
                 return (
                   <div className={`rounded-2xl border overflow-hidden bg-gradient-to-br ${isMyself
-                      ? 'border-amber-200 from-amber-50 to-amber-50/30'
-                      : 'border-purple-200 from-purple-50 to-emerald-50'
+                    ? 'border-amber-200 from-amber-50 to-amber-50/30'
+                    : 'border-purple-200 from-purple-50 to-emerald-50'
                     }`}>
                     <div className="px-3 pt-2.5 pb-1.5 space-y-1">
                       <div className="flex items-center justify-between text-xs font-bold text-gray-600">
@@ -5317,10 +6043,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         return acc + (p * qty);
                       }, 0);
 
+                      const isCustomPricingOn = fallbackStore.pricingSettings.customStorePricingEnabled;
+                      const customUnit = Number(fallbackStore.pricingSettings.customStorePricingAmount ?? 15) || 0;
+                      const newMyselfCount = checkedItems.length;
+                      const addedCustomFee = isCustomPricingOn ? newMyselfCount * customUnit : 0;
+
                       return {
                         ...o,
                         items: updatedItems,
                         productCost: totalCost > 0 ? totalCost : o.productCost,
+                        customStoreFee: addedCustomFee > 0 ? Math.max(o.customStoreFee || 0, addedCustomFee) : o.customStoreFee,
                         updatedAt: new Date().toISOString(),
                       };
                     });
@@ -5336,6 +6068,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               }}
               className="space-y-3"
             >
+              {fallbackStore.pricingSettings.customStorePricingEnabled && (
+                <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950">
+                  <div className="font-bold flex items-center justify-between text-indigo-900 mb-1">
+                    <span className="flex items-center gap-1.5">
+                      <Store className="w-3.5 h-3.5 text-indigo-600" />
+                      Custom Store Pricing Active
+                    </span>
+                    <span className="font-extrabold text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
+                      +৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}/পণ্য
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-600 leading-relaxed">
+                    লিস্টেড স্টোর ছাড়া অন্য দোকান থেকে কেনা পণ্যের জন্য কাস্টমার ও হেলপার সামারিতে প্রতি পণ্যে <strong>৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}</strong> কাস্টম স্টোর চার্জ যুক্ত হবে।
+                  </p>
+                </div>
+              )}
+
               {/* Items with Per-Item Price Input */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -5349,8 +6098,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     <div
                       key={item.id}
                       className={`p-2.5 rounded-xl border text-xs transition-all ${item.isChecked
-                          ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold'
-                          : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
+                        ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-bold'
+                        : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'
                         }`}
                     >
                       <div className="flex items-center justify-between gap-2">

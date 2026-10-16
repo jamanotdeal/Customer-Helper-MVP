@@ -16,7 +16,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-import { isPwaInstalled, isIosDevice, isPwaSupported } from './PwaSmartPrompt';
+import { isPwaInstalled, isIosDevice, isPwaSupported, isAndroidDevice, PlayStoreIcon, PLAY_STORE_URL } from './PwaSmartPrompt';
 
 interface OrderSuccessPwaModalProps {
   isOpen: boolean;
@@ -140,7 +140,27 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
             </div>
 
             {/* Android / Chrome Install Button */}
-            {!isIosDevice() && (
+            {isAndroidDevice() ? (
+              <a
+                href={PLAY_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  try {
+                    localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
+                  } catch (_) {}
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl bg-slate-950 hover:bg-black active:scale-98 text-white font-extrabold text-sm shadow-xl shadow-slate-900/30 flex items-center justify-center gap-3 transition-all border border-slate-800 group"
+              >
+                <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center shrink-0 p-1 transition-transform group-hover:scale-110">
+                  <PlayStoreIcon className="w-full h-full" />
+                </div>
+                <div className="text-left">
+                  <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider leading-none">GET IT ON</div>
+                  <div className="text-sm font-black text-white leading-tight mt-0.5">Play Store থেকে ইনস্টল করুন</div>
+                </div>
+              </a>
+            ) : !isIosDevice() ? (
               <button
                 type="button"
                 onClick={handleInstallClick}
@@ -150,7 +170,7 @@ export const OrderSuccessPwaModal: React.FC<OrderSuccessPwaModalProps> = ({
                 <Download className="w-4 h-4 text-slate-950" />
                 <span>{installing ? 'Installing...' : buttonText}</span>
               </button>
-            )}
+            ) : null}
 
             {/* iOS Safari Instructions */}
             {isIosDevice() && (
