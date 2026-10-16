@@ -33,6 +33,8 @@ import {
   Scale,
   MapPin,
   Calculator,
+  Tag,
+  ChevronDown,
 } from 'lucide-react';
 
 interface StorePageProps {
@@ -99,21 +101,33 @@ export const StorePage: React.FC<StorePageProps> = ({
     return () => unsub();
   }, [shop.id]);
 
-
-  // Extract categories
-  const categories = useMemo(() => {
-    const set = new Set<string>();
+  // Extract categories with item counts
+  const { categoriesWithCount, uncategorizedCount } = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let uncat = 0;
     products.forEach((p) => {
-      if (p.category) set.add(p.category.trim());
+      const cat = p.category?.trim();
+      if (cat) {
+        counts[cat] = (counts[cat] || 0) + 1;
+      } else {
+        uncat++;
+      }
     });
-    return Array.from(set);
+    return {
+      categoriesWithCount: Object.entries(counts).map(([name, count]) => ({ name, count })),
+      uncategorizedCount: uncat,
+    };
   }, [products]);
 
   // Filtered products
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      if (selectedCategory !== 'all' && (p.category || 'অন্যান্য') !== selectedCategory) {
-        return false;
+      if (selectedCategory !== 'all') {
+        if (selectedCategory === '__uncategorized__') {
+          if (p.category && p.category.trim()) return false;
+        } else {
+          if ((p.category || '').trim() !== selectedCategory) return false;
+        }
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -279,34 +293,45 @@ export const StorePage: React.FC<StorePageProps> = ({
           )}
         </div>
 
-        {/* Category Pills */}
-        {categories.length > 1 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-            <button
-              type="button"
-              onClick={() => setSelectedCategory('all')}
-              className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                selectedCategory === 'all'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              সকল পণ্য
-            </button>
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setSelectedCategory(cat)}
-                className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  selectedCategory === cat
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-                }`}
+        {/* Category Selection Box */}
+        {(categoriesWithCount.length > 0 || uncategorizedCount > 0) && (
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-600 flex items-center gap-1.5">
+                <Tag className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] font-bold text-gray-500 hidden sm:inline">ক্যাটাগরি:</span>
+              </div>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full pl-9 sm:pl-24 pr-8 py-2 text-xs sm:text-sm font-bold text-gray-800 bg-white border border-gray-200/90 rounded-2xl focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all shadow-2xs appearance-none cursor-pointer"
               >
-                {cat}
+                <option value="all">📂 সকল ক্যাটাগরি ({products.length} টি পণ্য)</option>
+                {categoriesWithCount.map((cat) => (
+                  <option key={cat.name} value={cat.name}>
+                    🏷️ {cat.name} ({cat.count})
+                  </option>
+                ))}
+                {uncategorizedCount > 0 && categoriesWithCount.length > 0 && (
+                  <option value="__uncategorized__">
+                    📦 অন্যান্য / আনক্যাটাগরাইজড ({uncategorizedCount})
+                  </option>
+                )}
+              </select>
+              <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+
+            {selectedCategory !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('all')}
+                className="shrink-0 px-3 py-2 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                title="ক্যাটাগরি রিসেট করুন"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">সকল পণ্য</span>
               </button>
-            ))}
+            )}
           </div>
         )}
       </div>
@@ -420,9 +445,18 @@ export const StorePage: React.FC<StorePageProps> = ({
                     <h3 className="font-extrabold text-gray-900 text-xs sm:text-sm line-clamp-2 leading-tight">
                       {product.name}
                     </h3>
-                    {product.unit && (
-                      <p className="text-[10px] text-gray-400 font-semibold">{product.unit}</p>
-                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                      {product.unit && (
+                        <span className="text-[10px] text-gray-500 font-semibold bg-gray-100 px-1.5 py-0.5 rounded">
+                          {product.unit}
+                        </span>
+                      )}
+                      {product.category && (
+                        <span className="text-[9px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/60 px-1.5 py-0.5 rounded truncate max-w-[130px]" title={product.category}>
+                          {product.category}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-baseline gap-1.5 pt-0.5">
                       <span className="font-black text-emerald-700 text-xs sm:text-sm">
                         ৳{discountedPrice}

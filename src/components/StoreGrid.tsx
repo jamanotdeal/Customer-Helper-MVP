@@ -696,7 +696,14 @@ const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shop
           </p>
         )}
         <h4 className="font-extrabold text-gray-900 text-xs truncate">{p.name}</h4>
-        <p className="text-[10px] text-gray-500">{p.unit}</p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] text-gray-500 font-medium">{p.unit}</span>
+          {p.category && (
+            <span className="text-[9px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-100/70 px-1.5 py-0.2 rounded truncate max-w-[110px]" title={p.category}>
+              {p.category}
+            </span>
+          )}
+        </div>
         <div className="flex items-baseline gap-1">
           <span className="font-extrabold text-emerald-700 text-xs">৳{discountedPrice}</span>
           {hasDiscount && (

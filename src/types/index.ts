@@ -344,6 +344,13 @@ export interface StoreProduct {
   updatedAt?: string;
 }
 
+export interface ProductCategoryConfig {
+  id: string;
+  name: string;
+  storeTypes: string[]; // Store type names this category is assigned to (e.g. ['মুদিখানা ও সুপারশপ'], or ['ALL'])
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface OrderFeedback {
   id: string;
@@ -536,6 +543,7 @@ export interface PricingSettings {
   bankInstructions?: string;
   cashInstructions?: string;
   storeTypes?: string[];
+  productCategories?: ProductCategoryConfig[];
   // Store application form placeholder texts (admin configurable)
   storeFormPlaceholders?: {
     storeName?: string;        // e.g. "যেমন: আলম জেনারেল স্টোর"

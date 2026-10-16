@@ -4,10 +4,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { StoreProduct } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
+import { getCategoriesForStoreType } from '@/lib/pricing';
 import {
   Plus, Search, Edit3, Trash2, Package, Check, X,
   Image as ImageIcon, Upload, Tag, Percent, AlertCircle,
-  ToggleLeft, ToggleRight, Sparkles, Filter
+  ToggleLeft, ToggleRight, Sparkles, Filter, ChevronDown
 } from 'lucide-react';
 
 interface StoreProductManagerProps {
@@ -61,11 +62,28 @@ const compressImage = (file: File): Promise<string> => {
   });
 };
 
+const COMMON_CATEGORIES = [
+  'চাল ও ডাল',
+  'তেল ও মশলা',
+  'শাকসবজি ও ফলমূল',
+  'মাছ ও মাংস',
+  'দুধ ও ডিম',
+  'স্ন্যাক্স ও বেকারি',
+  'পানীয় ও জুস',
+  'ওষুধ ও ফার্স্ট এইড',
+  'ব্যক্তিগত যত্ন',
+  'পরিষ্কার ও গৃহস্থালি',
+  'শিশু যত্ন',
+  'চা ও কফি',
+  'অন্যান্য',
+];
+
 export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeId, storeName, hideFloatingFab = false }) => {
   const { showAlert, showConfirm } = useModal();
   const [products, setProducts] = useState<StoreProduct[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [stockFilter, setStockFilter] = useState<'ALL' | 'IN_STOCK' | 'OUT_OF_STOCK'>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -74,6 +92,8 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   // Form State
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('১ কেজি');
+  const [category, setCategory] = useState('');
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [price, setPrice] = useState('');
   const [discountRate, setDiscountRate] = useState('');
   const [inStock, setInStock] = useState(true);
@@ -101,11 +121,50 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     return () => unsub();
   }, [storeId]);
 
+  // Unique categories with counts
+  const { categoriesWithCount, uncategorizedCount } = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let uncat = 0;
+    products.forEach((p) => {
+      const cat = p.category?.trim();
+      if (cat) {
+        counts[cat] = (counts[cat] || 0) + 1;
+      } else {
+        uncat++;
+      }
+    });
+    return {
+      categoriesWithCount: Object.entries(counts).map(([name, count]) => ({ name, count })),
+      uncategorizedCount: uncat,
+    };
+  }, [products]);
+
+  // Store type & Admin-configured categories for this store
+  const configuredCategories = useMemo(() => {
+    const shopObj = fallbackStore.shops.get(storeId);
+    const storeType = shopObj?.type || shopObj?.category || '';
+    const adminCats = getCategoriesForStoreType(storeType, fallbackStore.pricingSettings);
+    // Combine with any categories existing products in this store already have
+    const existing = products
+      .map((p) => p.category?.trim())
+      .filter(Boolean) as string[];
+    const set = new Set<string>([...adminCats, ...existing]);
+    return Array.from(set);
+  }, [storeId, products]);
+
+  // Combined suggestions for autocomplete (if needed)
+  const categorySuggestions = useMemo(() => {
+    return configuredCategories;
+  }, [configuredCategories]);
+
   // Open modal for adding
   const handleOpenAdd = () => {
     setEditingProduct(null);
     setName('');
     setUnit('১ কেজি');
+    const initialCat = categoryFilter !== 'ALL' && categoryFilter !== '__UNCATEGORIZED__' ? categoryFilter : '';
+    setCategory(initialCat);
+    setIsCustomCategory(Boolean(initialCat && !configuredCategories.includes(initialCat)));
     setPrice('');
     setDiscountRate('');
     setInStock(true);
@@ -119,6 +178,9 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     setEditingProduct(p);
     setName(p.name);
     setUnit(p.unit || '১ কেজি');
+    const cat = p.category || '';
+    setCategory(cat);
+    setIsCustomCategory(Boolean(cat && !configuredCategories.includes(cat)));
     setPrice(String(p.price || ''));
     setDiscountRate(p.discountRate !== undefined ? String(p.discountRate) : '');
     setInStock(p.inStock !== false);
@@ -179,7 +241,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
         unit: unit.trim() || '১ পিস',
         price: numPrice,
         discountRate: numDiscount > 0 ? numDiscount : undefined,
-        category: editingProduct?.category || undefined,
+        category: category.trim() || undefined,
         inStock,
         photoUrl: photoUrl || undefined,
         createdAt: editingProduct ? editingProduct.createdAt : now,
@@ -219,7 +281,6 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     }
   };
 
-
   // Toggle stock switch
   const handleToggleStock = async (p: StoreProduct, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -233,6 +294,15 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   // Filtered products
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
+      // Category filter
+      if (categoryFilter !== 'ALL') {
+        if (categoryFilter === '__UNCATEGORIZED__') {
+          if (p.category && p.category.trim()) return false;
+        } else {
+          if ((p.category || '').trim() !== categoryFilter) return false;
+        }
+      }
+
       // Stock filter
       if (stockFilter === 'IN_STOCK' && !p.inStock) return false;
       if (stockFilter === 'OUT_OF_STOCK' && p.inStock) return false;
@@ -247,7 +317,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
       }
       return true;
     });
-  }, [products, stockFilter, searchQuery]);
+  }, [products, categoryFilter, stockFilter, searchQuery]);
 
   const inStockCount = products.filter((p) => p.inStock).length;
   const outOfStockCount = products.filter((p) => !p.inStock).length;
@@ -333,6 +403,48 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
         </div>
       </div>
 
+      {/* ─── Category Selection Box ────────────────────────────────────────────── */}
+      {(categoriesWithCount.length > 0 || uncategorizedCount > 0) && (
+        <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-gray-100 shadow-xs">
+          <div className="relative flex-1">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-indigo-600 flex items-center gap-1.5">
+              <Tag className="w-4 h-4 shrink-0" />
+              <span className="text-[11px] font-bold text-gray-500 hidden sm:inline">ক্যাটাগরি:</span>
+            </div>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-full pl-9 sm:pl-24 pr-8 py-2 text-xs font-bold text-gray-800 bg-gray-50 hover:bg-gray-100/70 border border-gray-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all cursor-pointer appearance-none"
+            >
+              <option value="ALL">📂 সকল ক্যাটাগরি ({products.length} টি পণ্য)</option>
+              {categoriesWithCount.map((cat) => (
+                <option key={cat.name} value={cat.name}>
+                  🏷️ {cat.name} ({cat.count})
+                </option>
+              ))}
+              {uncategorizedCount > 0 && categoriesWithCount.length > 0 && (
+                <option value="__UNCATEGORIZED__">
+                  📦 অন্যান্য / আনক্যাটাগরাইজড ({uncategorizedCount})
+                </option>
+              )}
+            </select>
+            <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+
+          {categoryFilter !== 'ALL' && (
+            <button
+              type="button"
+              onClick={() => setCategoryFilter('ALL')}
+              className="shrink-0 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+              title="ক্যাটাগরি ফিল্টার রিসেট করুন"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">ফিল্টার রিসেট</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* ─── Product List / Cards ──────────────────────────────────────────────── */}
       {filteredProducts.length === 0 ? (
         <div className="bg-white border border-gray-100 rounded-3xl p-8 text-center shadow-soft">
@@ -406,14 +518,23 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                       </h4>
                     </div>
 
-                    <div className="text-[11px] text-gray-500 flex items-center gap-1.5 mt-0.5">
-                      <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-700 font-semibold">
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1.5 mt-1 flex-wrap">
+                      <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-700 font-semibold text-[10px]">
                         {p.unit}
                       </span>
-                      {p.category && (
-                        <span className="text-gray-400 truncate">
-                          • {p.category}
+                      {p.category ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200/70 font-bold text-[10px] max-w-[150px] truncate" title={p.category}>
+                          <Tag className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">{p.category}</span>
                         </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(p)}
+                          className="text-[10px] text-indigo-600 hover:underline font-semibold"
+                        >
+                          + ক্যাটাগরি যোগ
+                        </button>
                       )}
                     </div>
 
@@ -598,6 +719,78 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                   placeholder="যেমন: ১ কেজি, ১ পিস, ১ লিটার"
                   className="w-full px-3 py-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
                 />
+              </div>
+
+              {/* Category Selection Box */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-bold text-gray-700 flex items-center gap-1">
+                    <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>পণ্যের ক্যাটাগরি (Category)</span>
+                  </label>
+                  {category && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCategory('');
+                        setIsCustomCategory(false);
+                      }}
+                      className="text-[10px] text-rose-500 hover:underline font-semibold cursor-pointer"
+                    >
+                      ক্লিয়ার করুন
+                    </button>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <select
+                    value={isCustomCategory ? '__CUSTOM__' : category}
+                    onChange={(e) => {
+                      if (e.target.value === '__CUSTOM__') {
+                        setIsCustomCategory(true);
+                      } else {
+                        setIsCustomCategory(false);
+                        setCategory(e.target.value);
+                      }
+                    }}
+                    className="w-full pl-3 pr-8 py-2.5 rounded-xl border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs font-semibold bg-white cursor-pointer appearance-none"
+                  >
+                    <option value="">-- ক্যাটাগরি নির্বাচন করুন (ঐচ্ছিক) --</option>
+                    {configuredCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                    <option value="__CUSTOM__">➕ অন্য নতুন ক্যাটাগরি লিখুন (Custom)...</option>
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+
+                {isCustomCategory && (
+                  <div className="mt-2 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] text-gray-500 font-bold">নতুন ক্যাটাগরির নাম লিখুন:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCustomCategory(false);
+                          setCategory('');
+                        }}
+                        className="text-[10px] text-indigo-600 hover:underline font-bold cursor-pointer"
+                      >
+                        তালিকা থেকে বাছুন
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      placeholder="যেমন: মশলাপাতি, অর্গানিক ফল..."
+                      autoFocus
+                      className="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs bg-indigo-50/20"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Price & Discount Rate (2 cols) */}

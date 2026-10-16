@@ -1,4 +1,4 @@
-import { PricingSettings, Shop, Order, ShopOrder } from '@/types';
+import { PricingSettings, Shop, Order, ShopOrder, ProductCategoryConfig } from '@/types';
 
 export const DEFAULT_INPUT_PLACEHOLDERS: string[] = [
   'বাজার-সদাই করে দিতে হবে (গ্যাস, চাল-ডাল, মাছ-মাংস, শাকসবজি)?',
@@ -88,6 +88,49 @@ export const DEFAULT_STORE_TYPES: string[] = [
   'লন্ড্রি ও ড্রাই ক্লিনিং',
   'অন্যান্য',
 ];
+
+export const DEFAULT_PRODUCT_CATEGORIES: ProductCategoryConfig[] = [
+  { id: 'cat-1', name: 'চাল ও ডাল', storeTypes: ['মুদিখানা ও সুপারশপ'] },
+  { id: 'cat-2', name: 'তেল ও মশলা', storeTypes: ['মুদিখানা ও সুপারশপ'] },
+  { id: 'cat-3', name: 'শাকসবজি ও ফলমূল', storeTypes: ['মুদিখানা ও সুপারশপ', 'ফল ও সবজির দোকান'] },
+  { id: 'cat-4', name: 'মাছ ও মাংস', storeTypes: ['মুদিখানা ও সুপারশপ', 'মাংস ও মাছ বাজার'] },
+  { id: 'cat-5', name: 'দুধ ও ডিম', storeTypes: ['মুদিখানা ও সুপারশপ'] },
+  { id: 'cat-6', name: 'স্ন্যাক্স ও বেকারি', storeTypes: ['মুদিখানা ও সুপারশপ', 'রেস্টুরেন্ট ও ফাস্টফুড'] },
+  { id: 'cat-7', name: 'পানীয় ও জুস', storeTypes: ['মুদিখানা ও সুপারশপ', 'রেস্টুরেন্ট ও ফাস্টফুড'] },
+  { id: 'cat-8', name: 'ওষুধ ও ফার্স্ট এইড', storeTypes: ['ফার্মেসি ও ওষুধ'] },
+  { id: 'cat-9', name: 'ব্যক্তিগত যত্ন (Personal Care)', storeTypes: ['মুদিখানা ও সুপারশপ', 'ফার্মেসি ও ওষুধ'] },
+  { id: 'cat-10', name: 'পরিষ্কার ও গৃহস্থালি', storeTypes: ['মুদিখানা ও সুপারশপ'] },
+  { id: 'cat-11', name: 'শিশু যত্ন (Baby Care)', storeTypes: ['মুদিখানা ও সুপারশপ', 'ফার্মেসি ও ওষুধ'] },
+  { id: 'cat-12', name: 'খাবার ও ফাস্টফুড', storeTypes: ['রেস্টুরেন্ট ও ফাস্টফুড'] },
+  { id: 'cat-13', name: 'চা ও কফি', storeTypes: ['মুদিখানা ও সুপারশপ', 'রেস্টুরেন্ট ও ফাস্টফুড'] },
+  { id: 'cat-14', name: 'স্টেশনারি ও খাতা-কলম', storeTypes: ['স্টেশনারি ও বই'] },
+  { id: 'cat-15', name: 'অন্যান্য', storeTypes: ['ALL'] },
+];
+
+export function getProductCategories(settings?: PricingSettings): ProductCategoryConfig[] {
+  if (settings?.productCategories && settings.productCategories.length > 0) {
+    return settings.productCategories;
+  }
+  return DEFAULT_PRODUCT_CATEGORIES;
+}
+
+export function getCategoriesForStoreType(storeType?: string, settings?: PricingSettings): string[] {
+  const all = getProductCategories(settings);
+  if (!storeType) return all.map(c => c.name);
+
+  const normType = storeType.trim().toLowerCase();
+  const matched = all.filter(c => {
+    if (c.storeTypes.includes('ALL') || c.storeTypes.includes('all') || c.storeTypes.includes('সকল দোকান') || c.storeTypes.includes('সকল ধরনের দোকান')) return true;
+    return c.storeTypes.some(t => {
+      const normT = t.trim().toLowerCase();
+      return normT === normType || normT.includes(normType) || normType.includes(normT);
+    });
+  });
+
+  const names = matched.map(c => c.name);
+  if (!names.includes('অন্যান্য')) names.push('অন্যান্য');
+  return names;
+}
 
 /**
  * Splits and sanitizes store types if provided as a single string,

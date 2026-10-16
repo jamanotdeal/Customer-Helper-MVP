@@ -275,14 +275,14 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
           saveDefaultDeliveryLocation(delivLoc);
           if (user.uid) {
             addSavedDeliveryAddress(user.uid, delivLoc);
-            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => {});
+            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
           }
         }
         updateCustomerPreferences(altPhone.trim() || undefined, delivLoc, undefined);
         showAlert(
           'রিকোয়েস্ট শিডিউল হয়েছে!',
           (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-            ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+          ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
           'info'
         );
         onClose();
@@ -520,7 +520,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
                 type="text"
                 value={pickupNote}
                 onChange={(e) => setPickupNote(e.target.value)}
-                placeholder="যেমন: উত্তরার ১১ নম্বর সেক্টর কাঁচাবাজার, বা নির্দিষ্ট যেকোনো দোকান"
+                placeholder="যেমন: Dottopara, Khagan বা নির্দিষ্ট যেকোনো দোকান"
                 className="w-full pl-9 pr-3.5 py-2.5 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
               />
             </div>
@@ -576,11 +576,10 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
                   }
                   setUseFreeDelivery((prev) => !prev);
                 }}
-                className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${
-                  useFreeDelivery
+                className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${useFreeDelivery
                     ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
                     : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-2">
                   <input

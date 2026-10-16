@@ -94,6 +94,7 @@ import { AdminRewardsManager } from './admin/AdminRewardsManager';
 import { AdminAddressesManager } from './admin/AdminAddressesManager';
 import { StoreProductManager } from './StoreProductManager';
 import { AdminStoreItemsModal } from './admin/AdminStoreItemsModal';
+import { AdminCategoriesManager } from './admin/AdminCategoriesManager';
 import { OrderFeedbackAnalytics } from './admin/OrderFeedbackAnalytics';
 import { AdminBlockModal } from './admin/AdminBlockModal';
 import { BlockedUserModal } from './BlockedUserModal';
@@ -130,7 +131,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
   const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
-  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS' | 'ITEMS'>('TABLE');
+  const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS' | 'ITEMS' | 'CATEGORIES'>('TABLE');
   const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE' | 'FEATURED'>('UNPAID');
   const [shopsSortDirection, setShopsSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [selectedShopDetails, setSelectedShopDetails] = useState<Shop | null>(null);
@@ -139,6 +140,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [managingItemsShop, setManagingItemsShop] = useState<Shop | null>(null);
   const [selectedShopForItems, setSelectedShopForItems] = useState<string>('ALL');
   const [allStoreProducts, setAllStoreProducts] = useState<import('@/types').StoreProduct[]>([]);
+  const [adminItemsSearchQuery, setAdminItemsSearchQuery] = useState<string>('');
+  const [adminItemsCategoryFilter, setAdminItemsCategoryFilter] = useState<string>('ALL');
+  const [adminItemsStockFilter, setAdminItemsStockFilter] = useState<'ALL' | 'IN_STOCK' | 'OUT_OF_STOCK'>('ALL');
+  const [adminItemsStoreFilter, setAdminItemsStoreFilter] = useState<string>('ALL');
+  const [adminItemsViewMode, setAdminItemsViewMode] = useState<'TABLE' | 'STORES'>('TABLE');
+  const [adminItemsPage, setAdminItemsPage] = useState<number>(1);
+  const [adminItemsPageSize, setAdminItemsPageSize] = useState<number>(20);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -8467,6 +8475,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     type="button"
+                    onClick={() => setShopSubView('CATEGORIES')}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
+                      shopSubView === 'CATEGORIES'
+                        ? 'bg-purple-900 text-white shadow-md'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <Tag className="w-3.5 h-3.5" />
+                    <span>Categories</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => setShopSubView('APPLICATIONS')}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
                       shopSubView === 'APPLICATIONS'
@@ -8867,102 +8888,511 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     ) : (
                       /* "ALL" Stores Catalog Grid / List */
-                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-soft space-y-4">
-                        <div className="flex items-center justify-between flex-wrap gap-3">
-                          <div>
-                            <h4 className="font-extrabold text-sm text-gray-900">
-                              সকল দোকানের পণ্য তালিকা ও ব্যবস্থাপনা
-                            </h4>
-                            <p className="text-[11px] text-gray-500">
-                              নির্দিষ্ট দোকানের পণ্য ম্যানেজ করতে নিচে কোনো দোকানের কার্ডে ক্লিক করুন অথবা ড্রপডাউন থেকে সিলেক্ট করুন
-                            </p>
-                          </div>
-                          {shopsSource.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (shopsSource[0]) setSelectedShopForItems(shopsSource[0].id);
-                              }}
-                              className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer active:scale-95"
-                            >
-                              <Plus className="w-4 h-4" />
-                              <span>দোকানে পণ্য যোগ করুন</span>
-                            </button>
-                          )}
-                        </div>
+                      (() => {
+                        const allProductCategories = Array.from(
+                          new Set(allStoreProducts.map((p) => p.category?.trim()).filter(Boolean))
+                        ) as string[];
+                        const uncategorizedItemsCount = allStoreProducts.filter(
+                          (p) => !p.category || !p.category.trim()
+                        ).length;
 
-                        {/* Stores quick cards grid */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                          {shopsSource.map((s) => {
-                            const pList = allStoreProducts.filter(
-                              (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
-                            );
-                            const inStock = pList.filter(p => p.inStock).length;
-                            return (
-                              <div
-                                key={s.id}
-                                onClick={() => setSelectedShopForItems(s.id)}
-                                className="p-4 rounded-2xl border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50/20 bg-gray-50/60 transition-all cursor-pointer group flex flex-col justify-between"
-                              >
-                                <div>
-                                  <div className="flex items-start justify-between gap-1 mb-1">
-                                    <h5 className="font-extrabold text-sm text-gray-900 group-hover:text-indigo-900 truncate">
-                                      {s.name}
-                                    </h5>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      <span
-                                        onClick={async (e) => {
-                                          e.stopPropagation();
-                                          const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
-                                          const nextVal = !isStoreActive;
-                                          await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
-                                          setShops(Array.from(fallbackStore.shops.values()));
-                                          if (serverShops) {
-                                            setServerShops((prev) =>
-                                              prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
-                                            );
-                                          }
-                                        }}
-                                        title="Click to toggle store active/inactive"
-                                        className={`px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
-                                          (s.isActive !== undefined ? s.isActive : (s.isOpen !== false))
-                                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
-                                            : 'bg-rose-100 text-rose-850 border-rose-300 hover:bg-rose-200'
-                                        }`}
-                                      >
-                                        {(s.isActive !== undefined ? s.isActive : (s.isOpen !== false)) ? '🟢 Active' : '🔴 Inactive'}
-                                      </span>
-                                      <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 text-[10px] font-bold">
-                                        {s.type}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <p className="text-[11px] text-gray-500 truncate">{s.location?.address || '—'}</p>
-                                </div>
-                                <div className="mt-3 pt-2.5 border-t border-gray-200/70 flex items-center justify-between">
-                                  <span className="text-xs font-black text-indigo-700">
-                                    {pList.length} টি পণ্য ({inStock} স্টকে)
+                        const filteredAllProducts = allStoreProducts.filter((p) => {
+                          // Store filter
+                          if (adminItemsStoreFilter !== 'ALL' && p.storeId !== adminItemsStoreFilter) {
+                            return false;
+                          }
+                          // Category filter
+                          if (adminItemsCategoryFilter !== 'ALL') {
+                            if (adminItemsCategoryFilter === '__UNCATEGORIZED__') {
+                              if (p.category && p.category.trim()) return false;
+                            } else {
+                              if ((p.category || '').trim() !== adminItemsCategoryFilter) return false;
+                            }
+                          }
+                          // Stock filter
+                          if (adminItemsStockFilter === 'IN_STOCK' && !p.inStock) return false;
+                          if (adminItemsStockFilter === 'OUT_OF_STOCK' && p.inStock) return false;
+
+                          // Search filter
+                          if (adminItemsSearchQuery.trim()) {
+                            const q = adminItemsSearchQuery.toLowerCase();
+                            const matchesName = p.name.toLowerCase().includes(q);
+                            const matchesCategory = p.category?.toLowerCase().includes(q);
+                            const matchesUnit = p.unit?.toLowerCase().includes(q);
+                            const matchesStore = (p.storeName || '').toLowerCase().includes(q);
+                            return matchesName || matchesCategory || matchesUnit || matchesStore;
+                          }
+                          return true;
+                        });
+
+                        const hasAdminItemsFilter = Boolean(
+                          adminItemsSearchQuery.trim() ||
+                          adminItemsCategoryFilter !== 'ALL' ||
+                          adminItemsStockFilter !== 'ALL' ||
+                          adminItemsStoreFilter !== 'ALL'
+                        );
+
+                        const totalAdminItemPages = Math.max(1, Math.ceil(filteredAllProducts.length / adminItemsPageSize));
+                        const validAdminItemPage = Math.min(Math.max(1, adminItemsPage), totalAdminItemPages);
+                        const startAdminItemIdx = (validAdminItemPage - 1) * adminItemsPageSize;
+                        const paginatedAdminItems = filteredAllProducts.slice(startAdminItemIdx, startAdminItemIdx + adminItemsPageSize);
+
+                        const totalInStock = allStoreProducts.filter(p => p.inStock).length;
+                        const totalOutOfStock = allStoreProducts.filter(p => !p.inStock).length;
+
+                        return (
+                          <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-soft space-y-4">
+                            {/* Header & Sub-view Toggles */}
+                            <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-gray-100">
+                              <div>
+                                <h4 className="font-extrabold text-sm sm:text-base text-gray-900 flex items-center gap-2">
+                                  <span>স্টোর পণ্য ও ক্যাটাগরি ব্যবস্থাপনা</span>
+                                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 text-[10px] font-black">
+                                    {filteredAllProducts.length} টি পণ্য
                                   </span>
+                                </h4>
+                                <p className="text-[11px] text-gray-500 mt-0.5">
+                                  সকল দোকানের পণ্য ক্যাটাগরি অনুযায়ী ফিল্টার ও অনুসন্ধান করুন, স্টক নিয়ন্ত্রণ করুন অথবা নির্দিষ্ট দোকান নির্বাচন করুন
+                                </p>
+                              </div>
+
+                              <div className="flex items-center space-x-2 flex-wrap gap-1.5">
+                                {/* Mode Toggles */}
+                                <div className="flex bg-gray-100 p-1 rounded-xl">
                                   <button
                                     type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setManagingItemsShop(s);
-                                    }}
-                                    className="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] shadow-2xs transition-all cursor-pointer"
+                                    onClick={() => setAdminItemsViewMode('TABLE')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+                                      adminItemsViewMode === 'TABLE'
+                                        ? 'bg-purple-900 text-white shadow-xs'
+                                        : 'text-gray-600 hover:text-gray-900'
+                                    }`}
                                   >
-                                    ম্যানেজ করুন →
+                                    <Layers className="w-3.5 h-3.5" />
+                                    <span>সকল পণ্যের তালিকা ({filteredAllProducts.length})</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAdminItemsViewMode('STORES')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+                                      adminItemsViewMode === 'STORES'
+                                        ? 'bg-purple-900 text-white shadow-xs'
+                                        : 'text-gray-600 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    <Store className="w-3.5 h-3.5" />
+                                    <span>দোকান ভিত্তিক ({shopsSource.length})</span>
                                   </button>
                                 </div>
+
+                                {shopsSource.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (shopsSource[0]) setSelectedShopForItems(shopsSource[0].id);
+                                    }}
+                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1 cursor-pointer active:scale-95"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>পণ্য যোগ করুন</span>
+                                  </button>
+                                )}
                               </div>
-                            );
-                          })}
-                        </div>
-                      </div>
+                            </div>
+
+                            {/* Filters Bar */}
+                            <div className="bg-gray-50/80 p-3 rounded-2xl border border-gray-100 flex flex-wrap items-center gap-2.5">
+                              {/* Search */}
+                              <div className="relative flex-1 min-w-[200px]">
+                                <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                <input
+                                  type="text"
+                                  value={adminItemsSearchQuery}
+                                  onChange={(e) => {
+                                    setAdminItemsSearchQuery(e.target.value);
+                                    setAdminItemsPage(1);
+                                  }}
+                                  placeholder="পণ্য, ক্যাটাগরি বা দোকানের নাম খুঁজুন..."
+                                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white border border-gray-200/90 focus:border-purple-600 focus:ring-1 focus:ring-purple-600 outline-none transition-all font-medium"
+                                />
+                                {adminItemsSearchQuery && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAdminItemsSearchQuery('');
+                                      setAdminItemsPage(1);
+                                    }}
+                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Category Filter */}
+                              <div className="flex items-center space-x-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1.5">
+                                <Tag className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                <span className="text-gray-500 text-[11px] font-bold">ক্যাটাগরি:</span>
+                                <select
+                                  value={adminItemsCategoryFilter}
+                                  onChange={(e) => {
+                                    setAdminItemsCategoryFilter(e.target.value);
+                                    setAdminItemsPage(1);
+                                  }}
+                                  className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer max-w-[150px] truncate"
+                                >
+                                  <option value="ALL">সকল ক্যাটাগরি ({allStoreProducts.length})</option>
+                                  {allProductCategories.map((cat) => {
+                                    const count = allStoreProducts.filter((p) => (p.category || '').trim() === cat.trim()).length;
+                                    return (
+                                      <option key={cat} value={cat}>
+                                        {cat} ({count})
+                                      </option>
+                                    );
+                                  })}
+                                  {uncategorizedItemsCount > 0 && (
+                                    <option value="__UNCATEGORIZED__">
+                                      অন্যান্য / ক্যাটাগরি ছাড়া ({uncategorizedItemsCount})
+                                    </option>
+                                  )}
+                                </select>
+                              </div>
+
+                              {/* Store Filter */}
+                              <div className="flex items-center space-x-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1.5">
+                                <Store className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                <span className="text-gray-500 text-[11px] font-bold">দোকান:</span>
+                                <select
+                                  value={adminItemsStoreFilter}
+                                  onChange={(e) => {
+                                    setAdminItemsStoreFilter(e.target.value);
+                                    setAdminItemsPage(1);
+                                  }}
+                                  className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer max-w-[150px] truncate"
+                                >
+                                  <option value="ALL">সকল দোকান ({shopsSource.length})</option>
+                                  {shopsSource.map((s) => {
+                                    const pCount = allStoreProducts.filter(
+                                      (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
+                                    ).length;
+                                    return (
+                                      <option key={s.id} value={s.id}>
+                                        {s.name} ({pCount})
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+
+                              {/* Stock Filter */}
+                              <div className="flex items-center space-x-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                                <span className="text-gray-500 text-[11px] font-bold">স্টক:</span>
+                                <select
+                                  value={adminItemsStockFilter}
+                                  onChange={(e) => {
+                                    setAdminItemsStockFilter(e.target.value as any);
+                                    setAdminItemsPage(1);
+                                  }}
+                                  className="bg-transparent text-gray-900 font-extrabold text-xs outline-none cursor-pointer"
+                                >
+                                  <option value="ALL">সকল স্টক ({allStoreProducts.length})</option>
+                                  <option value="IN_STOCK">🟢 স্টকে আছে ({totalInStock})</option>
+                                  <option value="OUT_OF_STOCK">🔴 স্টক শেষ ({totalOutOfStock})</option>
+                                </select>
+                              </div>
+
+                              {hasAdminItemsFilter && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAdminItemsSearchQuery('');
+                                    setAdminItemsCategoryFilter('ALL');
+                                    setAdminItemsStockFilter('ALL');
+                                    setAdminItemsStoreFilter('ALL');
+                                    setAdminItemsPage(1);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-650 text-xs font-bold transition-all cursor-pointer"
+                                >
+                                  ফিল্টার মুছুন
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Content based on View Mode */}
+                            {adminItemsViewMode === 'TABLE' ? (
+                              <div className="space-y-3">
+                                {filteredAllProducts.length === 0 ? (
+                                  <div className="text-center py-12 space-y-2.5 bg-gray-50/50 rounded-2xl border border-dashed border-gray-200">
+                                    <Package className="w-8 h-8 text-gray-300 mx-auto" />
+                                    <p className="text-xs font-bold text-gray-600">কোনো পণ্য পাওয়া যায়নি</p>
+                                    {hasAdminItemsFilter && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setAdminItemsSearchQuery('');
+                                          setAdminItemsCategoryFilter('ALL');
+                                          setAdminItemsStockFilter('ALL');
+                                          setAdminItemsStoreFilter('ALL');
+                                        }}
+                                        className="text-xs font-extrabold text-purple-700 hover:underline cursor-pointer"
+                                      >
+                                        সকল ফিল্টার রিসেট করুন
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="overflow-x-auto rounded-2xl border border-gray-100 shadow-2xs">
+                                      <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
+                                        <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
+                                          <tr>
+                                            <th className="py-3 px-3 w-12 text-center">#</th>
+                                            <th className="py-3 px-3 w-14 text-center">ছবি</th>
+                                            <th className="py-3 px-3">পণ্যের নাম ও ক্যাটাগরি</th>
+                                            <th className="py-3 px-3">দোকান</th>
+                                            <th className="py-3 px-3">পরিমাণ / একক</th>
+                                            <th className="py-3 px-3">বিক্রয়মূল্য</th>
+                                            <th className="py-3 px-3 text-center">স্টক নিয়ন্ত্রণ</th>
+                                            <th className="py-3 px-3 text-right">অ্যাকশন</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100 bg-white">
+                                          {paginatedAdminItems.map((p, idx) => {
+                                            const itemShop = shopsSource.find(
+                                              (s) => s.id === p.storeId || (s.ownerUserId && s.ownerUserId === p.storeId)
+                                            );
+                                            const hasDiscount = Boolean(p.discountRate && p.discountRate > 0);
+                                            const discountedPrice = hasDiscount
+                                              ? Math.round(p.price * (1 - (p.discountRate || 0) / 100))
+                                              : p.price;
+
+                                            return (
+                                              <tr key={p.id} className="hover:bg-purple-50/20 transition-colors">
+                                                <td className="py-2.5 px-3 text-center text-[11px] font-bold text-gray-400">
+                                                  {startAdminItemIdx + idx + 1}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-center">
+                                                  <div className="w-10 h-10 rounded-xl bg-gray-50 border border-gray-100 overflow-hidden mx-auto flex items-center justify-center">
+                                                    {p.photoUrl ? (
+                                                      // eslint-disable-next-line @next/next/no-img-element
+                                                      <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
+                                                    ) : (
+                                                      <Package className="w-5 h-5 text-gray-300" />
+                                                    )}
+                                                  </div>
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                  <div className="font-extrabold text-gray-900 text-xs">
+                                                    {p.name}
+                                                  </div>
+                                                  <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                                    {p.category ? (
+                                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200/70 font-bold text-[10px]">
+                                                        <Tag className="w-2.5 h-2.5" />
+                                                        <span>{p.category}</span>
+                                                      </span>
+                                                    ) : (
+                                                      <span className="text-[10px] text-gray-400 italic">
+                                                        ক্যাটাগরি নেই
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                  {itemShop ? (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setSelectedShopForItems(itemShop.id)}
+                                                      className="text-left font-bold text-indigo-700 hover:text-indigo-900 hover:underline flex items-center gap-1 text-xs cursor-pointer"
+                                                      title="এই দোকানের পণ্য ম্যানেজ করুন"
+                                                    >
+                                                      <Store className="w-3 h-3 text-indigo-500 shrink-0" />
+                                                      <span className="truncate max-w-[140px]">{itemShop.name}</span>
+                                                    </button>
+                                                  ) : (
+                                                    <span className="text-gray-500 font-medium text-xs">
+                                                      {p.storeName || '—'}
+                                                    </span>
+                                                  )}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-xs font-semibold text-gray-600">
+                                                  {p.unit}
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                  <div className="flex items-baseline gap-1.5">
+                                                    <span className="font-extrabold text-emerald-700 text-xs">
+                                                      ৳{discountedPrice}
+                                                    </span>
+                                                    {hasDiscount && (
+                                                      <span className="text-[10px] text-gray-400 line-through">
+                                                        ৳{p.price}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  {hasDiscount && (
+                                                    <span className="text-[9px] font-bold text-rose-600 block">
+                                                      -{p.discountRate}% ছাড়
+                                                    </span>
+                                                  )}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-center">
+                                                  <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                      await fallbackStore.toggleProductStock(p.id, !p.inStock);
+                                                      setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
+                                                    }}
+                                                    className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
+                                                      p.inStock
+                                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                                                        : 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
+                                                    }`}
+                                                    title="ক্লিক করে স্টক পরিবর্তন করুন"
+                                                  >
+                                                    {p.inStock ? '🟢 স্টকে আছে' : '🔴 স্টক শেষ'}
+                                                  </button>
+                                                </td>
+                                                <td className="py-2.5 px-3 text-right">
+                                                  <div className="flex items-center justify-end gap-1.5">
+                                                    {itemShop && (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                          setManagingItemsShop(itemShop);
+                                                        }}
+                                                        className="px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] transition-all cursor-pointer"
+                                                        title="দোকানের পণ্য ম্যানেজ করুন"
+                                                      >
+                                                        ম্যানেজ
+                                                      </button>
+                                                    )}
+                                                    <button
+                                                      type="button"
+                                                      onClick={async () => {
+                                                        const confirmed = await showConfirm(
+                                                          'পণ্য মুছে ফেলবেন?',
+                                                          `"${p.name}" চিরতরে মুছে যাবে। আপনি কি নিশ্চিত?`,
+                                                          'হ্যাঁ, মুছুন',
+                                                          'বাতিল'
+                                                        );
+                                                        if (confirmed) {
+                                                          await fallbackStore.deleteStoreProduct(p.id);
+                                                          setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
+                                                          showAlert('মুছে ফেলা হয়েছে', 'পণ্যটি মুছে ফেলা হয়েছে।', 'info');
+                                                        }
+                                                      }}
+                                                      className="p-1 rounded-lg hover:bg-rose-50 text-gray-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                                      title="পণ্য মুছুন"
+                                                    >
+                                                      <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+
+                                    {/* Pagination */}
+                                    {totalAdminItemPages > 1 && (
+                                      <div className="pt-2">
+                                        <PaginationControl
+                                          currentPage={validAdminItemPage}
+                                          totalPages={totalAdminItemPages}
+                                          totalItems={filteredAllProducts.length}
+                                          pageSize={adminItemsPageSize}
+                                          onPageChange={(page) => setAdminItemsPage(page)}
+                                          onPageSizeChange={(newSize) => {
+                                            setAdminItemsPageSize(newSize);
+                                            setAdminItemsPage(1);
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            ) : (
+                              /* Stores quick cards grid */
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                {shopsSource.map((s) => {
+                                  const pList = allStoreProducts.filter(
+                                    (p) => p.storeId === s.id || (s.ownerUserId && p.storeId === s.ownerUserId)
+                                  );
+                                  const inStock = pList.filter(p => p.inStock).length;
+                                  return (
+                                    <div
+                                      key={s.id}
+                                      onClick={() => setSelectedShopForItems(s.id)}
+                                      className="p-4 rounded-2xl border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50/20 bg-gray-50/60 transition-all cursor-pointer group flex flex-col justify-between"
+                                    >
+                                      <div>
+                                        <div className="flex items-start justify-between gap-1 mb-1">
+                                          <h5 className="font-extrabold text-sm text-gray-900 group-hover:text-indigo-900 truncate">
+                                            {s.name}
+                                          </h5>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <span
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
+                                                const nextVal = !isStoreActive;
+                                                await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                                setShops(Array.from(fallbackStore.shops.values()));
+                                                if (serverShops) {
+                                                  setServerShops((prev) =>
+                                                    prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
+                                                  );
+                                                }
+                                              }}
+                                              title="Click to toggle store active/inactive"
+                                              className={`px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
+                                                (s.isActive !== undefined ? s.isActive : (s.isOpen !== false))
+                                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                                                  : 'bg-rose-100 text-rose-850 border-rose-300 hover:bg-rose-200'
+                                              }`}
+                                            >
+                                              {(s.isActive !== undefined ? s.isActive : (s.isOpen !== false)) ? '🟢 Active' : '🔴 Inactive'}
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 text-[10px] font-bold">
+                                              {s.type}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <p className="text-[11px] text-gray-500 truncate">{s.location?.address || '—'}</p>
+                                      </div>
+                                      <div className="mt-3 pt-2.5 border-t border-gray-200/70 flex items-center justify-between">
+                                        <span className="text-xs font-black text-indigo-700">
+                                          {pList.length} টি পণ্য ({inStock} স্টকে)
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setManagingItemsShop(s);
+                                          }}
+                                          className="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] shadow-2xs transition-all cursor-pointer"
+                                        >
+                                          ম্যানেজ করুন →
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()
                     )}
                   </div>
                 );
               })()
+            ) : shopSubView === 'CATEGORIES' ? (
+              <AdminCategoriesManager />
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
