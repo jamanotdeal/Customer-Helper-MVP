@@ -668,7 +668,7 @@ export async function finishRefresh(): Promise<void> {
 // Splash screen
 // ---------------------------------------------------------------------------
 
-/** Hide the native splash. Called once the page is mounted, with AppSplash or the app underneath. */
+/** Hide the native launch splash. Called once AppSplash (same art) or the app is painted underneath. */
 export async function hideNativeSplash(): Promise<void> {
   if (!isNativeApp()) return;
   try {

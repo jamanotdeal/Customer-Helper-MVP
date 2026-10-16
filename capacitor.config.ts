@@ -23,14 +23,18 @@ const config: CapacitorConfig = {
 
   // ─── Plugin Configuration ─────────────────────────────────────────────────
   plugins: {
-    // Pure white, logo only. `launchAutoHide: false` hands control to JS, which
-    // calls hideNativeSplash() once the page is up and AppSplash (same white,
-    // same logo position, plus the slogan) is underneath — this is what removes
-    // the white-flash-then-content gap. CENTER_INSIDE (not CENTER_CROP) so the
-    // logo is never cropped on tall or short screens.
+    // The launch splash is held until the page has painted AppSplash, which
+    // draws the same art (logo, name, slogan — public/splash-art.png) in the
+    // same place, so the hand-over cannot be seen. JS releases it through
+    // hideNativeSplash() (see page-client.tsx); launchShowDuration is only the
+    // cap if that never comes. It used to be 0, which makes the plugin skip the
+    // launch splash altogether: Android's own splash then vanished at the
+    // WebView's first, still blank, frame — logo, white, then the in-app
+    // splash with the slogan.
     SplashScreen: {
-      launchShowDuration: 0,
-      launchAutoHide: false,
+      launchShowDuration: 8000,
+      launchAutoHide: true,
+      launchFadeOutDuration: 150,
       backgroundColor: '#ffffff',
       androidSplashResourceName: 'splash',
       androidScaleType: 'CENTER_INSIDE',

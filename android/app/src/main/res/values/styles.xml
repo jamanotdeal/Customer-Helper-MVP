@@ -33,10 +33,14 @@
         <item name="android:forceDarkAllowed">false</item>
     </style>
 
-    <!-- Launch theme, API < 31. windowBackground carries the whole splash. -->
+    <!-- Launch theme, API < 31. windowBackground is what shows before the
+         activity starts; the compat splash library then draws the icon below
+         over the same white, at the same size — both are the full splash art. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
         <item name="android:windowBackground">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
         <item name="android:statusBarColor">@color/splash_background</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">@color/splash_background</item>

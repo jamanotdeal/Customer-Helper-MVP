@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Splash + app ground. Pure white, logo only. -->
+    <!-- Splash + app ground. Pure white. -->
     <color name="splash_background">#FFFFFFFF</color>
 
     <color name="brand_primary">#FF059669</color>

@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Capacitor splash (androidSplashResourceName: "splash").
-     Solid white with the logo centred at a fixed size — deliberately NOT a
-     full-bleed bitmap, so the logo is never cropped or scaled by screen ratio. -->
+<!-- Launch window background before Android 12. White, with the same art the
+     Android 12+ splash icon, iOS and the in-app AppSplash draw: logo, name and
+     slogan in a 192 dp box, centred. ic_splash_logo is that box on a 288 dp
+     canvas (see scripts/render-splash-art.mjs), so it is drawn at 288 dp here
+     to come out the same size. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/splash_background" />
-    <item android:gravity="center">
-        <bitmap
-            android:src="@drawable/splash_logo"
-            android:gravity="center"
-            android:width="180dp"
-            android:height="180dp" />
-    </item>
+    <item
+        android:width="288dp"
+        android:height="288dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_splash_logo" />
 </layer-list>

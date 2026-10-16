@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { AppSplash } from '@/components/AppSplash';
+import { AppSplash, whenSplashArtReady } from '@/components/AppSplash';
 import { BottomNav } from '@/components/BottomNav';
 import { CustomerHome } from '@/components/CustomerHome';
 import { HelperDashboard } from '@/components/HelperDashboard';
@@ -413,11 +413,12 @@ export default function PageClient() {
     setNativeStatusBar('dark', '#ffffff');
   }, []);
 
-  // Fade the native splash out as soon as the page is up. What is underneath is
-  // either AppSplash — same white ground, logo in the same place — or the app
-  // itself, so there is nothing to flash and no reason to wait for auth.
+  // Release the native splash as soon as the page can stand in for it: AppSplash
+  // (the same art, in the same place) with its image decoded, or the app itself
+  // if auth had already resolved. Not waiting for the image is what showed a
+  // white screen, then the slogan without the logo, between the two splashes.
   useEffect(() => {
-    hideNativeSplash();
+    whenSplashArtReady().then(hideNativeSplash);
   }, []);
 
   // Setup native app lifecycle listeners (Android back button, foreground/background events)

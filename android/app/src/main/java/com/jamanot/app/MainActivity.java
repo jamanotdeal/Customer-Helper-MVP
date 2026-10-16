@@ -60,6 +60,8 @@ public class MainActivity extends BridgeActivity {
         // Must precede super.onCreate — installSplashScreen swaps the launch
         // theme for the post-splash theme, and that has to happen before the
         // activity's content view is created or Android 12+ paints its default.
+        // How long the splash stays is not decided here: the SplashScreen plugin
+        // (capacitor.config.ts) holds it until the page has painted AppSplash.
         SplashScreen.installSplashScreen(this);
 
         registerPlugin(JamanotNativePlugin.class);
