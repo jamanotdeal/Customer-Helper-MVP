@@ -2,7 +2,7 @@
 // YYYY-MM-DD and read back as `${day}T00:00:00` — the same convention the
 // admin's date inputs and reports already use.
 
-export type AdminDatePreset = 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'LAST_30' | 'THIS_MONTH' | 'CUSTOM';
+export type AdminDatePreset = 'TODAY' | 'YESTERDAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'ALL_TIME' | 'LAST_7' | 'LAST_30' | 'CUSTOM';
 
 export interface AdminDateRange {
   preset: AdminDatePreset;
@@ -26,15 +26,25 @@ export function rangeForPreset(preset: Exclude<AdminDatePreset, 'CUSTOM'>): Admi
   switch (preset) {
     case 'YESTERDAY':
       return { preset, start: daysAgo(1), end: daysAgo(1) };
-    case 'LAST_7':
-      return { preset, start: daysAgo(6), end: today };
-    case 'LAST_30':
-      return { preset, start: daysAgo(29), end: today };
+    case 'THIS_WEEK': {
+      const d = new Date();
+      const day = d.getDay();
+      const diff = (day + 6) % 7; // Monday as first day of the week
+      const startOfWeek = new Date();
+      startOfWeek.setDate(startOfWeek.getDate() - diff);
+      return { preset, start: toLocalDay(startOfWeek), end: today };
+    }
     case 'THIS_MONTH': {
       const d = new Date();
       d.setDate(1);
       return { preset, start: toLocalDay(d), end: today };
     }
+    case 'ALL_TIME':
+      return { preset, start: '2020-01-01', end: today };
+    case 'LAST_7':
+      return { preset, start: daysAgo(6), end: today };
+    case 'LAST_30':
+      return { preset, start: daysAgo(29), end: today };
     default:
       return { preset: 'TODAY', start: today, end: today };
   }
@@ -51,6 +61,7 @@ export function rangeBoundsIso(start: string, end: string): { startIso: string; 
 /** True when an ISO timestamp falls on one of the range's days. */
 export function isInRange(iso: string | undefined, startIso: string, endIso: string): boolean {
   if (!iso) return false;
+  if (startIso.startsWith('2020-01-01')) return true;
   const t = new Date(iso).getTime();
   return t >= new Date(startIso).getTime() && t < new Date(endIso).getTime();
 }
@@ -59,9 +70,11 @@ export function describeRange(range: AdminDateRange): string {
   switch (range.preset) {
     case 'TODAY': return 'today';
     case 'YESTERDAY': return 'yesterday';
+    case 'THIS_WEEK': return 'this week';
+    case 'THIS_MONTH': return 'this month';
+    case 'ALL_TIME': return 'all time';
     case 'LAST_7': return 'last 7 days';
     case 'LAST_30': return 'last 30 days';
-    case 'THIS_MONTH': return 'this month';
     default: return range.start === range.end ? range.start : `${range.start} – ${range.end}`;
   }
 }

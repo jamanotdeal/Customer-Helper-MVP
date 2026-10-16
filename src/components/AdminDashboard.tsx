@@ -103,7 +103,7 @@ import { AdminDateRangeFilter } from './admin/AdminDateRangeFilter';
 import { LifetimeDataNotice } from './admin/LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import { AdminDateRange, rangeForPreset, rangeBoundsIso, isInRange, describeRange } from '@/lib/adminDateRange';
-import { DEFAULT_SERVICES, DEFAULT_STORE_TYPES, parseStoreTypes, getStoreTypesForService } from '@/lib/pricing';
+import { DEFAULT_SERVICES, DEFAULT_STORE_TYPES, parseStoreTypes, getStoreTypesForService, calculateHelperCommission } from '@/lib/pricing';
 import {
   exportUsersToCSV,
   exportUsersToPDF,
@@ -130,7 +130,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<
     'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
   >('EXCEPTIONS');
-  const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('MAP');
+  const [helperSubView, setHelperSubView] = useState<'MAP' | 'AREAS' | 'APPLICATIONS' | 'TABLE'>('TABLE');
   const [shopSubView, setShopSubView] = useState<'MAP' | 'TABLE' | 'APPLICATIONS' | 'ITEMS' | 'CATEGORIES'>('TABLE');
   const [shopsSortField, setShopsSortField] = useState<'UNPAID' | 'SALES' | 'COMMISSION' | 'ORDERS' | 'NAME' | 'TYPE' | 'DATE' | 'FEATURED'>('UNPAID');
   const [shopsSortDirection, setShopsSortDirection] = useState<'ASC' | 'DESC'>('DESC');
@@ -970,7 +970,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const force = rangeForceRef.current;
     rangeForceRef.current = false;
     setRangeStatus('loading');
-    const readOrders = () => fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
+    const readOrders = () => {
+      if (dateRange.preset === 'ALL_TIME') {
+        return fallbackStore.ensureAdminLifetimeData(force);
+      }
+      return fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
+    };
     // Store Orders reads its own list first and the orders (for the work-hours
     // card) after it. Read side by side, the far larger orders read held up
     // the store orders on the same connection: 30 days took 5–7 s on a phone.
@@ -986,7 +991,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => { cancelled = true; };
     // receivingShopIds only matters while Store Orders is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload]);
+  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload, dateRange.preset]);
 
   const reloadRange = (force: boolean) => {
     rangeForceRef.current = force;
@@ -1984,15 +1989,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     avgDeliveryTimeMins?: number;
   };
   const processedHelpers = React.useMemo((): HelperRow[] => {
-    if (activeTab !== 'HELPERS') return [];
+    if (activeTab !== 'HELPERS' || helperSubView !== 'TABLE') return [];
     const helperMap = new Map<string, HelperRow>();
 
-    // Every helper's wallet, and which orders have shop orders, up front.
+    const isAllTime = dateRange.preset === 'ALL_TIME';
+
+    // Collect helper IDs from applications, registered users, and orders
     const helperIds = new Set<string>();
     applications.forEach((app) => helperIds.add(app.userId));
+    users.forEach((u) => {
+      if (u.isHelper || u.role === 'helper') helperIds.add(u.uid);
+    });
     allOrders.forEach((o) => {
       if (o.helperId) helperIds.add(o.helperId);
     });
+
     const wallets = fallbackStore.getHelperWallets(helperIds);
     const ordersWithShopOrders = new Set<string>();
     fallbackStore.shopOrders.forEach((so) => {
@@ -2001,7 +2012,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // Seed from helper applications & wallets
     applications.forEach((app) => {
-      const w = wallets.get(app.userId)!;
+      const w = wallets.get(app.userId) || { totalEarned: 0, balance: 0, totalWithdrawn: 0 };
       helperMap.set(app.userId, {
         id: app.userId,
         name: app.legalName || app.userName,
@@ -2012,21 +2023,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         activeOrders: 0,
         storeOrdersCount: 0,
         storeOrdersPercentage: 0,
-        totalEarned: w.totalEarned,
+        totalEarned: isAllTime ? w.totalEarned : 0,
         balance: w.balance,
-        totalWithdrawn: w.totalWithdrawn,
+        totalWithdrawn: isAllTime ? w.totalWithdrawn : 0,
         createdAt: app.createdAt,
       });
     });
 
-    const helperDurations = new Map<string, { totalMs: number; count: number }>();
+    // Seed registered helper users
+    users.forEach((u) => {
+      if ((u.isHelper || u.role === 'helper') && !helperMap.has(u.uid)) {
+        const w = wallets.get(u.uid) || { totalEarned: 0, balance: 0, totalWithdrawn: 0 };
+        helperMap.set(u.uid, {
+          id: u.uid,
+          name: u.displayName || 'Helper',
+          phone: u.phoneNumber || 'N/A',
+          nid: (u as any).nid || '',
+          status: 'APPROVED',
+          completedJobs: 0,
+          activeOrders: 0,
+          storeOrdersCount: 0,
+          storeOrdersPercentage: 0,
+          totalEarned: isAllTime ? w.totalEarned : 0,
+          balance: w.balance,
+          totalWithdrawn: isAllTime ? w.totalWithdrawn : 0,
+          createdAt: u.createdAt || new Date().toISOString(),
+        });
+      }
+    });
 
-    // Aggregate from orders (using allOrders for complete history)
+    const helperDurations = new Map<string, { totalMs: number; count: number }>();
+    const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
+
+    // Aggregate from orders (filtered by date range if not ALL_TIME)
     allOrders.forEach((o) => {
       if (!o.helperId) return;
+
+      const orderInDateRange = isAllTime || isInRange(o.createdAt, rangeStartIso, rangeEndIso) || isInRange(o.deliveredAt, rangeStartIso, rangeEndIso);
+      if (!orderInDateRange) return;
+
       let existing = helperMap.get(o.helperId);
       if (!existing) {
-        const w = wallets.get(o.helperId)!;
+        const w = wallets.get(o.helperId) || { totalEarned: 0, balance: 0, totalWithdrawn: 0 };
         existing = {
           id: o.helperId,
           name: o.helperName || 'Helper',
@@ -2036,9 +2074,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           activeOrders: 0,
           storeOrdersCount: 0,
           storeOrdersPercentage: 0,
-          totalEarned: w.totalEarned,
+          totalEarned: isAllTime ? w.totalEarned : 0,
           balance: w.balance,
-          totalWithdrawn: w.totalWithdrawn,
+          totalWithdrawn: isAllTime ? w.totalWithdrawn : 0,
           createdAt: o.createdAt,
         };
         helperMap.set(o.helperId, existing);
@@ -2050,6 +2088,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       if (o.status === 'DELIVERED') {
         existing.completedJobs += 1;
+        if (!isAllTime) {
+          const baseFeeForHelper = o.isFreeDelivery
+            ? Math.max(o.originalDeliveryFee || 0, minFee)
+            : Math.max(o.deliveryFee || 0, minFee);
+          const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
+          existing.totalEarned += helperShare;
+        }
+
         if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
           const duration = new Date(o.deliveredAt).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
           if (duration > 0) {
@@ -2063,6 +2109,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         existing.activeOrders += 1;
       }
     });
+
+    // If not all time, aggregate helper withdrawals in date range
+    if (!isAllTime) {
+      fallbackStore.withdrawals.forEach((w) => {
+        if (w.status === 'APPROVED' && isInRange(w.createdAt, rangeStartIso, rangeEndIso)) {
+          const helper = helperMap.get(w.helperId);
+          if (helper) {
+            helper.totalWithdrawn += w.amount;
+          }
+        }
+      });
+    }
 
     // Calculate average delivery time & store orders percentage for each helper
     helperMap.forEach((helper, helperId) => {
@@ -2101,7 +2159,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // walletInputsVersion stands for everything the wallets are computed from
     // inside the store (orders, withdrawals, shop orders, shops, pricing).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, applications, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion]);
+  }, [activeTab, helperSubView, dateRange.preset, rangeStartIso, rangeEndIso, applications, users, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion]);
 
   // 4. Unified Users List with Live Running States
   //
@@ -2471,9 +2529,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // summed over every order, so these views read the full history — on
   // demand, once per session — instead of every admin session doing it.
   const lifetimeData = useAdminLifetimeData(
-    // Shops: its per-shop sales and payouts are summed from shop orders, their
-    // parent orders and withdrawals (getStoreFinancials).
-    activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
+    (activeTab === 'HELPERS' && dateRange.preset === 'ALL_TIME') || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
   );
 
   if (isNormalAdmin && allowedAdminTabs.length === 0) {
@@ -2986,8 +3042,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
       </DraggableTabsContainer>
 
-      {/* Date range — the very top of the order lists. Only these days are read. */}
-      {(activeTab === 'ORDERS' || activeTab === 'STORE_ORDERS') && isTabAllowed(activeTab) && (
+      {/* Date range — the very top of the order lists and helper performance. Only these days are read. */}
+      {(activeTab === 'ORDERS' || activeTab === 'STORE_ORDERS' || activeTab === 'HELPERS') && isTabAllowed(activeTab) && (
         <AdminDateRangeFilter
           value={dateRange}
           onChange={setDateRange}
@@ -2997,7 +3053,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           summary={
             activeTab === 'ORDERS'
               ? `${processedOrdersForTab.length} order${processedOrdersForTab.length === 1 ? '' : 's'}`
-              : `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
+              : activeTab === 'STORE_ORDERS'
+              ? `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
+              : `${processedHelpers.length} helper${processedHelpers.length === 1 ? '' : 's'}`
           }
         />
       )}
@@ -5323,9 +5381,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 3: HELPER STATS TAB --- */}
       {activeTab === 'HELPERS' && isTabAllowed('HELPERS') && (() => {
-        const processed = processedHelpers;
-        const { totalPages, paginatedItems, totalItems } = paginateList(processed);
-
         const handleUpdateHelperType = async (userId: string, newType: 'commuter' | 'dedicated') => {
           const helperUser = fallbackStore.users.get(userId);
           if (helperUser) {
@@ -5894,9 +5949,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               return (
                 <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                  <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                    <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800">
+                  <div className="p-5 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-extrabold text-base text-gray-900">Helper Statistics & Performance Histories</h3>
+                      <p className="text-xs text-purple-700 font-bold mt-0.5">
+                        Performance metrics for: <span className="underline">{describeRange(dateRange)}</span>
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 self-start sm:self-auto">
                       {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
                     </span>
                   </div>

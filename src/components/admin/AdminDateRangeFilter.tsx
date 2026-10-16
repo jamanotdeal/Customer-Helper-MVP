@@ -4,12 +4,12 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, Calendar, RefreshCw } from 'lucide-react';
 import { AdminDatePreset, AdminDateRange, rangeForPreset } from '@/lib/adminDateRange';
 
-const PRESETS: { key: Exclude<AdminDatePreset, 'CUSTOM'>; label: string }[] = [
+const PRESETS: { key: Exclude<AdminDatePreset, 'CUSTOM' | 'LAST_7' | 'LAST_30'>; label: string }[] = [
   { key: 'TODAY', label: 'Today' },
   { key: 'YESTERDAY', label: 'Yesterday' },
-  { key: 'LAST_7', label: 'Last 7 Days' },
-  { key: 'LAST_30', label: 'Last 30 Days' },
+  { key: 'THIS_WEEK', label: 'This Week' },
   { key: 'THIS_MONTH', label: 'This Month' },
+  { key: 'ALL_TIME', label: 'All Time' },
 ];
 
 interface AdminDateRangeFilterProps {
