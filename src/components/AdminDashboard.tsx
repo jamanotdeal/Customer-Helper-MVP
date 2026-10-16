@@ -80,6 +80,7 @@ import { AdminHelperMapView } from './admin/AdminHelperMapView';
 import { DraggableTabsContainer } from './admin/DraggableTabsContainer';
 import { AddShopModal } from './AddShopModal';
 import { UserActionDropdown } from './admin/UserActionDropdown';
+import { ShopActionDropdown } from './admin/ShopActionDropdown';
 import { AdminCustomModalFormModal } from './admin/AdminCustomModalFormModal';
 import { AdminStoreOrderDetailsModal } from './admin/AdminStoreOrderDetailsModal';
 import { AdminShopMapView } from './admin/AdminShopMapView';
@@ -8893,7 +8894,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-gray-600 min-w-[1100px]">
+                  <table className="w-full text-left text-xs text-gray-600 min-w-[760px]">
                     <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
                       <tr>
                         <th
@@ -8901,7 +8902,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => toggleShopSort('NAME')}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Store Name</span>
+                            <span>Store Name, Type & Items</span>
                             {shopsSortField === 'NAME' ? (
                               shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
                             ) : (
@@ -8909,37 +8910,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             )}
                           </div>
                         </th>
-                        <th
-                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
-                          onClick={() => toggleShopSort('TYPE')}
-                        >
-                          <div className="flex items-center space-x-1">
-                            <span>Store Type</span>
-                            {shopsSortField === 'TYPE' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
-                            )}
-                          </div>
-                        </th>
-                        <th className="py-3.5 px-4 min-w-[185px]">
+                        <th className="py-3.5 px-4 min-w-[190px]">
                           <div className="flex items-center space-x-1.5 text-gray-800 font-black">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Store Status (স্ট্যাটাস)</span>
-                          </div>
-                        </th>
-                        <th
-                          className="py-3.5 px-4 cursor-pointer hover:bg-amber-50/80 transition-colors select-none"
-                          onClick={() => toggleShopSort('FEATURED')}
-                        >
-                          <div className="flex items-center space-x-1 text-amber-950 font-black">
-                            <Sparkles className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
-                            <span>Featured (টপ)</span>
-                            {shopsSortField === 'FEATURED' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-amber-700" /> : <ArrowDown className="w-3 h-3 text-amber-700" />
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 text-amber-400" />
-                            )}
+                            <span>Status & Featured</span>
                           </div>
                         </th>
                         <th
@@ -8948,9 +8922,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         >
                           <div className="flex items-center space-x-1 text-emerald-950 font-black">
                             <DollarSign className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Unpaid Balance (৳)</span>
+                            <span>Due Amount (৳)</span>
                             {shopsSortField === 'UNPAID' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3.5 h-3.5 text-emerald-700" /> : <ArrowDown className="w-3.5 h-3.5 text-emerald-700" />
+                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-emerald-700" /> : <ArrowDown className="w-3 h-3 text-emerald-700" />
                             ) : (
                               <ArrowUpDown className="w-3 h-3 text-emerald-300" />
                             )}
@@ -8961,23 +8935,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => toggleShopSort('SALES')}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Orders & Sales</span>
+                            <span>Current Orders</span>
                             {shopsSortField === 'SALES' ? (
-                              shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 text-gray-300" />
-                            )}
-                          </div>
-                        </th>
-                        <th className="py-3.5 px-4">Contact & WhatsApp</th>
-                        <th className="py-3.5 px-4">Location Address</th>
-                        <th
-                          className="py-3.5 px-4 cursor-pointer hover:bg-gray-100/80 transition-colors"
-                          onClick={() => toggleShopSort('DATE')}
-                        >
-                          <div className="flex items-center space-x-1">
-                            <span>Added Date</span>
-                            {shopsSortField === 'DATE' ? (
                               shopsSortDirection === 'ASC' ? <ArrowUp className="w-3 h-3 text-purple-700" /> : <ArrowDown className="w-3 h-3 text-purple-700" />
                             ) : (
                               <ArrowUpDown className="w-3 h-3 text-gray-300" />
@@ -9017,10 +8976,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onClick={() => setSelectedShopDetails(s)}
                             className="hover:bg-purple-50/50 transition-colors cursor-pointer"
                           >
+                            {/* 1. STORE NAME + TYPE + ITEMS */}
                             <td className="py-4 px-4">
                               <div className="font-extrabold text-gray-900 flex items-center space-x-2">
                                 <Store className="w-4 h-4 text-purple-600 shrink-0" />
-                                <span>{s.name}</span>
+                                <span className="font-bold text-gray-950">{s.name}</span>
                                 {s.isBlocked && (
                                   <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-black text-[9px] uppercase tracking-wider flex items-center space-x-0.5">
                                     <Ban className="w-2.5 h-2.5" />
@@ -9031,12 +8991,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {s.isBlocked && (s.adminBlockNote || s.blockedReason) && (
                                 <p className="text-[10px] text-red-700 font-bold flex items-center gap-1 mt-0.5">
                                   <Lock className="w-2.5 h-2.5 text-red-500 shrink-0" />
-                                  <span className="truncate max-w-[140px]" title={s.adminBlockNote || s.blockedReason}>
+                                  <span className="truncate max-w-[200px]" title={s.adminBlockNote || s.blockedReason}>
                                     Note: {s.adminBlockNote || s.blockedReason}
                                   </span>
                                 </p>
                               )}
-                              <div className="mt-1 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                                <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-900 font-bold text-[9px] border border-purple-200">
+                                  {s.type}
+                                </span>
                                 <button
                                   type="button"
                                   onClick={() => setManagingItemsShop(s)}
@@ -9052,15 +9015,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </button>
                               </div>
                             </td>
-                            <td className="py-4 px-4">
-                              <span className="px-2.5 py-1 rounded-full bg-purple-50 text-purple-900 font-bold text-[10px]">
-                                {s.type}
-                              </span>
-                            </td>
-                            {/* DEDICATED STORE STATUS CELL */}
-                            <td className="py-4 px-4 min-w-[185px]" onClick={(e) => e.stopPropagation()}>
+
+                            {/* 2. INACTIVE + FEATURED STATUS */}
+                            <td className="py-4 px-4 min-w-[190px]" onClick={(e) => e.stopPropagation()}>
                               <div className="space-y-1.5">
-                                {/* 1. Active / Inactive Toggle Switch */}
+                                {/* Active / Inactive Toggle Switch */}
                                 <div
                                   onClick={async () => {
                                     const nextVal = !isStoreActive;
@@ -9103,8 +9062,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </div>
                                 </div>
 
-                                {/* 2. Approval Status Selector */}
-                                <div className="flex items-center">
+                                {/* Featured Toggle Switch */}
+                                <div className="space-y-1">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const nextVal = !s.isFeatured;
+                                      await fallbackStore.toggleShopFeaturedStatus(s.id, nextVal);
+                                      setShops(Array.from(fallbackStore.shops.values()));
+                                      if (serverShops) {
+                                        setServerShops((prev) =>
+                                          prev ? prev.map((item) => (item.id === s.id ? { ...item, isFeatured: nextVal, featuredAt: nextVal ? new Date().toISOString() : undefined } : item)) : null
+                                        );
+                                      }
+                                      showAlert(
+                                        'ফিচার্ড স্ট্যাটাস আপডেট',
+                                        `"${s.name}" ${nextVal ? 'সফলভাবে টপে ফিচার করা হয়েছে। গ্রাহক ক্যাটাগরি বেছে নিলে এই দোকানটি সবার উপরে থাকবে।' : 'টপ ফিচার থেকে সরানো হয়েছে।'}`,
+                                        'success'
+                                      );
+                                    }}
+                                    title={s.isFeatured ? 'টপ ফিচার থেকে বাদ দিতে ক্লিক করুন' : 'টপে ফিচার করতে ক্লিক করুন'}
+                                    className={`w-full flex items-center justify-between gap-1.5 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all shadow-2xs ${
+                                      s.isFeatured
+                                        ? 'bg-amber-50 hover:bg-amber-100/90 border-amber-300 text-amber-950'
+                                        : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-500'
+                                    }`}
+                                  >
+                                    <div className="flex items-center space-x-1.5">
+                                      <Sparkles className={`w-3.5 h-3.5 ${s.isFeatured ? 'text-amber-500 fill-amber-400 animate-pulse' : 'text-gray-400'}`} />
+                                      <span className="text-[11px] font-black uppercase tracking-wider">
+                                        {s.isFeatured ? '⭐ Featured' : '☆ Not Top'}
+                                      </span>
+                                    </div>
+                                    <div
+                                      className={`w-7 h-3.5 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
+                                        s.isFeatured ? 'bg-amber-500' : 'bg-gray-300'
+                                      }`}
+                                    >
+                                      <div
+                                        className={`bg-white w-2.5 h-2.5 rounded-full shadow transform transition-transform duration-200 ${
+                                          s.isFeatured ? 'translate-x-3.5' : 'translate-x-0'
+                                        }`}
+                                      />
+                                    </div>
+                                  </button>
+
+                                  {s.isFeatured && (
+                                    <div className="flex items-center justify-between gap-1 px-1">
+                                      <span className="text-[9px] font-black uppercase text-amber-700 tracking-wider">
+                                        Priority:
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const input = prompt(
+                                            `"${s.name}" এর জন্য প্রায়োরিটি ক্রম নম্বর দিন (কম নম্বর শীর্ষে থাকবে, যেমন 1, 2, 3...):`,
+                                            s.featuredOrder !== undefined ? String(s.featuredOrder) : '1'
+                                          );
+                                          if (input === null) return;
+                                          const num = parseInt(input.trim(), 10);
+                                          const newOrder = !isNaN(num) && num > 0 ? num : undefined;
+                                          await fallbackStore.toggleShopFeaturedStatus(s.id, true, newOrder);
+                                          setShops(Array.from(fallbackStore.shops.values()));
+                                          if (serverShops) {
+                                            setServerShops((prev) =>
+                                              prev ? prev.map((item) => (item.id === s.id ? { ...item, featuredOrder: newOrder } : item)) : null
+                                            );
+                                          }
+                                          showAlert('অগ্রাধিকার আপডেট', `"${s.name}" এর প্রায়োরিটি #${newOrder || 'Default'} সেট করা হয়েছে।`, 'success');
+                                        }}
+                                        className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 font-black text-[10px] border border-amber-300 transition-colors cursor-pointer"
+                                        title="ক্লিক করে প্রায়োরিটি ক্রম পরিবর্তন করুন"
+                                      >
+                                        #{s.featuredOrder || '1'} (Edit ✎)
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Approval Status & Direct Orders */}
+                                <div className="flex items-center gap-1">
                                   <select
                                     value={sStatus}
                                     onChange={async (e) => {
@@ -9118,7 +9155,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       }
                                       showAlert('স্ট্যাটাস আপডেট', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
                                     }}
-                                    className={`w-full px-2 py-1 rounded-xl text-[10px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
+                                    className={`flex-1 px-1.5 py-0.5 rounded-lg text-[9px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
                                       sStatus === 'Approved'
                                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                                         : sStatus === 'Pending'
@@ -9126,14 +9163,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
                                     }`}
                                   >
-                                    <option value="Approved">✓ Approved (অনুমোদিত)</option>
-                                    <option value="Pending">⏳ Pending (অপেক্ষমাণ)</option>
-                                    <option value="Rejected">✕ Rejected (বাতিল)</option>
+                                    <option value="Approved">✓ Approved</option>
+                                    <option value="Pending">⏳ Pending</option>
+                                    <option value="Rejected">✕ Rejected</option>
                                   </select>
-                                </div>
 
-                                {/* 3. Can Receive Orders Toggle */}
-                                <div>
                                   <button
                                     type="button"
                                     onClick={async () => {
@@ -9148,97 +9182,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         'success'
                                       );
                                     }}
-                                    title="Click to toggle whether this store can accept order requests directly"
-                                    className={`w-full px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all text-center ${
+                                    title={s.canReceiveOrders !== false ? 'Accepts orders directly' : 'Admin manual orders only'}
+                                    className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
                                       (s.canReceiveOrders !== false)
                                         ? 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
                                         : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
                                     }`}
                                   >
-                                    {(s.canReceiveOrders !== false) ? '⚡ Accepts Orders' : '🚫 Admin Manual Only'}
+                                    {(s.canReceiveOrders !== false) ? '⚡ Orders ON' : '🚫 OFF'}
                                   </button>
                                 </div>
                               </div>
                             </td>
-                            {/* DEDICATED STORE FEATURED CELL */}
-                            <td className="py-4 px-4 min-w-[160px]" onClick={(e) => e.stopPropagation()}>
-                              <div className="space-y-1.5">
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const nextVal = !s.isFeatured;
-                                    await fallbackStore.toggleShopFeaturedStatus(s.id, nextVal);
-                                    setShops(Array.from(fallbackStore.shops.values()));
-                                    if (serverShops) {
-                                      setServerShops((prev) =>
-                                        prev ? prev.map((item) => (item.id === s.id ? { ...item, isFeatured: nextVal, featuredAt: nextVal ? new Date().toISOString() : undefined } : item)) : null
-                                      );
-                                    }
-                                    showAlert(
-                                      'ফিচার্ড স্ট্যাটাস আপডেট',
-                                      `"${s.name}" ${nextVal ? 'সফলভাবে টপে ফিচার করা হয়েছে। গ্রাহক ক্যাটাগরি বেছে নিলে এই দোকানটি সবার উপরে থাকবে।' : 'টপ ফিচার থেকে সরানো হয়েছে।'}`,
-                                      'success'
-                                    );
-                                  }}
-                                  title={s.isFeatured ? 'টপ ফিচার থেকে বাদ দিতে ক্লিক করুন' : 'টপে ফিচার করতে ক্লিক করুন'}
-                                  className={`w-full flex items-center justify-between gap-1.5 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all shadow-2xs ${
-                                    s.isFeatured
-                                      ? 'bg-amber-50 hover:bg-amber-100/90 border-amber-300 text-amber-950'
-                                      : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-500'
-                                  }`}
-                                >
-                                  <div className="flex items-center space-x-1.5">
-                                    <Sparkles className={`w-3.5 h-3.5 ${s.isFeatured ? 'text-amber-500 fill-amber-400 animate-pulse' : 'text-gray-400'}`} />
-                                    <span className="text-[11px] font-black uppercase tracking-wider">
-                                      {s.isFeatured ? '⭐ Featured' : '☆ Not Top'}
-                                    </span>
-                                  </div>
-                                  <div
-                                    className={`w-7 h-3.5 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
-                                      s.isFeatured ? 'bg-amber-500' : 'bg-gray-300'
-                                    }`}
-                                  >
-                                    <div
-                                      className={`bg-white w-2.5 h-2.5 rounded-full shadow transform transition-transform duration-200 ${
-                                        s.isFeatured ? 'translate-x-3.5' : 'translate-x-0'
-                                      }`}
-                                    />
-                                  </div>
-                                </button>
 
-                                {s.isFeatured && (
-                                  <div className="flex items-center justify-between gap-1 px-1">
-                                    <span className="text-[9px] font-black uppercase text-amber-700 tracking-wider">
-                                      Priority Rank:
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        const input = prompt(
-                                          `"${s.name}" এর জন্য প্রায়োরিটি ক্রম নম্বর দিন (কম নম্বর শীর্ষে থাকবে, যেমন 1, 2, 3...):`,
-                                          s.featuredOrder !== undefined ? String(s.featuredOrder) : '1'
-                                        );
-                                        if (input === null) return;
-                                        const num = parseInt(input.trim(), 10);
-                                        const newOrder = !isNaN(num) && num > 0 ? num : undefined;
-                                        await fallbackStore.toggleShopFeaturedStatus(s.id, true, newOrder);
-                                        setShops(Array.from(fallbackStore.shops.values()));
-                                        if (serverShops) {
-                                          setServerShops((prev) =>
-                                            prev ? prev.map((item) => (item.id === s.id ? { ...item, featuredOrder: newOrder } : item)) : null
-                                          );
-                                        }
-                                        showAlert('অগ্রাধিকার আপডেট', `"${s.name}" এর প্রায়োরিটি #${newOrder || 'Default'} সেট করা হয়েছে।`, 'success');
-                                      }}
-                                      className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 font-black text-[10px] border border-amber-300 transition-colors cursor-pointer"
-                                      title="ক্লিক করে প্রায়োরিটি ক্রম পরিবর্তন করুন"
-                                    >
-                                      #{s.featuredOrder || '1'} (Edit ✎)
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
+                            {/* 3. DUE AMOUNT */}
                             <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
                               {metrics.unpaidBalance > 0 ? (
                                 <button
@@ -9281,163 +9238,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </div>
                               )}
                             </td>
+
+                            {/* 4. CURRENT ORDERS */}
                             <td className="py-4 px-4">
                               <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className={`px-2 py-0.5 rounded-md font-black text-[10px] border ${
+                                    metrics.running > 0
+                                      ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
+                                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  }`}
+                                  title="Running Orders"
+                                >
+                                  ⚡ {metrics.running} Running
+                                </span>
                                 <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-black text-[10px] border border-emerald-200" title="Completed Orders">
                                   ✓ {metrics.completed}
-                                </span>
-                                <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-black text-[10px] border border-amber-200" title="Running Orders">
-                                  ⚡ {metrics.running}
                                 </span>
                                 <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 font-black text-[10px] border border-rose-200" title="Rejected Orders">
                                   ✕ {metrics.rejected}
                                 </span>
                               </div>
                               <div className="mt-1.5 text-[11px] font-semibold text-gray-700 space-y-0.5">
-                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block mb-0.5">Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong></div>
-                                <div>Total Sales: <strong className="text-emerald-700">৳{metrics.totalSales.toLocaleString('en-US')}</strong></div>
-                                <div>
-                                  Comm ({s.commissionPercent || 0}%): <strong className="text-purple-700">৳{metrics.commission.toLocaleString('en-US')}</strong>
-                                  {metrics.disbursedCommission > 0 && (
-                                    <span className="text-[10px] text-gray-500 font-normal ml-1">
-                                      (Settled: ৳{metrics.disbursedCommission.toLocaleString('en-US')}{metrics.unpaidCommission > 0 ? `, Due: ৳${metrics.unpaidCommission.toLocaleString('en-US')}` : ''})
-                                    </span>
-                                  )}
+                                <div className="text-[11px] font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded-md inline-block">
+                                  Today: <strong>৳{metrics.todaySales.toLocaleString('en-US')}</strong>
+                                </div>
+                                <div className="text-[10px] text-gray-500">
+                                  Total Sales: <strong className="text-emerald-700 font-bold">৳{metrics.totalSales.toLocaleString('en-US')}</strong>
                                 </div>
                               </div>
                             </td>
-                            <td className="py-4 px-4">
-                              <div className="font-bold text-gray-800">{s.contactPerson}</div>
-                              <div className="text-[11px] text-emerald-700 font-extrabold">WA: {s.whatsapp}</div>
-                            </td>
-                            <td className="py-4 px-4">
-                              <div className="text-gray-800 font-semibold max-w-xs">{s.location.address}</div>
-                              {typeof s.location.lat === 'number' && typeof s.location.lng === 'number' && (
-                                <div className="text-[10px] text-gray-400 font-mono">
-                                  {s.location.lat.toFixed(4)}, {s.location.lng.toFixed(4)}
-                                </div>
-                              )}
-                            </td>
-                            <td className="py-4 px-4 text-gray-500 font-medium">
-                              <span className="block text-gray-800 font-bold text-xs">{s.addedByHelperName || 'Admin'}</span>
-                              <span className="text-[10px] text-gray-400 block">
-                                {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '—'}
-                              </span>
-                            </td>
+
+                            {/* 5. ACTIONS (DROPDOWN UNDER THREE-DOT BUTTON) */}
                             <td className="py-4 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center justify-end space-x-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setDisbursingShop(s)}
-                                  className="py-1 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                                  title="Disburse Payment, View Financials & Helper Breakdown"
-                                >
-                                  <DollarSign className="w-3.5 h-3.5" />
-                                  <span className="text-[10px] font-black uppercase">Disburse</span>
-                                </button>
-                                {s.isBlocked ? (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const confirmed = await showConfirm(
-                                        'স্টোর আনব্লক নিশ্চিতকরণ',
-                                        `আপনি কি "${s.name}" স্টোরটি আনব্লক করতে চান?`,
-                                        'হ্যাঁ, আনব্লক করুন',
-                                        'বাতিল'
-                                      );
-                                      if (!confirmed) return;
-                                      await fallbackStore.blockShop(s.id, false);
-                                      setShops(Array.from(fallbackStore.shops.values()));
-                                      showAlert('আনব্লক সম্পন্ন', `"${s.name}" স্টোরটি আনব্লক করা হয়েছে।`, 'success');
-                                    }}
-                                    className="p-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs"
-                                    title="Unblock Store"
-                                  >
-                                    <CheckCircle2 className="w-4 h-4" />
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => setBlockTarget({ id: s.id, name: s.name, type: 'Store' })}
-                                    className="p-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-xs"
-                                    title="Block Store"
-                                  >
-                                    <Ban className="w-4 h-4" />
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const nextVal = !isStoreActive;
-                                    await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
-                                    setShops(Array.from(fallbackStore.shops.values()));
-                                    if (serverShops) {
-                                      setServerShops((prev) =>
-                                        prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
-                                      );
-                                    }
-                                    showAlert(
-                                      'স্টোর স্ট্যাটাস পরিবর্তন',
-                                      `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
-                                      'success'
+                              <ShopActionDropdown
+                                shop={s}
+                                isStoreActive={isStoreActive}
+                                onDisburse={() => setDisbursingShop(s)}
+                                onToggleActive={async () => {
+                                  const nextVal = !isStoreActive;
+                                  await fallbackStore.toggleShopActiveStatus(s.id, nextVal);
+                                  setShops(Array.from(fallbackStore.shops.values()));
+                                  if (serverShops) {
+                                    setServerShops((prev) =>
+                                      prev ? prev.map((item) => (item.id === s.id ? { ...item, isActive: nextVal, isOpen: nextVal } : item)) : null
                                     );
-                                  }}
-                                  className={`p-1.5 rounded-xl font-bold text-xs transition-colors cursor-pointer ${
-                                    isStoreActive
-                                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
-                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
-                                  }`}
-                                  title={isStoreActive ? 'Deactivate Store (দোকান বন্ধ করুন)' : 'Activate Store (দোকান চালু করুন)'}
-                                >
-                                  <Power className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setManagingItemsShop(s)}
-                                  className="p-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs cursor-pointer"
-                                  title="Manage Store Items (পণ্য ব্যবস্থাপনা)"
-                                >
-                                  <Package className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedShopDetails(s)}
-                                  className="p-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-xs"
-                                  title="View Details"
-                                >
-                                  <Globe className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingShop(s);
-                                    setShowAddShopModal(true);
-                                  }}
-                                  className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={async () => {
+                                  }
+                                  showAlert(
+                                    'স্টোর স্ট্যাটাস পরিবর্তন',
+                                    `"${s.name}" সফলভাবে ${nextVal ? 'সক্রিয় (Active / Open)' : 'নিষ্ক্রিয় (Inactive / Closed)'} করা হয়েছে।`,
+                                    'success'
+                                  );
+                                }}
+                                onToggleBlock={async () => {
+                                  if (s.isBlocked) {
                                     const confirmed = await showConfirm(
-                                      'দোকান ডিলিট নিশ্চিতকরণ',
-                                      `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
-                                      'হ্যাঁ, ডিলিট করুন',
+                                      'স্টোর আনব্লক নিশ্চিতকরণ',
+                                      `আপনি কি "${s.name}" স্টোরটি আনব্লক করতে চান?`,
+                                      'হ্যাঁ, আনব্লক করুন',
                                       'বাতিল'
                                     );
                                     if (!confirmed) return;
-                                    await fallbackStore.deleteShop(s.id);
+                                    await fallbackStore.blockShop(s.id, false);
                                     setShops(Array.from(fallbackStore.shops.values()));
-                                    setServerShops((prev) => (prev ? prev.filter((shop) => shop.id !== s.id) : null));
-                                    setExactShopsCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
-                                    showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
-                                  }}
-                                  className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
+                                    showAlert('আনব্লক সম্পন্ন', `"${s.name}" স্টোরটি আনব্লক করা হয়েছে।`, 'success');
+                                  } else {
+                                    setBlockTarget({ id: s.id, name: s.name, type: 'Store' });
+                                  }
+                                }}
+                                onManageItems={() => setManagingItemsShop(s)}
+                                onViewDetails={() => setSelectedShopDetails(s)}
+                                onEdit={() => {
+                                  setEditingShop(s);
+                                  setShowAddShopModal(true);
+                                }}
+                                onDelete={async () => {
+                                  const confirmed = await showConfirm(
+                                    'দোকান ডিলিট নিশ্চিতকরণ',
+                                    `আপনি কি নিশ্চিতভাবে ${s.name} দোকানটি ডিলিট করতে চান?`,
+                                    'হ্যাঁ, ডিলিট করুন',
+                                    'বাতিল'
+                                  );
+                                  if (!confirmed) return;
+                                  await fallbackStore.deleteShop(s.id);
+                                  setShops(Array.from(fallbackStore.shops.values()));
+                                  setServerShops((prev) => (prev ? prev.filter((shop) => shop.id !== s.id) : null));
+                                  setExactShopsCount((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
+                                  showAlert('সফল', 'দোকানের তথ্য মুছে ফেলা হয়েছে।', 'success');
+                                }}
+                              />
                             </td>
                           </tr>
                         );

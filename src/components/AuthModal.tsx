@@ -123,10 +123,11 @@ export const AuthModal: React.FC = () => {
 
         {/* Minimalist Premium Header */}
         <div className="pt-8 px-7 pb-4 text-center">
-          <div className="inline-flex items-center justify-center w-13 h-13 rounded-2xl bg-emerald-50 border border-emerald-100/80 text-emerald-600 shadow-xs mb-3.5">
-            <User className="w-6 h-6 stroke-[2.2]" />
-          </div>
-
+          <img
+            src="/Jamanot-Logo.png"
+            alt="Jamanot Logo"
+            className="mx-auto mb-3 h-20 w-auto object-contain"
+          />
           <h2 className="text-xl font-black text-gray-900 tracking-tight">
             স্বাগতম জামানতে
           </h2>
@@ -176,12 +177,10 @@ export const AuthModal: React.FC = () => {
           {manualAuthEnabled && (
             <>
               {/* Subtle Minimal Divider */}
-              <div className="relative flex items-center justify-center my-3">
-                <div className="border-t border-gray-150 w-full" />
-                <span className="bg-white px-3 text-[11px] font-bold text-gray-400 tracking-wider">
-                  বা ইমেইল দিয়ে
-                </span>
-                <div className="border-t border-gray-150 w-full" />
+              <div className="flex items-center my-3">
+                <div className="flex-1 border-t border-gray-150" />
+                <span className="bg-white px-3 text-[11px] font-bold text-gray-400 tracking-wider whitespace-nowrap">বা ইমেইল দিয়ে</span>
+                <div className="flex-1 border-t border-gray-150" />
               </div>
 
               {/* Mode Switcher Segmented Control */}
@@ -296,7 +295,7 @@ export const AuthModal: React.FC = () => {
           {/* Subtle Security Badge */}
           <div className="pt-2 text-center flex items-center justify-center space-x-1.5 text-[11px] text-gray-400">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>জামানত দ্বারা ১০০% নিরাপদ ও সুরক্ষিত</span>
+            <span>Join if you agree with our policies.</span>
           </div>
         </div>
       </div>
