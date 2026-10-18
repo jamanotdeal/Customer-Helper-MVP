@@ -37,19 +37,23 @@ if (typeof window !== 'undefined') {
   });
 }
 
+import { isNativeApp } from '@/lib/native';
+
 // Check if currently running inside native Play Store app / TWA / Cordova / Capacitor
 export const isNativeAndroidApp = (): boolean => {
   if (typeof window === 'undefined') return false;
+  if (isNativeApp()) return true;
+
   const isTwaOrAndroidApp =
-    document.referrer.startsWith('android-app://') ||
+    document.referrer.includes('android-app://com.jamanot.app') ||
     document.referrer.includes('com.jamanot.app');
   const isCapacitorOrCordova =
-    !!(window as any).Capacitor ||
+    !!(window as any).Capacitor?.isNativePlatform?.() ||
     !!(window as any).Cordova ||
     !!(window as any).AndroidInterface ||
     (window as any).isNativeApp === true ||
     (window as any).isApp === true;
-  const isAppUserAgent = /wv|AndroidApp|JamanotApp/i.test(navigator.userAgent || '');
+  const isAppUserAgent = /AndroidApp|JamanotApp/i.test(navigator.userAgent || '');
 
   return Boolean(isTwaOrAndroidApp || isCapacitorOrCordova || isAppUserAgent);
 };
@@ -263,12 +267,13 @@ export const PwaSmartPrompt: React.FC = () => {
     window.addEventListener('pwa-install-available', handlePromptAvail);
     window.addEventListener('pwa-installed-success', handleInstallSuccess);
 
-    // Auto-show modal if not in native app and not dismissed within last 24 hours
-    // (Still shows for Android even if PWA is installed, as requested)
+    // Auto-show modal:
+    // On Android browser: Show it EVERY TIME user visits the website!
+    // On iOS / Desktop: auto-show if not dismissed within last 24 hours
     const dismissedAt = localStorage.getItem('pwa_prompt_dismissed_at');
     const now = Date.now();
     const oneDay = 24 * 60 * 60 * 1000;
-    const shouldAutoShow = !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
+    const shouldAutoShow = (android && !nativeApp) || !dismissedAt || now - parseInt(dismissedAt, 10) > oneDay;
 
     if (shouldAutoShow) {
       const timer = setTimeout(() => {
@@ -276,7 +281,7 @@ export const PwaSmartPrompt: React.FC = () => {
         if (!isRunningNative) {
           setShowPromptModal(true);
         }
-      }, 1500);
+      }, 1000);
       return () => {
         clearTimeout(timer);
         window.removeEventListener('pwa-install-available', handlePromptAvail);
@@ -299,9 +304,12 @@ export const PwaSmartPrompt: React.FC = () => {
     setShowIosGuideModal(false);
     setShowInAppGuideModal(false);
     setShowFallbackGuideModal(false);
-    try {
-      localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
-    } catch (_) {}
+    // Only persist 24h dismissal for non-Android devices; on Android browser it shows every visit
+    if (!isAndroid) {
+      try {
+        localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
+      } catch (_) {}
+    }
   };
 
   const handleOpenApp = (e?: React.MouseEvent) => {
@@ -310,10 +318,6 @@ export const PwaSmartPrompt: React.FC = () => {
     const isIosDeviceType = isIosDevice();
 
     if (isAndroidDeviceType) {
-      try {
-        localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
-        localStorage.setItem('jamanot_play_app_installed', 'true');
-      } catch (_) {}
       setShowPromptModal(false);
       // Launch Android App via standard intent URI
       const intentUrl =
@@ -355,10 +359,6 @@ export const PwaSmartPrompt: React.FC = () => {
 
   const handleInstallClick = async () => {
     if (isAndroid) {
-      try {
-        localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
-        localStorage.setItem('jamanot_play_app_installed', 'true');
-      } catch (_) {}
       setShowPromptModal(false);
       window.location.href = PLAY_STORE_URL;
       return;
@@ -449,10 +449,8 @@ export const PwaSmartPrompt: React.FC = () => {
                 </div>
                 <p className="text-xs text-gray-600 mt-1 leading-relaxed">
                   {isAndroid
-                    ? isPlayAppInstalled
-                      ? 'আপনার ফোনে জামানত অফিশিয়াল অ্যাপ ইনস্টল করা রয়েছে। দ্রুততম সেবা ও সেরা অভিজ্ঞতার জন্য সরাসরি অ্যাপে ওপেন করুন!'
-                      : 'সহজ ও দ্রুত কেনাকাটা, লাইভ অর্ডার ট্র্যাকিং এবং ইনস্ট্যান্ট আপডেটের জন্য গুগল প্লে স্টোর থেকে জামানত অফিসিয়াল অ্যাপটি ডাউনলোড করুন!'
-                    : 'লাইভ অর্ডার ট্র্যাকিং, দ্রুত নোটিফিকেশন ও সেরা অভিজ্ঞতার জন্য মাত্র ১-ক্লিকে অ্যাপ ইনস্টল করুন!'}
+                    ? 'সহজ ও দ্রুত সেবার জন্য জামানত অ্যাপ ইনস্টল করুন।'
+                    : 'লাইভ ট্র্যাকিং ও দ্রুত সেবার জন্য অ্যাপ ইনস্টল করুন।'}
                 </p>
               </div>
             </div>
@@ -460,92 +458,58 @@ export const PwaSmartPrompt: React.FC = () => {
             {/* Main Action Button */}
             <div className="space-y-2 pt-1">
               {isAndroid ? (
-                isPlayAppInstalled ? (
-                  <button
-                    type="button"
-                    onClick={handleOpenApp}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-98 text-white font-extrabold text-sm shadow-xl shadow-emerald-600/25 flex items-center justify-center gap-3.5 transition-all cursor-pointer border border-emerald-500 group"
+                <>
+                  <a
+                    href={PLAY_STORE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      setShowPromptModal(false);
+                    }}
+                    className="w-full py-3 px-4 rounded-2xl bg-slate-950 hover:bg-black active:scale-98 text-white font-extrabold text-sm shadow-xl shadow-slate-900/25 flex items-center justify-center gap-3 transition-all cursor-pointer border border-slate-800 group"
                   >
-                    <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0 p-1.5 transition-transform group-hover:scale-110">
+                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center shrink-0 p-1 transition-transform group-hover:scale-110">
                       <PlayStoreIcon className="w-full h-full" />
                     </div>
                     <div className="text-left flex-1">
-                      <div className="text-[10px] text-emerald-100 font-bold uppercase tracking-wider leading-none">INSTALLED APP</div>
-                      <div className="text-sm font-black text-white leading-tight mt-0.5">Jamanot অ্যাপে ওপেন করুন</div>
+                      <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider leading-none">GET IT ON</div>
+                      <div className="text-sm font-black text-white leading-tight mt-0.5">Play Store থেকে ইনস্টল করুন</div>
                     </div>
-                    <ExternalLink className="w-4 h-4 text-white/90 group-hover:text-white transition-colors shrink-0" />
-                  </button>
-                ) : (
-                  <>
-                    <a
-                      href={PLAY_STORE_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={() => {
-                        try {
-                          localStorage.setItem('pwa_prompt_dismissed_at', Date.now().toString());
-                          localStorage.setItem('jamanot_play_app_installed', 'true');
-                        } catch (_) {}
-                        setShowPromptModal(false);
-                      }}
-                      className="w-full py-3.5 px-4 rounded-2xl bg-slate-950 hover:bg-black active:scale-98 text-white font-extrabold text-sm shadow-xl shadow-slate-900/25 flex items-center justify-center gap-3.5 transition-all cursor-pointer border border-slate-800 group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center shrink-0 p-1.5 transition-transform group-hover:scale-110">
-                        <PlayStoreIcon className="w-full h-full" />
-                      </div>
-                      <div className="text-left flex-1">
-                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider leading-none">GET IT ON</div>
-                        <div className="text-sm font-black text-white leading-tight mt-0.5">Play Store থেকে ইনস্টল করুন</div>
-                      </div>
-                      <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors shrink-0" />
-                    </a>
+                    <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors shrink-0" />
+                  </a>
 
-                    <button
-                      type="button"
-                      onClick={handleOpenApp}
-                      className="w-full py-1.5 px-3 text-center text-xs font-bold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <span>অ্যাপ ইতিমধ্যে ইনস্টল করা থাকলে:</span>
-                      <span className="font-extrabold underline">সরাসরি খুলুন (Open App)</span>
-                    </button>
-                  </>
-                )
+                  <button
+                    type="button"
+                    onClick={handleOpenApp}
+                    className="w-full py-1 text-center text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <span>অ্যাপ থাকলে:</span>
+                    <span className="font-bold underline">সরাসরি খুলুন (Open App)</span>
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"
                   onClick={handleInstallClick}
                   disabled={isInstalling}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  className="w-full py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>{isInstalling ? 'ইনস্টল হচ্ছে...' : 'অ্যাপ ইনস্টল করুন (Install App)'}</span>
+                  <span>{isInstalling ? 'ইনস্টল হচ্ছে...' : 'অ্যাপ ইনস্টল করুন'}</span>
                 </button>
               )}
-
-              <p className="text-[11px] text-gray-500 text-center font-medium">
-                {isAndroid
-                  ? isPlayAppInstalled
-                    ? '১-ক্লিকে অফিসিয়াল জামানত অ্যাপ চালু করুন'
-                    : 'গুগল প্লে স্টোর থেকে নিরাপদ ও সরাসরি ইনস্টল'
-                  : 'কোনো স্টোরেজ বা চার্জ ছাড়াই তাৎক্ষণিক ইনস্টল হয়'}
-              </p>
             </div>
 
             {/* Bottom Actions */}
-            <div className="pt-1 flex items-center justify-between text-xs font-bold text-gray-500">
+            <div className="pt-0.5 text-center">
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-gray-400 hover:text-gray-600 py-1 px-2 cursor-pointer"
+                className="text-xs font-semibold text-gray-400 hover:text-gray-600 py-1 px-3 cursor-pointer"
               >
-                এখন নয় (Later)
+                এখন নয়
               </button>
-              <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
-                <Sparkles className="w-3 h-3 text-emerald-600" />
-                <span>Fast • Official • Verified</span>
-              </div>
             </div>
-
           </div>
         </div>
       )}
