@@ -664,6 +664,18 @@ const ADDRESS_FULL_SYNC_MS = 24 * 60 * 60 * 1000;
 const ADDRESS_FULL_AT_KEY = 'jamanot_server_addresses_full_at';
 const ADDRESS_CURSOR_KEY = 'jamanot_server_addresses_cursor';
 
+/** When this device last read every order feedback — see getAllOrderFeedbacks. */
+const FEEDBACK_FULL_READ_KEY = 'jamanot_feedbacks_full_read_at';
+const FEEDBACK_FULL_READ_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Notifications held live per customer, helper or store, and the size of each
+ * older page the drawer reads behind them (loadOlderNotifications). The drawer
+ * shows ten at a time; the live window used to be 50-60, all read on every
+ * launch.
+ */
+const NOTIFICATION_PAGE_SIZE = 25;
+
 /** How long a full read of a collection stands in for another — see isFullReadFresh. */
 const FULL_READ_TTL_MS = 2 * 60 * 1000;
 
@@ -920,6 +932,14 @@ class FallbackStore {
   private _shopsCachedAt = 0;  // epoch ms when shops were last fetched
   private _modalsCachedAt = 0; // epoch ms when customModals were last fetched
   private _listenersRole: string | null = null; // e.g. 'helper:uid123'
+
+  /**
+   * The shop whose orders the store-role listeners keep live (newest 100 shop
+   * orders, and the orders that selected it), or null outside store mode.
+   * StoreDashboard adds a listener of its own only for a different shop — one
+   * a staff account reaches through assignedUserIds rather than its storeId.
+   */
+  public storeListenerShopId: string | null = null;
   // uid the per-account collections currently belong to. Unlike _listenersRole
   // it survives teardown, so a different account signing in can be detected.
   private _dataOwnerUid: string | null = null;
@@ -1568,6 +1588,14 @@ class FallbackStore {
       active = onSnapshot(
         q,
         (snapshot) => {
+          // Once older pages have been read, a document pushed out of the live
+          // window by a newer one moves to them rather than vanishing from the
+          // list between the window and the first older page.
+          if (olderDocs.length > 0) {
+            const still = new Set(snapshot.docs.map((d: any) => d.id));
+            const dropped = mainDocs.filter((d: any) => !still.has(d.id));
+            if (dropped.length > 0) olderDocs = [...dropped, ...olderDocs];
+          }
           mainDocs = snapshot.docs;
           emit();
         },
@@ -1591,7 +1619,54 @@ class FallbackStore {
     // rebuilds the per-user list from whatever docs it is given.
     let mainDocs: any[] = [];
     let segmentDocs: any[] = [];
-    const emit = () => this._handleNotificationSnapshot({ docs: [...mainDocs, ...segmentDocs] }, userId);
+    let olderDocs: any[] = [];
+    const emit = () => {
+      const seen = new Set<string>();
+      const docs = [...mainDocs, ...segmentDocs, ...olderDocs].filter((d: any) => {
+        if (seen.has(d.id)) return false;
+        seen.add(d.id);
+        return true;
+      });
+      this._handleNotificationSnapshot({ docs }, userId);
+    };
+
+    // Older notifications, a page at a time, behind the live window — for the
+    // drawer's "load more" (see loadOlderNotifications).
+    let olderDone = false;
+    let olderLoading: Promise<boolean> | null = null;
+    this._loadOlderNotifs = () => {
+      if (olderLoading) return olderLoading;
+      const last = olderDocs.length > 0 ? olderDocs[olderDocs.length - 1] : mainDocs[mainDocs.length - 1];
+      if (olderDone || !last || mainDocs.length < max) return Promise.resolve(false);
+      olderLoading = getDocs(
+        query(
+          collection(db, 'notifications'),
+          where('userId', 'in', targets),
+          orderBy('createdAt', 'desc'),
+          startAfter(last),
+          limit(NOTIFICATION_PAGE_SIZE)
+        )
+      )
+        .then((snap) => {
+          if (disposed) return false;
+          // Old news, not new: known before the handler sees them, or it would
+          // pop them up and re-dispatch their orders as if they had just come in.
+          snap.docs.forEach((d) => this._knownNotifIds.add((d.data() as AppNotification).id || d.id));
+          olderDocs = [...olderDocs, ...snap.docs];
+          olderDone = snap.docs.length < NOTIFICATION_PAGE_SIZE;
+          emit();
+          this.notify();
+          return !olderDone;
+        })
+        .catch((e) => {
+          console.warn(`[Firestore] ${label} older notifications note:`, e?.message || e);
+          return true; // Still more, as far as anyone knows — the button stays.
+        })
+        .finally(() => {
+          olderLoading = null;
+        });
+      return olderLoading;
+    };
 
     const unsubSegments = onSnapshot(
       query(
@@ -1608,11 +1683,23 @@ class FallbackStore {
     );
 
     attach('createdAt');
+    const pager = this._loadOlderNotifs;
     return () => {
       disposed = true;
       if (active) active();
       unsubSegments();
+      if (this._loadOlderNotifs === pager) this._loadOlderNotifs = null;
     };
+  }
+
+  private _loadOlderNotifs: (() => Promise<boolean>) | null = null;
+
+  /**
+   * Reads the next page of the signed-in user's notifications behind the live
+   * window. Resolves false once there are none left (or none can be paged).
+   */
+  public loadOlderNotifications(): Promise<boolean> {
+    return this._loadOlderNotifs ? this._loadOlderNotifs() : Promise.resolve(false);
   }
 
   /**
@@ -1690,7 +1777,8 @@ class FallbackStore {
     });
 
     userNotifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    this.notifications.set(userId, userNotifs.slice(0, MAX_NOTIFS_PER_USER));
+    // Older pages the user asked for are kept beyond the usual cap.
+    this.notifications.set(userId, userNotifs.slice(0, Math.max(MAX_NOTIFS_PER_USER, snapshot.docs.length)));
 
     // Fire browser popup and instant dispatch only for genuinely NEW, unread notifications targeting this device.
     if (this.currentUserId && this.currentUserId === userId) {
@@ -1950,6 +2038,7 @@ class FallbackStore {
     this._unsubListeners.forEach((unsub) => { try { unsub(); } catch (_) { } });
     this._unsubListeners = [];
     this._listenersRole = null;
+    this.storeListenerShopId = null;
     this._fullReadAt.clear();
     this._pendingOrdersPrimed = false;
     this._orderHistoryPromise = null;
@@ -2142,6 +2231,7 @@ class FallbackStore {
     // ── STORE role ────────────────────────────────────────────────────────────
     if (role === 'store') {
       const effectiveStoreId = storeId || `store-${userId}`;
+      this.storeListenerShopId = effectiveStoreId;
 
       // Live user profile sync (so role/permission updates or store deletions take effect immediately)
       unsubs.push(
@@ -2278,7 +2368,7 @@ class FallbackStore {
       );
 
       // Notifications for store owner + all-stores (realtime, newest first)
-      unsubs.push(this._listenNotifications([userId, 'all', 'all-stores'], userId, 50, 'Store'));
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-stores'], userId, NOTIFICATION_PAGE_SIZE, 'Store'));
 
       // Store owner's wallet document (realtime)
       unsubs.push(
@@ -2398,7 +2488,7 @@ class FallbackStore {
       );
 
       // Own notifications + broadcast ones (realtime, newest first)
-      unsubs.push(this._listenNotifications([userId, 'all', 'all-customers'], userId, 50, 'Customer'));
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-customers'], userId, NOTIFICATION_PAGE_SIZE, 'Customer'));
 
       // Own withdrawals (realtime)
       unsubs.push(
@@ -2634,7 +2724,7 @@ class FallbackStore {
       );
 
       // Own notifications + all-helpers broadcast + helperType-specific (realtime, newest first)
-      unsubs.push(this._listenNotifications([userId, 'all', 'all-helpers', helperGroup], userId, 60, 'Helper'));
+      unsubs.push(this._listenNotifications([userId, 'all', 'all-helpers', helperGroup], userId, NOTIFICATION_PAGE_SIZE, 'Helper'));
 
       // Helper's own wallet document (realtime, needed for earnings display)
       unsubs.push(
@@ -8738,8 +8828,53 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Every order feedback — what the home screen ranks shops by
+   * (sortShopsByFeedbackAndNew) and the admin's feedback list pages through.
+   *
+   * The whole collection used to be read on every launch by every customer,
+   * store and visitor who saw the home screen: 181 documents in October 2026,
+   * one more per rated order. The feedbacks are kept in localStorage anyway, so
+   * outside the admin panel the full read now happens once a day per device;
+   * in between, only feedbacks newer than the newest one held are read, plus
+   * the signed-in customer's own (an admin reply to them must show promptly —
+   * see the pending-reply check in page-client). A feedback deleted or edited
+   * by someone else is caught up with at the next daily read; the ranking only
+   * counts them.
+   */
   public async getAllOrderFeedbacks(force = false): Promise<OrderFeedback[]> {
     if (!force && this.isFullReadFresh('orderFeedbacks')) return Array.from(this.orderFeedbacks.values());
+    const asAdmin = Boolean(this._listenersRole?.startsWith('admin:'));
+    const fullDue =
+      force || asAdmin || this.orderFeedbacks.size === 0 ||
+      Date.now() - this._readNumber(FEEDBACK_FULL_READ_KEY) > FEEDBACK_FULL_READ_TTL_MS;
+    if (!fullDue) {
+      try {
+        let newest = '';
+        this.orderFeedbacks.forEach((f) => {
+          if (typeof f.createdAt === 'string' && f.createdAt > newest) newest = f.createdAt;
+        });
+        const uid = this.currentUserId;
+        const [fresh, own] = await Promise.all([
+          getDocs(query(collection(db, 'orderFeedbacks'), where('createdAt', '>', newest))),
+          uid ? getDocs(query(collection(db, 'orderFeedbacks'), where('customerId', '==', uid), limit(50))) : null,
+        ]);
+        [...fresh.docs, ...(own ? own.docs : [])].forEach((docSnap) => {
+          const f = docSnap.data() as OrderFeedback;
+          const id = f.id || docSnap.id;
+          if (id) this.orderFeedbacks.set(id, { ...f, id });
+        });
+        this._fullReadAt.set('orderFeedbacks', Date.now());
+        if (fresh.size > 0 || (own && own.size > 0)) {
+          this.scheduleLocalStoreSave();
+          this.notify();
+        }
+        return Array.from(this.orderFeedbacks.values());
+      } catch (e) {
+        console.warn('[Firestore] getAllOrderFeedbacks (new only) note:', e);
+        return Array.from(this.orderFeedbacks.values());
+      }
+    }
     try {
       const snap = await getDocs(collection(db, 'orderFeedbacks'));
       const list: OrderFeedback[] = [];
@@ -8755,6 +8890,7 @@ class FallbackStore {
       });
       this.orderFeedbacks = map;
       this._fullReadAt.set('orderFeedbacks', Date.now());
+      this._writeNumber(FEEDBACK_FULL_READ_KEY, Date.now());
       this.scheduleLocalStoreSave();
       this.notify();
       return list;

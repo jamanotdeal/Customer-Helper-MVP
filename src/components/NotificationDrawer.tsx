@@ -15,6 +15,10 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [visibleCount, setVisibleCount] = useState(10);
+  // Only the newest notifications are held live; older ones are read from
+  // the server a page at a time once everything held has been shown.
+  const [olderAvailable, setOlderAvailable] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   // The ids that were unread when the drawer opened. Kept in a ref so the "new"
   // highlight survives the mark-as-read below — the user still sees what arrived
@@ -55,7 +59,23 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
   }, [user]);
 
   const visibleNotifications = notifications.slice(0, visibleCount);
-  const hasMore = notifications.length > visibleCount;
+  const hasMore = notifications.length > visibleCount || (olderAvailable && notifications.length > 0);
+
+  const showMore = async () => {
+    if (notifications.length > visibleCount) {
+      setVisibleCount((prev) => prev + 10);
+      return;
+    }
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const more = await fallbackStore.loadOlderNotifications();
+      setOlderAvailable(more);
+      setVisibleCount((prev) => prev + 10);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   return (
     <div
@@ -126,10 +146,11 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({ onClose,
               {hasMore && (
                 <button
                   type="button"
-                  onClick={() => setVisibleCount((prev) => prev + 10)}
+                  onClick={showMore}
+                  disabled={loadingOlder}
                   className="w-full py-3 rounded-2xl border border-gray-200 hover:bg-gray-50 text-xs font-extrabold text-emerald-700 bg-white transition-all shadow-xs active:scale-98 flex items-center justify-center space-x-1"
                 >
-                  <span>Load More Notifications</span>
+                  <span>{loadingOlder ? 'Loading…' : 'Load More Notifications'}</span>
                 </button>
               )}
             </div>

@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Order } from '@/types';
 import { fallbackStore, db, versionOf, createChangeGate } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
+import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { getDocs, getDoc, onSnapshot } from '@/lib/firestoreMetered';
 import { RequestComposer } from './RequestComposer';
 import { OrderCard } from './OrderCard';
@@ -23,6 +24,7 @@ import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
 import { getShopItemPriceDisplay, getItemQuantityNum } from '@/lib/itemUtils';
 import { PaginationControl } from './admin/PaginationControl';
+import { useParentOrders } from '@/hooks/useParentOrders';
 
 
 
@@ -256,7 +258,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // Completed/Finished shop orders paginated loading state
   const [completedShopOrders, setCompletedShopOrders] = useState<ShopOrder[]>([]);
   const [completedParentOrders, setCompletedParentOrders] = useState<Record<string, Order>>({});
-  const [completedLastVisible, setCompletedLastVisible] = useState<any>(null);
   const [completedLoading, setCompletedLoading] = useState(false);
   const [completedHasMore, setCompletedHasMore] = useState(true);
 
@@ -411,12 +412,19 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   }, [initialSelectedOrderId, onClearInitialOrder, user]);
 
 
-  // Real-time Firestore listener for all shop orders for this store
+  // Live shop orders. The store-role listeners already hold this shop's newest
+  // 100 (initListenersForRole) and syncOrders below reads them from the store.
+  // This used to be a second listener on every shop order the store ever had,
+  // unlimited, read again on each start. Kept only for a shop those listeners
+  // do not cover — one a staff account reaches through assignedUserIds — and
+  // with the same window.
   useEffect(() => {
-    if (!storeId) return;
+    if (!storeId || storeId === fallbackStore.storeListenerShopId) return;
     const q = query(
       collection(db, 'shopOrders'),
-      where('shopId', '==', storeId)
+      where('shopId', '==', storeId),
+      orderBy('createdAt', 'desc'),
+      limit(100)
     );
     const unsub = onSnapshot(
       q,
@@ -440,15 +448,30 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return () => unsub();
   }, [storeId]);
 
-  const fetchCompletedPage = async () => {
-    if (!storeId || completedLoading) return;
+  // Older shop orders, a page at a time (newest first). Every shop order the
+  // store ever had used to be read whenever the Orders tab was opened.
+  const COMPLETED_PAGE_SIZE = 20;
+  const completedCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const completedLoadingRef = useRef(false);
+  const completedLoadedForRef = useRef<string | null>(null);
+
+  /**
+   * `more`: the next page after what is loaded. Otherwise the first page,
+   * merged into what is already there so pages read further back stay.
+   */
+  const fetchCompletedPage = async (more = false) => {
+    if (!storeId || completedLoadingRef.current) return;
+    if (more && (!completedHasMore || !completedCursorRef.current)) return;
+    completedLoadingRef.current = true;
     setCompletedLoading(true);
     try {
-      const q = query(
+      const base = query(
         collection(db, 'shopOrders'),
         where('shopId', '==', storeId),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(COMPLETED_PAGE_SIZE)
       );
+      const q = more && completedCursorRef.current ? query(base, startAfter(completedCursorRef.current)) : base;
       const snap = await getDocs(q);
       const newShopOrders: ShopOrder[] = [];
       const parentOrderFetchPromises: Promise<void>[] = [];
@@ -473,11 +496,20 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       await Promise.all(parentOrderFetchPromises);
 
       setCompletedParentOrders(prev => ({ ...prev, ...newParentOrders }));
-      setCompletedShopOrders(newShopOrders);
-      setCompletedHasMore(false);
+      setCompletedShopOrders((prev) => {
+        const byId = new Map(prev.map((so) => [so.id, so]));
+        newShopOrders.forEach((so) => byId.set(so.id, so));
+        return Array.from(byId.values());
+      });
+      // The first page read again leaves the cursor where the reading got to.
+      if (more || !completedCursorRef.current) {
+        completedCursorRef.current = snap.docs[snap.docs.length - 1] || completedCursorRef.current;
+        setCompletedHasMore(snap.docs.length === COMPLETED_PAGE_SIZE);
+      }
     } catch (err) {
       console.error('Error fetching completed shop orders:', err);
     } finally {
+      completedLoadingRef.current = false;
       setCompletedLoading(false);
     }
   };
@@ -508,12 +540,17 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     }
   };
 
-  // Fetch finished shopOrders once storeId is known so the Finished tab count is accurate
-  // before the user opens the tab, and refresh whenever the sub-tab lands on ORDERS.
+  // The first page of older shop orders, once per store, when the Orders tab is
+  // first opened. Coming back to the tab reads nothing: active orders stay
+  // live, and finished ones do not change.
   useEffect(() => {
-    if (storeId && localActiveTab === 'ORDERS') {
-      fetchCompletedPage();
-    }
+    if (!storeId || localActiveTab !== 'ORDERS' || completedLoadedForRef.current === storeId) return;
+    completedLoadedForRef.current = storeId;
+    completedCursorRef.current = null;
+    setCompletedShopOrders([]);
+    setCompletedHasMore(true);
+    fetchCompletedPage();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId, localActiveTab]);
 
   useEffect(() => {
@@ -622,69 +659,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     return parent ? parent.helperPhone || parent.customerPhone : '';
   };
 
-  // Real-time listeners & direct fetch for parent orders so main order delivery/cancellation dynamically moves shop orders to finished tab
-  useEffect(() => {
-    const parentIds = new Set<string>();
-    [...storeShopOrders, ...completedShopOrders].forEach((so) => {
-      if (so.parentOrderId) {
-        parentIds.add(so.parentOrderId);
-      }
-    });
-
-    if (parentIds.size === 0) return;
-
-    // Immediately fetch parent orders from Firestore to populate completedParentOrders & fallbackStore.orders
-    const fetchParentOrders = async () => {
-      const missing = Array.from(parentIds).filter(pId => !fallbackStore.orders.has(pId) && !completedParentOrders[pId]);
-      if (missing.length === 0) return;
-      const newFetched: Record<string, Order> = {};
-      await Promise.all(
-        missing.map(async (pId) => {
-          try {
-            const snap = await getDoc(doc(db, 'orders', pId));
-            if (snap.exists()) {
-              const ord = snap.data() as Order;
-              newFetched[pId] = ord;
-              fallbackStore.orders.set(pId, ord);
-            }
-          } catch (e) {
-            console.error('[Firestore] Error fetching parent order:', pId, e);
-          }
-        })
-      );
-      if (Object.keys(newFetched).length > 0) {
-        setCompletedParentOrders((prev) => ({ ...prev, ...newFetched }));
-        fallbackStore.notify();
-      }
-    };
-    fetchParentOrders();
-
-    // Subscribe to real-time updates for all parent orders
-    const unsubs: (() => void)[] = [];
-    parentIds.forEach((pId) => {
-      unsubs.push(
-        onSnapshot(
-          doc(db, 'orders', pId),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              const updatedParent = docSnap.data() as Order;
-              setCompletedParentOrders((prev) => ({
-                ...prev,
-                [pId]: updatedParent,
-              }));
-              fallbackStore.orders.set(pId, updatedParent);
-              fallbackStore.notify();
-            }
-          },
-          (err) => console.warn('[Firestore] Realtime parent order sync error:', err)
-        )
-      );
-    });
-
-    return () => {
-      unsubs.forEach((unsub) => unsub());
-    };
-  }, [storeShopOrders, completedShopOrders]);
+  // Parent orders: read once, or kept live while their shop order is active.
+  useParentOrders(storeShopOrders, completedShopOrders, completedParentOrders, setCompletedParentOrders);
 
   // Auto-sync shop order status when main order is DELIVERED or CANCELED
   useEffect(() => {
@@ -812,6 +788,20 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     const startIdx = (validStorePage - 1) * storePageSize;
     return filteredShopOrders.slice(startIdx, startIdx + storePageSize);
   }, [filteredShopOrders, validStorePage, storePageSize]);
+
+  // Older shop orders are read from the server a page at a time; shown at
+  // the end of the list (its last page) and under an empty result.
+  const renderLoadOlderShopOrders = () =>
+    completedHasMore || completedLoading ? (
+      <button
+        type="button"
+        onClick={() => fetchCompletedPage(true)}
+        disabled={completedLoading}
+        className="w-full mt-3 py-3 rounded-2xl border border-emerald-100 bg-emerald-50 text-emerald-700 text-sm font-bold disabled:opacity-60"
+      >
+        {completedLoading ? 'পুরনো অর্ডার লোড হচ্ছে...' : 'আরও পুরনো অর্ডার দেখুন'}
+      </button>
+    ) : null;
 
   const filteredMyRequests = useMemo(() => {
     let result = [...myRequests, ...completedRequests];
@@ -1261,6 +1251,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     <Package className="w-9 h-9 text-gray-300 mx-auto mb-2" />
                     <h4 className="font-bold text-gray-900 text-xs mb-0.5">No orders found</h4>
                     <p className="text-[11px] text-gray-500 font-medium">No incoming orders match your filter criteria.</p>
+                    {renderLoadOlderShopOrders()}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1514,6 +1505,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         className="rounded-2xl border border-gray-100 shadow-soft mt-3"
                       />
                     )}
+
+                    {validStorePage >= totalStorePages && renderLoadOlderShopOrders()}
                   </div>
                 )}
               </div>
