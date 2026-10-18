@@ -7579,11 +7579,40 @@ class FallbackStore {
   }
 
   public async saveStoreProduct(product: StoreProduct) {
-    this.storeProducts.set(product.id, product);
+    const cleanProduct: StoreProduct = { ...product };
+    const hasDiscount = typeof cleanProduct.discountRate === 'number' && cleanProduct.discountRate > 0;
+    if (!hasDiscount) {
+      delete cleanProduct.discountRate;
+    }
+    if (!cleanProduct.photoUrl) {
+      delete cleanProduct.photoUrl;
+    }
+    if (!cleanProduct.category) {
+      delete cleanProduct.category;
+    }
+    if (!cleanProduct.description) {
+      delete cleanProduct.description;
+    }
+
+    this.storeProducts.set(cleanProduct.id, cleanProduct);
     this.scheduleLocalStoreSave();
     this.notify();
     try {
-      await setDoc(doc(db, 'store_products', product.id), cleanForFirestore(product), { merge: true });
+      const firestoreData: Record<string, any> = cleanForFirestore(cleanProduct);
+      if (!hasDiscount) {
+        firestoreData.discountRate = deleteField();
+      }
+      if (!cleanProduct.photoUrl) {
+        firestoreData.photoUrl = deleteField();
+      }
+      if (!cleanProduct.category) {
+        firestoreData.category = deleteField();
+      }
+      if (!cleanProduct.description) {
+        firestoreData.description = deleteField();
+      }
+
+      await setDoc(doc(db, 'store_products', cleanProduct.id), firestoreData, { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] saveStoreProduct note (saved locally):', e?.message || e);
     }

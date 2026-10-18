@@ -182,7 +182,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     setCategory(cat);
     setIsCustomCategory(Boolean(cat && !configuredCategories.includes(cat)));
     setPrice(String(p.price || ''));
-    setDiscountRate(p.discountRate !== undefined ? String(p.discountRate) : '');
+    setDiscountRate(p.discountRate && p.discountRate > 0 ? String(p.discountRate) : '');
     setInStock(p.inStock !== false);
     setPhotoUrl(p.photoUrl || '');
     setFormError('');
@@ -209,6 +209,10 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     }
   };
 
+  // Normalize Bengali to English digits
+  const toEnglishDigits = (str: string) =>
+    String(str || '').replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)));
+
   // Save product
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,14 +220,17 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
       setFormError('পণ্যের নাম অবশ্যই দিতে হবে।');
       return;
     }
-    const numPrice = parseFloat(price);
+
+    const cleanPrice = toEnglishDigits(price).replace(/[৳,]/g, '').trim();
+    const numPrice = cleanPrice ? parseFloat(cleanPrice) : NaN;
     if (isNaN(numPrice) || numPrice < 0) {
       setFormError('সঠিক বিক্রয়মূল্য উল্লেখ করুন।');
       return;
     }
 
-    const numDiscount = discountRate ? parseFloat(discountRate) : 0;
-    if (discountRate && (isNaN(numDiscount) || numDiscount < 0 || numDiscount > 100)) {
+    const cleanDiscount = toEnglishDigits(discountRate).replace(/%/g, '').trim();
+    const numDiscount = cleanDiscount ? parseFloat(cleanDiscount) : 0;
+    if (cleanDiscount && (isNaN(numDiscount) || numDiscount < 0 || numDiscount > 100)) {
       setFormError('ছাড়ের হার ০ থেকে ১০০ এর মধ্যে হতে হবে।');
       return;
     }
@@ -235,8 +242,8 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
       const now = new Date().toISOString();
       const productData: StoreProduct = {
         id: editingProduct ? editingProduct.id : `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        storeId,
-        storeName: storeName || '',
+        storeId: editingProduct?.storeId || storeId,
+        storeName: storeName || editingProduct?.storeName || '',
         name: name.trim(),
         unit: unit.trim() || '১ পিস',
         price: numPrice,
@@ -812,18 +819,33 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">
-                    ছাড়ের হার (% Discount)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-gray-700">
+                      ছাড়ের হার (% Discount)
+                    </label>
+                    {discountRate && parseFloat(toEnglishDigits(discountRate)) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setDiscountRate('')}
+                        className="text-[10px] text-rose-600 hover:text-rose-700 font-extrabold hover:underline cursor-pointer"
+                      >
+                        ছাড় সরান (Remove)
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="number"
                     min="0"
                     max="100"
+                    step="any"
                     value={discountRate}
                     onChange={(e) => setDiscountRate(e.target.value)}
-                    placeholder="যেমন: 5 (৫% ছাড়)"
+                    placeholder="যেমন: 5 (ছাড় সরাতে 0 বা খালি রাখুন)"
                     className="w-full px-3 py-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs font-bold"
                   />
+                  <p className="text-[10px] text-gray-400 mt-1 font-medium">
+                    ছাড় না থাকলে ঘরটি খালি রাখুন অথবা ০ লিখুন।
+                  </p>
                 </div>
               </div>
 
