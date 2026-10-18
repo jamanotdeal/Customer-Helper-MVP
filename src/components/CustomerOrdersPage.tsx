@@ -7,10 +7,14 @@ import { OrderDetailsView } from './OrderDetailsView';
 import { Order } from '@/types';
 import { fallbackStore, versionOf, createChangeGate } from '@/lib/firebase';
 import { useOlderOrders } from '@/hooks/useOlderOrders';
-import { ClipboardList, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
+import { ClipboardList, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, Calendar, Clock } from 'lucide-react';
+import { processAndDispatchScheduledOrders } from '@/utils/scheduledOrders';
 
-type FilterType = 'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'CANCELLED';
+type FilterType = 'ALL' | 'ACTIVE' | 'SCHEDULED' | 'PENDING' | 'COMPLETED' | 'CANCELLED';
 type DateFilterType = 'ALL' | 'TODAY' | 'LAST_7_DAYS' | 'THIS_MONTH';
+
+const isOrderScheduled = (o: Order) =>
+  o.status === 'SCHEDULED' || o.isScheduled === true;
 
 const isOrderActive = (o: Order) =>
   !['DELIVERED', 'COMPLETED', 'CANCELED', 'CANCELLED'].includes(o.status as string) &&
@@ -56,6 +60,7 @@ const isWithinDateFilter = (o: Order, filter: DateFilterType) => {
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'ALL', label: 'All Orders' },
   { key: 'ACTIVE', label: 'Active' },
+  { key: 'SCHEDULED', label: 'Scheduled' },
   { key: 'PENDING', label: 'Pending' },
   { key: 'COMPLETED', label: 'Completed' },
   { key: 'CANCELLED', label: 'Cancelled' },
@@ -125,6 +130,15 @@ export const CustomerOrdersPage: React.FC<CustomerOrdersPageProps> = ({
     }
   }, [user?.uid]);
 
+  // Check and dispatch due scheduled orders
+  useEffect(() => {
+    processAndDispatchScheduledOrders().catch(() => {});
+    const interval = setInterval(() => {
+      processAndDispatchScheduledOrders().catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Reset pagination to page 1 whenever filters change
   useEffect(() => {
     setCurrentPage(1);
@@ -132,6 +146,7 @@ export const CustomerOrdersPage: React.FC<CustomerOrdersPageProps> = ({
 
   const filteredOrders = orders.filter((o) => {
     if (selectedFilter === 'ACTIVE' && !isOrderActive(o)) return false;
+    if (selectedFilter === 'SCHEDULED' && !isOrderScheduled(o)) return false;
     if (selectedFilter === 'PENDING' && !isOrderPending(o)) return false;
     if (selectedFilter === 'COMPLETED' && !isOrderCompleted(o)) return false;
     if (selectedFilter === 'CANCELLED' && !isOrderCancelled(o)) return false;
@@ -187,6 +202,7 @@ export const CustomerOrdersPage: React.FC<CustomerOrdersPageProps> = ({
   }
 
   const activeCount = orders.filter(isOrderActive).length;
+  const scheduledCount = orders.filter(isOrderScheduled).length;
 
   return (
     <div className="space-y-4 pb-28 animate-in fade-in duration-200">
@@ -230,13 +246,18 @@ export const CustomerOrdersPage: React.FC<CustomerOrdersPageProps> = ({
             >
               {FILTERS.map(({ key, label }) => (
                 <option key={key} value={key}>
-                  {label}{key === 'ACTIVE' && activeCount > 0 ? ` (${activeCount})` : ''}
+                  {label}
+                  {key === 'ACTIVE' && activeCount > 0 ? ` (${activeCount})` : ''}
+                  {key === 'SCHEDULED' && scheduledCount > 0 ? ` (${scheduledCount})` : ''}
                 </option>
               ))}
             </select>
             <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             {selectedFilter !== 'ACTIVE' && activeCount > 0 && (
               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse border-2 border-white pointer-events-none" />
+            )}
+            {selectedFilter !== 'SCHEDULED' && scheduledCount > 0 && (
+              <span className="absolute -top-1 -left-1 w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse border-2 border-white pointer-events-none" />
             )}
           </div>
         </div>

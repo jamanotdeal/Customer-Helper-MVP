@@ -485,6 +485,118 @@ exports.dedicatedRoutingSweep = onSchedule(
 );
 
 /**
+ * Automatically activates scheduled customer orders when their scheduledAt time arrives,
+ * even if the customer has closed the app or is offline.
+ */
+exports.scheduledOrdersSweep = onSchedule(
+  {
+    schedule: 'every 1 minutes',
+    region: REGION,
+    memory: '256MiB',
+    maxInstances: 1,
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const db = getFirestore();
+    const nowIso = new Date().toISOString();
+    let dueDocs = [];
+
+    try {
+      // First attempt query with range
+      const snap = await db
+        .collection('orders')
+        .where('status', '==', 'SCHEDULED')
+        .where('scheduledAt', '<=', nowIso)
+        .limit(25)
+        .get();
+      dueDocs = snap.docs;
+    } catch (e) {
+      // Fallback in case composite index (status, scheduledAt) is still building
+      try {
+        const snap = await db
+          .collection('orders')
+          .where('status', '==', 'SCHEDULED')
+          .limit(50)
+          .get();
+        dueDocs = snap.docs.filter((d) => {
+          const data = d.data() || {};
+          return !data.scheduledAt || data.scheduledAt <= nowIso;
+        });
+      } catch (err) {
+        logger.error('scheduledOrdersSweep query failed', { error: err.message });
+        return;
+      }
+    }
+
+    if (dueDocs.length === 0) return;
+
+    const pricing = await readPricing(db);
+    const rule = pricing.orderReceiverRule || 'commuter_first';
+    const targetGroup =
+      rule === 'dedicated_first'
+        ? 'all-dedicated-helpers'
+        : rule === 'both_simultaneous'
+          ? 'all-helpers'
+          : 'all-commuter-helpers';
+
+    let activated = 0;
+    for (const docSnap of dueDocs) {
+      const order = docSnap.data() || {};
+      const orderId = docSnap.id;
+      const now = new Date().toISOString();
+      const notifId = `notif-${Date.now()}-new-${orderId}`;
+      const items = Array.isArray(order.items) ? order.items : [];
+      const itemDesc = items.map((i) => i && i.name).filter(Boolean).join(', ') || order.title || 'অর্ডার';
+
+      try {
+        await db.runTransaction(async (tx) => {
+          const freshSnap = await tx.get(docSnap.ref);
+          if (!freshSnap.exists) return;
+          const freshOrder = freshSnap.data() || {};
+          if (freshOrder.status !== 'SCHEDULED' && !freshOrder.isScheduled) return;
+
+          tx.update(docSnap.ref, {
+            status: 'PENDING',
+            isScheduled: false,
+            createdAt: now,
+            updatedAt: now,
+            statusHistory: FieldValue.arrayUnion({
+              id: `sh-scheduled-dispatched-${Date.now()}`,
+              status: 'PENDING',
+              timestamp: now,
+              actor: 'System',
+              note: 'নির্ধারিত সময় হওয়ায় শিডিউল করা অর্ডারটি স্বয়ংক্রিয়ভাবে সার্ভারে সক্রিয় হয়েছে',
+            }),
+          });
+
+          tx.set(db.doc(`notifications/${notifId}`), {
+            id: notifId,
+            userId: targetGroup,
+            title: `নতুন সার্ভিস রিকোয়েস্ট: ${order.title || 'দোকান অর্ডার'}`,
+            body: `বিবরণ: ${itemDesc} (${order.pickupLocation?.address ? 'পিকআপ: ' + order.pickupLocation.address + ' | ' : ''}ডেলিভারি: ${order.deliveryLocation?.address || ''})`,
+            orderId,
+            read: false,
+            createdAt: now,
+            targetRole: 'helper',
+            type: 'new_order',
+          });
+        });
+
+        activated++;
+        logger.info('scheduled order activated by server sweep', { orderId });
+      } catch (err) {
+        logger.warn('failed activating scheduled order', { orderId, error: err.message });
+      }
+    }
+
+    logger.info('scheduled orders sweep complete', {
+      candidates: dueDocs.length,
+      activated,
+    });
+  }
+);
+
+/**
  * Suppresses a dedicated announcement written by a client that does not have the
  * deterministic-id fix — an old APK or a stale web session. Such a client stamps
  * its own clock into the id, so it lands as a *new* document that no de-dup set

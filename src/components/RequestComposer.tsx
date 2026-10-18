@@ -15,7 +15,8 @@ import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
-import { saveScheduledOrder } from '@/utils/scheduledOrders';
+import { PlatformClosedScheduleModal } from './PlatformClosedScheduleModal';
+import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -113,6 +114,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
   // Free delivery / Discount via Coins state
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
+  const [showPlatformClosedModal, setShowPlatformClosedModal] = useState(false);
 
   // Service selection state
   const [service, setService] = useState('');
@@ -401,8 +403,11 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
     setIsExpanded(true);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (
+    e?: React.FormEvent,
+    scheduledOptions?: { isScheduled?: boolean; scheduledDate?: Date; scheduledNote?: string }
+  ) => {
+    if (e) e.preventDefault();
 
     if (!isUserAuthenticated(user)) {
       openAuthModal();
@@ -444,18 +449,29 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
 
     setErrors({});
 
-    const isConfirmed = await showConfirm(
-      'Confirm Your Request',
-      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
-      'Yes, Submit Request',
-      'Cancel'
-    );
-
-    if (!isConfirmed) {
+    // Check if platform service is currently open; if closed, ask to schedule or not
+    const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
+    if (!serviceTiming.isOpen && !scheduledOptions?.isScheduled) {
+      setShowPlatformClosedModal(true);
       return;
     }
 
+    if (!scheduledOptions?.isScheduled) {
+      const isConfirmed = await showConfirm(
+        'Confirm Your Request',
+        'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
+        'Yes, Submit Request',
+        'Cancel'
+      );
 
+      if (!isConfirmed) {
+        return;
+      }
+    }
+
+    // Collapse the form immediately so customers see the order is being processed
+    // and can't accidentally interact with the form inputs during submission
+    setIsExpanded(false);
     setSubmitting(true);
 
     try {
@@ -636,16 +652,16 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
           },
         ],
       };
-      // Check if platform service is currently open; if not, schedule the order locally
-      const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
-      if (!serviceTiming.isOpen) {
+      // If scheduled via platform closed modal, save to Firestore and queue
+      if (scheduledOptions?.isScheduled) {
         const scheduledOrder: Order = {
           ...newOrder,
           status: 'SCHEDULED' as any,
           isScheduled: true,
-          scheduledAt: new Date().toISOString(),
-          scheduledNote: serviceTiming.message || undefined,
+          scheduledAt: scheduledOptions.scheduledDate?.toISOString() || new Date().toISOString(),
+          scheduledNote: scheduledOptions.scheduledNote || serviceTiming.message || undefined,
         };
+        await fallbackStore.addOrder(scheduledOrder);
         saveScheduledOrder(scheduledOrder);
         setDescription('');
         setService('');
@@ -660,7 +676,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         await showAlert(
           'রিকোয়েস্ট শিডিউল হয়েছে!',
           (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-            ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
+            ` সার্ভিস শুরু হওয়ার সময় (${formatScheduledTime(scheduledOrder.scheduledAt)}) এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে সার্ভার থেকে হেলপারদের কাছে পাঠানো হবে। এমনকি অ্যাপ বন্ধ থাকলেও নির্ধারিত সময়ে কার্যকর হবে।`,
           'info'
         );
         onOrderCreated(scheduledOrder as Order);
@@ -1321,6 +1337,21 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         </div>,
         document.body
       )}
+
+      {/* Platform Closed Schedule Modal */}
+      <PlatformClosedScheduleModal
+        isOpen={showPlatformClosedModal}
+        pricingSettings={fallbackStore.pricingSettings}
+        onSchedule={(targetDate, noteText) => {
+          setShowPlatformClosedModal(false);
+          handleSubmit(undefined, {
+            isScheduled: true,
+            scheduledDate: targetDate,
+            scheduledNote: noteText,
+          });
+        }}
+        onCancel={() => setShowPlatformClosedModal(false)}
+      />
 
       {/* Blocked User Custom Modal */}
       {showBlockedModal && (

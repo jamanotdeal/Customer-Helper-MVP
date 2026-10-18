@@ -89,17 +89,27 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
     }
   };
 
-  // Eligible users: not admin, not helper, not assigned to a DIFFERENT shop
+  // Eligible users: not admin, not helper
+  // Multi-store support: a user can be assigned to multiple stores, so we no longer
+  // exclude users who are already assigned to a different shop.
   const allUsersList = Array.from(fallbackStore.users.values());
   const eligibleUsers = allUsersList.filter((u) => {
     if (u.isAdmin || u.role === 'admin' || (u.email && u.email.endsWith('@admin.com'))) return false;
     if (u.isHelper || u.role === 'helper') return false;
-    // Allow users already in this shop's assignedUserIds
-    if (assignedUserIds.includes(u.uid)) return true;
-    if (u.storeId && u.storeId !== shopToEdit?.id) return false;
-    if (u.isStoreApproved && u.storeId !== shopToEdit?.id) return false;
     return true;
   });
+
+  // Helper: get names of all shops a user is already assigned to (excluding the current shop being edited)
+  const getOtherAssignedShops = (uid: string): string[] => {
+    const names: string[] = [];
+    for (const shop of Array.from(fallbackStore.shops.values())) {
+      if (shop.id === shopToEdit?.id) continue; // skip current shop
+      if (shop.ownerUserId === uid || shop.assignedUserIds?.includes(uid)) {
+        names.push(shop.name);
+      }
+    }
+    return names;
+  };
 
   // ── Inline map state ───────────────────────────────────────────────────────
   const inlineMapRef = useRef<HTMLDivElement>(null);
@@ -597,6 +607,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                     ) : (
                       filtered.map((u) => {
                         const initials = (u.displayName || 'U').split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
+                        const otherShops = getOtherAssignedShops(u.uid);
                         return (
                           <button
                             key={u.uid}
@@ -617,6 +628,18 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                               <p className="text-[10px] text-gray-400 font-mono truncate">
                                 {u.email || u.alternativePhone || u.uid.slice(0, 12)}
                               </p>
+                              {otherShops.length > 0 && (
+                                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                  <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                                    🏪 Also in:
+                                  </span>
+                                  {otherShops.map((shopName, idx) => (
+                                    <span key={idx} className="text-[9px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full max-w-[100px] truncate">
+                                      {shopName}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200 shrink-0">+ Add</span>
                           </button>

@@ -12,6 +12,7 @@ import { hapticFeedback } from '@/lib/native';
 import { AddCustomItemModal } from './AddCustomItemModal';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { isShopOpenNow } from './StoreGrid';
+import { PlatformClosedScheduleModal } from './PlatformClosedScheduleModal';
 import {
   saveAltPhone,
   saveDefaultDeliveryLocation,
@@ -19,7 +20,7 @@ import {
   addSavedDeliveryAddress,
   getPreviousCustomerContact,
 } from '@/lib/storage';
-import { saveScheduledOrder } from '@/utils/scheduledOrders';
+import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
 
 import {
   X,
@@ -101,6 +102,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
   const [formError, setFormError] = useState('');
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
+  const [showPlatformClosedModal, setShowPlatformClosedModal] = useState(false);
 
   // Check if store or items' stores are closed
   const closedStoreNames = useMemo(() => {
@@ -236,40 +238,19 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
 
   if (!isCartDrawerOpen) return null;
 
-  const handleSubmitOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!user) {
-      openAuthModal();
-      return;
-    }
-
-    if (cartItems.length === 0) {
-      setFormError('আপনার কার্টে কোনো পণ্য নেই।');
-      return;
-    }
-
-    if (!deliveryAddress.trim()) {
-      setFormError('অনুগ্রহ করে ডেলিভারি ঠিকানা উল্লেখ করুন।');
-      return;
-    }
-
-
-    const totalPayable = subtotal + feeEst.deliverySubtotal + feeEst.processingFee;
-    const confirmed = await showConfirm(
-      'অর্ডার নিশ্চিতকরণ',
-      `${cartShop?.name || 'স্টোর'} থেকে মোট ৳${totalPayable} টাকার অর্ডারটি সম্পন্ন করতে আপনি কি নিশ্চিত?`,
-      'হ্যাঁ, নিশ্চিত করুন',
-      'বাতিল'
-    );
-    if (!confirmed) {
-      return;
-    }
-
+  const executePlaceOrder = async (options?: {
+    isScheduled?: boolean;
+    scheduledDate?: Date;
+    scheduledNote?: string;
+  }) => {
     setSubmittingOrder(true);
     setFormError('');
 
     try {
+      const isScheduled = !!options?.isScheduled;
+      const scheduledDate = options?.scheduledDate;
+      const scheduledNote = options?.scheduledNote;
+
       const reqCoins = fallbackStore.pricingSettings?.freeDeliveryRequiredCoins ?? 50;
       const isFree = useFreeDelivery && (user?.coins || 0) >= reqCoins;
       const discountPct = fallbackStore.pricingSettings?.freeDeliveryDiscountPercent ?? 100;
@@ -302,18 +283,18 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         lng: cartShop?.location?.lng,
       };
 
-      // If store was closed, append a helper-facing note so they know to source from any available store
+      // Notes
       const baseNote = orderNotes.trim();
       const closedStoreNote = isStoreCurrentlyClosed
         ? `⚠️ দোকান বন্ধ ছিল: ${closedStoreNames.join(', ')} — অন্য যেকোনো দোকান থেকে পণ্য সংগ্রহ করুন।`
         : '';
-      const finalNote = [closedStoreNote, baseNote].filter(Boolean).join('\n');
+      const finalNote = [scheduledNote, closedStoreNote, baseNote].filter(Boolean).join('\n');
 
-      const finalItems = (cartItems || []).map(item => {
+      const finalItems = (cartItems || []).map((item) => {
         const itemShop = item.storeId ? fallbackStore.shops.get(item.storeId) : cartShop;
         const isShopClosed = itemShop ? (itemShop.isOpen === false || itemShop.isBlocked === true) : false;
         if (isShopClosed || isStoreCurrentlyClosed) {
-          // Mark as custom and clear price — helper will determine the actual price
+          // Closed store items count as custom — helper determines actual price from other shop
           return {
             ...item,
             isCustom: true,
@@ -323,106 +304,105 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         return item;
       });
 
-      const newOrder: Order = {
+      // Target scheduled ISO time
+      const scheduledIso = scheduledDate ? scheduledDate.toISOString() : undefined;
+
+      const orderData: Order = {
         id: `${orderNum}`,
-        customerId: user.uid,
-        customerName: user.displayName || 'Customer',
-        customerPhone: customerPhone || user.phoneNumber || '',
+        customerId: user!.uid,
+        customerName: user!.displayName || 'Customer',
+        customerPhone: customerPhone || user!.phoneNumber || '',
         alternativePhone: customerPhone || undefined,
-        title: `${shopName} থেকে অর্ডার`,
+        title: isScheduled ? `${shopName} থেকে অর্ডার (শিডিউল)` : `${shopName} থেকে অর্ডার`,
         service: 'বাজার-সদাই করে দিন',
         shopId: cartShop?.id,
         selectedShopIds: cartShop?.id ? [cartShop.id] : [],
         isStoreOrder: true,
         creatorRole: 'customer',
         isStoreClosedAtOrder: isStoreCurrentlyClosed || undefined,
+        isScheduled: isScheduled || undefined,
+        scheduledAt: scheduledIso,
+        scheduledNote: scheduledNote || undefined,
         items: finalItems,
         pickupLocation: pickupLoc,
         deliveryLocation: delivLoc,
         additionalNote: finalNote || undefined,
-        status: 'PENDING',
+        status: isScheduled ? ('SCHEDULED' as any) : 'PENDING',
         deliveryFee,
         originalDeliveryFee: rawDeliveryFee,
         isFreeDelivery: isFree || undefined,
         deliveryDiscountPercent: isFree ? discountPct : undefined,
         coinsRedeemedForDelivery: isFree ? reqCoins : undefined,
         processingFee: processingFee > 0 ? processingFee : undefined,
-        weightKg: undefined, // Weight decided by helper upon pickup/purchase
+        weightKg: undefined,
         productCost: subtotal > 0 ? subtotal : undefined,
         createdAt: now,
         updatedAt: now,
         statusHistory: [
           {
             id: `sh-${Date.now()}`,
-            status: 'PENDING',
+            status: isScheduled ? ('SCHEDULED' as any) : 'PENDING',
             timestamp: now,
             actor: 'Customer',
-            note: isStoreCurrentlyClosed
-              ? `${shopName} বন্ধ ছিল — ${totalCartCount}টি পণ্যের রিকোয়েস্ট তৈরি হয়েছে (অন্য দোকান থেকে সংগ্রহযোগ্য)`
-              : `${shopName} থেকে ${totalCartCount}টি পণ্যের রিকোয়েস্ট তৈরি করা হয়েছে`,
+            note: isScheduled
+              ? scheduledNote || `দোকান খোলার সময় (${formatScheduledTime(scheduledIso)}) এর জন্য শিডিউল করা হয়েছে`
+              : isStoreCurrentlyClosed
+                ? `${shopName} বন্ধ ছিল — ${totalCartCount}টি পণ্যের রিকোয়েস্ট তৈরি হয়েছে (অন্য দোকান থেকে সংগ্রহযোগ্য)`
+                : `${shopName} থেকে ${totalCartCount}টি পণ্যের রিকোয়েস্ট তৈরি করা হয়েছে`,
           },
         ],
       };
-      // Check if platform service is currently open
+
+      // Check if platform service is currently closed (when order wasn't already explicitly scheduled)
       const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
-      if (!serviceTiming.isOpen) {
-        const scheduledOrder: Order = {
-          ...newOrder,
-          status: 'SCHEDULED' as any,
-          isScheduled: true,
-          scheduledAt: new Date().toISOString(),
-          scheduledNote: serviceTiming.message || undefined,
-        };
-        saveScheduledOrder(scheduledOrder);
-        if (customerPhone.trim()) saveAltPhone(customerPhone.trim());
-        if (delivLoc.address) {
-          saveDefaultDeliveryLocation(delivLoc);
-          if (user.uid) {
-            addSavedDeliveryAddress(user.uid, delivLoc);
-            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
-          }
-        }
-        updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
-        hapticFeedback('medium');
-        showAlert(
-          'রিকোয়েস্ট শিডিউল হয়েছে!',
-          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-          ' সার্ভিস সময় শুরু হলে এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে হেলপারদের কাছে পাঠানো হবে।',
-          'info'
-        );
-        clearCart();
-        closeCartDrawer();
-        if (onOrderCreated) onOrderCreated(scheduledOrder as Order);
-        return;
+      if (!isScheduled && !serviceTiming.isOpen) {
+        const nextService = getNextPlatformOpeningTime(fallbackStore.pricingSettings);
+        orderData.status = 'SCHEDULED' as any;
+        orderData.isScheduled = true;
+        orderData.scheduledAt = nextService.targetDate.toISOString();
+        orderData.scheduledNote = serviceTiming.message || 'সার্ভিস খোলার সময় এর জন্য শিডিউল করা হয়েছে';
       }
 
-      await fallbackStore.addOrder(newOrder);
+      // 1. Add order to Firestore & local cache
+      await fallbackStore.addOrder(orderData);
+      if (orderData.isScheduled) {
+        saveScheduledOrder(orderData);
+      }
 
-      // Save customer phone and delivery location so they are remembered for future orders
+      // 2. Remember customer phone and delivery location
       if (customerPhone.trim()) {
         saveAltPhone(customerPhone.trim());
       }
       if (delivLoc.address) {
         saveDefaultDeliveryLocation(delivLoc);
-        if (user.uid) {
-          addSavedDeliveryAddress(user.uid, delivLoc);
-          saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
+        if (user!.uid) {
+          addSavedDeliveryAddress(user!.uid, delivLoc);
+          saveCustomerSavedAddressToFirestore(user!.uid, delivLoc).catch(() => {});
         }
       }
       updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
 
       hapticFeedback('medium');
-      showAlert(
-        'অর্ডার সফল হয়েছে!',
-        `${shopName} থেকে আপনার অর্ডার রিকোয়েস্ট সফলভাবে তৈরি হয়েছে। হেলপার খুব শীঘ্রই অর্ডারটি গ্রহণ করবে।`,
-        'success'
-      );
+
+      if (orderData.isScheduled) {
+        showAlert(
+          'অর্ডার শিডিউল করা হয়েছে!',
+          `সার্ভিস খোলার সময় (${formatScheduledTime(orderData.scheduledAt)}) আপনার অর্ডারটি স্বয়ংক্রিয়ভাবে সার্ভারে সক্রিয় হবে এবং হেলপারদের পাঠানো হবে। এমনকি অ্যাপ বন্ধ থাকলেও নির্ধারিত সময়ে সঠিক সময়ে অর্ডার সম্পন্ন হবে।`,
+          'success'
+        );
+      } else {
+        showAlert(
+          'অর্ডার সফল হয়েছে!',
+          `${shopName} থেকে আপনার অর্ডার রিকোয়েস্ট সফলভাবে তৈরি হয়েছে। হেলপার খুব শীঘ্রই অর্ডারটি গ্রহণ করবে।`,
+          'success'
+        );
+      }
 
       clearCart();
       closeCartDrawer();
 
       if (onOrderCreated) {
-        onOrderCreated(newOrder);
+        onOrderCreated(orderData);
       }
     } catch (err) {
       console.error('Failed to place store order:', err);
@@ -430,6 +410,49 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
     } finally {
       setSubmittingOrder(false);
     }
+  };
+
+  const handleSubmitOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!user) {
+      openAuthModal();
+      return;
+    }
+
+    if (cartItems.length === 0) {
+      setFormError('আপনার কার্টে কোনো পণ্য নেই।');
+      return;
+    }
+
+    if (!deliveryAddress.trim()) {
+      setFormError('অনুগ্রহ করে ডেলিভারি ঠিকানা উল্লেখ করুন।');
+      return;
+    }
+
+    // Check if platform is currently closed (Order Timing & Form Controls)
+    const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
+    if (!serviceTiming.isOpen) {
+      // Ask user whether to schedule or not
+      setShowPlatformClosedModal(true);
+      return;
+    }
+
+    const totalPayable = subtotal + feeEst.deliverySubtotal + feeEst.processingFee;
+    const confirmed = await showConfirm(
+      'অর্ডার নিশ্চিতকরণ',
+      `${cartShop?.name || 'স্টোর'} থেকে মোট ৳${totalPayable} টাকার অর্ডারটি সম্পন্ন করতে আপনি কি নিশ্চিত?`,
+      'হ্যাঁ, নিশ্চিত করুন',
+      'বাতিল'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    // Close the drawer immediately so customers see the order is being processed
+    // and can't accidentally interact with the form inputs during submission
+    closeCartDrawer();
+    await executePlaceOrder({ isScheduled: false });
   };
 
   return (
@@ -919,6 +942,22 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         }}
       />
 
+
+      {/* Platform Closed Schedule Modal (Ask user to schedule or not when platform is off) */}
+      <PlatformClosedScheduleModal
+        isOpen={showPlatformClosedModal}
+        pricingSettings={fallbackStore.pricingSettings}
+        onSchedule={(targetDate, noteText) => {
+          setShowPlatformClosedModal(false);
+          closeCartDrawer();
+          executePlaceOrder({
+            isScheduled: true,
+            scheduledDate: targetDate,
+            scheduledNote: noteText,
+          });
+        }}
+        onCancel={() => setShowPlatformClosedModal(false)}
+      />
 
       {/* Insufficient Coins Modal */}
       {showInsufficientCoinsModal && (

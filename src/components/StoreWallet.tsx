@@ -51,7 +51,7 @@ interface WalletOrderBreakdownItem {
 }
 
 export const StoreWallet: React.FC = () => {
-  const { user } = useAuth();
+  const { user, activeStoreId } = useAuth();
   const { showAlert } = useModal();
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
@@ -69,12 +69,14 @@ export const StoreWallet: React.FC = () => {
   const [breakdownSearch, setBreakdownSearch] = useState('');
 
   const storeId = useMemo(() => {
+    // Prefer the user's actively selected store (multi-store support)
+    if (activeStoreId && fallbackStore.shops.has(activeStoreId)) return activeStoreId;
     if (user?.storeId && fallbackStore.shops.has(user.storeId)) return user.storeId;
     const foundShop = Array.from(fallbackStore.shops.values()).find(
       (s) => s.ownerUserId === user?.uid || (s.assignedUserIds && s.assignedUserIds.includes(user?.uid || '')) || s.id === `store-${user?.uid}`
     );
     return foundShop?.id || (user?.isStoreApproved ? user?.storeId : undefined);
-  }, [user]);
+  }, [user, activeStoreId]);
 
   const shopDoc = useMemo(() => {
     if (!storeId && !user?.uid) return null;
@@ -107,10 +109,10 @@ export const StoreWallet: React.FC = () => {
 
   const getTodayStr = () => getLocalYYYYMMDD(new Date());
 
-  // Date Range Filtering State (Default: ALL_TIME so 1st block is Today's and 2nd is Total)
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('ALL_TIME');
+  // Date Range Filtering State (Default: TODAY so wallet opens showing today's data)
+  const [startDate, setStartDate] = useState<string>(() => getLocalYYYYMMDD(new Date()));
+  const [endDate, setEndDate] = useState<string>(() => getLocalYYYYMMDD(new Date()));
+  const [activePreset, setActivePreset] = useState<'ALL_TIME' | 'TODAY' | 'LAST_7' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const getDaysAgoStr = (days: number) => {
     const d = new Date();

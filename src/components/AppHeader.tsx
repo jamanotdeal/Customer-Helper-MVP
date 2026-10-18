@@ -20,7 +20,7 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNavigate }) => {
-  const { user, loading, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, openAuthModal, logout } = useAuth();
+  const { user, loading, activeMode, setActiveMode, enableCommuterHelperWithLocation, loginWithGoogle, openAuthModal, logout, activeStoreId, setActiveStoreId } = useAuth();
   const { showAlert, showPermissionModal, showConfirm } = useModal();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
@@ -69,9 +69,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
         setHelperAppStatus(latestHelperApp?.status || null);
 
-        // Fetch/sync store info if store approved
-        if (user.storeId) {
-          setStoreInfo(fallbackStore.shops.get(user.storeId) || null);
+        // Fetch/sync store info — use activeStoreId if set, otherwise fallback to user.storeId
+        const effectiveStoreId = activeStoreId || user.storeId;
+        if (effectiveStoreId) {
+          setStoreInfo(fallbackStore.shops.get(effectiveStoreId) || null);
         } else {
           setStoreInfo(null);
         }
@@ -80,7 +81,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
     syncNotifs();
     const unsub = fallbackStore.subscribe(syncNotifs);
     return () => { unsub(); };
-  }, [user]);
+  }, [user, activeStoreId]);
 
   const isAdminView = Boolean(
     user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
@@ -299,7 +300,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                       <CheckCircle2 className="w-5 h-5 text-purple-600" />
                     </div>
                   ) : isStoreUser ? (
-                    /* Store User - Store details only */
+                    /* Store User - Store details with multi-store switcher */
                     <div className="w-full p-3 rounded-2xl border border-orange-400 bg-orange-50/70 text-orange-950 shadow-sm space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
@@ -324,6 +325,61 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                         <Edit className="w-3 h-3 text-white" />
                         <span>Edit Store Info</span>
                       </button>
+
+                      {/* Multi-store switcher */}
+                      {user.storeIds && user.storeIds.length > 1 && (
+                        <>
+                          <div className="text-[9px] font-bold text-orange-700 uppercase tracking-wider pt-1 border-t border-orange-200">
+                            Switch Store ({user.storeIds.length} stores)
+                          </div>
+                          <div className="space-y-1">
+                            {user.storeIds.map((sid) => {
+                              const shop = fallbackStore.shops.get(sid);
+                              const isCurrentStore = activeStoreId === sid || (!activeStoreId && sid === user.storeId);
+                              if (!shop) return null;
+                              return (
+                                <button
+                                  key={sid}
+                                  onClick={() => {
+                                    setActiveStoreId(sid);
+                                    setShowProfileMenu(false);
+                                  }}
+                                  className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl border transition-all text-left ${
+                                    isCurrentStore
+                                      ? 'border-orange-500 bg-orange-100 text-orange-900'
+                                      : 'border-orange-100 bg-white hover:bg-orange-50 hover:border-orange-300 text-gray-700'
+                                  }`}
+                                >
+                                  <div className={`w-6 h-6 rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden ${
+                                    isCurrentStore ? 'bg-orange-200' : 'bg-gray-100'
+                                  }`}>
+                                    {shop.photoUrl ? (
+                                      <img src={shop.photoUrl} alt={shop.name} className="w-full h-full object-cover rounded-lg" />
+                                    ) : (
+                                      <Store className={`w-3.5 h-3.5 ${isCurrentStore ? 'text-orange-700' : 'text-gray-500'}`} />
+                                    )}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className={`text-[11px] font-bold leading-tight truncate ${
+                                      isCurrentStore ? 'text-orange-900' : 'text-gray-800'
+                                    }`}>
+                                      {shop.name}
+                                    </div>
+                                    <div className={`text-[9px] font-medium ${
+                                      shop.isOpen !== false ? 'text-emerald-600' : 'text-gray-400'
+                                    }`}>
+                                      {shop.isOpen !== false ? '🟢 Open' : '🔴 Closed'}
+                                    </div>
+                                  </div>
+                                  {isCurrentStore && (
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <>

@@ -148,7 +148,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
 }) => {
-  const { user, setActiveMode } = useAuth();
+  const { user, setActiveMode, activeStoreId } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [localActiveTab, setLocalActiveTab] = useState<'ORDERS' | 'MY_REQUESTS'>('ORDERS');
 
@@ -268,12 +268,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [completedReqHasMore, setCompletedReqHasMore] = useState(true);
 
   const storeId = useMemo(() => {
+    // Prefer the user's actively selected store (multi-store support)
+    if (activeStoreId && fallbackStore.shops.has(activeStoreId)) return activeStoreId;
     if (user?.storeId && fallbackStore.shops.has(user.storeId)) return user.storeId;
     const foundShop = Array.from(fallbackStore.shops.values()).find(
       (s) => s.ownerUserId === user?.uid || (s.assignedUserIds && s.assignedUserIds.includes(user?.uid || ''))
     );
     return foundShop?.id || (user?.isStoreApproved ? user?.storeId : undefined);
-  }, [user]);
+  }, [user, activeStoreId]);
 
   // If user is not an approved store or has no shop, switch back to customer mode
   useEffect(() => {

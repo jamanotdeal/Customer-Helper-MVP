@@ -56,9 +56,10 @@ import { FloatingCartBar } from '@/components/FloatingCartBar';
 import { MissingItemFloatingButton } from '@/components/MissingItemFloatingButton';
 import { CustomRequestModal } from '@/components/CustomRequestModal';
 import { processAndDispatchScheduledOrders } from '@/utils/scheduledOrders';
+import { StorePickerModal } from '@/components/StorePickerModal';
 
 export default function PageClient() {
-  const { user, loading, activeMode, setActiveMode, openAuthModal } = useAuth();
+  const { user, loading, activeMode, setActiveMode, openAuthModal, showStorePicker, setShowStorePicker } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'my_orders' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'store_products'>('request');
   const [customerHomeResetTrigger, setCustomerHomeResetTrigger] = useState(0);
@@ -991,6 +992,11 @@ export default function PageClient() {
           handleSelectOrder(order.id);
         }}
       />
+
+      {/* Multi-Store Picker Modal — shown on login when user has access to multiple stores */}
+      {showStorePicker && (
+        <StorePickerModal onClose={() => setShowStorePicker(false)} />
+      )}
     </div>
   );
 }

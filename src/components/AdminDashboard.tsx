@@ -11217,6 +11217,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onDisbursed={() => {
             setShops(Array.from(fallbackStore.shops.values()));
             setWithdrawals(Array.from(fallbackStore.withdrawals.values()));
+            setWalletInputsVersion((v) => v + 1);
           }}
         />
       )}

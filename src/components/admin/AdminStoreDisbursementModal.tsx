@@ -56,15 +56,9 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const { showConfirm, showAlert } = useModal();
 
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
-  const [activePreset, setActivePreset] = useState<DatePreset>('TODAY');
-  const [startDate, setStartDate] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  });
-  const [endDate, setEndDate] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  });
+  const [activePreset, setActivePreset] = useState<DatePreset>('ALL_TIME');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
 
   // Search queries
   const [helperSearch, setHelperSearch] = useState('');
@@ -127,7 +121,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   }, [shop]);
 
   // Target Store User ID
-  const storeUserId = shop.ownerUserId || shop.id;
+  const storeUserId = shop.ownerUserId || (shop.id.startsWith('store-') ? shop.id.replace('store-', '') : shop.id);
 
   // Real-time synchronization tick from fallbackStore
   const [storeTick, setStoreTick] = useState(0);
@@ -142,6 +136,15 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
           const so = d.data() as ShopOrder;
           if (so && so.id) fallbackStore.shopOrders.set(so.id, so);
         });
+
+        if (storeUserId && storeUserId !== shop.id) {
+          const qSoUser = query(collection(db, 'shopOrders'), where('shopId', '==', storeUserId), limit(100));
+          const snapSoUser = await getDocs(qSoUser);
+          snapSoUser.docs.forEach((d) => {
+            const so = d.data() as ShopOrder;
+            if (so && so.id) fallbackStore.shopOrders.set(so.id, so);
+          });
+        }
 
         const qWd = query(collection(db, 'withdrawals'), where('shopId', '==', shop.id), limit(100));
         const snapWd = await getDocs(qWd);
@@ -158,7 +161,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     fetchFreshData();
 
     return () => unsub();
-  }, [shop.id]);
+  }, [shop.id, storeUserId]);
 
   // Retrieve all orders and shop orders
   // Re-read once the full history has arrived (see useAdminLifetimeData) and
@@ -171,7 +174,11 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const shopOrdersForThisStore = useMemo(() => {
     const targetShopId = shop.id;
     return allShopOrders.filter(
-      (so) => so.shopId === targetShopId || so.shopId === storeUserId || so.shopId === `store-${storeUserId}`
+      (so) =>
+        so.shopId === targetShopId ||
+        so.shopId === storeUserId ||
+        so.shopId === `store-${storeUserId}` ||
+        (storeUserId && so.shopId === storeUserId.replace('store-', ''))
     );
   }, [allShopOrders, shop.id, storeUserId]);
 
@@ -183,9 +190,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
         o.shopId === targetShopId ||
         o.shopId === storeUserId ||
         o.selectedShopIds?.includes(targetShopId) ||
-        o.selectedShopIds?.includes(storeUserId)
+        o.selectedShopIds?.includes(storeUserId) ||
+        o.items?.some((it) => it.storeId === targetShopId || it.storeId === storeUserId || (shop.name && it.storeName === shop.name))
     );
-  }, [allOrders, shop.id, storeUserId]);
+  }, [allOrders, shop.id, storeUserId, shop.name]);
 
   // Store Withdrawals / Disbursements
   const storeWithdrawals = useMemo(() => {
@@ -212,6 +220,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   // Combined Normalized Orders for this store with Full Details
   const normalizedStoreOrders = useMemo(() => {
     const map = new Map<string, any>();
+    const seenParentOrderIds = new Set<string>();
 
     const orderById = new Map<string, Order>();
     allOrders.forEach((o) => {
@@ -220,9 +229,12 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
 
     // 1. From ShopOrders
     shopOrdersForThisStore.forEach((so) => {
+      if (so.parentOrderId) {
+        seenParentOrderIds.add(so.parentOrderId);
+      }
       const parent = orderById.get(so.parentOrderId);
       const isCanceled = so.status === 'CANCELED' || (so.status as string) === 'CANCELLED' || parent?.status === 'CANCELED' || (parent?.status as string) === 'CANCELLED';
-      const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED';
+      const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED' || so.status === 'HANDOVER';
       const isHandover = so.status === 'HANDOVER';
 
       let grossPrice = 0;
@@ -253,13 +265,14 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       const isHelperPaid = Boolean(parent?.isHelperPaid);
       const isPaid = Boolean(parent?.isPaid || (isStorePaid && (isHelperPaid || !parent?.helperId)));
 
-      map.set(so.parentOrderId || so.id, {
+      // Key by so.id so multiple shopOrders for the same parent are NEVER overwritten
+      map.set(so.id, {
         id: so.id,
         parentOrderId: so.parentOrderId || so.id,
         orderNumber: parent?.id ? (parent.id.length > 8 ? parent.id.slice(-6).toUpperCase() : parent.id) : so.id.slice(-6).toUpperCase(),
         createdAt: effectiveDate,
         deliveredAt: parent?.statusHistory?.find((s) => s.status === 'DELIVERED')?.timestamp || so.updatedAt,
-        status: isCanceled ? 'CANCELED' : isDelivered ? 'DELIVERED' : isHandover ? 'HANDOVER' : 'IN_PROGRESS',
+        status: isCanceled ? 'CANCELED' : isDelivered ? (isHandover ? 'HANDOVER' : 'DELIVERED') : isHandover ? 'HANDOVER' : 'IN_PROGRESS',
         rawStatus: so.status,
         grossSales: grossPrice,
         commissionRate,
@@ -281,9 +294,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       });
     });
 
-    // 2. From Parent Orders directly (if not already captured)
+    // 2. From Parent Orders directly (only if not already captured by shop order)
     parentOrdersForThisStore.forEach((po) => {
-      if (!map.has(po.id)) {
+      if (!seenParentOrderIds.has(po.id) && !map.has(po.id) && !map.has(`po-${po.id}`)) {
+        seenParentOrderIds.add(po.id);
         const isCanceled = po.status === 'CANCELED' || (po.status as string) === 'CANCELLED';
         const isDelivered = po.status === 'DELIVERED' || (po.status as string) === 'COMPLETED';
 
@@ -309,7 +323,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
         const isHelperPaid = Boolean(po.isHelperPaid);
         const isPaid = Boolean(po.isPaid || (isStorePaid && (isHelperPaid || !po.helperId)));
 
-        map.set(po.id, {
+        map.set(`po-${po.id}`, {
           id: `po-${po.id}`,
           parentOrderId: po.id,
           orderNumber: po.id.length > 8 ? po.id.slice(-6).toUpperCase() : po.id,
@@ -352,54 +366,23 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     });
   }, [normalizedStoreOrders, startDate, endDate]);
 
-  // Overall Financials Calculation directly based on order statuses "disbursed" or not:
-  const allTimeDeliveredNetSales = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => o.status === 'DELIVERED' || o.status === 'HANDOVER')
-      .reduce((sum, o) => sum + o.netSales, 0);
-  }, [normalizedStoreOrders]);
+  // Unified Store Financials from fallbackStore (matches Admin Dashboard table view)
+  const fin = useMemo(() => fallbackStore.getStoreFinancials(shop), [shop, lifetimeData.ready, storeTick]);
 
-  const allTimeDisbursedNetSales = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && (o.isStorePaid || o.isPaid))
-      .reduce((sum, o) => sum + o.netSales, 0);
-  }, [normalizedStoreOrders]);
+  // Overall Financials Calculation directly based on unified financials
+  const allTimeDeliveredNetSales = fin.deliveredNetSales;
+  const allTimeDisbursedNetSales = fin.disbursedNetSales;
+  const allTimeUnpaidBalance = fin.unpaidBalance;
+  const allTimeGrossSales = fin.deliveredSales;
+  const allTimeDisbursedCommission = fin.disbursedCommission;
+  const allTimeUnpaidCommission = fin.unpaidCommission;
+  const allTimeCommission = fin.deliveredCommission;
 
-  const allTimeUnpaidBalance = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid)
-      .reduce((sum, o) => sum + o.netSales, 0);
-  }, [normalizedStoreOrders]);
+  // Current Available Unpaid Balance directly from unified financials
+  const currentAvailableBalance = fin.unpaidBalance;
 
-  const allTimeGrossSales = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => o.status === 'DELIVERED' || o.status === 'HANDOVER')
-      .reduce((sum, o) => sum + o.grossSales, 0);
-  }, [normalizedStoreOrders]);
-
-  const allTimeDisbursedCommission = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && (o.isStorePaid || o.isPaid))
-      .reduce((sum, o) => sum + o.commission, 0);
-  }, [normalizedStoreOrders]);
-
-  const allTimeUnpaidCommission = useMemo(() => {
-    return normalizedStoreOrders
-      .filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid)
-      .reduce((sum, o) => sum + o.commission, 0);
-  }, [normalizedStoreOrders]);
-
-  const allTimeCommission = useMemo(() => {
-    return allTimeDisbursedCommission + allTimeUnpaidCommission;
-  }, [allTimeDisbursedCommission, allTimeUnpaidCommission]);
-
-  // Current Available Unpaid Balance directly from unpaid delivered orders
-  const currentAvailableBalance = allTimeUnpaidBalance;
-
-  // Total Disbursed directly from disbursed orders (or manual withdrawal records if no orders yet)
-  const totalAllTimeDisbursed = (normalizedStoreOrders.length > 0 || allTimeDisbursedNetSales > 0)
-    ? allTimeDisbursedNetSales
-    : totalApprovedWithdrawalSum;
+  // Total Disbursed directly from unified store financials
+  const totalAllTimeDisbursed = fin.totalDisbursed;
 
   // Metrics for the Selected Date Range calculated dynamically based on order statuses
   const rangeMetrics = useMemo(() => {
@@ -744,7 +727,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
               <button
                 type="button"
                 onClick={() => {
-                  setPayoutAmount(currentAvailableBalance > 0 ? String(currentAvailableBalance) : '');
+                  setPayoutAmount(currentAvailableBalance > 0 ? String(Math.round(currentAvailableBalance * 100) / 100) : '');
                   setShowDisburseForm(true);
                   setActiveTab('OVERVIEW');
                 }}
@@ -922,13 +905,15 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                 {/* Net Sales Payable / Due */}
                 <div className="bg-white p-4 rounded-2xl border border-emerald-100 shadow-xs space-y-1 bg-gradient-to-br from-emerald-50/50 to-white">
                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">
-                    Unpaid Net Sales (Due)
+                    {activePreset === 'ALL_TIME' ? 'Unpaid Balance (Due)' : `Unpaid Net Sales (${activePreset})`}
                   </span>
                   <span className="text-xl font-black text-emerald-700 block font-mono">
-                    ৳{rangeMetrics.unpaidNet.toLocaleString('en-US')}
+                    ৳{(activePreset === 'ALL_TIME' ? currentAvailableBalance : rangeMetrics.unpaidNet).toLocaleString('en-US')}
                   </span>
                   <span className="text-[10px] text-emerald-600 font-bold block">
-                    {rangeMetrics.unpaidCount} orders pending payout
+                    {activePreset === 'ALL_TIME'
+                      ? normalizedStoreOrders.filter((o) => (o.status === 'DELIVERED' || o.status === 'HANDOVER') && !o.isStorePaid && !o.isPaid).length
+                      : rangeMetrics.unpaidCount} orders pending payout
                   </span>
                 </div>
 
@@ -983,7 +968,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                         {currentAvailableBalance > 0 && (
                           <button
                             type="button"
-                            onClick={() => setPayoutAmount(Math.round(currentAvailableBalance).toString(10))}
+                            onClick={() => setPayoutAmount(String(Math.round(currentAvailableBalance * 100) / 100))}
                             className="text-[10px] font-black text-emerald-700 hover:underline cursor-pointer"
                           >
                             Fill Max (৳{currentAvailableBalance.toLocaleString('en-US')})

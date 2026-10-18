@@ -61,6 +61,11 @@ interface AuthContextType {
     options?: { force?: boolean }
   ) => void;
   isUserAuthenticated: (userOverride?: UserProfile | null) => boolean;
+  // Multi-store support
+  activeStoreId: string | null;
+  setActiveStoreId: (storeId: string) => void;
+  showStorePicker: boolean;
+  setShowStorePicker: (show: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -191,6 +196,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const [activeMode, setActiveModeState] = useState<ActiveMode>('customer');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  // Multi-store support
+  const [activeStoreId, setActiveStoreIdState] = useState<string | null>(null);
+  const [showStorePicker, setShowStorePicker] = useState<boolean>(false);
 
   const closeAuthModal = () => setIsAuthModalOpen(false);
 
@@ -332,7 +340,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return profile;
   };
 
-  const applyProfile = (profile: UserProfile, savedMode: ActiveMode) => {
+  const applyProfile = (profile: UserProfile, savedMode: ActiveMode, isFirstLogin?: boolean) => {
     setUser(profile);
     if (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(profile.email)) {
       setActiveModeState('admin');
@@ -341,6 +349,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Approved stores are always locked into store mode
       setActiveModeState('store');
       saveActiveMode('store');
+      // Multi-store: set active store ID
+      if (profile.storeIds && profile.storeIds.length > 1) {
+        // Has multiple stores — show picker on first login, or keep current selection
+        if (isFirstLogin) {
+          setShowStorePicker(true);
+        }
+        // Set activeStoreId to current storeId if not yet set
+        setActiveStoreIdState((prev) => {
+          if (prev && profile.storeIds?.includes(prev)) return prev;
+          return profile.storeId || (profile.storeIds ?? [])[0] || null;
+        });
+      } else if (profile.storeId) {
+        setActiveStoreIdState(profile.storeId);
+      }
     } else if (profile.isHelper || profile.role === 'helper') {
       // All helper type users automatically get helper view as primary on login/load
       setActiveModeState('helper');
@@ -351,6 +373,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         savedMode === 'admin' || savedMode === 'store' || savedMode === 'helper' ? 'customer' : savedMode || 'customer';
       setActiveModeState(safeSavedMode);
       saveActiveMode(safeSavedMode);
+    }
+  };
+
+  const setActiveStoreId = (storeId: string) => {
+    setActiveStoreIdState(storeId);
+    setShowStorePicker(false);
+    // Also update user profile's primary storeId so StoreDashboard uses the right one
+    setUser((prev) => {
+      if (!prev) return null;
+      return { ...prev, storeId };
+    });
+    // Update fallbackStore cache
+    if (user) {
+      fallbackStore.cacheUser({ ...user, storeId });
+    }
+    // Persist to localStorage for session continuity
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(`jamanot_active_store_${user?.uid}`, storeId);
+    }
+    // Re-init store listeners for the new store
+    if (user?.uid) {
+      fallbackStore.initListenersForRole('store', user.uid, user.helperType, storeId);
     }
   };
 
@@ -436,7 +480,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (profile.photoURL && !fbUser.photoURL) {
         updateProfile(fbUser, { photoURL: profile.photoURL }).catch(() => {});
       }
-      applyProfile(profile, currentSavedMode);
+      // Restore persisted active store selection
+      const persistedStoreId = typeof localStorage !== 'undefined'
+        ? localStorage.getItem(`jamanot_active_store_${fbUser.uid}`) || null
+        : null;
+      if (persistedStoreId) setActiveStoreIdState(persistedStoreId);
+      applyProfile(profile, currentSavedMode, false);
       setLoading(false);
 
       // 2. Fetch and synchronize roles/store data in background
@@ -445,7 +494,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile = buildProfile(fbUser, currentSavedMode);
         const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
         if (syncedProfile) profile = syncedProfile;
-        applyProfile(profile, currentSavedMode);
+        // On first-ever store login (no persisted store selected), show picker if multi-store
+        const isFirstStoreLogin = !persistedStoreId && (profile.storeIds?.length ?? 0) > 1;
+        applyProfile(profile, currentSavedMode, isFirstStoreLogin);
       } catch (e) {
         console.warn('[AuthContext] Background user profile sync note:', e);
       }
@@ -1196,6 +1247,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateCustomerPreferences,
         updateHelperLocation,
         isUserAuthenticated: (u) => isUserAuthenticated(u !== undefined ? u : user),
+        activeStoreId,
+        setActiveStoreId,
+        showStorePicker,
+        setShowStorePicker,
       }}
     >
       {children}

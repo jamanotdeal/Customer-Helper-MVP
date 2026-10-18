@@ -244,7 +244,8 @@ export interface UserProfile {
   fcmTokens?: string[]; // every device signed in to this account (see saveFcmToken)
   isStore?: boolean;         // True if user has an approved store application
   isStoreApproved?: boolean; // Explicit approval flag for store mode
-  storeId?: string;          // The shop document ID linked to this user's store
+  storeId?: string;          // The primary/active shop document ID linked to this user's store
+  storeIds?: string[];       // All shop IDs this user is assigned to (multi-store support)
   coins?: number;            // Current coin balance
   totalEarnedCoins?: number; // Lifetime earned coins
   creditedOrderIds?: string[]; // Order IDs for which completion coins have been credited

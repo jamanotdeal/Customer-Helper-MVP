@@ -21,6 +21,7 @@ import { OrderFeedbackModal } from './OrderFeedbackModal';
 import { EditOrderDetailsModal } from './EditOrderDetailsModal';
 import { CustomerOrderItemModal } from './CustomerOrderItemModal';
 import { formatItemQuantityUnit, calculateOrderProductCost, getItemUnitPrice } from '@/lib/itemUtils';
+import { formatScheduledTime, removeScheduledOrder } from '@/utils/scheduledOrders';
 
 interface OrderDetailsViewProps {
   orderId: string;
@@ -325,7 +326,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Simplified progress steps
   const steps: { status: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
-    { status: 'PENDING', label: 'Order Placed', icon: Check, desc: 'Order Placed Successfully' },
+    {
+      status: 'PENDING',
+      label: order.status === 'SCHEDULED' ? 'Scheduled' : 'Order Placed',
+      icon: order.status === 'SCHEDULED' ? Clock : Check,
+      desc: order.status === 'SCHEDULED'
+        ? `Will activate at ${formatScheduledTime(order.scheduledAt)}`
+        : 'Order Placed Successfully',
+    },
     {
       status: 'ACCEPTED',
       label: showAdminAccepted ? 'Admin Accepted' : 'Helper Assigned',
@@ -410,6 +418,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         cancelHistoryEntry,
       ],
     }));
+    removeScheduledOrder(order.id);
     setShowCancelModal(false);
   };
 
@@ -428,7 +437,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   const canCancel = Boolean(
     user &&
-    (order.status === 'PENDING' || order.status === 'ACCEPTED') &&
+    (order.status === 'PENDING' || order.status === 'ACCEPTED' || order.status === 'SCHEDULED') &&
     user.uid === order.customerId &&
     !isCanceled
   );
@@ -575,6 +584,35 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               >
                 Dismiss
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── SCHEDULED ORDER BANNER ── */}
+        {order.status === 'SCHEDULED' && !isCanceled && (
+          <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 border border-purple-200 shadow-xs space-y-2.5 animate-in fade-in duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-600 text-white shadow-xs">
+                    শিডিউল অর্ডার (Scheduled)
+                  </span>
+                </div>
+                <h4 className="font-extrabold text-sm text-purple-950 mt-1">
+                  নির্ধারিত সময়: {formatScheduledTime(order.scheduledAt)}
+                </h4>
+              </div>
+            </div>
+            <div className="text-xs text-purple-900 bg-white/80 p-3 rounded-2xl border border-purple-100/80 leading-relaxed space-y-1">
+              <p className="font-medium">
+                {order.scheduledNote || 'দোকান বা সার্ভিস খোলার সময়ে এই অর্ডারটি স্বয়ংক্রিয়ভাবে সার্ভার থেকে সক্রিয় হবে।'}
+              </p>
+              <p className="text-[11px] text-purple-700 font-semibold">
+                ✓ আপনার উপস্থিতি বা অ্যাপ খোলা রাখার প্রয়োজন নেই — সঠিক সময়ে সার্ভার থেকে অর্ডারটি কার্যকর হবে।
+              </p>
             </div>
           </div>
         )}

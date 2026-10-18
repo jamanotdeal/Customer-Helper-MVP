@@ -8,6 +8,7 @@ import { AsyncButton } from './ui/AsyncButton';
 import { fallbackStore } from '@/lib/firebase';
 import { isOrderFromStore } from '@/utils/orderUtils';
 import { ServiceIcon, getServiceIconInfo } from './ServiceIcon';
+import { formatScheduledTime } from '@/utils/scheduledOrders';
 
 interface OrderCardProps {
   order: Order;
@@ -25,6 +26,8 @@ interface OrderCardProps {
 
 export const getStatusBadgeInfo = (status: OrderStatus) => {
   switch (status) {
+    case 'SCHEDULED':
+      return { label: 'Scheduled', color: 'bg-purple-100 text-purple-800 border-purple-200', icon: Calendar };
     case 'PENDING':
       return { label: 'Pending Helper', color: 'bg-amber-100 text-amber-800 border-amber-200', icon: Clock };
     case 'ACCEPTED':
@@ -48,6 +51,13 @@ export const getStatusBadgeInfo = (status: OrderStatus) => {
 // Each status gets a unique card accent to make orders feel visually distinct
 const getCardAccent = (status: OrderStatus) => {
   switch (status) {
+    case 'SCHEDULED':
+      return {
+        border: 'border-purple-300',
+        bar: 'bg-purple-500',
+        bg: 'bg-gradient-to-br from-white to-purple-50/40',
+        locationBg: 'bg-purple-50/60 border-purple-100',
+      };
     case 'PENDING':
       return {
         border: 'border-amber-200',
@@ -340,6 +350,17 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             )}
           </div>
 
+          {order.status === 'SCHEDULED' && (
+            <div className="mb-3.5 p-2.5 rounded-2xl bg-purple-50/90 border border-purple-200/90 flex items-center justify-between gap-2 text-xs font-bold text-purple-900">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Clock className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                <span className="truncate">শিডিউল: {formatScheduledTime(order.scheduledAt)}</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-600 text-white font-black shrink-0 shadow-xs">
+                নির্ধারিত সময়ে সক্রিয় হবে
+              </span>
+            </div>
+          )}
 
           <AsyncButton
             onClick={(e) => {

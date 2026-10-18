@@ -3570,42 +3570,79 @@ class FallbackStore {
     // ── Store applications & Direct Shop Assignment & Shop Existence ────────
     try {
       // 1. Check direct shop assignment (admin assigned shop where ownerUserId === profile.uid or assignedUserIds contains profile.uid)
-      let assignedShop: Shop | undefined;
+      // Collect ALL assigned shops (multi-store support)
+      const assignedShops: Shop[] = [];
       for (const s of Array.from(this.shops.values())) {
         if (s.ownerUserId === profile.uid || (s.assignedUserIds && s.assignedUserIds.includes(profile.uid))) {
-          assignedShop = s;
-          break;
+          assignedShops.push(s);
         }
       }
 
-      if (!assignedShop && profile.uid) {
+      // Also fetch from Firestore if not found locally
+      if (assignedShops.length === 0 && profile.uid) {
         try {
           const shopByOwnerSnap = await getDocs(
-            query(collection(db, 'shops'), where('ownerUserId', '==', profile.uid), limit(1))
+            query(collection(db, 'shops'), where('ownerUserId', '==', profile.uid), limit(10))
           );
           if (shopByOwnerSnap && !shopByOwnerSnap.empty) {
-            assignedShop = shopByOwnerSnap.docs[0].data() as Shop;
-            this.shops.set(assignedShop.id, assignedShop);
-          } else {
-            const shopByAssignedSnap = await getDocs(
-              query(collection(db, 'shops'), where('assignedUserIds', 'array-contains', profile.uid), limit(1))
-            );
-            if (shopByAssignedSnap && !shopByAssignedSnap.empty) {
-              assignedShop = shopByAssignedSnap.docs[0].data() as Shop;
-              this.shops.set(assignedShop.id, assignedShop);
-            }
+            shopByOwnerSnap.docs.forEach((d) => {
+              const s = d.data() as Shop;
+              this.shops.set(s.id, s);
+              assignedShops.push(s);
+            });
+          }
+          const shopByAssignedSnap = await getDocs(
+            query(collection(db, 'shops'), where('assignedUserIds', 'array-contains', profile.uid), limit(10))
+          );
+          if (shopByAssignedSnap && !shopByAssignedSnap.empty) {
+            shopByAssignedSnap.docs.forEach((d) => {
+              const s = d.data() as Shop;
+              if (!assignedShops.find((existing) => existing.id === s.id)) {
+                this.shops.set(s.id, s);
+                assignedShops.push(s);
+              }
+            });
+          }
+        } catch (_) { }
+      } else if (assignedShops.length > 0 && profile.uid) {
+        // Also check Firestore for any additional shops not in local cache
+        try {
+          const shopByAssignedSnap = await getDocs(
+            query(collection(db, 'shops'), where('assignedUserIds', 'array-contains', profile.uid), limit(10))
+          );
+          if (shopByAssignedSnap && !shopByAssignedSnap.empty) {
+            shopByAssignedSnap.docs.forEach((d) => {
+              const s = d.data() as Shop;
+              if (!assignedShops.find((existing) => existing.id === s.id)) {
+                this.shops.set(s.id, s);
+                assignedShops.push(s);
+              }
+            });
           }
         } catch (_) { }
       }
 
-      if (assignedShop) {
-        const effectiveShopId = assignedShop.id;
-        if (!next.isStore || !next.isStoreApproved || next.storeId !== effectiveShopId || next.role !== 'store' || next.lastActiveMode !== 'store') {
+      if (assignedShops.length > 0) {
+        const allStoreIds = assignedShops.map((s) => s.id);
+        // Use existing storeId if it's still valid, otherwise pick the first
+        const effectiveStoreId = (next.storeId && allStoreIds.includes(next.storeId))
+          ? next.storeId
+          : allStoreIds[0];
+
+        if (
+          !next.isStore ||
+          !next.isStoreApproved ||
+          next.storeId !== effectiveStoreId ||
+          next.role !== 'store' ||
+          next.lastActiveMode !== 'store' ||
+          JSON.stringify(next.storeIds?.slice().sort()) !== JSON.stringify(allStoreIds.slice().sort())
+        ) {
           next = {
             ...next,
             isStore: true,
             isStoreApproved: true,
-            storeId: effectiveShopId,
+            storeId: effectiveStoreId,
+            storeIds: allStoreIds,
             role: 'store',
             lastActiveMode: 'store',
           };
@@ -4315,21 +4352,65 @@ class FallbackStore {
     this.orders.set(order.id, order);
     this.notify();
 
-    // 2. The order and its announcement are written together, in one batch.
-    // Written one after the other, the announcement could land after a fast
-    // helper had already accepted (2–5 s, twice in ten days in production),
-    // and then rang every other helper for an order that was gone.
-    const announcement = this.newOrderAnnouncement(order, `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`);
+    const isScheduledOrder = order.status === 'SCHEDULED' || order.isScheduled === true;
+    const announcement = !isScheduledOrder
+      ? this.newOrderAnnouncement(order, `notif-${new Date(order.createdAt).getTime()}-new-${order.id}`)
+      : null;
     try {
       const batch = writeBatch(db);
       batch.set(doc(db, 'orders', order.id), cleanForFirestore(order));
-      batch.set(doc(db, 'notifications', announcement.id), cleanForFirestore(announcement));
+      if (announcement) {
+        batch.set(doc(db, 'notifications', announcement.id), cleanForFirestore(announcement));
+      }
       await batch.commit();
     } catch (e: any) {
       // Rollback local memory so app state matches server truth
       this.orders.delete(order.id);
       this.notify();
       console.error('[Firestore] addOrder failed to persist to Firestore:', e?.message || e);
+      throw e;
+    }
+  }
+
+  /**
+   * Activates a scheduled order when its scheduled time arrives, updating its status to PENDING
+   * and alerting helpers.
+   */
+  public async activateScheduledOrder(orderId: string) {
+    const existing = this.orders.get(orderId);
+    if (!existing) return;
+    if (existing.status !== 'SCHEDULED' && !existing.isScheduled) return;
+
+    const now = new Date().toISOString();
+    const updated: Order = {
+      ...existing,
+      status: 'PENDING',
+      isScheduled: false,
+      createdAt: now,
+      updatedAt: now,
+      statusHistory: [
+        ...(existing.statusHistory || []),
+        {
+          id: `sh-scheduled-dispatched-${Date.now()}`,
+          status: 'PENDING',
+          timestamp: now,
+          actor: 'System',
+          note: 'নির্ধারিত সময় হওয়ায় শিডিউল করা অর্ডারটি স্বয়ংক্রিয়ভাবে সার্ভারে সক্রিয় হয়েছে',
+        },
+      ],
+    };
+
+    this.orders.set(orderId, updated);
+    this.notify();
+
+    const announcement = this.newOrderAnnouncement(updated, `notif-${new Date(now).getTime()}-new-${orderId}`);
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'orders', orderId), cleanForFirestore(updated), { merge: true });
+      batch.set(doc(db, 'notifications', announcement.id), cleanForFirestore(announcement));
+      await batch.commit();
+    } catch (e: any) {
+      console.error('[Firestore] activateScheduledOrder failed:', e?.message || e);
       throw e;
     }
   }
@@ -6114,7 +6195,8 @@ class FallbackStore {
         mo.shopId === storeUserId ||
         mo.selectedShopIds?.includes(effectiveShopId) ||
         mo.selectedShopIds?.includes(targetShopId) ||
-        mo.selectedShopIds?.includes(storeUserId);
+        mo.selectedShopIds?.includes(storeUserId) ||
+        mo.items?.some((it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === storeUserId || (storeName && it.storeName === storeName));
       if (matchesShop && !seenParentOrderIds.has(mo.id)) {
         const isCanceled = mo.status === 'CANCELED' || (mo.status as string) === 'CANCELLED';
         const isCompleted = mo.status === 'DELIVERED' || (mo.status as string) === 'COMPLETED';
@@ -6381,33 +6463,63 @@ class FallbackStore {
       (s) => s.id === targetShopId || s.ownerUserId === targetUserId || s.id === `store-${targetUserId}`
     );
     const effectiveShopId = shopDoc?.id || targetShopId;
+    const storeName = shopDoc?.name || '';
 
     let commissionRate = Number(shopDoc?.commissionPercent);
-    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined) {
+    if (isNaN(commissionRate) || shopDoc?.commissionPercent === undefined || shopDoc?.commissionPercent === null) {
       const app = Array.from(this.storeApplications.values()).find(
         (a) => a.userId === targetUserId || a.id === shopDoc?.applicationId
       );
       commissionRate = Number(app?.commissionPercent) || 0;
     }
 
-    // 1. Gather all shop orders for this store
     const allShopOrders = Array.from(this.shopOrders.values());
+    const seenParentOrderIds = new Set<string>();
+
+    // Register all parentOrderIds from all shop orders for this store
+    allShopOrders.forEach((so) => {
+      const matches =
+        so.shopId === effectiveShopId ||
+        so.shopId === targetShopId ||
+        so.shopId === targetUserId ||
+        so.shopId === `store-${targetUserId}` ||
+        (targetUserId && so.shopId === targetUserId.replace('store-', ''));
+      if (matches && so.parentOrderId) {
+        seenParentOrderIds.add(so.parentOrderId);
+      }
+    });
+
+    // 1. Gather all UNPAID delivered shop orders for this store
     const storeShopOrders = allShopOrders.filter((so) => {
-      const matches = so.shopId === effectiveShopId || so.shopId === targetShopId || so.shopId === targetUserId || so.shopId === `store-${targetUserId}`;
+      const matches =
+        so.shopId === effectiveShopId ||
+        so.shopId === targetShopId ||
+        so.shopId === targetUserId ||
+        so.shopId === `store-${targetUserId}` ||
+        (targetUserId && so.shopId === targetUserId.replace('store-', ''));
       if (!matches) return false;
       const parent = this.orders.get(so.parentOrderId);
       const isDelivered = parent?.status === 'DELIVERED' || (parent?.status as string) === 'COMPLETED' || so.status === 'DELIVERED' || so.status === 'HANDOVER';
-      return isDelivered && !so.isPaid;
+      const isDisbursed = Boolean(so.isPaid || parent?.isStorePaid || parent?.isPaid);
+      return isDelivered && !isDisbursed;
     });
 
     // 2. Gather parent orders for this store not already covered by shop orders
     const allOrders = Array.from(this.orders.values());
     const storeOrders = allOrders.filter((o) => {
-      const matches = o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId || o.shopId === `store-${targetUserId}` ||
-        o.selectedShopIds?.includes(effectiveShopId) || o.selectedShopIds?.includes(targetShopId) || o.selectedShopIds?.includes(targetUserId);
+      const matches =
+        o.shopId === effectiveShopId ||
+        o.shopId === targetShopId ||
+        o.shopId === targetUserId ||
+        o.shopId === `store-${targetUserId}` ||
+        o.selectedShopIds?.includes(effectiveShopId) ||
+        o.selectedShopIds?.includes(targetShopId) ||
+        o.selectedShopIds?.includes(targetUserId) ||
+        o.items?.some((it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === targetUserId || (storeName && it.storeName === storeName));
       if (!matches) return false;
       const isDelivered = o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED';
-      return isDelivered && !o.isStorePaid;
+      const isDisbursed = Boolean(o.isStorePaid || o.isPaid);
+      return isDelivered && !isDisbursed && !seenParentOrderIds.has(o.id);
     });
 
     const orderEntries: {
@@ -6418,12 +6530,7 @@ class FallbackStore {
       netAmount: number;
     }[] = [];
 
-    const seenOrderIds = new Set<string>();
-
-    const storeName = shopDoc?.name || '';
-
     storeShopOrders.forEach((so) => {
-      seenOrderIds.add(so.parentOrderId || so.id);
       const parent = this.orders.get(so.parentOrderId);
       
       let gross = 0;
@@ -6456,33 +6563,28 @@ class FallbackStore {
     });
 
     storeOrders.forEach((o) => {
-      if (!seenOrderIds.has(o.id)) {
-        seenOrderIds.add(o.id);
-        let gross = 0;
-        if (o.items && o.items.length > 0) {
-          const storeItems = o.items.filter(
-            (it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === targetUserId || (storeName && it.storeName === storeName)
-          );
-          if (storeItems.length > 0) {
-            gross = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
-          } else if (o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId) {
-            gross = o.productCost || 0;
-          }
+      let gross = 0;
+      if (o.items && o.items.length > 0) {
+        const storeItems = o.items.filter(
+          (it) => it.storeId === effectiveShopId || it.storeId === targetShopId || it.storeId === targetUserId || (storeName && it.storeName === storeName)
+        );
+        if (storeItems.length > 0) {
+          gross = storeItems.reduce((sum, it) => sum + ((Number(it.price) || 0) * getItemQuantityNum(it)), 0);
         } else if (o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId) {
           gross = o.productCost || 0;
         }
-
-        if (gross > 0) {
-          const comm = Math.round(gross * (commissionRate / 100));
-          const net = Math.max(0, gross - comm);
-          orderEntries.push({
-            orderId: o.id,
-            order: o,
-            createdAt: o.createdAt || now,
-            netAmount: net,
-          });
-        }
+      } else if (o.shopId === effectiveShopId || o.shopId === targetShopId || o.shopId === targetUserId) {
+        gross = o.productCost || 0;
       }
+
+      const comm = Math.round(gross * (commissionRate / 100));
+      const net = Math.max(0, gross - comm);
+      orderEntries.push({
+        orderId: o.id,
+        order: o,
+        createdAt: o.createdAt || now,
+        netAmount: net,
+      });
     });
 
     // Sort oldest first (FIFO)
@@ -6490,7 +6592,7 @@ class FallbackStore {
 
     let remaining = amount;
     const totalUnpaidNet = orderEntries.reduce((sum, e) => sum + e.netAmount, 0);
-    const markAll = amount >= (totalUnpaidNet - 1) && totalUnpaidNet > 0;
+    const markAll = (amount >= (totalUnpaidNet - 1) && totalUnpaidNet > 0) || (orderEntries.length > 0 && Math.abs(amount - totalUnpaidNet) < 1);
 
     const writes: Parameters<FallbackStore['commitFieldUpdates']>[0] = [];
     for (const entry of orderEntries) {
@@ -6502,7 +6604,8 @@ class FallbackStore {
         writes.push({ collection: 'shopOrders', id: entry.shopOrder.id, fields: paid });
       }
 
-      const parentOrder = entry.order || this.orders.get(entry.orderId);
+      const parentOrderId = entry.order?.id || (entry.shopOrder?.parentOrderId ? entry.shopOrder.parentOrderId : (entry.orderId !== entry.shopOrder?.id ? entry.orderId : undefined));
+      const parentOrder = entry.order || (parentOrderId ? this.orders.get(parentOrderId) : undefined);
       if (parentOrder) {
         const hasHelper = Boolean(parentOrder.helperId);
         const fullyPaid = !hasHelper || Boolean(parentOrder.isHelperPaid);
@@ -6515,11 +6618,22 @@ class FallbackStore {
         this.orders.set(parentOrder.id, { ...parentOrder, ...paid });
         paidOrderIds.push(parentOrder.id);
         writes.push({ collection: 'orders', id: parentOrder.id, fields: paid });
+      } else if (parentOrderId) {
+        paidOrderIds.push(parentOrderId);
+        writes.push({
+          collection: 'orders',
+          id: parentOrderId,
+          fields: {
+            isStorePaid: true,
+            storePaidAt: now,
+            storeDisbursementId: disbursementId,
+          },
+        });
       } else {
         paidOrderIds.push(entry.orderId);
       }
 
-      remaining -= (entry.netAmount > 0 ? entry.netAmount : 1);
+      remaining -= (entry.netAmount > 0 ? entry.netAmount : 0);
     }
 
     this.notify();
