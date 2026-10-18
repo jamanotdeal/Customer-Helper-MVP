@@ -9,6 +9,7 @@ import {
   Tag, Plus, Edit, Trash2, Search, Filter, Store,
   Check, X, AlertCircle, Layers, CheckSquare, Square, ChevronDown
 } from 'lucide-react';
+import { PaginationControl } from './PaginationControl';
 
 interface AdminCategoriesManagerProps {
   onCategoryCountChange?: () => void;
@@ -37,6 +38,13 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [storeTypeFilter, setStoreTypeFilter] = useState('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+
+  // Reset to first page when search query or store type filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, storeTypeFilter]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -138,6 +146,14 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
       return true;
     });
   }, [categories, storeTypeFilter, searchQuery]);
+
+  // Pagination calculations
+  const totalPages = Math.max(1, Math.ceil(filteredCategories.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedCategories = useMemo(() => {
+    const start = (safeCurrentPage - 1) * pageSize;
+    return filteredCategories.slice(start, start + pageSize);
+  }, [filteredCategories, safeCurrentPage, pageSize]);
 
   // Display label for the store type dropdown trigger button
   const storeTypeDisplayLabel = useMemo(() => {
@@ -296,19 +312,29 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
     );
   };
 
-  // Toggle select all filtered rows
-  const isAllFilteredSelected =
-    filteredCategories.length > 0 &&
-    filteredCategories.every((c) => selectedCategoryIds.includes(c.id));
+  // Check selection status on current page
+  const isAllCurrentPageSelected =
+    paginatedCategories.length > 0 &&
+    paginatedCategories.every((c) => selectedCategoryIds.includes(c.id));
 
+  const isSomeCurrentPageSelected =
+    paginatedCategories.some((c) => selectedCategoryIds.includes(c.id));
+
+  // Toggle select all rows on current page
   const handleToggleSelectAll = () => {
-    if (isAllFilteredSelected) {
-      const filteredIds = new Set(filteredCategories.map((c) => c.id));
-      setSelectedCategoryIds((prev) => prev.filter((id) => !filteredIds.has(id)));
+    if (isAllCurrentPageSelected) {
+      const pageIds = new Set(paginatedCategories.map((c) => c.id));
+      setSelectedCategoryIds((prev) => prev.filter((id) => !pageIds.has(id)));
     } else {
-      const merged = new Set([...selectedCategoryIds, ...filteredCategories.map((c) => c.id)]);
+      const merged = new Set([...selectedCategoryIds, ...paginatedCategories.map((c) => c.id)]);
       setSelectedCategoryIds(Array.from(merged));
     }
+  };
+
+  // Select all filtered items across all pages
+  const handleSelectAllFiltered = () => {
+    const allFilteredIds = filteredCategories.map((c) => c.id);
+    setSelectedCategoryIds(Array.from(new Set([...selectedCategoryIds, ...allFilteredIds])));
   };
 
   // Delete multiple categories at once
@@ -504,6 +530,16 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
               <span className="text-xs font-bold">
                 টি ক্যাটাগরি নির্বাচিত হয়েছে (মোট {categories.length} টির মধ্যে)
               </span>
+              {filteredCategories.length > paginatedCategories.length &&
+                selectedCategoryIds.length < filteredCategories.length && (
+                  <button
+                    type="button"
+                    onClick={handleSelectAllFiltered}
+                    className="ml-2 px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-purple-100 text-[11px] font-bold transition-all cursor-pointer underline"
+                  >
+                    ফিল্টার করা সকল {filteredCategories.length} টি সিলেক্ট করুন
+                  </button>
+                )}
             </div>
             <div className="flex items-center space-x-2">
               <button
@@ -547,12 +583,16 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
                       type="button"
                       onClick={handleToggleSelectAll}
                       className="p-1 rounded-md hover:bg-gray-200 text-gray-500 hover:text-purple-700 transition-colors cursor-pointer inline-flex items-center justify-center"
-                      title={isAllFilteredSelected ? "সব নির্বাচন বাতিল করুন" : "সবগুলো নির্বাচন করুন"}
+                      title={
+                        isAllCurrentPageSelected
+                          ? 'বর্তমান পেজের সব নির্বাচন বাতিল করুন'
+                          : 'বর্তমান পেজের সবগুলো নির্বাচন করুন'
+                      }
                       aria-label="Select All"
                     >
-                      {isAllFilteredSelected ? (
+                      {isAllCurrentPageSelected ? (
                         <CheckSquare className="w-4 h-4 text-purple-700" />
-                      ) : selectedCategoryIds.length > 0 ? (
+                      ) : isSomeCurrentPageSelected ? (
                         <div className="w-3.5 h-3.5 rounded bg-purple-700 text-white flex items-center justify-center text-[10px] font-black leading-none">
                           -
                         </div>
@@ -569,10 +609,11 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {filteredCategories.map((cat, idx) => {
+                {paginatedCategories.map((cat, idx) => {
                   const isSelected = selectedCategoryIds.includes(cat.id);
                   const usageCount = productCountPerCategory[cat.name] || 0;
                   const isAll = cat.storeTypes.includes('ALL') || cat.storeTypes.includes('all');
+                  const itemIndex = (safeCurrentPage - 1) * pageSize + idx + 1;
 
                   return (
                     <tr
@@ -598,7 +639,7 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
                         </button>
                       </td>
                       <td className="py-3 px-2 text-center text-[11px] font-bold text-gray-400">
-                        {idx + 1}
+                        {itemIndex}
                       </td>
                       <td className="py-3 px-3.5 font-extrabold text-gray-900 text-xs">
                         <div className="flex items-center gap-1.5">
@@ -625,11 +666,13 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
                         </div>
                       </td>
                       <td className="py-3 px-3.5 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                          usageCount > 0
-                            ? 'bg-indigo-100 text-indigo-900'
-                            : 'bg-gray-100 text-gray-500'
-                        }`}>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                            usageCount > 0
+                              ? 'bg-indigo-100 text-indigo-900'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}
+                        >
                           {usageCount} টি পণ্য
                         </span>
                       </td>
@@ -659,6 +702,23 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* ── Pagination Footer ── */}
+        {filteredCategories.length > 0 && (
+          <PaginationControl
+            currentPage={safeCurrentPage}
+            totalPages={totalPages}
+            totalItems={filteredCategories.length}
+            pageSize={pageSize}
+            onPageChange={(p) => setCurrentPage(p)}
+            onPageSizeChange={(sz) => {
+              setPageSize(sz);
+              setCurrentPage(1);
+            }}
+            pageSizeOptions={[10, 15, 25, 50, 100]}
+            colorScheme="purple"
+          />
         )}
       </div>
 
