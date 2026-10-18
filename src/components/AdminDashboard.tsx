@@ -9452,7 +9452,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 );
               })()
             ) : shopSubView === 'CATEGORIES' ? (
-              <AdminCategoriesManager />
+              <AdminCategoriesManager
+                adminCategories={allShopCategories}
+                pricingSettings={pricing}
+                onPricingChange={(newPricing) => setPricing(newPricing)}
+              />
             ) : (
               <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
