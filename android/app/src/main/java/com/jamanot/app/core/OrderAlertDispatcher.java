@@ -63,6 +63,27 @@ public final class OrderAlertDispatcher {
     /** Dispatches still running, by notification id — see {@link #onNewOrderPush}. */
     private static final Map<String, Task<Void>> IN_FLIGHT = new ConcurrentHashMap<>();
 
+    /**
+     * What became of each alert, by notification id, for the push receipt
+     * (pushReceipts, written by JamanotMessagingService). The point is the
+     * pushes that end with nothing on screen: FCM lowers the priority of an app
+     * whose high-priority messages keep producing no visible notification, and
+     * that is what then makes the next order late on that phone.
+     */
+    private static final Map<String, String> OUTCOMES = new ConcurrentHashMap<>();
+
+    private static void outcome(@Nullable String notifId, String what) {
+        if (notifId == null) return;
+        if (OUTCOMES.size() > 200) OUTCOMES.clear(); // Only the push path reads these back.
+        OUTCOMES.put(notifId, what);
+    }
+
+    /** The outcome recorded for this alert, removed as it is read; null if none. */
+    @Nullable
+    public static String takeOutcome(@Nullable String notifId) {
+        return notifId == null ? null : OUTCOMES.remove(notifId);
+    }
+
     private OrderAlertDispatcher() {}
 
     /**
@@ -80,6 +101,7 @@ public final class OrderAlertDispatcher {
             return handleNewOrder(c, notifId, title, body, orderId);
         }
         Task<Void> running = IN_FLIGHT.get(notifId);
+        if (running == null) outcome(notifId, "duplicate"); // Alerted earlier by the listener.
         return running != null ? running : Tasks.forResult(null);
     }
 
@@ -185,6 +207,7 @@ public final class OrderAlertDispatcher {
         Map<String, Object> data = doc.getData();
         if (!OrderMatcher.isOrderOpen(data)) {
             Log.i(TAG, "Order " + orderId + " already taken or cancelled — not alerting.");
+            outcome(notifId, "order_closed");
             return false;
         }
 
@@ -198,6 +221,7 @@ public final class OrderAlertDispatcher {
 
         if (!OrderMatcher.withinRadius(hLat, hLng, pLat, pLng, dLat, dLng, radius)) {
             Log.i(TAG, "Order " + orderId + " outside " + radius + "km — skipping.");
+            outcome(notifId, "outside_radius");
             return false;
         }
 
@@ -218,6 +242,7 @@ public final class OrderAlertDispatcher {
             }
             if (!awaiting) {
                 Log.i(TAG, "Shop orders for " + orderId + " already answered — not alerting.");
+                outcome(notifId, "store_answered");
                 return false;
             }
         }
@@ -263,6 +288,7 @@ public final class OrderAlertDispatcher {
             long delay = foreground ? 0L : RING_AFTER_NOTIFICATION_MS;
             if (!ActiveOrderAlerts.raise(app, orderId, payload, delay)) {
                 Log.i(TAG, "Alert for " + orderId + " was already dealt with — not repeating it.");
+                outcome(notifId, "already_handled");
                 return false;
             }
         } else if (foreground) {
@@ -272,12 +298,16 @@ public final class OrderAlertDispatcher {
         // Always tell JS, background included: the duty service keeps the
         // WebView alive, so the popup is already on screen when the app opens.
         JamanotNativePlugin.emitOrderAlert(orderId, payload);
-        if (foreground) return false;
+        if (foreground) {
+            outcome(notifId, "in_app");
+            return false;
+        }
 
         // 1. Baseline everyone gets: heads-up notification, no special permission.
         String detail = body;
         if (distance != null) detail = (body == null || body.isEmpty()) ? distance : body + " · " + distance;
         NotificationHelper.postOrderAlert(app, notifId, title, detail, orderId);
+        outcome(notifId, "tray");
 
         // Escalation is for helpers and stores on duty. FCM fans new orders out
         // to every helper in radius, on duty or not, and an off-duty helper must
@@ -290,6 +320,7 @@ public final class OrderAlertDispatcher {
         //    Infinix) the launch is allowed as BAL_ALLOW_NON_APP_VISIBLE_WINDOW,
         //    i.e. because this card is on screen.
         boolean card = OrderOverlay.show(app, orderId, title, body, payload, distance);
+        outcome(notifId, card ? "tray+card+open" : "tray+open");
 
         // 3. Open the app itself on this order, with its popup already up —
         //    always, locked or not. (It briefly opened only on a locked phone,

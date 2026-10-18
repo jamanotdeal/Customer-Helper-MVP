@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer. Same exclusion as backup_rules.xml, for the same reason. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="jamanot_native.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="jamanot_native.xml" />
+    </device-transfer>
+</data-extraction-rules>

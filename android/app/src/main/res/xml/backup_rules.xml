@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 and older (android:fullBackupContent).
+
+    jamanot_native.xml holds this install's FCM token and who is signed in
+    (core/Prefs.java). Restored onto a reinstall or a new phone, that token is
+    another install's — dead — and the account looked registered while every
+    push to it failed. The app rewrites the file on sign-in, so nothing is lost.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="jamanot_native.xml" />
+</full-backup-content>

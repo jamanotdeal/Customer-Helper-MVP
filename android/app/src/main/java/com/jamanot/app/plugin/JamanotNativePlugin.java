@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.util.Log;
 
 import androidx.activity.result.ActivityResult;
 import androidx.core.app.NotificationManagerCompat;
@@ -53,6 +54,8 @@ import com.jamanot.app.work.DutyWatchdogWorker;
         }
 )
 public class JamanotNativePlugin extends Plugin {
+
+    private static final String TAG = "JamanotNative";
 
     private static JamanotNativePlugin instance;
 
@@ -607,30 +610,42 @@ public class JamanotNativePlugin extends Plugin {
 
     // ── FCM ─────────────────────────────────────────────────────────────────
 
+    /**
+     * The token Play Services holds now — asked every time, never answered from
+     * our own copy first. That copy can be dead while still looking fine: it is
+     * restored by Android backup onto a reinstall, and is never told when FCM
+     * drops a token. Answered from it, the app re-registered a dead token every
+     * session, and the server removed it again on the next push — production had
+     * helpers accepting orders for days with no device on their account, so
+     * every alert reached them only when they next opened the app.
+     *
+     * getToken() is answered locally once Play Services has a token, so this
+     * costs nothing; the copy is the fallback when it cannot answer at all.
+     */
     @PluginMethod
     public void getFcmToken(PluginCall call) {
         String cached = Prefs.fcmToken(getContext());
-        if (cached != null) {
-            JSObject r = new JSObject();
-            r.put("token", cached);
-            call.resolve(r);
-            return;
-        }
         try {
             FirebaseMessaging.getInstance().getToken()
                     .addOnCompleteListener(task -> {
                         JSObject r = new JSObject();
                         if (task.isSuccessful() && task.getResult() != null) {
-                            Prefs.setFcmToken(getContext(), task.getResult());
-                            r.put("token", task.getResult());
+                            String token = task.getResult();
+                            if (!token.equals(cached)) {
+                                Log.i(TAG, "FCM token " + (cached == null ? "obtained" : "differs from the cached one — replaced"));
+                            }
+                            Prefs.setFcmToken(getContext(), token);
+                            r.put("token", token);
                         } else {
-                            r.put("token", null);
+                            Log.w(TAG, "FCM getToken failed, using the cached token: "
+                                    + (task.getException() != null ? task.getException().getMessage() : "no result"));
+                            r.put("token", cached);
                         }
                         call.resolve(r);
                     });
         } catch (Exception e) {
             JSObject r = new JSObject();
-            r.put("token", null);
+            r.put("token", cached);
             call.resolve(r);
         }
     }

@@ -21,6 +21,7 @@ import com.jamanot.app.core.ActiveOrderAlerts;
 import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderOverlay;
 import com.jamanot.app.core.PendingAlerts;
+import com.jamanot.app.core.PushReceipts;
 import com.jamanot.app.core.Prefs;
 import com.jamanot.app.plugin.JamanotNativePlugin;
 
@@ -205,6 +206,11 @@ public class MainActivity extends BridgeActivity {
      */
     private void handleAlertIntent(@Nullable Intent intent) {
         if (intent == null) return;
+        String notifId = intent.getStringExtra(NotificationHelper.EXTRA_NOTIF_ID);
+        if (notifId != null) {
+            intent.removeExtra(NotificationHelper.EXTRA_NOTIF_ID);
+            PushReceipts.opened(this, notifId);
+        }
         String orderId = intent.getStringExtra(NotificationHelper.EXTRA_ORDER_ID);
         if (orderId == null || orderId.isEmpty()) return;
 

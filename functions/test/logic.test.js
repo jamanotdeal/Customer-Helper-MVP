@@ -65,13 +65,13 @@ function mockDb({ users = {}, orders = {}, pricing = null }) {
     },
     collection() {
       return {
-        where() {
+        where(field, op, value) {
           return {
             async get() {
               // Real Firestore's `where('fcmToken','!=',null)` only returns docs
               // that have the field, so the mock must too.
               const docs = Object.entries(users)
-                .filter(([, u]) => !!u.fcmToken)
+                .filter(([, u]) => (op === '!=' ? u[field] !== undefined && u[field] !== value : u[field] === value))
                 .map(([id, u]) => ({ id, data: () => u }));
               return { docs };
             },
@@ -160,6 +160,18 @@ console.log('recipient resolution');
       'helper-far',
       'helper-nogps',
     ]);
+  });
+
+  await testAsync('a helper whose newest device logged out is still reached through fcmTokens', async () => {
+    const helperDb = mockDb({
+      users: { ...USERS, 'helper-other-device': { fcmToken: '', fcmTokens: ['t-tablet'], isHelper: true } },
+    });
+    assert.ok(uids(await resolveRecipients(helperDb, 'all-helpers')).includes('helper-other-device'));
+  });
+
+  await testAsync('helper groups never reach a non-helper', async () => {
+    const helperDb = mockDb({ users: { ...USERS, 'customer-2': { fcmToken: 't-c2', isHelper: false } } });
+    assert.ok(!uids(await resolveRecipients(helperDb, 'all-helpers')).includes('customer-2'));
   });
 
   await testAsync('all-customers excludes helpers and admins', async () => {

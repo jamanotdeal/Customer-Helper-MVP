@@ -56,6 +56,9 @@ public final class NotificationHelper {
 
     public static final String EXTRA_ORDER_ID = "orderId";
 
+    /** The notification document a tap came from — for PushReceipts.opened. */
+    public static final String EXTRA_NOTIF_ID = "notifId";
+
     private static final int BRAND = 0xFF059669;
 
     private NotificationHelper() {}
@@ -180,6 +183,7 @@ public final class NotificationHelper {
         Intent open = new Intent(c, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (orderId != null) open.putExtra(EXTRA_ORDER_ID, orderId);
+        if (notifId != null) open.putExtra(EXTRA_NOTIF_ID, notifId);
 
         PendingIntent pi = PendingIntent.getActivity(
                 c, requestCode(notifId), open,
@@ -231,6 +235,7 @@ public final class NotificationHelper {
         Intent open = new Intent(c, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (orderId != null) open.putExtra(EXTRA_ORDER_ID, orderId);
+        if (notifId != null) open.putExtra(EXTRA_NOTIF_ID, notifId);
 
         PendingIntent pi = PendingIntent.getActivity(
                 c, requestCode(notifId), open,

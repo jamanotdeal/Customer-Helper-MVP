@@ -190,6 +190,35 @@ export async function saveFcmToken(userId: string, token: string): Promise<void>
   }
 }
 
+let _lastReRegisterAt = 0;
+
+/**
+ * Puts this device back on the account when the account's live profile no
+ * longer lists it. A device can be taken off while the app keeps running — the
+ * push function removes a token FCM reports dead, another session's logout
+ * transaction can race — and a helper keeps one session open for days, so
+ * registering once per sign-in left them with no push for days (production,
+ * 2026-10: two of the five working dedicated riders, 2.6 days and counting).
+ *
+ * `profile` must be the server's document as it is (a snapshot), not a merge
+ * with the cache, which still shows the token after the server dropped it.
+ * In the app the token is asked from Play Services again, so a dead one is
+ * replaced rather than written back; at most once in 10 minutes either way.
+ */
+export function ensureDeviceRegistered(userId: string, profile: Partial<UserProfile>): void {
+  const mine = _registeredToken;
+  if (!mine || mine.userId !== userId) return;
+  if (profile.fcmToken === mine.token || (profile.fcmTokens || []).includes(mine.token)) return;
+  if (Date.now() - _lastReRegisterAt < 10 * 60 * 1000) return;
+  _lastReRegisterAt = Date.now();
+  _registeredToken = null;
+  console.warn('[FCM] this device is no longer on the account — registering it again');
+  import('@/lib/native')
+    .then(({ isNativeApp, getNativeFcmToken }) => (isNativeApp() ? getNativeFcmToken() : mine.token))
+    .then((token) => saveFcmToken(userId, token || mine.token))
+    .catch(() => {});
+}
+
 /**
  * Takes this device off the user's profile on logout, so the next account on
  * this device is not sent the previous one's notifications. Only this device:
@@ -2055,6 +2084,7 @@ class FallbackStore {
           (docSnap) => {
             if (!docSnap.exists()) return;
             const incoming = docSnap.data() as UserProfile;
+            ensureDeviceRegistered(userId, incoming);
             const current = this.users.get(userId);
             const merged = this.mergeUserProfile(userId, incoming);
             // Only notify on a real change — this fires on our own writes too,
@@ -2123,6 +2153,7 @@ class FallbackStore {
               // partial writes put there (fcmToken, helperLocation, coins), and
               // replacing the profile with it drops uid, name and email.
               const u = docSnap.data() as UserProfile;
+              ensureDeviceRegistered(userId, u);
               const current = this.users.get(userId);
               const merged = this.mergeUserProfile(userId, u);
               if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
@@ -2434,6 +2465,7 @@ class FallbackStore {
           (docSnap) => {
             if (docSnap.exists()) {
               const u = docSnap.data() as UserProfile;
+              ensureDeviceRegistered(userId, u);
               const current = this.users.get(userId);
               const merged = this.mergeUserProfile(userId, u);
               if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
@@ -2666,6 +2698,7 @@ class FallbackStore {
           (docSnap) => {
             if (docSnap.exists()) {
               const u = docSnap.data() as UserProfile;
+              ensureDeviceRegistered(userId, u);
               const current = this.users.get(userId);
               const merged = this.mergeUserProfile(userId, u);
               if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
@@ -4030,6 +4063,10 @@ class FallbackStore {
           return { kind: current.helperId === helper.uid ? 'mine' : 'taken', current };
         }
         tx.set(ref, cleanForFirestore({ ...claim(current), updatedAt: now }), { merge: true });
+        // The customer's "accepted" notice goes out in the same commit — see
+        // customerStatusNotification. Rebuilt identically below from `now`.
+        const statusNotif = this.customerStatusNotification(current, claim(current), now);
+        if (statusNotif) tx.set(doc(db, 'notifications', statusNotif.id), cleanForFirestore(statusNotif));
         return { kind: 'claimed', before: current };
       });
     } catch (e: any) {
@@ -4075,7 +4112,10 @@ class FallbackStore {
     // The order is this helper's from here on, whatever becomes of the
     // notifications below — a failure there must not read as a failed accept.
     try {
-      await this.runOrderSideEffects(orderId, before, claimed);
+      // 'claimed' and 'landed' alike: the commit was this run's transaction,
+      // and that wrote the notice. Same inputs and `now`, so the same document.
+      const committedStatusNotif = this.customerStatusNotification(before, claim(before), now);
+      await this.runOrderSideEffects(orderId, before, claimed, committedStatusNotif);
     } catch (e: any) {
       console.warn('[Firestore] claimOrderForHelper side effects note:', e?.message || e);
     }
@@ -4314,7 +4354,7 @@ class FallbackStore {
     const ref = doc(db, 'orders', orderId);
     const now = new Date().toISOString();
     type Commit =
-      | { kind: 'saved'; before: Order; after: Order }
+      | { kind: 'saved'; before: Order; after: Order; statusNotif: AppNotification | null }
       | { kind: 'unchanged' | 'conflict'; before: Order }
       | { kind: 'missing' };
 
@@ -4346,7 +4386,10 @@ class FallbackStore {
           const patch = changedFields(stored, after);
           if (Object.keys(patch).length === 0) return { kind: 'unchanged', before };
           tx.update(ref, { ...patch, updatedAt: now });
-          return { kind: 'saved', before, after: { ...after, updatedAt: now } };
+          // Committed with the change — see customerStatusNotification.
+          const statusNotif = this.customerStatusNotification(before, after, now);
+          if (statusNotif) tx.set(doc(db, 'notifications', statusNotif.id), cleanForFirestore(statusNotif));
+          return { kind: 'saved', before, after: { ...after, updatedAt: now }, statusNotif };
         });
       } catch (e: any) {
         console.warn('[Firestore] updateOrder: server not reached, queueing the change:', e?.message || e);
@@ -4369,8 +4412,10 @@ class FallbackStore {
 
     let before: Order;
     let after: Order;
+    let committedStatusNotif: AppNotification | null | undefined;
     if (commit?.kind === 'saved') {
       ({ before, after } = commit);
+      committedStatusNotif = commit.statusNotif;
       if (isLatest()) this.orders.set(orderId, this.resolveOrderLocations(after));
     } else {
       if (!cached || !optimistic) return 'failed';
@@ -4398,7 +4443,7 @@ class FallbackStore {
     }
 
     try {
-      await this.runOrderSideEffects(orderId, before, after);
+      await this.runOrderSideEffects(orderId, before, after, committedStatusNotif);
     } catch (e: any) {
       console.warn('[Firestore] updateOrder side effects note:', e?.message || e);
     }
@@ -4468,10 +4513,74 @@ class FallbackStore {
   }
 
   /**
+   * The customer's notice of a status change from `existing` to `updated`, or
+   * null when the change has none.
+   *
+   * Built apart from runOrderSideEffects so the transaction that commits the
+   * change can write it in the same commit: the notice can never exist without
+   * the change, and it reaches the server — and so the push — with the change
+   * instead of one round trip later. Measured in production (2026-10-12..18),
+   * the separate write put the customer's "accepted" notice on the server
+   * 4.9 s after the accept at the median, 2.5 s of it after the commit.
+   *
+   * `at` fixes the id, so every attempt of one transaction, and a retry that
+   * finds its commit already landed, name the same document.
+   */
+  private customerStatusNotification(existing: Order, updated: Order, at: string): AppNotification | null {
+    if (updated.status === existing.status || !updated.customerId) return null;
+
+    let notifTitle = '';
+    let notifBody = '';
+
+    if (updated.status === 'ACCEPTED') {
+      notifTitle = 'রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
+      notifBody = `${updated.helperName || 'হেলপার'} আপনার অর্ডার #${updated.id} গ্রহণ করেছেন।`;
+    } else if (updated.status === 'PURCHASED_EXECUTED') {
+      notifTitle = 'Helper Purchasing/Executing your task.';
+      notifBody = `${updated.helperName || 'Helper'} is purchasing/executing your task right now. Please wait!`;
+    } else if (updated.status === 'ON_THE_WAY') {
+      notifTitle = 'হেলপার আপনার পথে আছেন!';
+      notifBody = `${updated.helperName || 'হেলপার'} ডেলিভারি দিতে রওনা হয়েছেন।`;
+    } else if (updated.status === 'ARRIVED') {
+      notifTitle = 'হেলপার আপনার ঠিকানায় পৌঁছেছেন!';
+      notifBody = `আপনার বাসার সামনে হেলপার উপস্থিত আছেন।`;
+    } else if (updated.status === 'DELIVERED') {
+      notifTitle = 'অর্ডার সম্পন্ন হয়েছে!';
+      notifBody = `ধন্যবাদ! আপনার অর্ডার #${updated.id} সফলভাবে ডেলিভারি হয়েছে।`;
+    } else if (updated.status === 'CANCELED') {
+      notifTitle = 'অর্ডার বাতিল হয়েছে';
+      notifBody = `অর্ডার #${updated.id} বাতিল করা হয়েছে।`;
+    }
+    if (!notifTitle) return null;
+
+    const id = coalescedNotifId(`status-${updated.status}`, updated.id, Date.parse(at) || Date.now());
+    return {
+      id: canonicalNotifId(id, at),
+      userId: updated.customerId,
+      title: notifTitle,
+      body: notifBody,
+      orderId: updated.id,
+      read: false,
+      createdAt: at,
+      targetRole: 'customer',
+      type: 'order_update',
+    };
+  }
+
+  /**
    * Everything that follows from an order having changed from `existing` to
    * `updated`: notifications, shop orders, the helper's wallet, coins.
+   *
+   * @param committedStatusNotif the customer's status notice the change's own
+   *   transaction already wrote (null: it had none); undefined when the change
+   *   went out without one — queued offline — and it is written from here.
    */
-  private async runOrderSideEffects(orderId: string, existing: Order, updated: Order) {
+  private async runOrderSideEffects(
+    orderId: string,
+    existing: Order,
+    updated: Order,
+    committedStatusNotif?: AppNotification | null
+  ) {
     const previousStatus = existing.status;
     const previousHelperId = existing.helperId;
 
@@ -4509,41 +4618,14 @@ class FallbackStore {
 
     // Dynamic Notifications based on Order Status changes
     if (updated.status !== previousStatus) {
-      let notifTitle = '';
-      let notifBody = '';
-
-      if (updated.status === 'ACCEPTED') {
-        notifTitle = 'রিকোয়েস্ট একসেপ্ট করা হয়েছে!';
-        notifBody = `${updated.helperName || 'হেলপার'} আপনার অর্ডার #${updated.id} গ্রহণ করেছেন।`;
-      } else if (updated.status === 'PURCHASED_EXECUTED') {
-        notifTitle = 'Helper Purchasing/Executing your task.';
-        notifBody = `${updated.helperName || 'Helper'} is purchasing/executing your task right now. Please wait!`;
-      } else if (updated.status === 'ON_THE_WAY') {
-        notifTitle = 'হেলপার আপনার পথে আছেন!';
-        notifBody = `${updated.helperName || 'হেলপার'} ডেলিভারি দিতে রওনা হয়েছেন।`;
-      } else if (updated.status === 'ARRIVED') {
-        notifTitle = 'হেলপার আপনার ঠিকানায় পৌঁছেছেন!';
-        notifBody = `আপনার বাসার সামনে হেলপার উপস্থিত আছেন।`;
-      } else if (updated.status === 'DELIVERED') {
-        notifTitle = 'অর্ডার সম্পন্ন হয়েছে!';
-        notifBody = `ধন্যবাদ! আপনার অর্ডার #${updated.id} সফলভাবে ডেলিভারি হয়েছে।`;
-      } else if (updated.status === 'CANCELED') {
-        notifTitle = 'অর্ডার বাতিল হয়েছে';
-        notifBody = `অর্ডার #${updated.id} বাতিল করা হয়েছে।`;
-      }
-
-      if (notifTitle && updated.customerId) {
-        this.addNotification({
-          id: coalescedNotifId(`status-${updated.status}`, updated.id),
-          userId: updated.customerId,
-          title: notifTitle,
-          body: notifBody,
-          orderId: updated.id,
-          read: false,
-          createdAt: new Date().toISOString(),
-          targetRole: 'customer',
-          type: 'order_update',
-        });
+      // Already written by the transaction that made the change, when it could
+      // (committedStatusNotif); recorded on this device only, then.
+      const statusNotif =
+        committedStatusNotif !== undefined
+          ? committedStatusNotif
+          : this.customerStatusNotification(existing, updated, new Date().toISOString());
+      if (statusNotif) {
+        this.addNotification(statusNotif, { persisted: committedStatusNotif !== undefined });
       }
 
       // If order canceled, notify assigned helper ONLY if the order was accepted (has helperId)
@@ -7019,7 +7101,13 @@ class FallbackStore {
     return false;
   }
 
-  public async addNotification(notif: AppNotification) {
+  /**
+   * @param opts.persisted the document is already on the server (written in
+   *   the transaction that made the change it reports); only this device's
+   *   copy is recorded. Writing it again would be one more round trip for
+   *   nothing — the push fires on the create alone.
+   */
+  public async addNotification(notif: AppNotification, opts: { persisted?: boolean } = {}) {
     // The id doubles as the sort key whenever the listener falls back to
     // document-id order, so it has to start with a fixed-width timestamp.
     // Ids like `notif-shop-status-<ms>` sort above every `notif-<ms>` id
@@ -7134,10 +7222,12 @@ class FallbackStore {
     //   1. Foreground: Firestore onSnapshot → triggerBrowserNotification()
     //   2. Background/Closed: FCM push → SW onBackgroundMessage → showNotification()
 
-    try {
-      await setDoc(doc(db, 'notifications', notif.id), cleanForFirestore(notif));
-    } catch (e: any) {
-      console.warn('[Firestore] addNotification note (saved locally):', e?.message || e);
+    if (!opts.persisted) {
+      try {
+        await setDoc(doc(db, 'notifications', notif.id), cleanForFirestore(notif));
+      } catch (e: any) {
+        console.warn('[Firestore] addNotification note (saved locally):', e?.message || e);
+      }
     }
 
     // ─── FCM Push Fan-out ─────────────────────────────────────────────────────

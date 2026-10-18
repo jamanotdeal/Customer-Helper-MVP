@@ -190,10 +190,16 @@ async function resolveRecipients(db, target) {
     return tokens.length ? [{ uid: snap.id, tokens, profile }] : [];
   }
 
-  // Every client that registers a device also writes fcmToken (see
+  // A helper group is answered from the helper accounts alone — a new order is
+  // the most time-critical push there is, and reading every account with a
+  // device for it (~8x as many documents in production) only delays it.
+  //
+  // Otherwise: every client that registers a device also writes fcmToken (see
   // saveFcmToken), and the token cleanup below keeps it set ('' at worst)
   // while fcmTokens has entries — so this still finds every reachable user.
-  const snap = await db.collection('users').where('fcmToken', '!=', null).get();
+  const snap = HELPER_GROUPS.has(target)
+    ? await db.collection('users').where('isHelper', '==', true).get()
+    : await db.collection('users').where('fcmToken', '!=', null).get();
   const users = snap.docs
     .map((d) => ({ uid: d.id, tokens: tokensOf(d.data()), profile: d.data() }))
     .filter((u) => u.tokens.length > 0);
@@ -285,14 +291,11 @@ async function applyGeofence(db, recipients, notif) {
     return [];
   }
 
-  let radiusKm = DEFAULT_RADIUS_KM;
-  try {
-    const pricing = await db.doc('settings/pricing').get();
-    const configured = pricing.exists && pricing.data().helperRadiusKm;
-    if (typeof configured === 'number' && configured > 0) radiusKm = configured;
-  } catch (e) {
-    logger.warn('pricing settings unreadable, using default radius', { error: e.message });
-  }
+  // Cached per warm instance (readPricing): one less round trip before the
+  // push on every new order.
+  const pricing = await readPricing(db);
+  const configured = pricing && pricing.helperRadiusKm;
+  const radiusKm = typeof configured === 'number' && configured > 0 ? configured : DEFAULT_RADIUS_KM;
 
   return recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
 }
@@ -623,7 +626,12 @@ async function sendWithRetry(messaging, tokens, message, notifId) {
         const token = batch[idx];
         if (r.success) return outcome.set(token, 'sent');
         const code = (r.error && r.error.code) || 'unknown';
-        if (DEAD_TOKEN_CODES.has(code)) return outcome.set(token, 'dead');
+        if (DEAD_TOKEN_CODES.has(code)) {
+          // Removing a token is what makes an account unreachable until its
+          // app registers again, so each removal says why.
+          logger.info('dead token removed', { notifId, code, token: tokenHash(token) });
+          return outcome.set(token, 'dead');
+        }
         if (TRANSIENT_CODES.has(code)) {
           outcome.set(token, 'transient');
           retryLater.push(token);

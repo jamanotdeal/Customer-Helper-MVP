@@ -16,8 +16,8 @@ import com.jamanot.app.core.NotificationHelper;
 import com.jamanot.app.core.OrderAlertDispatcher;
 import com.jamanot.app.core.OrderMatcher;
 import com.jamanot.app.core.Prefs;
+import com.jamanot.app.core.PushReceipts;
 
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -45,9 +45,6 @@ public class JamanotMessagingService extends FirebaseMessagingService {
 
     /** FCM allows ~20 s per message; the order fetch is normally well under one. */
     private static final long DISPATCH_TIMEOUT_S = 8L;
-
-    /** How long a delivery receipt is kept (a TTL policy on expireAt purges it). */
-    private static final long RECEIPT_TTL_MS = 14L * 24 * 60 * 60 * 1000;
 
     @Override
     public void onNewToken(@NonNull String token) {
@@ -79,51 +76,6 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         }
     }
 
-    /**
-     * When the push got here and how — the device end of the timings the push
-     * function records in pushLog. {@code originalPriority} high but
-     * {@code priority} normal means Android/FCM has deprioritised this app,
-     * which delays its pushes until the phone next wakes.
-     */
-    private void logReceipt(RemoteMessage message, Map<String, String> data, String notifId, String type) {
-        long now = System.currentTimeMillis();
-        long createdAtMs = parseLong(data.get("createdAtMs"));
-        long sentAt = parseLong(data.get("sentAt"));
-        String priority = priorityName(message.getPriority());
-        String originalPriority = priorityName(message.getOriginalPriority());
-        boolean foreground = MainActivity.isAppInForeground();
-        Log.i(TAG, "push " + notifId + " type=" + type
-                + " sinceCreated=" + (createdAtMs > 0 ? (now - createdAtMs) + "ms" : "?")
-                + " sinceSent=" + (sentAt > 0 ? (now - sentAt) + "ms" : "?")
-                + " priority=" + priority + " (sent " + originalPriority + ")"
-                + " foreground=" + foreground + " role=" + Prefs.role(this) + " onDuty=" + Prefs.onDuty(this));
-
-        // New orders only: those are the ones whose lateness costs money.
-        String uid = Prefs.uid(this);
-        if (!"new_order".equals(type) || notifId == null || uid == null) return;
-        try {
-            Map<String, Object> r = new HashMap<>();
-            r.put("notifId", notifId);
-            r.put("uid", uid);
-            r.put("orderId", data.get("orderId"));
-            r.put("receivedAt", new Date(now));
-            if (createdAtMs > 0) r.put("sinceCreatedMs", now - createdAtMs);
-            if (sentAt > 0) r.put("sinceSentMs", now - sentAt);
-            r.put("priority", priority);
-            r.put("originalPriority", originalPriority);
-            r.put("foreground", foreground);
-            r.put("role", Prefs.role(this));
-            r.put("onDuty", Prefs.onDuty(this));
-            r.put("expireAt", new Date(now + RECEIPT_TTL_MS));
-            FirebaseFirestore.getInstance()
-                    .collection("pushReceipts").document(notifId + "_" + uid)
-                    .set(r)
-                    .addOnFailureListener(e -> Log.w(TAG, "receipt write: " + e.getMessage()));
-        } catch (Exception e) {
-            Log.w(TAG, "receipt not recorded: " + e.getMessage());
-        }
-    }
-
     private static long parseLong(String v) {
         if (v == null) return 0L;
         try {
@@ -143,11 +95,33 @@ public class JamanotMessagingService extends FirebaseMessagingService {
 
     @Override
     public void onMessageReceived(@NonNull RemoteMessage message) {
+        long receivedAt = System.currentTimeMillis();
         Map<String, String> data = message.getData();
-
         String notifId = data.get("tag") != null ? data.get("tag") : message.getMessageId();
         String type = data.get("type");
         String orderId = data.get("orderId");
+        boolean foreground = MainActivity.isAppInForeground();
+
+        String outcome = handle(message, data, notifId, type, orderId);
+
+        // After handling, so the receipt says what the push led to — not only
+        // that it arrived. See PushReceipts.
+        long createdAtMs = parseLong(data.get("createdAtMs"));
+        long sentAt = parseLong(data.get("sentAt"));
+        String priority = priorityName(message.getPriority());
+        String originalPriority = priorityName(message.getOriginalPriority());
+        Log.i(TAG, "push " + notifId + " type=" + type
+                + " sinceCreated=" + (createdAtMs > 0 ? (receivedAt - createdAtMs) + "ms" : "?")
+                + " sinceSent=" + (sentAt > 0 ? (receivedAt - sentAt) + "ms" : "?")
+                + " priority=" + priority + " (sent " + originalPriority + ")"
+                + " foreground=" + foreground + " role=" + Prefs.role(this) + " onDuty=" + Prefs.onDuty(this)
+                + " outcome=" + outcome + " handled=" + (System.currentTimeMillis() - receivedAt) + "ms");
+        PushReceipts.received(this, notifId, type, orderId, receivedAt, createdAtMs, sentAt,
+                priority, originalPriority, foreground, outcome, System.currentTimeMillis() - receivedAt);
+    }
+
+    /** @return what became of the push, for the receipt. */
+    private String handle(RemoteMessage message, Map<String, String> data, String notifId, String type, String orderId) {
         String targetUserId = data.get("userId");
 
         String title = data.get("title");
@@ -157,13 +131,11 @@ public class JamanotMessagingService extends FirebaseMessagingService {
             if (body == null) body = message.getNotification().getBody();
         }
 
-        logReceipt(message, data, notifId, type);
-
         // Same targeting predicate the duty listener uses, so a push cannot alert
         // someone the Firestore path would have filtered out.
         if (targetUserId != null && !OrderMatcher.targets(this, targetUserId)) {
             Log.i(TAG, "push " + notifId + " not for the account signed in here — dropped.");
-            return;
+            return "not_for_account";
         }
 
         if ("new_order".equals(type)) {
@@ -190,15 +162,17 @@ public class JamanotMessagingService extends FirebaseMessagingService {
             } catch (Exception e) {
                 Log.w(TAG, "new_order dispatch still pending: " + e.getMessage());
             }
-            return;
+            String outcome = OrderAlertDispatcher.takeOutcome(notifId);
+            return outcome != null ? outcome : "pending";
         }
 
         // De-duplicate against the Firestore listener: whichever arrives first wins.
-        if (notifId != null && !Prefs.markSeen(this, notifId)) return;
+        if (notifId != null && !Prefs.markSeen(this, notifId)) return "duplicate";
 
         // A status update is a tray entry, as on the duty path. It used to be
         // sent to the WebView as an orderAlert while the app was open, which
         // yanked the user onto that order mid-task.
         NotificationHelper.postGeneral(this, notifId, title, body, orderId);
+        return "tray";
     }
 }
