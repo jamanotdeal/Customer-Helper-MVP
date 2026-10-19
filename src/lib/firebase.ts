@@ -216,7 +216,7 @@ export function ensureDeviceRegistered(userId: string, profile: Partial<UserProf
   import('@/lib/native')
     .then(({ isNativeApp, getNativeFcmToken }) => (isNativeApp() ? getNativeFcmToken() : mine.token))
     .then((token) => saveFcmToken(userId, token || mine.token))
-    .catch(() => {});
+    .catch(() => { });
 }
 
 /**
@@ -709,7 +709,7 @@ const SHOP_ORDER_SEND_WAIT_MS = 15_000;
 const PERMANENT_WRITE_ERRORS = ['invalid-argument', 'permission-denied', 'failed-precondition', 'out-of-range'];
 
 /** An error whose message is meant for the helper, in Bangla. */
-export class ShopOrderError extends Error {}
+export class ShopOrderError extends Error { }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -1569,21 +1569,21 @@ class FallbackStore {
       const q =
         orderBySpec === 'createdAt'
           ? query(
-              collection(db, 'notifications'),
-              where('userId', 'in', targets),
-              orderBy('createdAt', 'desc'),
-              limit(max)
-            )
+            collection(db, 'notifications'),
+            where('userId', 'in', targets),
+            orderBy('createdAt', 'desc'),
+            limit(max)
+          )
           : query(
-              collection(db, 'notifications'),
-              where('userId', 'in', targets),
-              orderBy(documentId(), 'desc'),
-              // Wider window in the fallback: documents written before
-              // canonicalNotifId() existed (`notif-ded-*`, `notif-shop-*`) sort
-              // above every timestamp-first id, so a tight window could still be
-              // filled entirely by that legacy backlog.
-              limit(Math.max(max, 200))
-            );
+            collection(db, 'notifications'),
+            where('userId', 'in', targets),
+            orderBy(documentId(), 'desc'),
+            // Wider window in the fallback: documents written before
+            // canonicalNotifId() existed (`notif-ded-*`, `notif-shop-*`) sort
+            // above every timestamp-first id, so a tight window could still be
+            // filled entirely by that legacy backlog.
+            limit(Math.max(max, 200))
+          );
 
       active = onSnapshot(
         q,
@@ -1603,7 +1603,7 @@ class FallbackStore {
           if (orderBySpec === 'createdAt' && err?.code === 'failed-precondition' && !disposed) {
             console.warn(
               `[Firestore] ${label} notifications: composite index (userId, createdAt desc) missing — ` +
-                'falling back to document-id order. Deploy firestore.indexes.json to restore exact ordering.'
+              'falling back to document-id order. Deploy firestore.indexes.json to restore exact ordering.'
             );
             attach('id');
             return;
@@ -3020,7 +3020,7 @@ class FallbackStore {
       else groups.push(null);
       for (const group of groups) {
         let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
-        for (;;) {
+        for (; ;) {
           const base = [
             ...(group ? [where('shopId', 'in', group)] : []),
             where(field, '>=', startIso),
@@ -3183,7 +3183,7 @@ class FallbackStore {
   private async _scanCollection(path: string, pageSize = 500): Promise<QueryDocumentSnapshot<DocumentData>[]> {
     const out: QueryDocumentSnapshot<DocumentData>[] = [];
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
-    for (;;) {
+    for (; ;) {
       const q: Query<DocumentData> = cursor
         ? query(collection(db, path), orderBy(documentId()), startAfter(cursor), limit(pageSize))
         : query(collection(db, path), orderBy(documentId()), limit(pageSize));
@@ -3774,8 +3774,8 @@ class FallbackStore {
       displayName: incoming.displayName && incoming.displayName !== '?' && incoming.displayName.trim() !== ''
         ? incoming.displayName
         : (existing?.displayName && existing.displayName !== '?' && existing.displayName.trim() !== ''
-            ? existing.displayName
-            : (incoming.email ? incoming.email.split('@')[0] : (existing?.email ? existing.email.split('@')[0] : 'Customer User'))),
+          ? existing.displayName
+          : (incoming.email ? incoming.email.split('@')[0] : (existing?.email ? existing.email.split('@')[0] : 'Customer User'))),
       email: incoming.email || existing?.email || '',
       photoURL: incoming.photoURL || existing?.photoURL,
     };
@@ -4272,7 +4272,7 @@ class FallbackStore {
       ...cleanForFirestore({ uid, ...timing, startedAt: new Date(timing.startedMs).toISOString() }),
       loggedAt: serverTimestamp(),
     };
-    setDoc(doc(db, 'acceptLog', orderId), { claims: { [`${uid}_${timing.startedMs}`]: entry } }, { merge: true }).catch(() => {});
+    setDoc(doc(db, 'acceptLog', orderId), { claims: { [`${uid}_${timing.startedMs}`]: entry } }, { merge: true }).catch(() => { });
   }
 
   /**
@@ -4291,7 +4291,7 @@ class FallbackStore {
       doc(db, 'acceptLog', incoming.id),
       { seen: { [who]: { sinceAcceptMs: sinceAccept, at: serverTimestamp() } } },
       { merge: true }
-    ).catch(() => {});
+    ).catch(() => { });
   }
 
   /**
@@ -5514,8 +5514,8 @@ class FallbackStore {
         body:
           updated.price !== undefined
             ? [`দোকানদার পণ্যের মূল্য নির্ধারণ করেছেন।`, (updated.requestText || '').trim().substring(0, 60)]
-                .filter(Boolean)
-                .join(' · ')
+              .filter(Boolean)
+              .join(' · ')
             : `দোকানদার মূল্য পরিবর্তন করেছেন।`,
         orderId: updated.parentOrderId,
         read: false,
@@ -6532,7 +6532,7 @@ class FallbackStore {
 
     storeShopOrders.forEach((so) => {
       const parent = this.orders.get(so.parentOrderId);
-      
+
       let gross = 0;
       if (so.price && Number(so.price) > 0) {
         gross = Number(so.price);
@@ -7675,7 +7675,7 @@ class FallbackStore {
       if (typeof window !== 'undefined' && window.localStorage) {
         localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
       }
-    } catch {}
+    } catch { }
     this.notify();
     try {
       await setDoc(doc(db, 'settings', 'pricing'), cleanForFirestore(settings), { merge: true });

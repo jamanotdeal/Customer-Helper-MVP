@@ -16,16 +16,18 @@ export const MissingItemFloatingButton: React.FC<MissingItemFloatingButtonProps>
   const { user, activeMode } = useAuth();
   const { totalCartCount, openCartDrawer } = useCart();
 
-  // Only display for customer view
+  // Only display for customer view — hide for store and helper users
+  const isStoreUser = Boolean(
+    user?.isStoreApproved ||
+    user?.isStore ||
+    user?.role === 'store' ||
+    Boolean(user?.storeId) ||
+    activeMode === 'store'
+  );
+  const isHelperUser = Boolean(user?.isHelper || user?.role === 'helper');
+  const isAdminUser = Boolean(user?.isAdmin || user?.role === 'admin');
   const isCustomerMode =
-    !activeMode ||
-    activeMode === 'customer' ||
-    (!user?.isAdmin &&
-      user?.role !== 'admin' &&
-      !user?.isHelper &&
-      user?.role !== 'helper' &&
-      !user?.isStore &&
-      user?.role !== 'store');
+    !isStoreUser && !isHelperUser && !isAdminUser && activeMode !== 'store' && activeMode !== 'helper';
 
   if (!isCustomerMode) return null;
 

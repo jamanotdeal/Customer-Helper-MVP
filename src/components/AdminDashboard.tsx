@@ -65,6 +65,11 @@ import {
   Compass,
   ExternalLink,
   Package,
+  Copy,
+  CheckSquare,
+  Image as ImageIcon,
+  Upload,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -121,6 +126,8 @@ interface AdminDashboardProps {
   onClearInitialOrder?: () => void;
 }
 
+type AssignItemOverride = { name: string; price: string; photoUrl: string; category: string; };
+
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   initialSelectedOrderId,
   onClearInitialOrder,
@@ -147,6 +154,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [adminItemsViewMode, setAdminItemsViewMode] = useState<'TABLE' | 'STORES'>('TABLE');
   const [adminItemsPage, setAdminItemsPage] = useState<number>(1);
   const [adminItemsPageSize, setAdminItemsPageSize] = useState<number>(20);
+  // Multi-select & assign-to-store
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignTargetStoreId, setAssignTargetStoreId] = useState('');
+  const [assignItemOverrides, setAssignItemOverrides] = useState<Record<string, AssignItemOverride>>({});
+  const [assignSubmitting, setAssignSubmitting] = useState(false);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -419,7 +432,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
   const [blockedUserModalMessage, setBlockedUserModalMessage] = useState<string>(
     fallbackStore.pricingSettings?.blockedUserModalMessage ||
-      'নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। এই মুহূর্তে নতুন সার্ভিস রিকোয়েস্ট তৈরি বা নতুন অর্ডার গ্রহণ করা যাবে না। বিস্তারিত তথ্য বা সহায়তার জন্য অনুগ্রহ করে অ্যাডমিন বা সাপোর্টে যোগাযোগ করুন।'
+    'নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। এই মুহূর্তে নতুন সার্ভিস রিকোয়েস্ট তৈরি বা নতুন অর্ডার গ্রহণ করা যাবে না। বিস্তারিত তথ্য বা সহায়তার জন্য অনুগ্রহ করে অ্যাডমিন বা সাপোর্টে যোগাযোগ করুন।'
   );
   const [blockedUserModalButtonText, setBlockedUserModalButtonText] = useState<string>(
     fallbackStore.pricingSettings?.blockedUserModalButtonText || 'সাপোর্টে যোগাযোগ করুন (Contact Support)'
@@ -2591,14 +2604,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Needs Attention Metric */}
         <div
           onClick={() => isTabAllowed('EXCEPTIONS') && setActiveTab('EXCEPTIONS')}
-          className={`p-5 rounded-3xl border transition-all ${
-            isTabAllowed('EXCEPTIONS')
+          className={`p-5 rounded-3xl border transition-all ${isTabAllowed('EXCEPTIONS')
               ? `cursor-pointer ${totalExceptionsCount > 0
-                  ? 'bg-red-50/80 border-red-200 hover:border-red-400 shadow-soft'
-                  : 'bg-white border-gray-100 hover:border-gray-300 shadow-soft'
-                }`
+                ? 'bg-red-50/80 border-red-200 hover:border-red-400 shadow-soft'
+                : 'bg-white border-gray-100 hover:border-gray-300 shadow-soft'
+              }`
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2617,11 +2629,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Total Orders Metric */}
         <div
           onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('ORDERS')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('ORDERS')
               ? 'bg-white border-gray-100 hover:border-emerald-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2642,11 +2653,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Average Order Acceptance Time Metric */}
         <div
           onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('ORDERS')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('ORDERS')
               ? 'bg-white border-gray-100 hover:border-blue-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2681,8 +2691,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-gray-900">
-              {(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) > 0 
-                ? formatDurationMinutes(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) 
+              {(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins) > 0
+                ? formatDurationMinutes(serverAvgDeliveryTimeMins !== null ? serverAvgDeliveryTimeMins : avgDeliveryTimeMins)
                 : 'N/A'}
             </span>
             <span className="text-xs text-gray-500">per order</span>
@@ -2692,11 +2702,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Total Hours of Work Metric */}
         <div
           onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('ORDERS')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('ORDERS')
               ? 'bg-white border-gray-100 hover:border-teal-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2717,11 +2726,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Overall Reviews Metric */}
         <div
           onClick={() => isTabAllowed('FEEDBACK') && setActiveTab('FEEDBACK')}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('FEEDBACK')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('FEEDBACK')
               ? 'bg-white border-gray-100 hover:border-amber-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2742,11 +2750,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Customer Accounts Metric */}
         <div
           onClick={() => isTabAllowed('USERS_LIST') && setActiveTab('USERS_LIST')}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('USERS_LIST')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('USERS_LIST')
               ? 'bg-white border-gray-100 hover:border-purple-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2772,11 +2779,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               setHelperSubView('APPLICATIONS');
             }
           }}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${
-            isTabAllowed('HELPERS')
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('HELPERS')
               ? 'bg-white border-gray-100 hover:border-indigo-300 cursor-pointer'
               : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
@@ -2802,8 +2808,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('EXCEPTIONS')}
             data-active={activeTab === 'EXCEPTIONS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'EXCEPTIONS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
@@ -2821,8 +2827,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('GROWTH')}
             data-active={activeTab === 'GROWTH'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'GROWTH'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <BarChart2 className="w-4 h-4 text-indigo-600 shrink-0" />
@@ -2835,8 +2841,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('ORDERS')}
             data-active={activeTab === 'ORDERS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'ORDERS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <ShoppingBag className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2849,8 +2855,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('STORE_ORDERS')}
             data-active={activeTab === 'STORE_ORDERS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'STORE_ORDERS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Store className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2863,8 +2869,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('USERS_LIST')}
             data-active={activeTab === 'USERS_LIST'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'USERS_LIST'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Users className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2877,8 +2883,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('HELPERS')}
             data-active={activeTab === 'HELPERS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'HELPERS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Bike className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2896,8 +2902,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('SHOPS')}
             data-active={activeTab === 'SHOPS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'SHOPS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Store className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2910,8 +2916,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('FEEDBACK')}
             data-active={activeTab === 'FEEDBACK'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'FEEDBACK'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Star className="w-4 h-4 text-amber-500 shrink-0" />
@@ -2924,8 +2930,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('CUSTOM_MODALS')}
             data-active={activeTab === 'CUSTOM_MODALS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'CUSTOM_MODALS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2938,8 +2944,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('NOTIFICATIONS')}
             data-active={activeTab === 'NOTIFICATIONS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'NOTIFICATIONS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Bell className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2957,8 +2963,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('REVENUE')}
             data-active={activeTab === 'REVENUE'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'REVENUE'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2971,8 +2977,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('WITHDRAWALS')}
             data-active={activeTab === 'WITHDRAWALS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'WITHDRAWALS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <DollarSign className="w-4 h-4 text-purple-600 shrink-0" />
@@ -2985,8 +2991,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('PRICING')}
             data-active={activeTab === 'PRICING'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'PRICING'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <DollarSign className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2999,8 +3005,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('ADDRESSES')}
             data-active={activeTab === 'ADDRESSES'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'ADDRESSES'
-                ? 'bg-white text-teal-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-teal-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <MapPin className="w-4 h-4 text-teal-600 shrink-0" />
@@ -3013,8 +3019,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('SETTINGS')}
             data-active={activeTab === 'SETTINGS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'SETTINGS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Settings className="w-4 h-4 text-purple-600 shrink-0" />
@@ -3027,8 +3033,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('REWARDS')}
             data-active={activeTab === 'REWARDS'}
             className={`py-3 px-4 rounded-xl whitespace-nowrap transition-all flex items-center space-x-2 shrink-0 ${activeTab === 'REWARDS'
-                ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
-                : 'text-gray-600 hover:text-gray-900 font-semibold'
+              ? 'bg-white text-purple-950 shadow-md border border-gray-200/80 font-black'
+              : 'text-gray-600 hover:text-gray-900 font-semibold'
               }`}
           >
             <Coins className="w-4 h-4 text-amber-500 shrink-0" />
@@ -3054,8 +3060,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             activeTab === 'ORDERS'
               ? `${processedOrdersForTab.length} order${processedOrdersForTab.length === 1 ? '' : 's'}`
               : activeTab === 'STORE_ORDERS'
-              ? `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
-              : `${processedHelpers.length} helper${processedHelpers.length === 1 ? '' : 's'}`
+                ? `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
+                : `${processedHelpers.length} helper${processedHelpers.length === 1 ? '' : 's'}`
           }
         />
       )}
@@ -3774,10 +3780,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                           prev.map((o) =>
                                             o.id === fb.orderId
                                               ? {
-                                                  ...o,
-                                                  mutuallyDiscussed: true,
-                                                  feedback: o.feedback ? { ...o.feedback, mutuallyDiscussed: true } : o.feedback,
-                                                }
+                                                ...o,
+                                                mutuallyDiscussed: true,
+                                                feedback: o.feedback ? { ...o.feedback, mutuallyDiscussed: true } : o.feedback,
+                                              }
                                               : o
                                           )
                                         );
@@ -3993,9 +3999,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
                                 <td className="py-3.5 px-5">
                                   <span
-                                    className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
-                                      isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
-                                    }`}
+                                    className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
+                                      }`}
                                   >
                                     {isStore ? 'Store' : 'Helper'}
                                   </span>
@@ -4010,29 +4015,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     <span className="font-bold text-gray-900">{w.helperName}</span>
                                   )}
                                 </td>
-                              <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
-                              <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
-                              <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
-                              <td className="py-3.5 px-5 text-right">
-                                <div className="flex justify-end space-x-1.5">
-                                  <button
-                                    onClick={() => handleApproveWd(w.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
-                                  >
-                                    Approve
-                                  </button>
-                                  <button
-                                    onClick={() => handleRejectWd(w.id)}
-                                    className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
-                                  >
-                                    Reject
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
+                                <td className="py-3.5 px-5 font-extrabold text-purple-800">৳{w.amount}</td>
+                                <td className="py-3.5 px-5 uppercase font-bold text-gray-700">{w.paymentMethod}</td>
+                                <td className="py-3.5 px-5 font-mono">{w.accountNumber}</td>
+                                <td className="py-3.5 px-5 text-right">
+                                  <div className="flex justify-end space-x-1.5">
+                                    <button
+                                      onClick={() => handleApproveWd(w.id)}
+                                      className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectWd(w.id)}
+                                      className="py-1.5 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs transition-all"
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
                       </table>
                     </div>
                     <PaginationControl
@@ -4312,9 +4317,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     paginatedItems.map((ord) => (
                       <tr
                         key={ord.id}
-                        className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${
-                          selectedOrderIds.includes(ord.id) ? 'bg-purple-50/70' : ''
-                        }`}
+                        className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${selectedOrderIds.includes(ord.id) ? 'bg-purple-50/70' : ''
+                          }`}
                         onClick={() => setSelectedOrderId(ord.id)}
                       >
                         <td className="py-4 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
@@ -4405,10 +4409,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <div className="flex flex-col gap-0.5">
                             <span
                               className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] w-fit ${ord.status === 'DELIVERED'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : ord.status === 'CANCELED'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-amber-100 text-amber-800'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : ord.status === 'CANCELED'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-amber-100 text-amber-800'
                                 }`}
                             >
                               {ord.status}
@@ -4759,9 +4763,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       return (
                         <tr
                           key={so.id}
-                          className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${
-                            isSelected ? 'bg-purple-50/70' : ''
-                          }`}
+                          className={`hover:bg-purple-50/40 cursor-pointer transition-colors ${isSelected ? 'bg-purple-50/70' : ''
+                            }`}
                           onClick={() => setSelectedShopOrderId(so.id)}
                         >
                           <td className="py-4 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
@@ -4845,21 +4848,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <td className="py-4 px-5">
                             <div className="flex flex-col gap-0.5">
                               <span
-                                className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] w-fit border ${
-                                  so.status === 'DELIVERED'
+                                className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] w-fit border ${so.status === 'DELIVERED'
                                     ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
                                     : so.status === 'HANDOVER'
-                                    ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                                    : so.status === 'READY'
-                                    ? 'bg-teal-100 text-teal-800 border-teal-200'
-                                    : so.status === 'PREPARING'
-                                    ? 'bg-purple-100 text-purple-800 border-purple-200'
-                                    : so.status === 'ACCEPTED'
-                                    ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                    : so.status === 'CANCELED'
-                                    ? 'bg-red-100 text-red-800 border-red-200'
-                                    : 'bg-amber-100 text-amber-800 border-amber-200'
-                                }`}
+                                      ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                                      : so.status === 'READY'
+                                        ? 'bg-teal-100 text-teal-800 border-teal-200'
+                                        : so.status === 'PREPARING'
+                                          ? 'bg-purple-100 text-purple-800 border-purple-200'
+                                          : so.status === 'ACCEPTED'
+                                            ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                            : so.status === 'CANCELED'
+                                              ? 'bg-red-100 text-red-800 border-red-200'
+                                              : 'bg-amber-100 text-amber-800 border-amber-200'
+                                  }`}
                               >
                                 {so.status}
                               </span>
@@ -4931,9 +4933,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           return (
             <th
               onClick={() => handleUserColumnSort(col)}
-              className={`py-3.5 px-5 cursor-pointer select-none transition-colors group hover:bg-purple-100/70 hover:text-purple-950 ${
-                isActive ? 'bg-purple-100/80 text-purple-950 font-black' : ''
-              } ${extraClass}`}
+              className={`py-3.5 px-5 cursor-pointer select-none transition-colors group hover:bg-purple-100/70 hover:text-purple-950 ${isActive ? 'bg-purple-100/80 text-purple-950 font-black' : ''
+                } ${extraClass}`}
               title={`Click to sort by ${label} (${isActive ? (usersSortDirection === 'asc' ? 'Ascending' : 'Descending') : 'Click to Sort'})`}
             >
               <div className="flex items-center space-x-1.5">
@@ -5414,8 +5415,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={() => setHelperSubView('MAP')}
                   className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'MAP'
-                      ? 'bg-purple-950 text-white shadow-md'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-purple-950 text-white shadow-md'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Globe className="w-4 h-4 text-emerald-400" />
@@ -5426,8 +5427,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={() => setHelperSubView('AREAS')}
                   className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'AREAS'
-                      ? 'bg-purple-950 text-white shadow-md'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-purple-950 text-white shadow-md'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Square className="w-4 h-4 text-emerald-400" />
@@ -5438,8 +5439,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={() => setHelperSubView('APPLICATIONS')}
                   className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'APPLICATIONS'
-                      ? 'bg-purple-950 text-white shadow-md'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-purple-950 text-white shadow-md'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Users className="w-4 h-4 text-amber-400" />
@@ -5450,8 +5451,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={() => setHelperSubView('TABLE')}
                   className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${helperSubView === 'TABLE'
-                      ? 'bg-purple-950 text-white shadow-md'
-                      : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-purple-950 text-white shadow-md'
+                    : 'text-gray-600 hover:text-gray-900'
                     }`}
                 >
                   <Users className="w-4 h-4 text-indigo-400" />
@@ -5563,9 +5564,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 flex items-center justify-between">
                         <span>স্ট্যাটাস:</span>
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
-                          allowedDeliveryAreasEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'
-                        }`}>
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${allowedDeliveryAreasEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'
+                          }`}>
                           {allowedDeliveryAreasEnabled ? 'সক্রিয় (Enforced)' : 'নিষ্ক্রিয় (Bypass Allowed)'}
                         </span>
                       </div>
@@ -5821,10 +5821,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="py-4 px-5">
                               <span
                                 className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${app.status === 'APPROVED'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : app.status === 'REJECTED' || app.status === 'CANCELED'
-                                      ? 'bg-red-100 text-red-800'
-                                      : 'bg-amber-100 text-amber-800'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : app.status === 'REJECTED' || app.status === 'CANCELED'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-amber-100 text-amber-800'
                                   }`}
                               >
                                 {app.status}
@@ -6296,9 +6296,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
                         <td className="py-4 px-5">
                           <span
-                            className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${
-                              isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
-                            }`}
+                            className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${isStore ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}
                           >
                             {isStore ? 'Store' : 'Helper'}
                           </span>
@@ -6319,10 +6318,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <td className="py-4 px-5">
                           <span
                             className={`px-2.5 py-1 rounded-full font-extrabold text-[10px] ${w.status === 'APPROVED'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : w.status === 'REJECTED'
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-amber-100 text-amber-800'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : w.status === 'REJECTED'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-amber-100 text-amber-800'
                               }`}
                           >
                             {w.status}
@@ -6551,7 +6550,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               গ্রাহক ও হেলপারদের "Fee Details" পেজের লাইভ ফি গণনা সূত্র এবং কোম্পানি সার্ভিস ফি বিবরণ নিয়ন্ত্রণ করুন।
             </p>
 
-             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">Rate per KM (প্রতি কিমি চার্জ ৳):</label>
                 <input
@@ -6707,11 +6706,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </td>
                           <td className="p-3">
                             <span
-                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                                sug.userRole === 'helper'
+                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${sug.userRole === 'helper'
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : 'bg-blue-100 text-blue-800'
-                              }`}
+                                }`}
                             >
                               {sug.userRole === 'helper' ? 'Helper' : 'Customer'}
                             </span>
@@ -6747,8 +6745,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
                   <p className="text-xs text-gray-500 font-medium">
-                    {feeSuggestions.length <= 3 
-                      ? `মোট ${feeSuggestions.length}টির মধ্যে ${feeSuggestions.length}টি মতামত দেখানো হচ্ছে` 
+                    {feeSuggestions.length <= 3
+                      ? `মোট ${feeSuggestions.length}টির মধ্যে ${feeSuggestions.length}টি মতামত দেখানো হচ্ছে`
                       : `প্রথম ৩টি মতামত দেখানো হচ্ছে (মোট ${feeSuggestions.length}টি)`}
                   </p>
                   <button
@@ -7772,11 +7770,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {svcName}
                             </span>
                             <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                selectedTypes.length > 0
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selectedTypes.length > 0
                                   ? 'bg-purple-100 text-purple-700 border border-purple-200'
                                   : 'bg-amber-50 text-amber-700 border border-amber-200'
-                              }`}
+                                }`}
                             >
                               {selectedTypes.length > 0
                                 ? `${selectedTypes.length}টি ধরন সংযুক্ত`
@@ -7836,11 +7833,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     };
                                   });
                                 }}
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer font-medium active:scale-95 ${
-                                  isSelected
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer font-medium active:scale-95 ${isSelected
                                     ? 'bg-purple-600 text-white shadow-xs font-semibold'
                                     : 'bg-gray-100 hover:bg-gray-200/80 text-gray-700 border border-gray-200'
-                                }`}
+                                  }`}
                               >
                                 {isSelected ? (
                                   <Check className="w-3 h-3 text-white shrink-0" />
@@ -8296,8 +8292,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const sStatus = s.status === 'Pending' || s.status === 'PENDING'
               ? 'Pending'
               : s.status === 'Rejected' || s.status === 'REJECTED'
-              ? 'Rejected'
-              : 'Approved';
+                ? 'Rejected'
+                : 'Approved';
             return sStatus === shopsApprovalFilter;
           });
         }
@@ -8375,6 +8371,109 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="space-y-4">
+            {/* ── ASSIGN TO STORE MODAL (always rendered at top level) ── */}
+            {assignModalOpen && (() => {
+              const selectedProducts = allStoreProducts.filter((p) => selectedProductIds.has(p.id));
+              const compressImg = (file: File): Promise<string> => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                  const img = new Image();
+                  img.onload = () => {
+                    const canvas = document.createElement('canvas'); const MAX = 500;
+                    let w = img.width, h = img.height;
+                    if (w > h) { if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; } } else { if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; } }
+                    canvas.width = w; canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) { resolve(e.target?.result as string); return; }
+                    ctx.drawImage(img, 0, 0, w, h); resolve(canvas.toDataURL('image/jpeg', 0.82));
+                  };
+                  img.onerror = reject; img.src = e.target?.result as string;
+                };
+                reader.onerror = reject; reader.readAsDataURL(file);
+              });
+              const doAssign = async () => {
+                if (!assignTargetStoreId) { showAlert('দোকান নির্বাচন করুন', 'একটি লক্ষ্য দোকান বেছে নিন।', 'error'); return; }
+                const tShop = shopsSource.find((s) => s.id === assignTargetStoreId);
+                if (!tShop) return;
+                setAssignSubmitting(true);
+                try {
+                  const now = new Date().toISOString();
+                  for (const prod of selectedProducts) {
+                    const ov = assignItemOverrides[prod.id];
+                    const newId = `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                    const np = ov?.price ? parseFloat(ov.price) : prod.price;
+                    await fallbackStore.saveStoreProduct({ id: newId, storeId: assignTargetStoreId, storeName: tShop.name, name: ov?.name?.trim() || prod.name, unit: prod.unit, price: isNaN(np) ? prod.price : np, discountRate: prod.discountRate, inStock: true, category: (ov?.category?.trim() || prod.category) || undefined, photoUrl: (ov?.photoUrl || prod.photoUrl) || undefined, createdAt: now, updatedAt: now });
+                  }
+                  setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
+                  setAssignModalOpen(false); setSelectedProductIds(new Set());
+                  showAlert('সফল হয়েছে! 🎉', `${selectedProducts.length} টি পণ্য "${tShop.name}" দোকানে কপি হয়েছে।`, 'success');
+                } catch (err: any) { console.error(err); showAlert('সমস্যা হয়েছে', 'কপি করতে ব্যর্থ হয়েছে।', 'error'); }
+                finally { setAssignSubmitting(false); }
+              };
+              return (
+                <div className="fixed inset-0 z-[200000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+                  <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[92vh]">
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white flex items-center justify-center shadow-lg"><Copy className="w-5 h-5" /></div>
+                        <div>
+                          <h3 className="font-extrabold text-base text-gray-900">অন্য দোকানে পণ্য কপি করুন</h3>
+                          <p className="text-[11px] text-gray-500 mt-0.5">{selectedProducts.length} টি পণ্য নির্বাচিত — তথ্য পরিবর্তন করুন ও দোকান বেছে নিন</p>
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => setAssignModalOpen(false)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center cursor-pointer"><X className="w-4 h-4" /></button>
+                    </div>
+                    {/* Target store */}
+                    <div className="px-6 py-4 border-b border-gray-100 bg-indigo-50/40 shrink-0">
+                      <label className="block text-xs font-extrabold text-gray-700 mb-2 flex items-center gap-1.5"><Store className="w-3.5 h-3.5 text-indigo-600" />কোন দোকানে কপি করবেন? <span className="text-rose-500">*</span></label>
+                      <div className="relative">
+                        <select value={assignTargetStoreId} onChange={(e) => setAssignTargetStoreId(e.target.value)} className="w-full pl-4 pr-8 py-2.5 rounded-xl border border-indigo-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-xs font-bold bg-white cursor-pointer appearance-none">
+                          <option value="">-- দোকান নির্বাচন করুন --</option>
+                          {shopsSource.map((s) => (<option key={s.id} value={s.id}>{s.name} · {s.type}</option>))}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+                    {/* Product list */}
+                    <div className="overflow-y-auto flex-1 px-6 py-4 space-y-3">
+                      <p className="text-[11px] text-indigo-700 font-semibold bg-indigo-50 rounded-xl px-3 py-2 border border-indigo-100">💡 প্রয়োজনে নাম, মূল্য, ছবি ও ক্যাটাগরি পরিবর্তন করুন। পরিবর্তন না করলে মূল তথ্য ব্যবহার হবে।</p>
+                      {selectedProducts.map((prod) => {
+                        const ov = assignItemOverrides[prod.id] ?? { name: prod.name, price: String(prod.price), photoUrl: prod.photoUrl || '', category: prod.category || '' };
+                        const upd = (p: Partial<typeof ov>) => setAssignItemOverrides((prev) => ({ ...prev, [prod.id]: { ...ov, ...p } }));
+                        return (
+                          <div key={prod.id} className="bg-gray-50 rounded-2xl border border-gray-200 p-4">
+                            <div className="flex items-center gap-3 mb-3">
+                              <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-200 shrink-0 border border-gray-200 flex items-center justify-center relative group cursor-pointer" onClick={() => { const inp = document.getElementById(`assign-photo-${prod.id}`) as HTMLInputElement; inp?.click(); }}>
+                                {ov.photoUrl ? <img src={ov.photoUrl} alt={prod.name} className="w-full h-full object-cover" /> : <Package className="w-6 h-6 text-gray-400" />}
+                                <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"><Upload className="w-4 h-4 text-white" /></div>
+                                <input id={`assign-photo-${prod.id}`} type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { try { upd({ photoUrl: await compressImg(f) }); } catch {/**/ } } }} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-extrabold text-gray-800 truncate">{prod.name}</p>
+                                <p className="text-[10px] text-gray-400">মূল মূল্য: ৳{prod.price} · {prod.storeName || '—'}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div><label className="block text-[10px] font-bold text-gray-600 mb-0.5">নাম</label><input type="text" value={ov.name} onChange={(e) => upd({ name: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-400 outline-none text-xs bg-white" /></div>
+                              <div><label className="block text-[10px] font-bold text-gray-600 mb-0.5">মূল্য (৳)</label><input type="number" min="0" step="0.01" value={ov.price} onChange={(e) => upd({ price: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-400 outline-none text-xs font-bold bg-white" /></div>
+                              <div><label className="block text-[10px] font-bold text-gray-600 mb-0.5">ক্যাটাগরি</label><input type="text" value={ov.category} onChange={(e) => upd({ category: e.target.value })} placeholder="যেমন: মশলা" className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-400 outline-none text-xs bg-white" /></div>
+                              <div><label className="block text-[10px] font-bold text-gray-600 mb-0.5">ছবির URL</label><input type="text" value={ov.photoUrl} onChange={(e) => upd({ photoUrl: e.target.value })} placeholder="https://..." className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-400 outline-none text-xs bg-white" /></div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Footer */}
+                    <div className="px-6 py-4 border-t border-gray-100 shrink-0 flex gap-3">
+                      <button type="button" onClick={() => setAssignModalOpen(false)} className="flex-1 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs cursor-pointer">বাতিল</button>
+                      <button type="button" disabled={!assignTargetStoreId || assignSubmitting} onClick={doAssign} className="flex-[2] py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 active:scale-95 text-white font-extrabold text-xs shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50">
+                        {assignSubmitting ? (<><RefreshCw className="w-4 h-4 animate-spin" /><span>কপি হচ্ছে...</span></>) : (<><Copy className="w-4 h-4" /><span>{selectedProducts.length} টি পণ্য কপি করুন →</span></>)}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             {/* Top Sub-View Header & Controls */}
             <div className="bg-white rounded-3xl p-4 border border-gray-100 shadow-soft flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center space-x-2">
@@ -8497,11 +8596,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShopSubView('MAP')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
-                      shopSubView === 'MAP'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${shopSubView === 'MAP'
                         ? 'bg-purple-900 text-white shadow-md'
                         : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <Globe className="w-3.5 h-3.5" />
                     <span>Map View</span>
@@ -8510,11 +8608,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShopSubView('TABLE')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
-                      shopSubView === 'TABLE'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${shopSubView === 'TABLE'
                         ? 'bg-purple-900 text-white shadow-md'
                         : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <Layers className="w-3.5 h-3.5" />
                     <span>Table View</span>
@@ -8523,11 +8620,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShopSubView('ITEMS')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
-                      shopSubView === 'ITEMS'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${shopSubView === 'ITEMS'
                         ? 'bg-purple-900 text-white shadow-md'
                         : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <Package className="w-3.5 h-3.5" />
                     <span>Store Items</span>
@@ -8536,11 +8632,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShopSubView('CATEGORIES')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
-                      shopSubView === 'CATEGORIES'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${shopSubView === 'CATEGORIES'
                         ? 'bg-purple-900 text-white shadow-md'
                         : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <Tag className="w-3.5 h-3.5" />
                     <span>Categories</span>
@@ -8549,11 +8644,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setShopSubView('APPLICATIONS')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${
-                      shopSubView === 'APPLICATIONS'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center space-x-1.5 ${shopSubView === 'APPLICATIONS'
                         ? 'bg-orange-600 text-white shadow-md'
                         : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <AlertCircle className="w-3.5 h-3.5" />
                     <span>Applications</span>
@@ -8683,11 +8777,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   ) : <span className="text-gray-400">—</span>}
                                 </td>
                                 <td className="py-4 px-4">
-                                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
-                                    app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
-                                    app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
-                                    'bg-amber-100 text-amber-800'
-                                  }`}>
+                                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
+                                      app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
+                                        'bg-amber-100 text-amber-800'
+                                    }`}>
                                     {app.status}
                                   </span>
                                   {app.reviewNote && (
@@ -8702,7 +8795,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       onClick={() => setSelectedStoreApp(app)}
                                       className="py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center gap-1"
                                     >
-                                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                                       Details
                                     </button>
                                     {app.status === 'PENDING' && (
@@ -8911,11 +9004,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   'success'
                                 );
                               }}
-                              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors flex items-center space-x-1.5 border cursor-pointer ${
-                                (targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false))
+                              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors flex items-center space-x-1.5 border cursor-pointer ${(targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false))
                                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                                   : 'bg-rose-50 text-rose-850 border-rose-300 hover:bg-rose-100'
-                              }`}
+                                }`}
                               title="Click to toggle store active/inactive"
                             >
                               <span className={`w-2 h-2 rounded-full ${(targetShop.isActive !== undefined ? targetShop.isActive : (targetShop.isOpen !== false)) ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
@@ -9022,11 +9114,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => setAdminItemsViewMode('TABLE')}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
-                                      adminItemsViewMode === 'TABLE'
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${adminItemsViewMode === 'TABLE'
                                         ? 'bg-purple-900 text-white shadow-xs'
                                         : 'text-gray-600 hover:text-gray-900'
-                                    }`}
+                                      }`}
                                   >
                                     <Layers className="w-3.5 h-3.5" />
                                     <span>সকল পণ্যের তালিকা ({filteredAllProducts.length})</span>
@@ -9034,17 +9125,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => setAdminItemsViewMode('STORES')}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
-                                      adminItemsViewMode === 'STORES'
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${adminItemsViewMode === 'STORES'
                                         ? 'bg-purple-900 text-white shadow-xs'
                                         : 'text-gray-600 hover:text-gray-900'
-                                    }`}
+                                      }`}
                                   >
                                     <Store className="w-3.5 h-3.5" />
                                     <span>দোকান ভিত্তিক ({shopsSource.length})</span>
                                   </button>
                                 </div>
 
+                                {selectedProductIds.size > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      // Pre-fill overrides with current product data
+                                      const overrides: Record<string, { name: string; price: string; photoUrl: string; category: string }> = {};
+                                      Array.from(selectedProductIds).forEach((pid) => {
+                                        const prod = allStoreProducts.find((p) => p.id === pid);
+                                        if (prod) {
+                                          overrides[pid] = {
+                                            name: prod.name,
+                                            price: String(prod.price),
+                                            photoUrl: prod.photoUrl || '',
+                                            category: prod.category || '',
+                                          };
+                                        }
+                                      });
+                                      setAssignItemOverrides(overrides);
+                                      setAssignTargetStoreId('');
+                                      setAssignModalOpen(true);
+                                    }}
+                                    className="py-1.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer active:scale-95 animate-in fade-in"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>অন্য দোকানে কপি ({selectedProductIds.size})</span>
+                                  </button>
+                                )}
                                 {shopsSource.length > 0 && (
                                   <button
                                     type="button"
@@ -9180,6 +9297,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </div>
 
                             {/* Content based on View Mode */}
+                            {/* Selection summary bar */}
+                            {selectedProductIds.size > 0 && adminItemsViewMode === 'TABLE' && (
+                              <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-2xl px-4 py-2.5 animate-in fade-in">
+                                <div className="flex items-center gap-2">
+                                  <CheckSquare className="w-4 h-4 text-indigo-600" />
+                                  <span className="text-xs font-extrabold text-indigo-800">{selectedProductIds.size} টি পণ্য নির্বাচিত</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const overrides: Record<string, { name: string; price: string; photoUrl: string; category: string }> = {};
+                                      Array.from(selectedProductIds).forEach((pid) => {
+                                        const prod = allStoreProducts.find((p) => p.id === pid);
+                                        if (prod) {
+                                          overrides[pid] = { name: prod.name, price: String(prod.price), photoUrl: prod.photoUrl || '', category: prod.category || '' };
+                                        }
+                                      });
+                                      setAssignItemOverrides(overrides);
+                                      setAssignTargetStoreId('');
+                                      setAssignModalOpen(true);
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>অন্য দোকানে কপি করুন</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedProductIds(new Set())}
+                                    className="px-2.5 py-1.5 rounded-xl bg-white border border-indigo-200 text-indigo-700 font-bold text-xs cursor-pointer hover:bg-indigo-100 transition-all"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                             {adminItemsViewMode === 'TABLE' ? (
                               <div className="space-y-3">
                                 {filteredAllProducts.length === 0 ? (
@@ -9207,6 +9361,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       <table className="w-full text-left text-xs text-gray-600 min-w-[700px]">
                                         <thead className="bg-gray-50 text-gray-700 uppercase font-extrabold text-[10px] tracking-wider border-b border-gray-100 select-none">
                                           <tr>
+                                            <th className="py-3 px-3 w-10 text-center">
+                                              <input
+                                                type="checkbox"
+                                                title="সব নির্বাচন করুন"
+                                                checked={paginatedAdminItems.length > 0 && paginatedAdminItems.every((p) => selectedProductIds.has(p.id))}
+                                                onChange={(e) => {
+                                                  const next = new Set(selectedProductIds);
+                                                  if (e.target.checked) {
+                                                    paginatedAdminItems.forEach((p) => next.add(p.id));
+                                                  } else {
+                                                    paginatedAdminItems.forEach((p) => next.delete(p.id));
+                                                  }
+                                                  setSelectedProductIds(next);
+                                                }}
+                                                className="w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer accent-indigo-600"
+                                              />
+                                            </th>
                                             <th className="py-3 px-3 w-12 text-center">#</th>
                                             <th className="py-3 px-3 w-14 text-center">ছবি</th>
                                             <th className="py-3 px-3">পণ্যের নাম ও ক্যাটাগরি</th>
@@ -9226,9 +9397,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                             const discountedPrice = hasDiscount
                                               ? Math.round(p.price * (1 - (p.discountRate || 0) / 100))
                                               : p.price;
+                                            const isSelected = selectedProductIds.has(p.id);
 
                                             return (
-                                              <tr key={p.id} className="hover:bg-purple-50/20 transition-colors">
+                                              <tr key={p.id} className={`hover:bg-purple-50/20 transition-colors ${isSelected ? 'bg-indigo-50/60' : ''}`}>
+                                                <td className="py-2.5 px-3 text-center">
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    onChange={(e) => {
+                                                      const next = new Set(selectedProductIds);
+                                                      if (e.target.checked) next.add(p.id); else next.delete(p.id);
+                                                      setSelectedProductIds(next);
+                                                    }}
+                                                    className="w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer accent-indigo-600"
+                                                  />
+                                                </td>
                                                 <td className="py-2.5 px-3 text-center text-[11px] font-bold text-gray-400">
                                                   {startAdminItemIdx + idx + 1}
                                                 </td>
@@ -9303,11 +9487,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                                       await fallbackStore.toggleProductStock(p.id, !p.inStock);
                                                       setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
                                                     }}
-                                                    className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
-                                                      p.inStock
+                                                    className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border cursor-pointer transition-all ${p.inStock
                                                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                                                         : 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
-                                                    }`}
+                                                      }`}
                                                     title="ক্লিক করে স্টক পরিবর্তন করুন"
                                                   >
                                                     {p.inStock ? '🟢 স্টকে আছে' : '🔴 স্টক শেষ'}
@@ -9409,11 +9592,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                                 }
                                               }}
                                               title="Click to toggle store active/inactive"
-                                              className={`px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
-                                                (s.isActive !== undefined ? s.isActive : (s.isOpen !== false))
+                                              className={`px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${(s.isActive !== undefined ? s.isActive : (s.isOpen !== false))
                                                   ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
                                                   : 'bg-rose-100 text-rose-850 border-rose-300 hover:bg-rose-200'
-                                              }`}
+                                                }`}
                                             >
                                               {(s.isActive !== undefined ? s.isActive : (s.isOpen !== false)) ? '🟢 Active' : '🔴 Inactive'}
                                             </span>
@@ -9531,8 +9713,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const sStatus = s.status === 'Pending' || s.status === 'PENDING'
                           ? 'Pending'
                           : s.status === 'Rejected' || s.status === 'REJECTED'
-                          ? 'Rejected'
-                          : 'Approved';
+                            ? 'Rejected'
+                            : 'Approved';
 
                         const isStoreActive = s.isActive !== undefined ? s.isActive : (s.isOpen !== false);
 
@@ -9603,11 +9785,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     );
                                   }}
                                   title={isStoreActive ? 'Click to make Inactive (দোকান বন্ধ করুন)' : 'Click to make Active (দোকান চালু করুন)'}
-                                  className={`flex items-center justify-between gap-2 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all ${
-                                    isStoreActive
+                                  className={`flex items-center justify-between gap-2 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all ${isStoreActive
                                       ? 'bg-emerald-50 hover:bg-emerald-100/90 border-emerald-300 text-emerald-900 shadow-2xs'
                                       : 'bg-rose-50 hover:bg-rose-100/90 border-rose-300 text-rose-900 shadow-2xs'
-                                  }`}
+                                    }`}
                                 >
                                   <div className="flex items-center space-x-1.5">
                                     <span className={`w-2 h-2 rounded-full ${isStoreActive ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
@@ -9616,14 +9797,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </span>
                                   </div>
                                   <div
-                                    className={`w-8 h-4 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
-                                      isStoreActive ? 'bg-emerald-600' : 'bg-gray-300'
-                                    }`}
+                                    className={`w-8 h-4 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${isStoreActive ? 'bg-emerald-600' : 'bg-gray-300'
+                                      }`}
                                   >
                                     <div
-                                      className={`bg-white w-3 h-3 rounded-full shadow transform transition-transform duration-200 ${
-                                        isStoreActive ? 'translate-x-4' : 'translate-x-0'
-                                      }`}
+                                      className={`bg-white w-3 h-3 rounded-full shadow transform transition-transform duration-200 ${isStoreActive ? 'translate-x-4' : 'translate-x-0'
+                                        }`}
                                     />
                                   </div>
                                 </div>
@@ -9648,11 +9827,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       );
                                     }}
                                     title={s.isFeatured ? 'টপ ফিচার থেকে বাদ দিতে ক্লিক করুন' : 'টপে ফিচার করতে ক্লিক করুন'}
-                                    className={`w-full flex items-center justify-between gap-1.5 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all shadow-2xs ${
-                                      s.isFeatured
+                                    className={`w-full flex items-center justify-between gap-1.5 p-1.5 px-2.5 rounded-xl border cursor-pointer select-none transition-all shadow-2xs ${s.isFeatured
                                         ? 'bg-amber-50 hover:bg-amber-100/90 border-amber-300 text-amber-950'
                                         : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-500'
-                                    }`}
+                                      }`}
                                   >
                                     <div className="flex items-center space-x-1.5">
                                       <Sparkles className={`w-3.5 h-3.5 ${s.isFeatured ? 'text-amber-500 fill-amber-400 animate-pulse' : 'text-gray-400'}`} />
@@ -9661,14 +9839,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       </span>
                                     </div>
                                     <div
-                                      className={`w-7 h-3.5 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${
-                                        s.isFeatured ? 'bg-amber-500' : 'bg-gray-300'
-                                      }`}
+                                      className={`w-7 h-3.5 flex items-center rounded-full p-0.5 transition-colors duration-200 shrink-0 ${s.isFeatured ? 'bg-amber-500' : 'bg-gray-300'
+                                        }`}
                                     >
                                       <div
-                                        className={`bg-white w-2.5 h-2.5 rounded-full shadow transform transition-transform duration-200 ${
-                                          s.isFeatured ? 'translate-x-3.5' : 'translate-x-0'
-                                        }`}
+                                        className={`bg-white w-2.5 h-2.5 rounded-full shadow transform transition-transform duration-200 ${s.isFeatured ? 'translate-x-3.5' : 'translate-x-0'
+                                          }`}
                                       />
                                     </div>
                                   </button>
@@ -9721,13 +9897,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       }
                                       showAlert('স্ট্যাটাস আপডেট', `"${s.name}" স্ট্যাটাস ${newStatus} এ পরিবর্তিত হয়েছে।`, 'success');
                                     }}
-                                    className={`flex-1 px-1.5 py-0.5 rounded-lg text-[9px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${
-                                      sStatus === 'Approved'
+                                    className={`flex-1 px-1.5 py-0.5 rounded-lg text-[9px] font-extrabold uppercase border cursor-pointer outline-none transition-all ${sStatus === 'Approved'
                                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                                         : sStatus === 'Pending'
-                                        ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                                        : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
-                                    }`}
+                                          ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                          : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
+                                      }`}
                                   >
                                     <option value="Approved">✓ Approved</option>
                                     <option value="Pending">⏳ Pending</option>
@@ -9749,11 +9924,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       );
                                     }}
                                     title={s.canReceiveOrders !== false ? 'Accepts orders directly' : 'Admin manual orders only'}
-                                    className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${
-                                      (s.canReceiveOrders !== false)
+                                    className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border cursor-pointer transition-all ${(s.canReceiveOrders !== false)
                                         ? 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
                                         : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
-                                    }`}
+                                      }`}
                                   >
                                     {(s.canReceiveOrders !== false) ? '⚡ Orders ON' : '🚫 OFF'}
                                   </button>
@@ -9809,11 +9983,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="py-4 px-4">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span
-                                  className={`px-2 py-0.5 rounded-md font-black text-[10px] border ${
-                                    metrics.running > 0
+                                  className={`px-2 py-0.5 rounded-md font-black text-[10px] border ${metrics.running > 0
                                       ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
                                       : 'bg-amber-50 text-amber-700 border-amber-200'
-                                  }`}
+                                    }`}
                                   title="Running Orders"
                                 >
                                   ⚡ {metrics.running} Running
@@ -10019,11 +10192,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ) : <span className="text-gray-400">—</span>}
                         </td>
                         <td className="py-4 px-4">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
-                            app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
-                            app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
-                            'bg-amber-100 text-amber-800'
-                          }`}>
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${app.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' :
+                              app.status === 'REJECTED' || app.status === 'CANCELED' ? 'bg-red-100 text-red-800' :
+                                'bg-amber-100 text-amber-800'
+                            }`}>
                             {app.status}
                           </span>
                           {app.reviewNote && (
@@ -10509,111 +10681,111 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               return (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {filteredModals.map((modal) => (
-                  <div
-                    key={modal.id}
-                    className={`p-5 rounded-3xl bg-white border transition-all shadow-soft flex flex-col justify-between ${modal.isEnabled ? 'border-purple-200' : 'border-gray-200 opacity-75'
-                      }`}
-                  >
-                    <div className="space-y-3">
-                      {modal.imageUrl && (
-                        <div className="w-full h-32 rounded-2xl overflow-hidden bg-slate-900">
-                          <img src={modal.imageUrl} alt={modal.title} className="w-full h-full object-cover" />
-                        </div>
-                      )}
+                    <div
+                      key={modal.id}
+                      className={`p-5 rounded-3xl bg-white border transition-all shadow-soft flex flex-col justify-between ${modal.isEnabled ? 'border-purple-200' : 'border-gray-200 opacity-75'
+                        }`}
+                    >
+                      <div className="space-y-3">
+                        {modal.imageUrl && (
+                          <div className="w-full h-32 rounded-2xl overflow-hidden bg-slate-900">
+                            <img src={modal.imageUrl} alt={modal.title} className="w-full h-full object-cover" />
+                          </div>
+                        )}
 
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h4 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
-                            <span>{modal.title}</span>
-                            {modal.isEnabled ? (
-                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
-                                Disabled
-                              </span>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
+                              <span>{modal.title}</span>
+                              {modal.isEnabled ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">
+                                  Active
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
+                                  Disabled
+                                </span>
+                              )}
+                            </h4>
+                            {modal.subtitle && (
+                              <p className="text-xs text-purple-700 font-bold mt-0.5">{modal.subtitle}</p>
                             )}
-                          </h4>
-                          {modal.subtitle && (
-                            <p className="text-xs text-purple-700 font-bold mt-0.5">{modal.subtitle}</p>
-                          )}
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-gray-600 line-clamp-3 font-medium">
+                          {modal.description}
+                        </p>
+
+                        <div className="flex flex-wrap gap-1.5 text-[10px] font-extrabold">
+                          <span className="px-2.5 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200">
+                            Target: {
+                              modal.targetAudience === 'WEBSITE_USERS' ? 'Website Users' :
+                                modal.targetAudience === 'MOBILE_APP_USERS' ? 'Mobile App Users' :
+                                  modal.targetAudience
+                            }
+                          </span>
+                          <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200">
+                            Trigger: {modal.triggerEvent}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-900 border border-indigo-200">
+                            Freq: {modal.displayFrequency}
+                          </span>
                         </div>
                       </div>
 
-                      <p className="text-xs text-gray-600 line-clamp-3 font-medium">
-                        {modal.description}
-                      </p>
-
-                      <div className="flex flex-wrap gap-1.5 text-[10px] font-extrabold">
-                        <span className="px-2.5 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200">
-                          Target: {
-                            modal.targetAudience === 'WEBSITE_USERS' ? 'Website Users' :
-                            modal.targetAudience === 'MOBILE_APP_USERS' ? 'Mobile App Users' :
-                            modal.targetAudience
-                          }
-                        </span>
-                        <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200">
-                          Trigger: {modal.triggerEvent}
-                        </span>
-                        <span className="px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-900 border border-indigo-200">
-                          Freq: {modal.displayFrequency}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2 pt-4 mt-4 border-t border-gray-100">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const updated = { ...modal, isEnabled: !modal.isEnabled };
-                          await fallbackStore.saveCustomModal(updated);
-                          setCustomModals(Array.from(fallbackStore.customModals.values()));
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${modal.isEnabled
-                            ? 'bg-amber-100 hover:bg-amber-200 text-amber-900'
-                            : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900'
-                          }`}
-                      >
-                        {modal.isEnabled ? 'Deactivate' : 'Activate'}
-                      </button>
-
-                      <div className="flex items-center space-x-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingCustomModal(modal);
-                            setShowCustomModalForm(true);
-                          }}
-                          className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
+                      <div className="flex items-center justify-between gap-2 pt-4 mt-4 border-t border-gray-100">
                         <button
                           type="button"
                           onClick={async () => {
-                            const confirmed = await showConfirm(
-                              'পপআপ মোডাল ডিলিট নিশ্চিতকরণ',
-                              `আপনি কি নিশ্চিতভাবে "${modal.title}" মোডালটি ডিলিট করতে চান?`,
-                              'হ্যাঁ, ডিলিট করুন',
-                              'বাতিল'
-                            );
-                            if (!confirmed) return;
-                            await fallbackStore.deleteCustomModal(modal.id);
+                            const updated = { ...modal, isEnabled: !modal.isEnabled };
+                            await fallbackStore.saveCustomModal(updated);
                             setCustomModals(Array.from(fallbackStore.customModals.values()));
-                            showAlert('সফল', 'পপআপ মোডাল ডিলিট করা হয়েছে।', 'success');
                           }}
-                          className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold"
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${modal.isEnabled
+                            ? 'bg-amber-100 hover:bg-amber-200 text-amber-900'
+                            : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900'
+                            }`}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {modal.isEnabled ? 'Deactivate' : 'Activate'}
                         </button>
+
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingCustomModal(modal);
+                              setShowCustomModalForm(true);
+                            }}
+                            className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const confirmed = await showConfirm(
+                                'পপআপ মোডাল ডিলিট নিশ্চিতকরণ',
+                                `আপনি কি নিশ্চিতভাবে "${modal.title}" মোডালটি ডিলিট করতে চান?`,
+                                'হ্যাঁ, ডিলিট করুন',
+                                'বাতিল'
+                              );
+                              if (!confirmed) return;
+                              await fallbackStore.deleteCustomModal(modal.id);
+                              setCustomModals(Array.from(fallbackStore.customModals.values()));
+                              showAlert('সফল', 'পপআপ মোডাল ডিলিট করা হয়েছে।', 'success');
+                            }}
+                            className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
@@ -10801,9 +10973,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {highDurationOrders.map((o, idx) => (
                         <tr
                           key={o.id}
-                          className={`hover:bg-purple-50/40 transition-colors cursor-pointer ${
-                            selectedOrderIds.includes(o.id) ? 'bg-purple-50/70' : ''
-                          }`}
+                          className={`hover:bg-purple-50/40 transition-colors cursor-pointer ${selectedOrderIds.includes(o.id) ? 'bg-purple-50/70' : ''
+                            }`}
                           onClick={() => { setShowHighDurationModal(false); setSelectedOrderId(o.id); }}
                         >
                           <td className="py-3.5 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
@@ -11108,11 +11279,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </td>
                             <td className="p-3.5">
                               <span
-                                className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${
-                                  sug.userRole === 'helper'
+                                className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${sug.userRole === 'helper'
                                     ? 'bg-emerald-100 text-emerald-800'
                                     : 'bg-blue-100 text-blue-800'
-                                }`}
+                                  }`}
                               >
                                 {sug.userRole === 'helper' ? 'Helper' : 'Customer'}
                               </span>

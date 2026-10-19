@@ -105,16 +105,16 @@ export interface Order {
   customerName: string;
   customerPhone?: string;
   alternativePhone?: string;
-  
+
   title: string;
   service?: string;
   items: OrderItem[];
   missingItemPreference?: MissingItemPref;
-  
+
   pickupLocation?: LocationData;
   deliveryLocation: LocationData;
   additionalNote?: string;
-  
+
   status: OrderStatus;
   deliveryFee: number;
   originalDeliveryFee: number;
@@ -122,14 +122,14 @@ export interface Order {
   productCost?: number;
   processingFee?: number;
   customStoreFee?: number;
-  
+
   helperId?: string;
   helperName?: string;
   helperPhone?: string;
-  
+
   cancellationRequest?: CancellationRequest;
   cancellationReason?: string;
-  
+
   routedToDedicated?: boolean;
   dedicatedNotifiedAt?: string;
   /** Id of the one dedicated-routing announcement this order may have.
@@ -141,7 +141,7 @@ export interface Order {
   lastEditedAt?: string;
   lastEditedBy?: 'customer' | 'helper' | 'admin';
   editHistory?: OrderEditHistoryItem[];
-  
+
   createdAt: string;
   acceptedAt?: string;
   purchasedAt?: string;
@@ -150,7 +150,7 @@ export interface Order {
   deliveredAt?: string;
   cancelledAt?: string;
   updatedAt: string;
-  
+
   statusHistory: StatusHistoryItem[];
   feedback?: OrderFeedback;
   helperNote?: string;
@@ -162,7 +162,7 @@ export interface Order {
   shopId?: string;
   selectedShopIds?: string[];
   mutuallyDiscussed?: boolean;
-  
+
   // Due payment added to this completed order by helper or admin
   duePayment?: OrderDuePayment;
   // Previous due payment applied to this order's calculation summary
@@ -597,12 +597,12 @@ export interface PricingSettings {
   allowedAdminTabs?: string[];
   // Admin Accepted status timer: minutes before showing "Admin Accepted" to customer when no helper assigned
   adminAcceptedDelayMinutes?: number; // Default: 5
-  
+
   // Geofencing: Specific serving area polygons defined by admin
   allowedDeliveryAreasEnabled?: boolean; // Toggle to enforce geofence restriction
   allowedDeliveryAreas?: AllowedAreaPolygon[]; // Multiple drawn polygons
   outOfServiceAreaMessage?: string; // Admin configured custom message when user selects outside area
-  
+
   // Manual authentication (email/password login & register) toggle
   manualAuthEnabled?: boolean; // Default false (only active if admin explicitly checks it)
 
