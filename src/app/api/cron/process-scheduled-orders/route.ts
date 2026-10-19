@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Step 3: For each due order, patch it to PENDING ───────────────────────
-    for (const [orderId, doc] of orderMap) {
+    for (const [orderId, doc] of Array.from(orderMap.entries())) {
       const fields = doc.fields ?? {};
 
       // Check scheduledAt — only activate if the time has passed

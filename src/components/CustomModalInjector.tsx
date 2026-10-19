@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AdminCustomModalConfig, ModalButtonConfig } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
@@ -161,10 +162,23 @@ export const CustomModalInjector: React.FC<CustomModalInjectorProps> = ({ curren
     handleClose();
   };
 
-  if (!activeModal) return null;
+  if (!activeModal || typeof document === 'undefined') return null;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[999999] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        minHeight: '100vh',
+        margin: 0,
+      }}
+    >
       <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 border border-slate-200">
         <button
           type="button"
@@ -223,6 +237,7 @@ export const CustomModalInjector: React.FC<CustomModalInjectorProps> = ({ curren
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

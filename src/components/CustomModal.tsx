@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertCircle, CheckCircle, Info, AlertTriangle, X } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
 
@@ -161,8 +162,21 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <ModalContext.Provider value={{ showAlert, showConfirm, showPermissionModal }}>
       {children}
-      {modalState && (
-        <div className="fixed inset-0 z-[999999] bg-black/65 backdrop-blur-xs flex items-center justify-center p-4">
+      {modalState && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[999999] bg-black/65 backdrop-blur-xs flex items-center justify-center p-4"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            width: '100vw',
+            height: '100dvh',
+            minHeight: '100vh',
+            margin: 0,
+          }}
+        >
           <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4 relative animate-in zoom-in-95 duration-200 border border-emerald-100">
             {/* Close Button */}
             <button
@@ -245,7 +259,8 @@ export const ModalProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </ModalContext.Provider>
   );

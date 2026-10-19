@@ -152,6 +152,100 @@ export function getServiceIconInfo(service?: string): ServiceIconInfo {
   };
 }
 
+export function getServiceImage(service?: string): string {
+  const s = (service || '').trim().toLowerCase();
+
+  // Bazar / Grocery
+  if (
+    s.includes('bazar') ||
+    s.includes('বাজার') ||
+    s.includes('সদাই') ||
+    s.includes('sodai') ||
+    s.includes('grocery') ||
+    s.includes('মুদিখানা') ||
+    s.includes('সুপারশপ') ||
+    s.includes('সবজি') ||
+    s.includes('মাছ') ||
+    s.includes('মাংস') ||
+    s.includes('supermarket') ||
+    s.includes('market')
+  ) {
+    return 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Food / Restaurant
+  if (
+    s.includes('khabar') ||
+    s.includes('খাবার') ||
+    s.includes('food') ||
+    s.includes('restaurant') ||
+    s.includes('রেস্টুরেন্ট') ||
+    s.includes('বিরিয়ানি') ||
+    s.includes('বার্গার') ||
+    s.includes('মিষ্টি')
+  ) {
+    return 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Medicine / Pharmacy
+  if (
+    s.includes('medicine') ||
+    s.includes('ওষুধ') ||
+    s.includes('ঔষধ') ||
+    s.includes('pharmacy') ||
+    s.includes('ফার্মেসি') ||
+    s.includes('ডাক্তার')
+  ) {
+    return 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Laundry / Clothes / Iron / Tailor
+  if (
+    s.includes('zuta') ||
+    s.includes('জুতা') ||
+    s.includes('laundry') ||
+    s.includes('লন্ড্রি') ||
+    s.includes('সেলাই') ||
+    s.includes('কাপড়') ||
+    s.includes('কাপড়') ||
+    s.includes('আয়রন') ||
+    s.includes('দর্জি')
+  ) {
+    return 'https://images.unsplash.com/photo-1545173168-9f1947eebb7f?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Parcel / Courier / Package
+  if (
+    s.includes('parcel') ||
+    s.includes('পার্সেল') ||
+    s.includes('ডকুমেন্ট') ||
+    s.includes('চিঠি') ||
+    s.includes('কুরিয়ার') ||
+    s.includes('courier') ||
+    s.includes('package')
+  ) {
+    return 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Personal item delivery ("আমার একটা জিনিস দিয়ে আসুন")
+  if (
+    s.includes('জিনিস') ||
+    s.includes('দিয়ে আসুন') ||
+    s.includes('এনে দিন') ||
+    s.includes('delivery')
+  ) {
+    return 'https://images.unsplash.com/photo-1512418490979-92798cec1380?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // Mix / Multiple
+  if (s.includes('mix') || s.includes('মিক্স') || s.includes('একাধিক')) {
+    return 'https://images.unsplash.com/photo-1472851294608-062f824d29cc?auto=format&fit=crop&w=400&q=80';
+  }
+
+  // General helper / other work
+  return 'https://images.unsplash.com/photo-1521791136064-7986c2920216?auto=format&fit=crop&w=400&q=80';
+}
+
 interface ServiceIconProps {
   service?: string;
   className?: string;

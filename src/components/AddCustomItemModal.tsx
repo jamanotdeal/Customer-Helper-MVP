@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { OrderItem } from '@/types';
 import { X, Plus, Sparkles, MapPin, AlertCircle, Check } from 'lucide-react';
 
@@ -100,8 +101,23 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
     onClose();
   };
 
-  return (
-    <div className="fixed inset-0 z-[99999] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+  if (!isOpen || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[99999] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        minHeight: '100vh',
+        margin: 0,
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto space-y-4">
         {/* Header with Mascot */}
         <div className="flex items-start justify-between gap-3 pb-3 border-b border-gray-100">
@@ -290,6 +306,7 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

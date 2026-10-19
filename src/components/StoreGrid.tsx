@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ShopPhoto } from './ShopPhoto';
 import { Shop, StoreProduct } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
-import { Clock, Store, CircleDot, X, Package, ArrowLeft, Plus, Minus, Check, Search, ChevronDown, Sparkles, Layers } from 'lucide-react';
+import { Clock, Store, CircleDot, X, Package, ArrowLeft, Plus, Minus, Check, Search, ChevronDown, ChevronRight, Sparkles, Layers } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useCart } from '@/context/CartContext';
 import { StoreProductManager } from './StoreProductManager';
@@ -12,9 +12,15 @@ import { DEFAULT_SERVICES, isShopMatchingService } from '@/lib/pricing';
 import { hapticFeedback } from '@/lib/native';
 import { sortShopsByFeedbackAndNew } from '@/utils/storeRanking';
 
+import { ServiceSelectPopup } from './ServiceSelectPopup';
+import { getServiceIconInfo } from './ServiceIcon';
+
 interface StoreGridProps {
   onStoreClick?: (shop: Shop) => void;
   onOpenCustomRequest?: (serviceHint?: string) => void;
+  selectedService?: string;
+  onSelectService?: (service: string) => void;
+  resetTrigger?: number;
 }
 
 const INITIAL_COUNT = 8;
@@ -72,7 +78,13 @@ export function isShopOpenNow(shop: Shop): boolean {
   return true;
 }
 
-export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustomRequest }) => {
+export const StoreGrid: React.FC<StoreGridProps> = ({
+  onStoreClick,
+  onOpenCustomRequest,
+  selectedService: propSelectedService,
+  onSelectService,
+  resetTrigger,
+}) => {
   const [shops, setShops] = useState<Shop[]>(() => {
     return Array.from(fallbackStore.shops.values()).filter(
       (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
@@ -85,16 +97,21 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
   const [serviceStoreTypeMap, setServiceStoreTypeMap] = useState<Record<string, string[]> | undefined>(() => {
     return fallbackStore.pricingSettings?.serviceStoreTypeMap;
   });
-  // Default selected to first item in services list
-  const [selectedService, setSelectedService] = useState<string>(() => {
-    const svcs = fallbackStore.pricingSettings?.services || DEFAULT_SERVICES;
-    return svcs[0] || '';
-  });
+
+  // Default no service selected
+  const [internalSelectedService, setInternalSelectedService] = useState<string>('');
+  const currentService = propSelectedService !== undefined ? propSelectedService : internalSelectedService;
+
   const [visibleCount, setVisibleCount] = useState(INITIAL_COUNT);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isServicePopupOpen, setIsServicePopupOpen] = useState(false);
+  const [isHighlighted, setIsHighlighted] = useState(false);
+
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const loaderRef = useRef<HTMLDivElement | null>(null);
+  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasOpenedInitialPopupRef = useRef(false);
   const { user } = useAuth();
 
   // Close custom dropdown on outside click
@@ -108,6 +125,74 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
     return () => document.removeEventListener('mousedown', handleOutside);
   }, []);
 
+  // Open initial popup directly on first visit ONLY if customer hasn't selected any service
+  useEffect(() => {
+    let savedService = '';
+    try {
+      savedService = localStorage.getItem('customer_selected_service') || '';
+    } catch {}
+
+    const hasService = Boolean(currentService || savedService);
+
+    if (!hasService && !hasOpenedInitialPopupRef.current) {
+      hasOpenedInitialPopupRef.current = true;
+      setIsServicePopupOpen(true);
+    }
+  }, [currentService]);
+
+  // Cleanup highlight timer on unmount
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
+  }, []);
+
+  const triggerHighlight = () => {
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current);
+    }
+    setIsHighlighted(true);
+
+    // Smooth scroll the dropdown into view
+    setTimeout(() => {
+      dropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+
+    highlightTimerRef.current = setTimeout(() => {
+      setIsHighlighted(false);
+    }, 4500);
+  };
+
+  const handleSelectService = (svc: string) => {
+    try {
+      if (svc) {
+        localStorage.setItem('customer_selected_service', svc);
+      } else {
+        localStorage.removeItem('customer_selected_service');
+      }
+    } catch (e) {
+      console.warn('Failed to save customer_selected_service to localStorage:', e);
+    }
+    if (onSelectService) {
+      onSelectService(svc);
+    } else {
+      setInternalSelectedService(svc);
+    }
+    setVisibleCount(INITIAL_COUNT);
+    setIsDropdownOpen(false);
+  };
+
+  const handleSelectServiceFromPopup = (svc: string) => {
+    handleSelectService(svc);
+    setIsServicePopupOpen(false);
+    triggerHighlight();
+  };
+
+  const handleCloseServicePopup = () => {
+    setIsServicePopupOpen(false);
+    triggerHighlight();
+  };
+
   useEffect(() => {
     const sync = () => {
       const all = Array.from(fallbackStore.shops.values()).filter(
@@ -119,25 +204,28 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
       const svcs = adminServices && adminServices.length > 0 ? adminServices : DEFAULT_SERVICES;
       setServicesList(svcs);
       setServiceStoreTypeMap(fallbackStore.pricingSettings?.serviceStoreTypeMap);
-      setSelectedService((prev) => {
-        if (!prev || !svcs.includes(prev) || prev === 'Bazar-sodai korte hobe') {
-          return svcs[0] || '';
-        }
-        return prev;
-      });
+      if (propSelectedService === undefined) {
+        setInternalSelectedService((prev) => {
+          if (prev && !svcs.includes(prev)) {
+            return '';
+          }
+          return prev;
+        });
+      }
     };
     sync();
     fallbackStore.loadShops();
     fallbackStore.getAllOrderFeedbacks().catch(() => { });
     const unsub = fallbackStore.subscribe(sync);
     return () => unsub();
-  }, []);
+  }, [propSelectedService]);
 
   const filteredShops = useMemo(() => {
+    if (!currentService) return [];
     const matched = shops.filter((s) =>
       isShopMatchingService(
         s,
-        selectedService,
+        currentService,
         serviceStoreTypeMap
       )
     );
@@ -146,7 +234,7 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
       fallbackStore.orderFeedbacks,
       fallbackStore.orders
     );
-  }, [shops, selectedService, serviceStoreTypeMap]);
+  }, [shops, currentService, serviceStoreTypeMap]);
 
   const visible = filteredShops.slice(0, visibleCount);
   const hasMore = filteredShops.length > visibleCount;
@@ -183,17 +271,41 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
     <>
       <div className="space-y-3">
         {/* Custom Service Selection Dropdown */}
-        <div className={`relative w-full ${isDropdownOpen ? 'z-30' : 'z-10'}`} ref={dropdownRef}>
+        <div
+          className={`relative w-full transition-all duration-300 ${
+            isDropdownOpen ? 'z-30' : isHighlighted ? 'z-20' : 'z-10'
+          }`}
+          ref={dropdownRef}
+        >
+          {/* Animated Tooltip Bubble pointing to the dropdown */}
+          {isHighlighted && (
+            <div className="absolute -top-10 sm:-top-11 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-bounce">
+              <div className="bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 text-amber-950 font-black text-[11px] sm:text-xs px-3.5 py-1.5 rounded-full shadow-xl border-2 border-amber-200 flex items-center gap-1.5 whitespace-nowrap">
+                <span>{currentService ? 'সার্ভিস পরিবর্তন করতে এখানে চাপুন' : 'সার্ভিস বেছে নিতে এখানে চাপুন'}</span>
+                <span className="text-sm">👇</span>
+              </div>
+            </div>
+          )}
+
+          {/* Glowing Ping Aura */}
+          {isHighlighted && (
+            <div className="absolute -inset-1 rounded-2xl bg-amber-400/50 animate-ping pointer-events-none" />
+          )}
+
           <button
             type="button"
             onClick={() => {
               hapticFeedback('selection');
+              setIsHighlighted(false);
               setIsDropdownOpen((prev) => !prev);
             }}
-            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20 active:scale-[0.99] ${isDropdownOpen
+            className={`relative w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md active:scale-[0.99] ${
+              isHighlighted
+                ? 'border-amber-300 ring-4 ring-amber-400 ring-offset-2 ring-offset-white shadow-xl shadow-amber-400/40 animate-pulse'
+                : isDropdownOpen
                 ? 'border-emerald-300 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-600/30'
-                : 'border-emerald-500/80 hover:border-emerald-400 hover:shadow-lg'
-              }`}
+                : 'border-emerald-500/80 hover:border-emerald-400 hover:shadow-lg shadow-emerald-600/20'
+            }`}
             aria-expanded={isDropdownOpen}
             aria-haspopup="listbox"
           >
@@ -212,16 +324,17 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
                   সার্ভিস বেছে নিন
                 </span>
                 <span className="block text-xs sm:text-sm font-black text-white truncate">
-                  {selectedService || 'সার্ভিস নির্বাচন করুন'}
+                  {currentService || 'সার্ভিস নির্বাচন করুন'}
                 </span>
               </div>
             </div>
 
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${isDropdownOpen
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${
+                isDropdownOpen
                   ? 'bg-white text-emerald-700 rotate-180 shadow-xs'
                   : 'bg-white/20 border border-white/25 text-white'
-                }`}
+              }`}
             >
               <ChevronDown className="w-4 h-4 stroke-[2.5]" />
             </div>
@@ -230,31 +343,36 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
           {/* Custom Dropdown Menu */}
           {isDropdownOpen && (
             <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border-2 border-emerald-200 shadow-2xl overflow-hidden py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-              <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
+              <div className="max-h-64 overflow-y-auto divide-y divide-gray-50 no-scrollbar">
                 {servicesList.map((svc) => {
-                  const isSelected = svc === selectedService;
+                  const isSelected = svc === currentService;
+                  const info = getServiceIconInfo(svc);
+                  const SvcIcon = info.icon;
                   return (
                     <button
                       key={svc}
                       type="button"
                       onClick={() => {
                         hapticFeedback('selection');
-                        setSelectedService(svc);
-                        setVisibleCount(INITIAL_COUNT);
-                        setIsDropdownOpen(false);
+                        setIsHighlighted(false);
+                        handleSelectService(svc);
                       }}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${isSelected
+                      className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors cursor-pointer ${
+                        isSelected
                           ? 'bg-emerald-50 text-emerald-950 font-black'
                           : 'hover:bg-gray-50 text-gray-800 font-bold'
-                        }`}
+                      }`}
                     >
                       <div className="flex items-center gap-2.5 truncate">
                         <div
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${isSelected
-                              ? 'bg-emerald-600 ring-4 ring-emerald-200'
-                              : 'bg-gray-300'
-                            }`}
-                        />
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${
+                            isSelected
+                              ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                              : `${info.bgClass} ${info.borderClass} ${info.colorClass}`
+                          }`}
+                        >
+                          <SvcIcon className="w-3.5 h-3.5" />
+                        </div>
                         <span className="text-xs sm:text-sm truncate">{svc}</span>
                       </div>
                       {isSelected && (
@@ -268,7 +386,7 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
           )}
         </div>
 
-        {/* Loading skeleton or 2-column grid or empty state */}
+        {/* Loading skeleton or empty state or prompt state or 2-column grid */}
         {isLoading && shops.length === 0 ? (
           <div className="grid grid-cols-2 gap-3">
             {[1, 2, 3, 4].map((i) => (
@@ -281,6 +399,56 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
               </div>
             ))}
           </div>
+        ) : !currentService ? (
+          <div className="space-y-3 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-emerald-600" />
+                <h3 className="text-xs sm:text-sm font-black text-gray-900">
+                  সার্ভিস বেছে নিন
+                </h3>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+              {servicesList.map((svc) => {
+                const info = getServiceIconInfo(svc);
+                const SvcIcon = info.icon;
+
+                return (
+                  <button
+                    key={svc}
+                    type="button"
+                    onClick={() => {
+                      hapticFeedback('selection');
+                      handleSelectService(svc);
+                      triggerHighlight();
+                    }}
+                    className="group relative flex items-center justify-between gap-2.5 sm:gap-3 p-3 sm:p-3.5 rounded-2xl border border-gray-200/90 bg-white hover:border-emerald-500 hover:bg-emerald-50/40 shadow-xs hover:shadow-md hover:-translate-y-0.5 text-left transition-all duration-150 active:scale-[0.98] cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                      {/* Category Tinted Icon Chip */}
+                      <div
+                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 border transition-all duration-200 group-hover:scale-110 shadow-xs ${info.bgClass} ${info.borderClass} ${info.colorClass}`}
+                      >
+                        <SvcIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                      </div>
+
+                      {/* Main Service Title Only (No Sub-text) */}
+                      <h4 className="text-xs sm:text-[13px] font-black text-gray-900 group-hover:text-emerald-700 leading-snug line-clamp-2 transition-colors">
+                        {svc}
+                      </h4>
+                    </div>
+
+                    {/* Click Indicator */}
+                    <div className="w-6 h-6 rounded-full bg-gray-100 group-hover:bg-emerald-600 text-gray-400 group-hover:text-white flex items-center justify-center shrink-0 transition-all duration-200 group-hover:translate-x-0.5 shadow-2xs">
+                      <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ) : filteredShops.length === 0 ? (
           <div className="py-7 px-4 text-center bg-gray-50/80 rounded-2xl border border-dashed border-gray-200 space-y-2.5">
             <Store className="w-7 h-7 text-gray-400 mx-auto" />
@@ -290,7 +458,7 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
             <div className="flex items-center justify-center pt-1">
               <button
                 type="button"
-                onClick={() => onOpenCustomRequest?.(selectedService)}
+                onClick={() => onOpenCustomRequest?.(currentService)}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
@@ -318,6 +486,15 @@ export const StoreGrid: React.FC<StoreGridProps> = ({ onStoreClick, onOpenCustom
           </div>
         )}
       </div>
+
+      {/* Service Selection Initial/On-demand Popup */}
+      <ServiceSelectPopup
+        isOpen={isServicePopupOpen}
+        services={servicesList}
+        selectedService={currentService}
+        onSelect={handleSelectServiceFromPopup}
+        onClose={handleCloseServicePopup}
+      />
 
       {/* Store Detail / Product Modal */}
       {selectedShop && (

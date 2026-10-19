@@ -32,6 +32,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(
     initialSelectedOrderId && user ? initialSelectedOrderId : null
   );
+  const [selectedService, setSelectedService] = useState<string>('');
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [showCustomItemModal, setShowCustomItemModal] = useState(false);
   const [showCustomRequestModal, setShowCustomRequestModal] = useState(false);
@@ -57,6 +58,31 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   });
   const [serviceIndex, setServiceIndex] = useState(0);
 
+  // Restore saved service selection from localStorage on first mount
+  useEffect(() => {
+    try {
+      const savedService = localStorage.getItem('customer_selected_service');
+      if (savedService) {
+        setSelectedService(savedService);
+      }
+    } catch (e) {
+      console.warn('Failed to read customer_selected_service from localStorage:', e);
+    }
+  }, []);
+
+  const handleSelectService = (svc: string) => {
+    setSelectedService(svc);
+    try {
+      if (svc) {
+        localStorage.setItem('customer_selected_service', svc);
+      } else {
+        localStorage.removeItem('customer_selected_service');
+      }
+    } catch (e) {
+      console.warn('Failed to save customer_selected_service to localStorage:', e);
+    }
+  };
+
   // Sync timing status in real time and every 30 seconds
   useEffect(() => {
     const syncTiming = () => {
@@ -76,6 +102,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
     if (resetTrigger !== undefined && resetTrigger > 0) {
       setSelectedOrderId(null);
       setSelectedShop(null);
+      // Selected service is preserved so customer doesn't have to re-select on home tap
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -247,6 +274,9 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
 
       {/* ── 3. Store Grid with "Select Service" Filter & Infinite Scroll ── */}
       <StoreGrid
+        selectedService={selectedService}
+        onSelectService={handleSelectService}
+        resetTrigger={resetTrigger}
         onStoreClick={(shop) => setSelectedShop(shop)}
         onOpenCustomRequest={(hint) => handleOpenCustomRequest(hint)}
       />

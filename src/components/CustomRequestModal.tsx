@@ -334,8 +334,23 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-[99999] bg-black/55 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+  if (!isOpen || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[99999] bg-black/55 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        minHeight: '100vh',
+        margin: 0,
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-gray-100 max-h-[92vh] overflow-y-auto space-y-4">
         {/* Header with Mascot */}
         <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -691,7 +706,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         onCancel={() => setShowPlatformClosedModal(false)}
       />
 
-    </div>
-
+    </div>,
+    document.body
   );
 };
