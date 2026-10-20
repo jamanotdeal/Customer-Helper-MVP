@@ -38,6 +38,7 @@ export interface LocationData {
   name?: string;
   details?: string;
   addressId?: string;
+  areaId?: string;
 }
 
 export interface ServerAddress {
@@ -58,6 +59,7 @@ export interface AllowedAreaPolygon {
   country?: string; // e.g. "Bangladesh"
   coordinates: { lat: number; lng: number }[]; // Outer ring polygon coordinates
   assignedHelperIds?: string[]; // IDs of helpers specifically assigned to this area
+  assignedAdminIds?: string[]; // IDs of admins assigned to manage this area
   allHelpersAssigned?: boolean; // If true or empty/unset by default, all helpers can serve this area
 }
 
@@ -140,6 +142,9 @@ export interface Order {
   updatedByCustomer?: boolean;
   referredBy?: string; // UID of referrer user who referred this customer
   referredUserCoinsAwarded?: number; // Referral bonus coins awarded to this customer for this order
+  areaId?: string; // Main matching zone ID
+  areaName?: string; // Main matching zone name
+  areaIds?: string[]; // All matching zone IDs
   lastEditedAt?: string;
   lastEditedBy?: 'customer' | 'helper' | 'admin';
   editHistory?: OrderEditHistoryItem[];
@@ -251,7 +256,9 @@ export interface UserProfile {
   coins?: number;            // Current coin balance
   totalEarnedCoins?: number; // Lifetime earned coins
   creditedOrderIds?: string[]; // Order IDs for which completion coins have been credited
-  assignedAreaIds?: string[]; // Specific sub-area IDs assigned to this helper
+  assignedAreaIds?: string[]; // Specific sub-area IDs assigned to this helper or admin
+  areaId?: string;           // Primary assigned area ID if single
+  areaIds?: string[];        // Array of assigned area IDs
   serveAllAreas?: boolean;   // If true, helper receives orders from all service areas
   referredBy?: string;       // Referrer UID if customer joined via referral
   referredOrdersRewardedCount?: number; // Count of delivered orders awarded with referral bonus
@@ -269,6 +276,8 @@ export interface HelperApplication {
   hasSmartphone: boolean;
   hasCycle: boolean;
   hasBike: boolean;
+  preferredAreaId?: string; // Applicant's preferred zone/area ID
+  assignedAreaIds?: string[]; // Zone/area IDs assigned by admin upon approval
   applicationType?: 'dedicated';
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELED';
   createdAt: string;
@@ -720,6 +729,8 @@ export interface AppNotification {
   type?: string;
   isAdminPush?: boolean;
   createdByAdmin?: boolean;
+  areaId?: string;     // Specific service zone targeted by normal admin
+  areaIds?: string[];  // Multiple service zones targeted
 }
 
 export interface RewardPrize {

@@ -17,6 +17,7 @@ import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
 import { PlatformClosedScheduleModal } from './PlatformClosedScheduleModal';
 import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
+import { ensureOrderCoordinates } from '@/lib/orderLocationGuard';
 
 interface RequestComposerProps {
   onOrderCreated: (order: Order) => void;
@@ -456,6 +457,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       return;
     }
 
+    // Require device location permission if account doesn't have map coordinates
+    const locResult = await ensureOrderCoordinates(user, deliveryLat, deliveryLng, deliveryAddress.trim());
+    if (!locResult.allowed) {
+      showAlert(
+        'লোকেশন পারমিশন আবশ্যক',
+        locResult.errorMessage || 'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+        'warning'
+      );
+      return;
+    }
+
     if (!scheduledOptions?.isScheduled) {
       const isConfirmed = await showConfirm(
         'Confirm Your Request',
@@ -483,8 +495,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       //    them (and without the old address id) rather than pinned there.
       const deliveryCoordsFit = deliveryLat !== undefined && deliveryLng !== undefined
         && describesSamePlace(deliveryCoordsTextRef.current, deliveryAddress);
-      const orderDeliveryLat = deliveryCoordsFit ? deliveryLat : undefined;
-      const orderDeliveryLng = deliveryCoordsFit ? deliveryLng : undefined;
+      const orderDeliveryLat = locResult.lat ?? (deliveryCoordsFit ? deliveryLat : undefined);
+      const orderDeliveryLng = locResult.lng ?? (deliveryCoordsFit ? deliveryLng : undefined);
       const pickupCoordsFit = pickupLat !== undefined && pickupLng !== undefined
         && describesSamePlace(pickupCoordsTextRef.current, pickupNote);
       const orderPickupLat = pickupCoordsFit ? pickupLat : undefined;
@@ -518,9 +530,13 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         address: finalDeliveryAddressText,
         lat: orderDeliveryLat,
         lng: orderDeliveryLng,
+        areaId: locResult.areaId,
         addressId: effectiveDelivAddressId,
       };
       saveDefaultDeliveryLocation(finalDelivLoc);
+      if (user?.uid) {
+        fallbackStore.saveCustomerLocation(user.uid, finalDelivLoc, locResult.areaId).catch(() => {});
+      }
       if (service) {
         saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
       }
@@ -623,6 +639,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         missingItemPreference: undefined,
         pickupLocation: pickupLoc,
         deliveryLocation: finalDelivLoc,
+        areaId: locResult.areaId,
+        areaIds: locResult.areaId ? [locResult.areaId] : undefined,
         additionalNote: undefined,
         status: 'PENDING',
 

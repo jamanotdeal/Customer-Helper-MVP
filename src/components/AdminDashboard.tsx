@@ -9,6 +9,17 @@ import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/fires
 import { useModal } from './CustomModal';
 import { getOrderAcceptanceDurationText, getElapsedTime, getDeliveryDurationText, formatDurationMinutes } from '@/lib/timeUtils';
 import { AreaDrawerModal } from './admin/AreaDrawerModal';
+import { ApproveHelperModal } from './admin/ApproveHelperModal';
+import {
+  isOrderInZone,
+  isOrderInAnyZone,
+  isHelperInZone,
+  isHelperInAnyZone,
+  isAdminInZone,
+  isAdminInAnyZone,
+  isUserInZoneScope,
+  getAreasForPoint,
+} from '@/lib/geofenceUtils';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -134,6 +145,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClearInitialOrder,
 }) => {
   const { user: currentUser } = useAuth();
+  const isSuperAdmin = currentUser?.isSuperAdmin === true;
+  const isAdmin = currentUser?.isAdmin === true;
+  const isNormalAdmin = isAdmin && !isSuperAdmin;
   const { showAlert, showConfirm } = useModal();
   const [activeTab, setActiveTab] = useState<
     'EXCEPTIONS' | 'ORDERS' | 'STORE_ORDERS' | 'USERS_LIST' | 'REVENUE' | 'GROWTH' | 'HELPERS' | 'WITHDRAWALS' | 'SHOPS' | 'FEEDBACK' | 'CUSTOM_MODALS' | 'NOTIFICATIONS' | 'PRICING' | 'SETTINGS' | 'REWARDS' | 'ADDRESSES'
@@ -223,6 +237,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [outOfServiceAreaMessage, setOutOfServiceAreaMessage] = useState<string>('');
   const [showAreaDrawerModal, setShowAreaDrawerModal] = useState<boolean>(false);
   const [editingArea, setEditingArea] = useState<AllowedAreaPolygon | null>(null);
+
+  // Zone scoping for Admins & Helper approvals
+  const [selectedZoneFilter, setSelectedZoneFilter] = useState<string>(
+    fallbackStore.adminZoneFilter || 'ALL'
+  );
+  const [approvingHelperApp, setApprovingHelperApp] = useState<HelperApplication | null>(null);
+
+  const adminAssignedAreaIds = useMemo(() => {
+    const directList = currentUser?.assignedAreaIds || (currentUser?.areaId ? [currentUser.areaId] : (currentUser as any)?.areaIds || []);
+    const fleetList = allowedDeliveryAreas
+      .filter((a) => a.assignedAdminIds?.includes(currentUser?.uid || ''))
+      .map((a) => a.id);
+    const combined = Array.from(new Set([...directList, ...fleetList])).filter(Boolean);
+    return combined;
+  }, [currentUser?.assignedAreaIds, currentUser?.areaId, (currentUser as any)?.areaIds, currentUser?.uid, allowedDeliveryAreas]);
+
+  const assignedZoneNames = useMemo(() => {
+    if (!adminAssignedAreaIds || adminAssignedAreaIds.length === 0) return '';
+    const names = adminAssignedAreaIds
+      .map((id) => allowedDeliveryAreas.find((a) => a.id === id)?.name || id)
+      .filter(Boolean);
+    return names.join(', ');
+  }, [adminAssignedAreaIds, allowedDeliveryAreas]);
+
+  // Sync / set default zone filter for non-super admins or listen to store
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      if (adminAssignedAreaIds.length === 1) {
+        setSelectedZoneFilter(adminAssignedAreaIds[0]);
+      } else if (adminAssignedAreaIds.length > 1) {
+        if (selectedZoneFilter !== 'ALL' && !adminAssignedAreaIds.includes(selectedZoneFilter)) {
+          setSelectedZoneFilter(adminAssignedAreaIds[0]);
+        }
+      }
+    } else {
+      const syncFromStore = () => {
+        if (fallbackStore.adminZoneFilter && fallbackStore.adminZoneFilter !== selectedZoneFilter) {
+          setSelectedZoneFilter(fallbackStore.adminZoneFilter);
+        }
+      };
+      const unsub = fallbackStore.subscribe(syncFromStore);
+      return () => unsub();
+    }
+  }, [isSuperAdmin, adminAssignedAreaIds, selectedZoneFilter]);
+
+  // Effective active zone IDs to filter data by
+  const targetZoneIds = useMemo(() => {
+    if (isSuperAdmin) {
+      if (selectedZoneFilter === 'ALL') return null; // view all zones
+      return [selectedZoneFilter];
+    }
+    // For regular admins: strictly their assigned zones only, no option to change
+    if (adminAssignedAreaIds.length === 0) {
+      return []; // Not assigned to any zone
+    }
+    return adminAssignedAreaIds;
+  }, [isSuperAdmin, selectedZoneFilter, adminAssignedAreaIds]);
+
+  const isZoneFiltered = targetZoneIds !== null;
 
   // Payback instructions & Store types
   const [bkashInstructions, setBkashInstructions] = useState<string>('');
@@ -1302,6 +1375,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(id);
   }, []);
 
+  const scopedAllOrders = useMemo(() => {
+    if (!isZoneFiltered || !targetZoneIds) return allOrders;
+    return allOrders.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas));
+  }, [allOrders, isZoneFiltered, targetZoneIds, allowedDeliveryAreas]);
+
   // Needs Attention Queue calculations — computed from overall allOrders dataset for complete accuracy across DB
   const { cancellingRequests, notAcceptedRequests, feeAdjustmentsPending, delayedOrders } = useMemo(() => {
     const now = Date.now();
@@ -1309,7 +1387,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const notAccepted: Order[] = [];
     const feeAdjustments: Order[] = [];
     const delayed: Order[] = [];
-    allOrders.forEach((o) => {
+    scopedAllOrders.forEach((o) => {
       if (o.cancellationRequest && o.cancellationRequest.status === 'PENDING') cancelling.push(o);
       if (o.status === 'PENDING' && !o.helperId && o.cancellationRequest?.status !== 'APPROVED') notAccepted.push(o);
       if (o.feeAdjustment && o.feeAdjustment.status === 'PENDING') feeAdjustments.push(o);
@@ -1328,9 +1406,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       feeAdjustmentsPending: feeAdjustments,
       delayedOrders: delayed,
     };
-  }, [allOrders, minuteTick]);
+  }, [scopedAllOrders, minuteTick]);
 
-  const pendingApps = useMemo(() => applications.filter((a) => a.status === 'PENDING'), [applications]);
+  const pendingApps = useMemo(() => {
+    let list = applications.filter((a) => a.status === 'PENDING');
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((a) => {
+        if (a.assignedAreaIds && a.assignedAreaIds.some((id) => targetZoneIds.includes(id))) return true;
+        if (a.preferredAreaId && targetZoneIds.includes(a.preferredAreaId)) return true;
+        return !a.assignedAreaIds?.length && !a.preferredAreaId;
+      });
+    }
+    return list;
+  }, [applications, isZoneFiltered, targetZoneIds]);
+
   const pendingWds = useMemo(() => withdrawals.filter((w) => w.status === 'PENDING'), [withdrawals]);
   const pendingStoreApps = useMemo(() => storeApplications.filter((a) => a.status === 'PENDING'), [storeApplications]);
 
@@ -1340,11 +1429,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const allOrdersById = React.useMemo(() => {
     const map = new Map<string, Order>();
-    allOrders.forEach((o) => {
+    scopedAllOrders.forEach((o) => {
       if (!map.has(o.id)) map.set(o.id, o);
     });
     return map;
-  }, [allOrders]);
+  }, [scopedAllOrders]);
 
   const badFeedbacks = React.useMemo(() => {
     return feedbacks
@@ -1381,7 +1470,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     badFeedbacks.length;
 
   const avgDeliveryTimeMins = React.useMemo(() => {
-    const delivered = allOrders.filter(o => o.status === 'DELIVERED');
+    const delivered = scopedAllOrders.filter(o => o.status === 'DELIVERED');
     let totalMs = 0;
     let count = 0;
     delivered.forEach(o => {
@@ -1394,12 +1483,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     });
     return count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0;
-  }, [allOrders]);
+  }, [scopedAllOrders]);
 
   const avgAcceptanceTimeMins = React.useMemo(() => {
     let totalMs = 0;
     let count = 0;
-    allOrders.forEach(o => {
+    scopedAllOrders.forEach(o => {
       if (o.acceptedAt && o.createdAt) {
         const diff = new Date(o.acceptedAt).getTime() - new Date(o.createdAt).getTime();
         if (diff > 0) {
@@ -1409,7 +1498,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     });
     return count > 0 ? Math.round(totalMs / (1000 * 60 * count)) : 0;
-  }, [allOrders]);
+  }, [scopedAllOrders]);
 
   const overallReviewStats = React.useMemo(() => {
     const totalCount = exactFeedbacksCount !== null ? exactFeedbacksCount : feedbacks.length;
@@ -1431,7 +1520,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Work hours of the orders placed on the selected days (see dateRange).
   const totalHoursOfWork = React.useMemo(() => {
-    const delivered = allOrders.filter(o => o.status === 'DELIVERED' && isInRange(o.createdAt, rangeStartIso, rangeEndIso));
+    const delivered = scopedAllOrders.filter(o => o.status === 'DELIVERED' && isInRange(o.createdAt, rangeStartIso, rangeEndIso));
     let totalMs = 0;
     delivered.forEach(o => {
       if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
@@ -1443,16 +1532,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
     const hours = totalMs / (1000 * 60 * 60);
     return hours > 0 ? (hours >= 10 ? Math.round(hours).toString() : hours.toFixed(1)) : '0';
-  }, [allOrders, rangeStartIso, rangeEndIso]);
+  }, [scopedAllOrders, rangeStartIso, rangeEndIso]);
 
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
-  const approvedHelpersCount = applications.filter((a) => a.status === 'APPROVED').length;
 
-  const handleApproveApp = (appId: string) => {
-    fallbackStore.approveHelperApp(appId);
+  const approvedHelpersCount = useMemo(() => {
+    let list = applications.filter((a) => a.status === 'APPROVED');
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((a) => {
+        if (a.assignedAreaIds && a.assignedAreaIds.some((id) => targetZoneIds.includes(id))) return true;
+        if (a.preferredAreaId && targetZoneIds.includes(a.preferredAreaId)) return true;
+        const u = users.find((user) => user.uid === a.userId);
+        if (u?.serveAllAreas) return true;
+        return u?.assignedAreaIds?.some((id) => targetZoneIds.includes(id));
+      });
+    }
+    return list.length;
+  }, [applications, users, isZoneFiltered, targetZoneIds]);
+
+  const handleApproveApp = (appOrId: HelperApplication | string) => {
+    const app = typeof appOrId === 'string'
+      ? applications.find((a) => a.id === appOrId) || fallbackStore.helperApplications.get(appOrId) || null
+      : appOrId;
+    if (app) {
+      setApprovingHelperApp(app);
+    } else if (typeof appOrId === 'string') {
+      fallbackStore.approveHelperApp(appOrId);
+      setApplications(Array.from(fallbackStore.helperApplications.values()));
+      setUsers(Array.from(fallbackStore.users.values()));
+      showAlert('হেলপার অনুমোদিত', 'হেলপার আবেদন সফলভাবে অনুমোদন করা হয়েছে।', 'success');
+    }
+  };
+
+  const handleConfirmApproveHelper = async (
+    appId: string,
+    assignedAreaIds: string[],
+    serveAllAreas?: boolean
+  ) => {
+    await fallbackStore.approveHelperApp(appId, assignedAreaIds, serveAllAreas);
     setApplications(Array.from(fallbackStore.helperApplications.values()));
     setUsers(Array.from(fallbackStore.users.values()));
-    showAlert('হেলপার অনুমোদিত', 'হেলপার আবেদন সফলভাবে অনুমোদন করা হয়েছে।', 'success');
+    setAllowedDeliveryAreas([...(fallbackStore.pricingSettings.allowedDeliveryAreas || [])]);
+    setPricing({ ...fallbackStore.pricingSettings });
+    setApprovingHelperApp(null);
+    showAlert(
+      'হেলপার অনুমোদিত ও জোন নির্ধারিত',
+      'হেলপার আবেদন অনুমোদন করা হয়েছে এবং সার্ভিস জোন সফলভাবে এসাইন করা হয়েছে।',
+      'success'
+    );
   };
 
   const handleDeleteApp = async (appId: string) => {
@@ -1857,9 +1984,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const scopedUsers = React.useMemo(() => {
+    if (!isZoneFiltered || !targetZoneIds) return users;
+    const ordersSource = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
+    return users.filter((u) => isUserInZoneScope(u, targetZoneIds, allowedDeliveryAreas, ordersSource));
+  }, [users, isZoneFiltered, targetZoneIds, serverOrders, allOrders, orders, allowedDeliveryAreas]);
+
+  const scopedApplications = React.useMemo(() => {
+    if (!isZoneFiltered || !targetZoneIds) return applications;
+    return applications.filter((a) => {
+      if (a.assignedAreaIds && a.assignedAreaIds.some((id) => targetZoneIds.includes(id))) return true;
+      if (a.preferredAreaId && targetZoneIds.includes(a.preferredAreaId)) return true;
+      return false;
+    });
+  }, [applications, isZoneFiltered, targetZoneIds]);
+
+  const scopedShops = React.useMemo(() => {
+    if (!isZoneFiltered || !targetZoneIds) return shops;
+    return shops.filter((s) => {
+      if ((s as any).areaId && targetZoneIds.includes((s as any).areaId)) return true;
+      if ((s as any).areaIds && (s as any).areaIds.some((aid: string) => targetZoneIds.includes(aid))) return true;
+      if (s.location?.lat && s.location?.lng) {
+        const matched = getAreasForPoint({ lat: s.location.lat, lng: s.location.lng }, allowedDeliveryAreas);
+        return matched.some((a) => targetZoneIds.includes(a.id));
+      }
+      return false;
+    });
+  }, [shops, isZoneFiltered, targetZoneIds, allowedDeliveryAreas]);
+
   const helperOptions = React.useMemo(() => {
     const map = new Map<string, { id: string; name: string; phone?: string }>();
-    applications.forEach((app) => {
+    const eligibleHelpers = scopedUsers.filter((u) => u.role === 'helper' || u.isHelper);
+
+    scopedApplications.forEach((app) => {
       if (app.userId) {
         map.set(app.userId, {
           id: app.userId,
@@ -1868,17 +2025,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
       }
     });
-    users.forEach((u) => {
-      if (u.role === 'helper' || u.isHelper) {
-        const existing = map.get(u.uid);
-        map.set(u.uid, {
-          id: u.uid,
-          name: u.displayName || existing?.name || 'Helper',
-          phone: u.alternativePhone || existing?.phone,
-        });
-      }
+
+    eligibleHelpers.forEach((u) => {
+      const existing = map.get(u.uid);
+      map.set(u.uid, {
+        id: u.uid,
+        name: u.displayName || existing?.name || 'Helper',
+        phone: u.alternativePhone || existing?.phone,
+      });
     });
-    allOrders.forEach((o) => {
+
+    scopedAllOrders.forEach((o) => {
       if (o.helperId && !map.has(o.helperId)) {
         map.set(o.helperId, {
           id: o.helperId,
@@ -1887,13 +2044,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [applications, users, allOrders]);
+  }, [scopedApplications, scopedUsers, scopedAllOrders]);
 
   // --- Filtering & Sorting Helper Functions ---
 
   // 1. Process Orders List (Search, Filter by Status, Filter by Helper, Sort by Newest default)
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
+
+    // Zone scoping filter
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas));
+    }
 
     // Date range — the days read from the server for this list. An exact
     // order id typed into search is shown whatever its date (it is fetched on
@@ -1958,6 +2120,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // Date range — the days read from the server for this list.
     list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
+
+    // Zone scoping filter
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((so) => {
+        const parentOrder = fallbackStore.orders.get(so.parentOrderId) || allOrders.find((o) => o.id === so.parentOrderId);
+        if (parentOrder) {
+          return isOrderInAnyZone(parentOrder, targetZoneIds, allowedDeliveryAreas);
+        }
+        return false;
+      });
+    }
 
     // Search query filter
     if (storeOrdersAppliedSearchQuery.trim()) {
@@ -2174,6 +2347,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     let list = Array.from(helperMap.values());
 
+    // Zone filter for helpers
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((h) => {
+        const u = users.find((user) => user.uid === h.id);
+        if (u) {
+          return isUserInZoneScope(u, targetZoneIds, allowedDeliveryAreas);
+        }
+        const app = applications.find((a) => a.userId === h.id);
+        if (app) {
+          if (app.assignedAreaIds?.some((id) => targetZoneIds.includes(id))) return true;
+          if (app.preferredAreaId && targetZoneIds.includes(app.preferredAreaId)) return true;
+        }
+        return false;
+      });
+    }
+
     // Search
     if (helpersAppliedSearchQuery.trim()) {
       const q = helpersAppliedSearchQuery.toLowerCase().trim();
@@ -2199,7 +2388,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // walletInputsVersion stands for everything the wallets are computed from
     // inside the store (orders, withdrawals, shop orders, shops, pricing).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, helperSubView, dateRange.preset, rangeStartIso, rangeEndIso, applications, users, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion]);
+  }, [activeTab, helperSubView, dateRange.preset, rangeStartIso, rangeEndIso, applications, users, allOrders, helpersAppliedSearchQuery, sortBy, walletInputsVersion, isZoneFiltered, targetZoneIds]);
 
   // 4. Unified Users List with Live Running States
   //
@@ -2289,6 +2478,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (usersEndDate) {
       const endMs = new Date(`${usersEndDate}T23:59:59.999`).getTime();
       list = list.filter((item) => new Date(item.user.createdAt).getTime() <= endMs);
+    }
+
+    // Zone scoping filter for users
+    if (isZoneFiltered && targetZoneIds) {
+      list = list.filter((item) =>
+        isUserInZoneScope(item.user, targetZoneIds, allowedDeliveryAreas, ordersSource)
+      );
     }
 
     if (usersAppliedSearchQuery.trim()) {
@@ -2411,6 +2607,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     activeTab, serverUsers, users, serverOrders, allOrders, orders,
     usersStartDate, usersEndDate, usersAppliedSearchQuery, statusFilter, audienceFilter,
     usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortColumn, usersSortDirection, usersSortByCoins, sortBy,
+    isZoneFiltered, targetZoneIds, allowedDeliveryAreas,
   ]);
 
   // The two big order lists, filtered and sorted once per change of their
@@ -2420,7 +2617,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     () => (activeTab === 'ORDERS' ? getProcessedOrders(serverOrders !== null ? serverOrders : allOrders) : []),
     // getProcessedOrders reads exactly the filters listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy]
+    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy, isZoneFiltered, targetZoneIds, allowedDeliveryAreas]
   );
   // Which order is each customer's first — for the "first order" badge.
   const firstOrderIds = React.useMemo(
@@ -2526,10 +2723,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return map;
   }, [shops]);
 
-  const isSuperAdmin = currentUser?.isSuperAdmin;
-  const isAdmin = currentUser?.isAdmin;
-  const isNormalAdmin = isAdmin && !isSuperAdmin;
-
   const tabsList = [
     { key: 'EXCEPTIONS', label: 'Needs Attention', icon: AlertCircle, color: 'text-amber-500' },
     { key: 'GROWTH', label: 'Growth & Everyday Rates', icon: BarChart2, color: 'text-indigo-600' },
@@ -2572,6 +2765,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (activeTab === 'HELPERS' && dateRange.preset === 'ALL_TIME') || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
   );
 
+  // If no zone is assigned to a normal admin, he cannot see anything
+  if (!isSuperAdmin && adminAssignedAreaIds.length === 0) {
+    return (
+      <div className="max-w-xl mx-auto my-16 p-8 sm:p-10 bg-white rounded-3xl border border-red-200 shadow-2xl text-center space-y-6 animate-in fade-in zoom-in-95 duration-200">
+        <div className="w-20 h-20 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center mx-auto shadow-inner border border-red-200">
+          <MapPin className="w-10 h-10 animate-bounce text-red-500" />
+        </div>
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 text-xs font-black uppercase tracking-wider border border-red-200">
+            <span>🔒 সার্ভিস জোন নির্ধারিত নেই</span>
+          </div>
+          <h2 className="text-2xl font-black text-gray-900 tracking-tight">
+            অ্যাক্সেস সীমাবদ্ধ (No Zone Assigned)
+          </h2>
+          <p className="text-sm text-gray-600 max-w-md mx-auto leading-relaxed">
+            আপনার অ্যাকাউন্টে কোনো সার্ভিস জোন বরাদ্দ করা হয়নি। অ্যাডমিন হিসেবে কোনো ডাটা (অর্ডার, হেলপার, অ্যাপ্লিকেশন ইত্যাদি) অ্যাক্সেস করতে হলে আপনাকে নির্দিষ্ট জোনে অ্যাসাইন থাকতে হবে।
+          </p>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium text-left space-y-1.5">
+          <p className="font-extrabold flex items-center gap-1.5 text-amber-950">
+            <span>ℹ️ পরবর্তী করণীয়:</span>
+          </p>
+          <p>
+            অনুগ্রহ করে সুপার অ্যাডমিনের সাথে যোগাযোগ করুন। সুপার অ্যাডমিন আপনাকে নির্দিষ্ট কর্মএলাকা/জোনে অ্যাসাইন করার সাথে সাথেই আপনি শুধু সেই জোনের তথ্য দেখতে ও পরিচালনা করতে পারবেন।
+          </p>
+        </div>
+
+        <div className="pt-2">
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-2.5 rounded-2xl bg-gray-900 hover:bg-gray-800 text-white text-xs font-black transition-all shadow-md active:scale-95 cursor-pointer"
+          >
+            পেজ রিফ্রেশ করুন
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isNormalAdmin && allowedAdminTabs.length === 0) {
     return (
       <div className="max-w-md mx-auto my-12 p-8 bg-white rounded-3xl border border-gray-150 shadow-soft text-center space-y-4">
@@ -2600,7 +2833,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <h1 className="font-extrabold text-xl md:text-2xl tracking-tight text-white font-sans">
                   Jamanot Admin Dashboard
                 </h1>
-                <p className="text-xs md:text-sm text-purple-200 font-medium">
+                <p className="text-xs md:text-sm text-purple-200 font-medium mt-1">
                   Real-time operations, scalable pagination, helper assignment & analytics control.
                 </p>
               </div>
@@ -2610,7 +2843,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex items-center flex-wrap gap-2">
             <button
               onClick={() => setShowPushNotificationModal(true)}
-              className="text-xs font-extrabold px-3 py-2 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center space-x-2 shadow-lg shadow-purple-950/40 transition-all border border-purple-400/30 active:scale-95"
+              className="text-xs font-extrabold px-3 py-2 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white flex items-center space-x-2 shadow-lg shadow-purple-950/40 transition-all border border-purple-400/30 active:scale-95 cursor-pointer"
             >
               <Bell className="w-4 h-4 text-purple-200" />
               <span className="hidden sm:inline">Send Push Notification</span>
@@ -2671,9 +2904,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-gray-900">
-              {exactTotalOrders !== null ? exactTotalOrders : allOrders.length}
+              {isZoneFiltered ? scopedAllOrders.length : (exactTotalOrders !== null ? exactTotalOrders : allOrders.length)}
             </span>
-            <span className="text-xs text-gray-500">total in system</span>
+            <span className="text-xs text-gray-500">{isZoneFiltered ? 'in selected zone' : 'total in system'}</span>
           </div>
         </div>
 
@@ -2821,7 +3054,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-gray-900">
-              {exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount}
+              {isZoneFiltered ? approvedHelpersCount : (exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount)}
             </span>
             <span className="text-xs text-amber-600 font-semibold">({pendingApps.length} pending app)</span>
           </div>
@@ -2915,7 +3148,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
           >
             <Bike className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Helpers ({exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount})</span>
+            <span>Helpers ({isZoneFiltered ? approvedHelpersCount : (exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount)})</span>
             {pendingApps.length > 0 && (
               <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] shrink-0 font-bold">
                 {pendingApps.length} app
@@ -5328,6 +5561,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onEditCoins={(target) => handleOpenEditCoins(target)}
                             onToggleAdmin={(targetUser, makeAdmin) => handleToggleAdminRole(targetUser, makeAdmin)}
                             onToggleSuperAdmin={(targetUser, makeSuperAdmin) => handleToggleSuperAdminRole(targetUser, makeSuperAdmin)}
+                            onConvertToHelper={(targetUser) => {
+                              setSelectedUserId(targetUser.uid);
+                            }}
+                            onConvertToCustomer={async (targetUser) => {
+                              const confirmed = await showConfirm(
+                                'কাস্টমার অ্যাকাউন্টে রূপান্তর',
+                                `আপনি কি ${targetUser.displayName}-কে Admin থেকে সাধারণ Customer অ্যাকাউন্টে পরিবর্তন করতে চান?`,
+                                'হ্যাঁ, Customer করুন',
+                                'বাতিল'
+                              );
+                              if (!confirmed) return;
+                              await fallbackStore.convertUserRole(targetUser.uid, 'customer', []);
+                              setUsers(Array.from(fallbackStore.users.values()));
+                              showAlert('রূপান্তর সম্পন্ন', `${targetUser.displayName} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
+                            }}
                             onToggleBlock={async (targetUser) => {
                               if (targetUser.isBlocked) {
                                 const confirmed = await showConfirm(
@@ -5387,10 +5635,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 4: REVENUE ANALYTICS TAB --- */}
       {activeTab === 'REVENUE' && isTabAllowed('REVENUE') && (
         <RevenueAnalytics
-          orders={allOrders}
+          orders={scopedAllOrders}
           pricing={pricing}
-          shops={shops}
-          users={users}
+          shops={scopedShops}
+          users={scopedUsers}
           feedbacks={feedbacks}
           serverTotalDeliveryFees={exactTotalDeliveryFees}
           serverTotalProductCosts={exactTotalProductCosts}
@@ -5401,8 +5649,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB: GROWTH & EVERYDAY RATES TAB --- */}
       {activeTab === 'GROWTH' && isTabAllowed('GROWTH') && (
         <GrowthAnalytics
-          orders={allOrders}
-          users={users}
+          orders={scopedAllOrders}
+          users={scopedUsers}
           feedbacks={feedbacks}
         />
       )}
@@ -5491,10 +5739,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Live Earth Satellite Map View Component */}
             {helperSubView === 'MAP' && (
               <AdminHelperMapView
-                users={users}
-                orders={orders}
-                applications={applications}
-                allowedDeliveryAreas={allowedDeliveryAreas}
+                users={scopedUsers}
+                orders={isZoneFiltered && targetZoneIds ? orders.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas)) : orders}
+                applications={scopedApplications}
+                allowedDeliveryAreas={isZoneFiltered && targetZoneIds ? allowedDeliveryAreas.filter((a) => targetZoneIds.includes(a.id)) : allowedDeliveryAreas}
                 onSelectHelper={(h) => setSelectedHelper(h)}
                 onSelectUser={(uid) => setSelectedUserId(uid)}
                 onUpdateHelperType={handleUpdateHelperType}
@@ -5622,38 +5870,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   {/* Sub-Areas Cards List */}
-                  <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
-                    <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <Square className="w-5 h-5 text-emerald-600" />
-                        <h4 className="font-extrabold text-base text-gray-900">
-                          নির্ধারিত সাব-এরিয়া ও হেলপার তালিকা ({allowedDeliveryAreas.length})
-                        </h4>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingArea(null);
-                          setShowAreaDrawerModal(true);
-                        }}
-                        className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Draw Area</span>
-                      </button>
-                    </div>
+                  {(() => {
+                    const visibleAreas = isZoneFiltered && targetZoneIds
+                      ? allowedDeliveryAreas.filter((a) => targetZoneIds.includes(a.id))
+                      : allowedDeliveryAreas;
 
-                    {allowedDeliveryAreas.length === 0 ? (
-                      <div className="p-10 text-center text-xs text-gray-400">
-                        <Globe className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                        <p className="font-bold text-gray-600">কোনো সার্ভিস সাব-এরিয়া ড্র করা হয়নি।</p>
-                        <p className="text-[11px] text-gray-400 mt-1">
-                          এলাকা যুক্ত করতে উপরের &ldquo;Add Sub-Area&rdquo; বাটনে ক্লিক করুন।
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {allowedDeliveryAreas.map((area) => {
+                    return (
+                      <div className="bg-white rounded-3xl border border-gray-100 shadow-soft overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <Square className="w-5 h-5 text-emerald-600" />
+                            <h4 className="font-extrabold text-base text-gray-900">
+                              নির্ধারিত সাব-এরিয়া ও হেলপার তালিকা ({visibleAreas.length})
+                            </h4>
+                          </div>
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingArea(null);
+                                setShowAreaDrawerModal(true);
+                              }}
+                              className="py-1.5 px-3 rounded-xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Draw Area</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {visibleAreas.length === 0 ? (
+                          <div className="p-10 text-center text-xs text-gray-400">
+                            <Globe className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                            <p className="font-bold text-gray-600">কোনো সার্ভিস সাব-এরিয়া ড্র করা হয়নি।</p>
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              এলাকা যুক্ত করতে উপরের &ldquo;Add Sub-Area&rdquo; বাটনে ক্লিক করুন।
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {visibleAreas.map((area) => {
                           const isAllHelpers =
                             area.allHelpersAssigned !== false &&
                             (!area.assignedHelperIds || area.assignedHelperIds.length === 0);
@@ -5767,13 +6023,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     )}
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
+            </div>
+          );
+        })()}
 
             {/* Helper Applications Sub-View */}
             {helperSubView === 'APPLICATIONS' && (() => {
               let filtered = [...applications];
+              if (isZoneFiltered && targetZoneIds) {
+                filtered = filtered.filter((a) => {
+                  if (a.assignedAreaIds && a.assignedAreaIds.some((id) => targetZoneIds.includes(id))) return true;
+                  if (a.preferredAreaId && targetZoneIds.includes(a.preferredAreaId)) return true;
+                  return false;
+                });
+              }
               if (appsStartDate) {
                 const startMs = new Date(`${appsStartDate}T00:00:00`).getTime();
                 filtered = filtered.filter((a) => new Date(a.createdAt).getTime() >= startMs);
@@ -6221,6 +6486,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'WITHDRAWALS' && isTabAllowed('WITHDRAWALS') && (() => {
         const withdrawalsSource = serverWithdrawals !== null ? serverWithdrawals : withdrawals;
         let filtered = [...withdrawalsSource];
+        if (isZoneFiltered && targetZoneIds) {
+          filtered = filtered.filter((w) => {
+            const u = users.find((usr) => usr.uid === w.helperId);
+            if (u) {
+              if (u.serveAllAreas) return true;
+              if (u.assignedAreaIds && u.assignedAreaIds.some((id) => targetZoneIds.includes(id))) return true;
+              if (u.areaId && targetZoneIds.includes(u.areaId)) return true;
+              if (allowedDeliveryAreas.some((a) => targetZoneIds.includes(a.id) && a.assignedHelperIds?.includes(u.uid))) return true;
+            }
+            return false;
+          });
+        }
         if (withdrawalStatusFilter !== 'ALL') {
           filtered = filtered.filter((w) => w.status === withdrawalStatusFilter);
         }
@@ -8444,6 +8721,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const allShopCategories = Array.from(dynamicCats).sort();
 
         let filteredShops = [...shopsSource];
+        if (isZoneFiltered && targetZoneIds) {
+          filteredShops = filteredShops.filter((s) => {
+            if ((s as any).areaId && targetZoneIds.includes((s as any).areaId)) return true;
+            if ((s as any).areaIds && (s as any).areaIds.some((aid: string) => targetZoneIds.includes(aid))) return true;
+            if (s.location?.lat && s.location?.lng) {
+              const matched = getAreasForPoint({ lat: s.location.lat, lng: s.location.lng }, allowedDeliveryAreas);
+              return matched.some((a) => targetZoneIds.includes(a.id));
+            }
+            return false;
+          });
+        }
         if (shopsCategoryFilter !== 'ALL') {
           filteredShops = filteredShops.filter((s) => (s.type || '').trim() === shopsCategoryFilter.trim());
         }
@@ -10460,6 +10748,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         const feedbacksSource = serverFeedbacks !== null ? serverFeedbacks : feedbacks;
         let filteredFeedbacks = [...feedbacksSource];
+        if (isZoneFiltered && targetZoneIds) {
+          filteredFeedbacks = filteredFeedbacks.filter((f) => {
+            const o = fallbackStore.orders.get(f.orderId) || allOrders.find((ord) => ord.id === f.orderId);
+            if (o) {
+              return isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas);
+            }
+            return false;
+          });
+        }
         if (feedbackAppliedSearchQuery.trim()) {
           const q = feedbackAppliedSearchQuery.toLowerCase().trim();
           filteredFeedbacks = filteredFeedbacks.filter(
@@ -11039,7 +11336,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* 4.5 High Duration Deliveries Modal */}
       {showHighDurationModal && (() => {
-        const highDurationOrders = allOrders
+        const highDurationOrders = scopedAllOrders
           .filter(o => o.status === 'DELIVERED' && o.deliveredAt && (o.acceptedAt || o.createdAt))
           .map(o => {
             const durationMs = new Date(o.deliveredAt!).getTime() - new Date(o.acceptedAt || o.createdAt).getTime();
@@ -11328,6 +11625,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <AdminPushNotificationModal
           editingNotification={editingNotification}
           initialData={duplicateNotification}
+          targetZoneIds={targetZoneIds}
+          isSuperAdmin={isSuperAdmin}
           onClose={() => {
             setShowPushNotificationModal(false);
             setEditingNotification(null);
@@ -11340,7 +11639,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {(showAddAppModal || editingApp) && (
         <AdminHelperAppModal
           application={editingApp}
-          users={users}
+          users={scopedUsers}
           onClose={() => {
             setShowAddAppModal(false);
             setEditingApp(null);
@@ -11564,11 +11863,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           areaToEdit={editingArea}
           existingAreas={allowedDeliveryAreas}
           helpers={users.filter((u) => u.isHelper || u.role === 'helper')}
+          admins={users.filter((u) => u.isAdmin || u.role === 'admin')}
           onClose={() => {
             setShowAreaDrawerModal(false);
             setEditingArea(null);
           }}
-          onSaveArea={async (savedArea, assignedHelperIds, allHelpers) => {
+          onSaveArea={async (savedArea, assignedHelperIds, allHelpers, assignedAdminIds) => {
             const updatedAreas = (() => {
               const idx = allowedDeliveryAreas.findIndex((a) => a.id === savedArea.id);
               if (idx > -1) {
@@ -11608,17 +11908,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 const updatedUser = { ...h, assignedAreaIds: areaList };
                 await fallbackStore.saveUser(updatedUser);
               }
-              setUsers(Array.from(fallbackStore.users.values()));
             }
+
+            // Sync admin profiles if specific admins assigned
+            if (assignedAdminIds) {
+              const adminFleet = users.filter((u) => u.isAdmin || u.role === 'admin');
+              for (const a of adminFleet) {
+                let areaList = a.assignedAreaIds || [];
+                if (assignedAdminIds.includes(a.uid)) {
+                  if (!areaList.includes(savedArea.id)) {
+                    areaList = [...areaList, savedArea.id];
+                  }
+                } else {
+                  areaList = areaList.filter((id) => id !== savedArea.id);
+                }
+                const updatedUser = { ...a, assignedAreaIds: areaList };
+                await fallbackStore.saveUser(updatedUser);
+              }
+            }
+
+            setUsers(Array.from(fallbackStore.users.values()));
 
             showAlert(
               'সাব-এরিয়া সংরক্ষিত',
-              `"${savedArea.name}" এলাকা ও হেলপার অ্যাসাইনমেন্ট সফলভাবে সেভ করা হয়েছে।`,
+              `"${savedArea.name}" এলাকা ও অ্যাডমিন/হেলপার অ্যাসাইনমেন্ট সফলভাবে সেভ করা হয়েছে।`,
               'success'
             );
 
             setShowAreaDrawerModal(false);
             setEditingArea(null);
+          }}
+        />
+      )}
+
+      {approvingHelperApp && (
+        <ApproveHelperModal
+          application={approvingHelperApp}
+          existingAreas={allowedDeliveryAreas}
+          onClose={() => setApprovingHelperApp(null)}
+          onConfirmApprove={handleConfirmApproveHelper}
+          onOpenAreaDrawer={() => {
+            setApprovingHelperApp(null);
+            setShowAreaDrawerModal(true);
           }}
         />
       )}

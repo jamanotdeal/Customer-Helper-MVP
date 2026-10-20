@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { TimePickerInput } from './TimePickerInput';
 import { AppNotification, UserProfile } from '@/types';
+import { isUserInZoneScope } from '@/lib/geofenceUtils';
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 
@@ -15,6 +16,8 @@ interface AdminPushNotificationModalProps {
   onClose: () => void;
   editingNotification?: AppNotification | null;
   initialData?: Partial<AppNotification> | null;
+  targetZoneIds?: string[] | null;
+  isSuperAdmin?: boolean;
 }
 
 /** Structured custom segment params (all optional / additive) */
@@ -77,10 +80,20 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
   onClose,
   editingNotification,
   initialData,
+  targetZoneIds,
+  isSuperAdmin = false,
 }) => {
   const { showAlert } = useModal();
   const isEditMode = !!editingNotification;
   const initialSource = editingNotification || initialData;
+
+  const assignedZoneNames = React.useMemo(() => {
+    if (isSuperAdmin || !targetZoneIds || targetZoneIds.length === 0) return null;
+    const areas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+    return targetZoneIds
+      .map((id) => areas.find((a) => a.id === id)?.name || id)
+      .join(', ');
+  }, [isSuperAdmin, targetZoneIds]);
 
   const getInitialTarget = (): 'helpers' | 'customers' | 'all' | 'specific' | 'segment' => {
     if (!initialSource?.userId) return 'helpers';
@@ -176,7 +189,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
       try {
         const serverUsersList = await fallbackStore.getAllUsers();
         const q = searchUserQuery.toLowerCase().trim();
-        const matched = serverUsersList.filter((u) => {
+        let matched = serverUsersList.filter((u) => {
           if (!u) return false;
           return (
             (u.displayName && u.displayName.toLowerCase().includes(q)) ||
@@ -184,8 +197,15 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
             (u.alternativePhone && u.alternativePhone.toLowerCase().includes(q)) ||
             (u.uid && u.uid.toLowerCase().includes(q))
           );
-        }).slice(0, 30);
-        setSearchResults(matched);
+        });
+
+        if (!isSuperAdmin && targetZoneIds && targetZoneIds.length > 0) {
+          const areas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+          const allOrdersList = Array.from(fallbackStore.orders.values());
+          matched = matched.filter((u) => isUserInZoneScope(u, targetZoneIds, areas, allOrdersList));
+        }
+
+        setSearchResults(matched.slice(0, 30));
       } catch (err) {
         console.error('Error fetching users from server:', err);
       } finally {
@@ -194,7 +214,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchUserQuery]);
+  }, [searchUserQuery, isSuperAdmin, targetZoneIds]);
 
   /* ── Presets ────────────────────────────────────────────────────────────── */
   const presets = [
@@ -253,6 +273,8 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
         scheduledAtIso = schedObj.toISOString();
       }
 
+      const effectiveZoneIds = !isSuperAdmin && targetZoneIds && targetZoneIds.length > 0 ? targetZoneIds : undefined;
+
       if (isEditMode && editingNotification) {
         const isFutureScheduled = scheduledAtIso ? new Date(scheduledAtIso).getTime() > Date.now() : false;
         let mappedTarget = targetKey;
@@ -269,6 +291,8 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
           isScheduled: isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE'),
           repeatFrequency,
           repeatTime: scheduledTime,
+          areaIds: effectiveZoneIds,
+          areaId: effectiveZoneIds?.[0],
         });
 
         showAlert('নোটিফিকেশন আপডেট সম্পন্ন!', 'সিডিউলকৃত নোটিফিকেশনের সকল তথ্য সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
@@ -284,7 +308,8 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
         imageUrl.trim() || undefined,
         scheduledAtIso,
         repeatFrequency,
-        scheduledTime
+        scheduledTime,
+        effectiveZoneIds
       );
 
       let audienceLabel = 'সকল হেলপারদের';
@@ -361,6 +386,17 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
 
         {/* ── Form ── */}
         <form onSubmit={handleSend} className="p-5 overflow-y-auto space-y-5 flex-1">
+
+          {/* ── Zone Notice (for regular admins) ── */}
+          {assignedZoneNames && (
+            <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold shadow-xs">
+              <span className="p-1.5 rounded-xl bg-amber-200/70 text-base leading-none">📍</span>
+              <div>
+                <span className="font-extrabold text-amber-950">জোন-সীমিত নোটিফিকেশন: </span>
+                শুধুমাত্র আপনার নির্ধারিত জোন (<span className="underline font-bold text-amber-900">{assignedZoneNames}</span>)-এর গ্রাহক বা হেলপারদের নিকট পৌঁছাবে।
+              </div>
+            </div>
+          )}
 
           {/* ── 1. Target Audience tabs ── */}
           <div>

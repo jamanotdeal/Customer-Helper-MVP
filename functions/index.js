@@ -297,7 +297,65 @@ async function applyGeofence(db, recipients, notif) {
   const configured = pricing && pricing.helperRadiusKm;
   const radiusKm = typeof configured === 'number' && configured > 0 ? configured : DEFAULT_RADIUS_KM;
 
-  return recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
+  let filtered = recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
+  if (pricing && Array.isArray(pricing.allowedDeliveryAreas) && pricing.allowedDeliveryAreas.length > 0) {
+    filtered = filtered.filter((r) =>
+      isHelperEligibleForOrderBackend({ ...r.profile, uid: r.uid }, order, pricing.allowedDeliveryAreas)
+    );
+  }
+  return filtered;
+}
+
+function isPointInPolygon(point, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  const x = point.lng;
+  const y = point.lat;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].lng;
+    const yi = polygon[i].lat;
+    const xj = polygon[j].lng;
+    const yj = polygon[j].lat;
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function isHelperEligibleForOrderBackend(helperProfile, order, areas) {
+  if (!areas || areas.length === 0) return true;
+  if (helperProfile.serveAllAreas === true) return true;
+
+  const hasPersonalAssignment = Array.isArray(helperProfile.assignedAreaIds) && helperProfile.assignedAreaIds.length > 0;
+  const isAssignedInFleet = areas.some((a) => Array.isArray(a.assignedHelperIds) && a.assignedHelperIds.includes(helperProfile.uid));
+  if (!hasPersonalAssignment && !isAssignedInFleet) {
+    return false; // Unassigned helpers receive no requests
+  }
+
+  // Find matching areas for order
+  const matching = [];
+  const ends = [order.deliveryLocation, order.pickupLocation].filter((l) => l && present(l.lat) && present(l.lng));
+  for (const area of areas) {
+    if (ends.some((pt) => isPointInPolygon(pt, area.coordinates))) {
+      matching.push(area);
+    }
+  }
+
+  if (order.areaId) {
+    if (helperProfile.assignedAreaIds && helperProfile.assignedAreaIds.includes(order.areaId)) return true;
+    const target = areas.find((a) => a.id === order.areaId);
+    if (target && Array.isArray(target.assignedHelperIds) && target.assignedHelperIds.includes(helperProfile.uid)) return true;
+  }
+
+  if (matching.length === 0) {
+    return false;
+  }
+
+  return matching.some((area) => {
+    if (Array.isArray(area.assignedHelperIds) && area.assignedHelperIds.includes(helperProfile.uid)) return true;
+    if (Array.isArray(helperProfile.assignedAreaIds) && helperProfile.assignedAreaIds.includes(area.id)) return true;
+    return false;
+  });
 }
 
 /**

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle, Edit, Share2, ChevronRight } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle, Edit, Share2, ChevronRight, MapPin } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { StoreApplicationModal } from './StoreApplicationModal';
 import { EditStoreModal } from './EditStoreModal';
@@ -146,6 +146,34 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
     user && !isAdminView && !isStoreUser && (activeMode === 'customer' || (!activeMode && !user.isHelper && user.role !== 'helper'))
   );
 
+  const isNormalAdmin = Boolean(
+    user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin') && !user.isSuperAdmin && activeMode === 'admin'
+  );
+
+  const normalAdminAssignedZones = React.useMemo(() => {
+    if (!isNormalAdmin || !user) return '';
+    const allAreas = fallbackStore.pricingSettings?.allowedDeliveryAreas || [];
+    const directIds = user.assignedAreaIds || (user.areaId ? [user.areaId] : (user as any).areaIds || []);
+    const fleetIds = allAreas.filter((a) => a.assignedAdminIds?.includes(user.uid)).map((a) => a.id);
+    const assignedIds = Array.from(new Set([...directIds, ...fleetIds])).filter(Boolean);
+    if (assignedIds.length === 0) return '';
+    const matched = allAreas.filter((a) => assignedIds.includes(a.id));
+    if (matched.length > 0) {
+      return matched.map((m) => m.name).join(', ');
+    }
+    return assignedIds.join(', ');
+  }, [isNormalAdmin, user, fallbackStore.pricingSettings?.allowedDeliveryAreas]);
+
+  const [headerZoneFilter, setHeaderZoneFilter] = useState<string>(fallbackStore.adminZoneFilter || 'ALL');
+
+  useEffect(() => {
+    const syncFilter = () => {
+      setHeaderZoneFilter(fallbackStore.adminZoneFilter || 'ALL');
+    };
+    const unsub = fallbackStore.subscribe(syncFilter);
+    return () => unsub();
+  }, []);
+
   return (
     <>
       <header
@@ -177,6 +205,46 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                 Ask. Relax. Done.
               </p>
             </div>
+
+            {/* Normal Admin Assigned Zone indicator at the top header */}
+            {isNormalAdmin && (
+              <div className="ml-2 sm:ml-4 flex items-center">
+                {normalAdminAssignedZones ? (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100/90 border border-emerald-300 text-emerald-900 text-xs font-black shadow-xs">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    <span className="truncate max-w-[140px] sm:max-w-[220px]">
+                      জোন: {normalAdminAssignedZones}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 border border-red-300 text-red-800 text-xs font-black shadow-xs">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-ping shrink-0" />
+                    <span>কোনো জোন নেই</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Super Admin Zone Selector at the top header */}
+            {user?.isSuperAdmin && activeMode === 'admin' && (
+              <div className="ml-2 sm:ml-4 flex items-center">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-100/90 border border-purple-300 text-purple-950 text-xs font-black shadow-xs">
+                  <MapPin className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                  <select
+                    value={headerZoneFilter}
+                    onChange={(e) => fallbackStore.setAdminZoneFilter(e.target.value)}
+                    className="bg-transparent text-purple-950 font-black text-xs focus:outline-none cursor-pointer pr-1"
+                  >
+                    <option value="ALL">🌐 সব জোন ({(fallbackStore.pricingSettings?.allowedDeliveryAreas || []).length})</option>
+                    {(fallbackStore.pricingSettings?.allowedDeliveryAreas || []).map((area) => (
+                      <option key={area.id} value={area.id}>
+                        📍 {area.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons */}

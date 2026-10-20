@@ -21,6 +21,7 @@ import {
   getPreviousCustomerContact,
 } from '@/lib/storage';
 import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
+import { ensureOrderCoordinates } from '@/lib/orderLocationGuard';
 
 import {
   X,
@@ -103,6 +104,13 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
   const [showPlatformClosedModal, setShowPlatformClosedModal] = useState(false);
+  const [pendingLocResult, setPendingLocResult] = useState<{
+    allowed: boolean;
+    lat?: number;
+    lng?: number;
+    areaId?: string;
+    errorMessage?: string;
+  } | null>(null);
 
   // Check if store or items' stores are closed
   const closedStoreNames = useMemo(() => {
@@ -242,11 +250,33 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
     isScheduled?: boolean;
     scheduledDate?: Date;
     scheduledNote?: string;
+    resolvedLocation?: { lat?: number; lng?: number; areaId?: string; allowed?: boolean; errorMessage?: string };
   }) => {
     setSubmittingOrder(true);
     setFormError('');
 
     try {
+      // Require device location permission if account doesn't have map coordinates
+      const locResult =
+        options?.resolvedLocation ||
+        (await ensureOrderCoordinates(user, deliveryLat, deliveryLng, deliveryAddress.trim()));
+      if (!locResult.allowed) {
+        showAlert(
+          'লোকেশন পারমিশন আবশ্যক',
+          locResult.errorMessage ||
+            'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+          'warning'
+        );
+        return;
+      }
+
+      const resolvedLat = locResult.lat ?? deliveryLat;
+      const resolvedLng = locResult.lng ?? deliveryLng;
+      const resolvedAreaId = locResult.areaId;
+
+      if (resolvedLat !== undefined && deliveryLat === undefined) setDeliveryLat(resolvedLat);
+      if (resolvedLng !== undefined && deliveryLng === undefined) setDeliveryLng(resolvedLng);
+
       const isScheduled = !!options?.isScheduled;
       const scheduledDate = options?.scheduledDate;
       const scheduledNote = options?.scheduledNote;
@@ -268,8 +298,9 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       const now = new Date().toISOString();
       const delivLoc: LocationData = {
         address: deliveryAddress.trim(),
-        lat: deliveryLat,
-        lng: deliveryLng,
+        lat: resolvedLat,
+        lng: resolvedLng,
+        areaId: resolvedAreaId,
       };
 
       const shopName = cartShop?.name || 'স্টোর';
@@ -326,6 +357,8 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         items: finalItems,
         pickupLocation: pickupLoc,
         deliveryLocation: delivLoc,
+        areaId: resolvedAreaId,
+        areaIds: resolvedAreaId ? [resolvedAreaId] : undefined,
         additionalNote: finalNote || undefined,
         status: isScheduled ? ('SCHEDULED' as any) : 'PENDING',
         deliveryFee,
@@ -373,9 +406,10 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       if (customerPhone.trim()) {
         saveAltPhone(customerPhone.trim());
       }
-      if (delivLoc.address) {
+      if (delivLoc.address || delivLoc.lat) {
         saveDefaultDeliveryLocation(delivLoc);
         if (user!.uid) {
+          fallbackStore.saveCustomerLocation(user!.uid, delivLoc, resolvedAreaId).catch(() => {});
           addSavedDeliveryAddress(user!.uid, delivLoc);
           saveCustomerSavedAddressToFirestore(user!.uid, delivLoc).catch(() => {});
         }
@@ -430,10 +464,23 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       return;
     }
 
+    // Ensure location permission before proceeding
+    const locResult = await ensureOrderCoordinates(user, deliveryLat, deliveryLng, deliveryAddress.trim());
+    if (!locResult.allowed) {
+      showAlert(
+        'লোকেশন পারমিশন আবশ্যক',
+        locResult.errorMessage ||
+          'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+        'warning'
+      );
+      return;
+    }
+
     // Check if platform is currently closed (Order Timing & Form Controls)
     const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
     if (!serviceTiming.isOpen) {
-      // Ask user whether to schedule or not
+      // Store resolved location and ask user whether to schedule or not
+      setPendingLocResult(locResult);
       setShowPlatformClosedModal(true);
       return;
     }
@@ -452,7 +499,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
     // Close the drawer immediately so customers see the order is being processed
     // and can't accidentally interact with the form inputs during submission
     closeCartDrawer();
-    await executePlaceOrder({ isScheduled: false });
+    await executePlaceOrder({ isScheduled: false, resolvedLocation: locResult });
   };
 
   return (
@@ -954,6 +1001,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
             isScheduled: true,
             scheduledDate: targetDate,
             scheduledNote: noteText,
+            resolvedLocation: pendingLocResult || undefined,
           });
         }}
         onCancel={() => setShowPlatformClosedModal(false)}

@@ -21,6 +21,7 @@ import {
   getPreviousCustomerContact,
 } from '@/lib/storage';
 import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
+import { ensureOrderCoordinates } from '@/lib/orderLocationGuard';
 
 interface CustomRequestModalProps {
   isOpen: boolean;
@@ -187,6 +188,17 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       return;
     }
 
+    // Require device location permission if account doesn't have map coordinates
+    const locResult = await ensureOrderCoordinates(user, deliveryLat, deliveryLng, deliveryAddress.trim());
+    if (!locResult.allowed) {
+      showAlert(
+        'লোকেশন পারমিশন আবশ্যক',
+        locResult.errorMessage || 'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+        'warning'
+      );
+      return;
+    }
+
     if (!scheduledOptions?.isScheduled) {
       const confirmed = await showConfirm(
         'রিকোয়েস্ট নিশ্চিতকরণ',
@@ -219,10 +231,15 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         buyFrom: pickupNote.trim() || undefined,
       }));
 
+      const resolvedLat = locResult.lat ?? deliveryLat;
+      const resolvedLng = locResult.lng ?? deliveryLng;
+      const resolvedAreaId = locResult.areaId;
+
       const delivLoc: LocationData = {
         address: deliveryAddress.trim(),
-        lat: deliveryLat,
-        lng: deliveryLng,
+        lat: resolvedLat,
+        lng: resolvedLng,
+        areaId: resolvedAreaId,
       };
 
       const pickupLoc: LocationData | undefined = pickupNote.trim()
@@ -258,6 +275,8 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         items: itemsToCreate,
         pickupLocation: pickupLoc,
         deliveryLocation: delivLoc,
+        areaId: resolvedAreaId,
+        areaIds: resolvedAreaId ? [resolvedAreaId] : undefined,
         status: 'PENDING',
         deliveryFee: baseFee,
         originalDeliveryFee: rawFee,
@@ -288,9 +307,10 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         await fallbackStore.addOrder(scheduledOrder);
         saveScheduledOrder(scheduledOrder);
         if (altPhone.trim()) saveAltPhone(altPhone.trim());
-        if (delivLoc.address) {
+        if (delivLoc.address || delivLoc.lat) {
           saveDefaultDeliveryLocation(delivLoc);
           if (user.uid) {
+            fallbackStore.saveCustomerLocation(user.uid, delivLoc, resolvedAreaId).catch(() => {});
             addSavedDeliveryAddress(user.uid, delivLoc);
             saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
           }
@@ -312,9 +332,10 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       if (altPhone.trim()) {
         saveAltPhone(altPhone.trim());
       }
-      if (delivLoc.address) {
+      if (delivLoc.address || delivLoc.lat) {
         saveDefaultDeliveryLocation(delivLoc);
         if (user.uid) {
+          fallbackStore.saveCustomerLocation(user.uid, delivLoc, resolvedAreaId).catch(() => {});
           addSavedDeliveryAddress(user.uid, delivLoc);
           saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
         }

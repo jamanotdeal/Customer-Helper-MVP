@@ -65,7 +65,7 @@ import {
 
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
 import { isAppVisible, subscribeAppVisibility } from './appVisibility';
-import { isHelperEligibleForOrder } from './geofenceUtils';
+import { isHelperEligibleForOrder, getAreasForOrder, isHelperInAnyZone, isUserInZoneScope } from './geofenceUtils';
 import { isOrderOpen } from './orderStatus';
 import { getItemQuantityNum } from './itemUtils';
 
@@ -879,6 +879,12 @@ class FallbackStore {
   public coinTransactions: Map<string, CoinTransaction[]> = new Map();
   public serverAddresses: Map<string, ServerAddress> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
+  public adminZoneFilter: string = 'ALL';
+
+  public setAdminZoneFilter(zone: string) {
+    this.adminZoneFilter = zone;
+    this.notify();
+  }
 
   // Set by AuthContext when a user logs in/out so the Firestore
   // notification listener knows which device belongs to which user.
@@ -3885,6 +3891,27 @@ class FallbackStore {
     }
   }
 
+  public async saveCustomerLocation(uid: string, location: LocationData, areaId?: string) {
+    const existing = this.users.get(uid);
+    const updated: Partial<UserProfile> = {
+      defaultDeliveryLocation: location,
+      areaId: areaId || existing?.areaId,
+      assignedAreaIds: areaId
+        ? Array.from(new Set([...(existing?.assignedAreaIds || []), areaId]))
+        : existing?.assignedAreaIds,
+    };
+    if (existing) {
+      this.users.set(uid, { ...existing, ...updated });
+    }
+    this.scheduleLocalStoreSave();
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] saveCustomerLocation note:', e?.message || e);
+    }
+  }
+
   public async saveUser(user: UserProfile) {
     const existing = this.users.get(user.uid);
     const mergedUser: UserProfile = {
@@ -4080,6 +4107,102 @@ class FallbackStore {
       await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] setSuperAdminRole note (stored locally):', e?.message || e);
+    }
+  }
+
+  public async convertUserRole(
+    uid: string,
+    targetRole: 'customer' | 'helper' | 'admin',
+    targetAreaIds?: string[],
+    serveAllAreas?: boolean
+  ) {
+    const existing = this.users.get(uid);
+    if (!existing) return;
+
+    const isTargetAdmin = targetRole === 'admin';
+    const isTargetHelper = targetRole === 'helper';
+    const isTargetCustomer = targetRole === 'customer';
+
+    const updated: UserProfile = {
+      ...existing,
+      isAdmin: isTargetAdmin,
+      isSuperAdmin: isTargetAdmin ? existing.isSuperAdmin : false,
+      isHelper: isTargetHelper,
+      role: targetRole,
+      lastActiveMode: targetRole,
+      assignedAreaIds: targetAreaIds !== undefined ? targetAreaIds : (isTargetCustomer ? [] : (existing.assignedAreaIds || [])),
+      serveAllAreas: serveAllAreas !== undefined ? serveAllAreas : (isTargetCustomer ? false : (existing.serveAllAreas || false)),
+    };
+
+    if (isTargetHelper && !updated.helperType) {
+      updated.helperType = 'dedicated';
+    }
+
+    this.users.set(uid, updated);
+
+    // Sync allowedDeliveryAreas in pricingSettings
+    const areas = this.pricingSettings.allowedDeliveryAreas || [];
+    let areasChanged = false;
+    const finalAreaIds = updated.assignedAreaIds || [];
+    const isGlobal = updated.serveAllAreas === true;
+
+    const updatedAreas = areas.map((area) => {
+      const nextArea = { ...area };
+      let admins = nextArea.assignedAdminIds || [];
+      let helpers = nextArea.assignedHelperIds || [];
+
+      // Admin sync
+      if (!isTargetAdmin) {
+        if (admins.includes(uid)) {
+          admins = admins.filter((id) => id !== uid);
+          areasChanged = true;
+        }
+      } else {
+        const shouldHaveAdmin = !isGlobal && finalAreaIds.includes(area.id);
+        if (shouldHaveAdmin && !admins.includes(uid)) {
+          admins = [...admins, uid];
+          areasChanged = true;
+        } else if (!shouldHaveAdmin && admins.includes(uid)) {
+          admins = admins.filter((id) => id !== uid);
+          areasChanged = true;
+        }
+      }
+
+      // Helper sync
+      if (!isTargetHelper) {
+        if (helpers.includes(uid)) {
+          helpers = helpers.filter((id) => id !== uid);
+          areasChanged = true;
+        }
+      } else {
+        const shouldHaveHelper = !isGlobal && finalAreaIds.includes(area.id);
+        if (shouldHaveHelper && !helpers.includes(uid)) {
+          helpers = [...helpers, uid];
+          areasChanged = true;
+        } else if (!shouldHaveHelper && helpers.includes(uid)) {
+          helpers = helpers.filter((id) => id !== uid);
+          areasChanged = true;
+        }
+      }
+
+      nextArea.assignedAdminIds = admins;
+      nextArea.assignedHelperIds = helpers;
+      return nextArea;
+    });
+
+    if (areasChanged) {
+      this.pricingSettings.allowedDeliveryAreas = updatedAreas;
+      await this.savePricingSettings({
+        ...this.pricingSettings,
+        allowedDeliveryAreas: updatedAreas,
+      });
+    }
+
+    this.notify();
+    try {
+      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] convertUserRole note (stored locally):', e?.message || e);
     }
   }
 
@@ -4414,6 +4537,19 @@ class FallbackStore {
         }
       } catch (e) {
         // ignore
+      }
+    }
+
+    // Tag matching service zones on the order
+    if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
+      const matchedAreas = getAreasForOrder(order, this.pricingSettings.allowedDeliveryAreas);
+      if (matchedAreas.length > 0) {
+        order = {
+          ...order,
+          areaId: order.areaId || matchedAreas[0].id,
+          areaName: order.areaName || matchedAreas[0].name,
+          areaIds: Array.from(new Set([...(order.areaIds || []), ...matchedAreas.map((a) => a.id)])),
+        };
       }
     }
 
@@ -7254,23 +7390,58 @@ class FallbackStore {
     this.notify();
   }
 
-  public async approveHelperApp(appId: string) {
+  public async approveHelperApp(
+    appId: string,
+    assignedAreaIds?: string[],
+    serveAllAreas?: boolean
+  ) {
     const app = this.helperApplications.get(appId);
     if (!app) return;
     app.status = 'APPROVED';
+    if (assignedAreaIds && assignedAreaIds.length > 0) {
+      app.assignedAreaIds = assignedAreaIds;
+    }
     this.helperApplications.set(appId, app);
 
     const applicant = await this.getUserForUpdate(app.userId);
     if (applicant) {
       const isDedicated = app.applicationType === 'dedicated' || !app.applicationType;
+      const zones = assignedAreaIds && assignedAreaIds.length > 0
+        ? assignedAreaIds
+        : (applicant.assignedAreaIds || []);
+
       const updatedUser: UserProfile = {
         ...applicant,
         isHelper: true,
         helperType: isDedicated ? 'dedicated' : (applicant.helperType || 'commuter'),
         alternativePhone: app.whatsapp || applicant.alternativePhone,
+        assignedAreaIds: zones,
+        serveAllAreas: serveAllAreas === true,
       };
       this.users.set(app.userId, updatedUser);
       await this.saveUser(updatedUser);
+
+      // Sync with pricingSettings.allowedDeliveryAreas to add helper to each zone's assignedHelperIds
+      if (zones.length > 0 && this.pricingSettings.allowedDeliveryAreas) {
+        let changed = false;
+        const updatedAreas = this.pricingSettings.allowedDeliveryAreas.map((area) => {
+          if (zones.includes(area.id)) {
+            const currentHelpers = area.assignedHelperIds || [];
+            if (!currentHelpers.includes(app.userId)) {
+              changed = true;
+              return { ...area, assignedHelperIds: [...currentHelpers, app.userId] };
+            }
+          }
+          return area;
+        });
+        if (changed) {
+          const updatedPricing = {
+            ...this.pricingSettings,
+            allowedDeliveryAreas: updatedAreas,
+          };
+          await this.savePricingSettings(updatedPricing);
+        }
+      }
     }
     this.notify();
 
@@ -7402,10 +7573,19 @@ class FallbackStore {
     const target = notif.userId;
     const radiusKm = this.pricingSettings.helperRadiusKm || 3.5;
     const targetOrder = notif.orderId ? this.orders.get(notif.orderId) : undefined;
+    const zoneFilterIds = notif.areaIds && notif.areaIds.length > 0
+      ? notif.areaIds
+      : (notif.areaId ? [notif.areaId] : null);
+    const allOrdersList = Array.from(this.orders.values());
 
     if (target === 'all-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper && !u.isBlocked) {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isHelperInAnyZone(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas)) {
+              return;
+            }
+          }
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -7424,6 +7604,11 @@ class FallbackStore {
     } else if (target === 'all-commuter-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper && !u.isBlocked && u.helperType !== 'dedicated') {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isHelperInAnyZone(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas)) {
+              return;
+            }
+          }
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -7442,6 +7627,11 @@ class FallbackStore {
     } else if (target === 'all-dedicated-helpers') {
       this.users.forEach((u) => {
         if (u.isHelper && !u.isBlocked && u.helperType === 'dedicated') {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isHelperInAnyZone(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas)) {
+              return;
+            }
+          }
           if (targetOrder) {
             if (this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
@@ -7460,6 +7650,11 @@ class FallbackStore {
     } else if (target === 'all-customers') {
       this.users.forEach((u) => {
         if (!u.isBlocked && (!u.isHelper || u.role === 'customer')) {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+              return;
+            }
+          }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -7469,6 +7664,11 @@ class FallbackStore {
       const segName = target.replace('segment:', '');
       this.users.forEach((u) => {
         if (!u.isBlocked && this.doesUserMatchSegment(u, segName)) {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+              return;
+            }
+          }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -7477,6 +7677,11 @@ class FallbackStore {
     } else if (target === 'all') {
       this.users.forEach((u) => {
         if (!u.isBlocked) {
+          if (zoneFilterIds && zoneFilterIds.length > 0) {
+            if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+              return;
+            }
+          }
           const userList = this.notifications.get(u.uid) || [];
           userList.unshift({ ...notif, userId: u.uid });
           this.notifications.set(u.uid, userList);
@@ -7527,6 +7732,11 @@ class FallbackStore {
           if (u.isHelper && u.fcmToken) {
             if (t === 'all-commuter-helpers' && u.helperType === 'dedicated') return;
             if (t === 'all-dedicated-helpers' && u.helperType !== 'dedicated') return;
+            if (zoneFilterIds && zoneFilterIds.length > 0) {
+              if (!isHelperInAnyZone(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas)) {
+                return;
+              }
+            }
             if (targetOrder && this.pricingSettings.allowedDeliveryAreas && this.pricingSettings.allowedDeliveryAreas.length > 0) {
               if (!isHelperEligibleForOrder(u, targetOrder, this.pricingSettings.allowedDeliveryAreas, this.pricingSettings.allowedDeliveryAreasEnabled)) {
                 return;
@@ -7536,13 +7746,36 @@ class FallbackStore {
           }
         });
       } else if (t === 'all-customers') {
-        allUsers.forEach((u) => { if (!u.isHelper && u.role !== 'admin' && u.fcmToken) targetTokens.push(u.fcmToken); });
+        allUsers.forEach((u) => {
+          if (!u.isHelper && u.role !== 'admin' && u.fcmToken) {
+            if (zoneFilterIds && zoneFilterIds.length > 0) {
+              if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+                return;
+              }
+            }
+            targetTokens.push(u.fcmToken);
+          }
+        });
       } else if (t === 'all') {
-        allUsers.forEach((u) => { if (u.fcmToken) targetTokens.push(u.fcmToken); });
+        allUsers.forEach((u) => {
+          if (u.fcmToken) {
+            if (zoneFilterIds && zoneFilterIds.length > 0) {
+              if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+                return;
+              }
+            }
+            targetTokens.push(u.fcmToken);
+          }
+        });
       } else if (t.startsWith('segment:')) {
         const segName = t.replace('segment:', '');
         allUsers.forEach((u) => {
           if (u.fcmToken && this.doesUserMatchSegment(u, segName)) {
+            if (zoneFilterIds && zoneFilterIds.length > 0) {
+              if (!isUserInZoneScope(u, zoneFilterIds, this.pricingSettings.allowedDeliveryAreas, allOrdersList)) {
+                return;
+              }
+            }
             targetTokens.push(u.fcmToken);
           }
         });
@@ -7571,7 +7804,8 @@ class FallbackStore {
     imageUrl?: string,
     scheduledAt?: string,
     repeatFrequency?: 'NONE' | 'DAILY' | 'WEEKLY',
-    repeatTime?: string
+    repeatTime?: string,
+    targetZoneIds?: string[] | null
   ) {
     const notifId = `admin-notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     let mappedAudience = targetAudience;
@@ -7595,6 +7829,8 @@ class FallbackStore {
       repeatTime: repeatTime,
       isAdminPush: true,
       createdByAdmin: true,
+      areaIds: targetZoneIds || undefined,
+      areaId: targetZoneIds && targetZoneIds.length > 0 ? targetZoneIds[0] : undefined,
     };
 
     if (isFutureScheduled || (repeatFrequency && repeatFrequency !== 'NONE')) {

@@ -815,6 +815,68 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         <AddShopModal onClose={() => setShowAddShopModal(false)} />
       )}
 
+      {/* Service Zone Status Banner */}
+      {(() => {
+        const configuredAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+        if (configuredAreas.length === 0) return null;
+
+        const hasZoneAssignment = Boolean(
+          user?.serveAllAreas ||
+          (user?.assignedAreaIds && user.assignedAreaIds.length > 0) ||
+          configuredAreas.some((a) => a.assignedHelperIds?.includes(user?.uid || ''))
+        );
+
+        if (!hasZoneAssignment) {
+          return (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-4 shadow-sm flex items-start space-x-3 animate-in fade-in duration-300">
+              <div className="p-2 rounded-2xl bg-amber-100 text-amber-700 shrink-0 mt-0.5">
+                <MapPin className="w-5 h-5 animate-bounce" />
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <h4 className="font-extrabold text-xs text-amber-950">
+                  কোনো সার্ভিস জোন নির্ধারিত হয়নি (No Zone Assigned)
+                </h4>
+                <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
+                  আপনার অ্যাকাউন্টে এখনো কোনো সার্ভিস এলাকা বা জোন অ্যাসাইন করা হয়নি। অ্যাডমিন কর্তৃক জোন নির্ধারিত না হওয়া পর্যন্ত আপনি নতুন অর্ডারের রিকোয়েস্ট পাবেন না।
+                </p>
+              </div>
+            </div>
+          );
+        }
+
+        const assignedAreaNames = user?.serveAllAreas
+          ? 'সকল এলাকা (Global Coverage)'
+          : configuredAreas
+              .filter(
+                (a) =>
+                  user?.assignedAreaIds?.includes(a.id) ||
+                  a.assignedHelperIds?.includes(user?.uid || '')
+              )
+              .map((a) => a.name)
+              .join(', ') || 'নির্ধারিত জোন';
+
+        return (
+          <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl px-4 py-2.5 flex items-center justify-between text-xs text-emerald-950 font-bold shadow-xs">
+            <div className="flex items-center space-x-2 min-w-0">
+              <div className="p-1.5 rounded-xl bg-emerald-600 text-white shrink-0">
+                <MapPin className="w-3.5 h-3.5" />
+              </div>
+              <div className="truncate">
+                <span className="text-[10px] text-emerald-700 font-black uppercase block tracking-wider">
+                  নির্ধারিত সার্ভিস এলাকা:
+                </span>
+                <span className="text-xs font-extrabold text-emerald-950 truncate block">
+                  {assignedAreaNames}
+                </span>
+              </div>
+            </div>
+            <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-emerald-200/80 text-emerald-900 shrink-0 ml-2">
+              Zone Active
+            </span>
+          </div>
+        );
+      })()}
+
       {/* Pre-Tab Alert Banner: Running + Unviewed Active Orders */}
       {(activeOrders.length > 0 || unviewedActiveCount > 0) && (
         <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300">

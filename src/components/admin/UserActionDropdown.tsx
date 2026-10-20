@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { UserProfile } from '@/types';
-import { MoreVertical, User, ShieldCheck, ShieldAlert, Ban, Trash2, CheckCircle2, Coins } from 'lucide-react';
+import { MoreVertical, User, ShieldCheck, ShieldAlert, Ban, Trash2, CheckCircle2, Coins, Bike } from 'lucide-react';
 
 interface UserActionDropdownProps {
   user: UserProfile;
@@ -11,6 +11,8 @@ interface UserActionDropdownProps {
   onEditCoins?: (user: UserProfile) => void;
   onToggleAdmin: (user: UserProfile, makeAdmin: boolean) => void;
   onToggleSuperAdmin?: (user: UserProfile, makeSuperAdmin: boolean) => void;
+  onConvertToHelper?: (user: UserProfile) => void;
+  onConvertToCustomer?: (user: UserProfile) => void;
   onToggleBlock: (user: UserProfile) => void;
   onDeleteUser: (user: UserProfile) => void;
 }
@@ -22,6 +24,8 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
   onEditCoins,
   onToggleAdmin,
   onToggleSuperAdmin,
+  onConvertToHelper,
+  onConvertToCustomer,
   onToggleBlock,
   onDeleteUser,
 }) => {
@@ -110,6 +114,32 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
                 )
               ) : user.isAdmin ? (
                 <>
+                  {onConvertToHelper && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsOpen(false);
+                        onConvertToHelper(user);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-xs font-bold text-emerald-700 hover:bg-emerald-50 flex items-center space-x-2 cursor-pointer"
+                    >
+                      <Bike className="w-4 h-4 text-emerald-600" />
+                      <span>Convert to Helper</span>
+                    </button>
+                  )}
+                  {onConvertToCustomer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsOpen(false);
+                        onConvertToCustomer(user);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-xs font-bold text-blue-700 hover:bg-blue-50 flex items-center space-x-2 cursor-pointer"
+                    >
+                      <User className="w-4 h-4 text-blue-600" />
+                      <span>Convert to Customer</span>
+                    </button>
+                  )}
                   {onToggleSuperAdmin && (
                     <button
                       type="button"
@@ -117,7 +147,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
                         setIsOpen(false);
                         onToggleSuperAdmin(user, true);
                       }}
-                      className="w-full text-left px-4 py-2.5 text-xs font-bold text-purple-700 hover:bg-purple-50 flex items-center space-x-2"
+                      className="w-full text-left px-4 py-2.5 text-xs font-bold text-purple-700 hover:bg-purple-50 flex items-center space-x-2 cursor-pointer"
                     >
                       <ShieldCheck className="w-4 h-4 text-purple-600" />
                       <span>Promote to Super Admin</span>
@@ -129,7 +159,7 @@ export const UserActionDropdown: React.FC<UserActionDropdownProps> = ({
                       setIsOpen(false);
                       onToggleAdmin(user, false);
                     }}
-                    className="w-full text-left px-4 py-2.5 text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center space-x-2"
+                    className="w-full text-left px-4 py-2.5 text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center space-x-2 cursor-pointer"
                   >
                     <ShieldAlert className="w-4 h-4 text-amber-600" />
                     <span>Remove Admin Role</span>

@@ -30,6 +30,8 @@ import {
   Share2,
   ExternalLink,
   CheckCircle2,
+  MapPin,
+  Globe,
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
@@ -154,12 +156,25 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   // Change user account type
   const [savingRole, setSavingRole] = useState(false);
 
+  // Service Zone / Area Assignment states
+  const [userAssignedAreas, setUserAssignedAreas] = useState<string[]>(user?.assignedAreaIds || []);
+  const [userServeAllAreas, setUserServeAllAreas] = useState<boolean>(user?.serveAllAreas || false);
+  const [isSavingAreas, setIsSavingAreas] = useState<boolean>(false);
+
+  // Convert Admin to Customer or Helper modal state
+  const [convertingTargetRole, setConvertingTargetRole] = useState<'customer' | 'helper' | null>(null);
+  const [convertTargetAreas, setConvertTargetAreas] = useState<string[]>([]);
+  const [convertServeAll, setConvertServeAll] = useState<boolean>(false);
+  const [isConvertingUserRole, setIsConvertingUserRole] = useState<boolean>(false);
+
   React.useEffect(() => {
     if (user) {
       setEditName(user.displayName);
       setEditEmail(user.email || '');
       setEditPhone(user.alternativePhone || '');
       setCoinsInput(String(user.coins ?? 0));
+      setUserAssignedAreas(user.assignedAreaIds || []);
+      setUserServeAllAreas(user.serveAllAreas || false);
     }
   }, [user]);
 
@@ -387,6 +402,127 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
       'success'
     );
     if (onUserUpdated) onUserUpdated();
+  };
+
+  const handleStartConvertToHelper = () => {
+    setConvertTargetAreas(user?.assignedAreaIds || []);
+    setConvertServeAll(user?.serveAllAreas || false);
+    setConvertingTargetRole('helper');
+  };
+
+  const handleStartConvertToCustomer = async () => {
+    if (!currentUser?.isSuperAdmin) {
+      showAlert('অনুমতি নেই', 'শুধুমাত্র Super Admin রোল রূপান্তর করতে পারবেন।', 'error');
+      return;
+    }
+    const confirmed = await showConfirm(
+      'কাস্টমার অ্যাকাউন্টে রূপান্তর',
+      `আপনি কি নিশ্চিত যে ${user?.displayName}-কে Admin থেকে সাধারণ Customer অ্যাকাউন্টে পরিবর্তন করতে চান? অ্যাডমিন সুবিধাসমূহ ও জোন অ্যাসাইনমেন্ট সরানো হবে।`,
+      'হ্যাঁ, Customer করুন',
+      'বাতিল'
+    );
+    if (!confirmed) return;
+
+    await fallbackStore.convertUserRole(userId, 'customer', []);
+    setUserAssignedAreas([]);
+    setUserServeAllAreas(false);
+    showAlert('রূপান্তর সম্পন্ন', `${user?.displayName} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
+    if (onUserUpdated) onUserUpdated();
+  };
+
+  const handleConfirmConvertToHelper = async () => {
+    if (!currentUser?.isSuperAdmin) return;
+    setIsConvertingUserRole(true);
+    try {
+      await fallbackStore.convertUserRole(
+        userId,
+        'helper',
+        convertServeAll ? [] : convertTargetAreas,
+        convertServeAll
+      );
+      setUserAssignedAreas(convertServeAll ? [] : convertTargetAreas);
+      setUserServeAllAreas(convertServeAll);
+      showAlert(
+        'হেলপার অ্যাকাউন্টে রূপান্তর সম্পন্ন',
+        `${user?.displayName} এখন একজন Helper হিসেবে নিবন্ধিত এবং সার্ভিস জোন নির্ধারণ করা হয়েছে।`,
+        'success'
+      );
+      setConvertingTargetRole(null);
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      showAlert('ত্রুটি', err?.message || 'রূপান্তর সম্পন্ন করা সম্ভব হয়নি।', 'error');
+    } finally {
+      setIsConvertingUserRole(false);
+    }
+  };
+
+  const handleSaveZoneAssignment = async () => {
+    if (!user) return;
+    setIsSavingAreas(true);
+    try {
+      const updatedUser: UserProfile = {
+        ...user,
+        assignedAreaIds: userServeAllAreas ? [] : userAssignedAreas,
+        serveAllAreas: userServeAllAreas,
+      };
+      await fallbackStore.saveUser(updatedUser);
+
+      // Sync allowedDeliveryAreas in pricing settings
+      const areas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+      let areasChanged = false;
+      const updatedAreas = areas.map((area) => {
+        const nextArea = { ...area };
+        const isSelected = userAssignedAreas.includes(area.id);
+
+        if (user.isHelper || user.role === 'helper') {
+          let helpers = nextArea.assignedHelperIds || [];
+          if (isSelected && !userServeAllAreas) {
+            if (!helpers.includes(user.uid)) {
+              helpers = [...helpers, user.uid];
+              areasChanged = true;
+            }
+          } else {
+            if (helpers.includes(user.uid)) {
+              helpers = helpers.filter((id) => id !== user.uid);
+              areasChanged = true;
+            }
+          }
+          nextArea.assignedHelperIds = helpers;
+        }
+
+        if (user.isAdmin || user.role === 'admin') {
+          let admins = nextArea.assignedAdminIds || [];
+          if (isSelected && !userServeAllAreas) {
+            if (!admins.includes(user.uid)) {
+              admins = [...admins, user.uid];
+              areasChanged = true;
+            }
+          } else {
+            if (admins.includes(user.uid)) {
+              admins = admins.filter((id) => id !== user.uid);
+              areasChanged = true;
+            }
+          }
+          nextArea.assignedAdminIds = admins;
+        }
+
+        return nextArea;
+      });
+
+      if (areasChanged) {
+        await fallbackStore.savePricingSettings({
+          ...fallbackStore.pricingSettings,
+          allowedDeliveryAreas: updatedAreas,
+        });
+      }
+
+      showAlert('জোন সংরক্ষিত', 'সার্ভিস জোন সফলভাবে সংরক্ষণ করা হয়েছে।', 'success');
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      showAlert('ত্রুটি', err?.message || 'জোন সংরক্ষণ করা সম্ভব হয়নি।', 'error');
+    } finally {
+      setIsSavingAreas(false);
+    }
   };
 
   const handleToggleSuperAdminRoleInModal = async () => {
@@ -1578,30 +1714,59 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                           <div className="flex items-center space-x-2 flex-wrap gap-2">
                             <button
                               type="button"
+                              onClick={handleStartConvertToHelper}
+                              className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1.5 whitespace-nowrap shadow-md cursor-pointer"
+                            >
+                              <Bike className="w-4 h-4 text-emerald-200" />
+                              <span>Convert to Helper</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleStartConvertToCustomer}
+                              className="py-2 px-3.5 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-extrabold text-xs transition-all flex items-center space-x-1.5 whitespace-nowrap shadow-md cursor-pointer"
+                            >
+                              <User className="w-4 h-4 text-slate-300" />
+                              <span>Convert to Customer</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={handleToggleSuperAdminRoleInModal}
                               className="py-2 px-3.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md cursor-pointer"
                             >
                               <ShieldCheck className="w-4 h-4 text-purple-200" />
                               <span>Promote to Super Admin</span>
                             </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-2 flex-wrap gap-2">
                             <button
                               type="button"
                               onClick={handleToggleAdminRoleInModal}
-                              className="py-2 px-3.5 rounded-xl bg-red-500/80 hover:bg-red-600 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap cursor-pointer"
+                              className="py-2 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md cursor-pointer"
                             >
-                              <ShieldAlert className="w-4 h-4" />
-                              <span>Remove Admin Role</span>
+                              <Shield className="w-4 h-4" />
+                              <span>Make Admin</span>
                             </button>
+                            {!user.isHelper ? (
+                              <button
+                                type="button"
+                                onClick={handleStartConvertToHelper}
+                                className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1.5 whitespace-nowrap shadow-md cursor-pointer"
+                              >
+                                <Bike className="w-4 h-4 text-emerald-200" />
+                                <span>Convert to Helper</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handleStartConvertToCustomer}
+                                className="py-2 px-3.5 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-extrabold text-xs transition-all flex items-center space-x-1.5 whitespace-nowrap shadow-md cursor-pointer"
+                              >
+                                <User className="w-4 h-4 text-slate-300" />
+                                <span>Convert to Customer Only</span>
+                              </button>
+                            )}
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleToggleAdminRoleInModal}
-                            className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all flex items-center space-x-1 whitespace-nowrap shadow-md cursor-pointer"
-                          >
-                            <Shield className="w-4 h-4" />
-                            <span>Make Admin</span>
-                          </button>
                         )}
                       </div>
                     )
@@ -1611,6 +1776,152 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                     </p>
                   )}
                 </div>
+
+                {/* 0.05 Service Zone / Area Assignment (For Admins and Helpers) */}
+                {(user.isAdmin || user.isHelper || user.role === 'admin' || user.role === 'helper') && (
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-900 text-white border border-emerald-500/30 space-y-3 shadow-soft">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-600/30 border border-emerald-400/40 text-emerald-400 flex items-center justify-center font-bold">
+                          <MapPin className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-xs uppercase tracking-wider text-emerald-300">
+                            সার্ভিস এলাকা / জোন নির্ধারণ (Zone Assignment)
+                          </h4>
+                          <p className="text-[11px] text-slate-400">
+                            {user.isAdmin
+                              ? 'অ্যাডমিনকে নির্দিষ্ট জোনে অ্যাসাইন করলে তিনি শুধুমাত্র ঐ জোনের ডাটা (Orders, Helpers, Shops) দেখতে পাবেন।'
+                              : 'হেলপারকে নির্দিষ্ট জোনে অ্যাসাইন করুন। কোনো জোন না থাকলে হেলপার রিকোয়েস্ট পাবেন না।'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                        {userServeAllAreas
+                          ? 'Global Coverage (All Zones)'
+                          : `${userAssignedAreas.length} টি জোন অ্যাসাইন`}
+                      </span>
+                    </div>
+
+                    {/* Zone checklist */}
+                    {(() => {
+                      const allAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+                      if (allAreas.length === 0) {
+                        return (
+                          <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-center text-xs text-slate-400">
+                            এখনো কোনো সার্ভিস এলাকা বা জোন তৈরি করা হয়নি।
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-2.5 pt-1">
+                          {/* Quick Switch to Another Zone */}
+                          <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/30 flex-wrap gap-2">
+                            <div className="flex items-center space-x-1.5 text-xs text-emerald-300 font-bold">
+                              <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>অন্য জোনে সরাসরি পরিবর্তন করুন:</span>
+                            </div>
+                            <select
+                              value={userAssignedAreas.length === 1 && !userServeAllAreas ? userAssignedAreas[0] : ''}
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  setUserAssignedAreas([e.target.value]);
+                                  setUserServeAllAreas(false);
+                                }
+                              }}
+                              className="bg-slate-800 text-white text-xs font-bold rounded-lg px-2.5 py-1 border border-emerald-500/40 focus:outline-none cursor-pointer"
+                            >
+                              <option value="">-- অন্য জোন নির্বাচন করুন --</option>
+                              {allAreas.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  📍 {a.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                            {allAreas.map((area) => {
+                              const isChecked = userAssignedAreas.includes(area.id);
+                              return (
+                                <label
+                                  key={area.id}
+                                  className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
+                                    isChecked && !userServeAllAreas
+                                      ? 'bg-emerald-900/40 border-emerald-400/60 text-white'
+                                      : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+                                  }`}
+                                >
+                                  <div className="flex items-center space-x-2 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      disabled={userServeAllAreas}
+                                      checked={isChecked && !userServeAllAreas}
+                                      onChange={() => {
+                                        setUserAssignedAreas((prev) =>
+                                          prev.includes(area.id)
+                                            ? prev.filter((id) => id !== area.id)
+                                            : [...prev, area.id]
+                                        );
+                                      }}
+                                      className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 border-slate-600 bg-slate-800"
+                                    />
+                                    <div className="truncate">
+                                      <span className="text-xs font-bold block truncate">
+                                        {area.name}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400">
+                                        {area.country || 'Bangladesh'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-white/10 text-slate-300 shrink-0 ml-1">
+                                    {area.coordinates?.length || 0} pts
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          {/* Serve All Areas Toggle */}
+                          <label className="flex items-center space-x-2 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={userServeAllAreas}
+                              onChange={(e) => {
+                                setUserServeAllAreas(e.target.checked);
+                                if (e.target.checked) setUserAssignedAreas([]);
+                              }}
+                              className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 border-slate-600 bg-slate-800"
+                            />
+                            <div className="text-xs">
+                              <span className="font-extrabold text-white block">
+                                🌐 উন্মুক্ত / সকল সার্ভিস এলাকা (All Zones Access)
+                              </span>
+                              <span className="text-[10px] text-slate-400 block">
+                                এই ব্যবহারকারীর জন্য কোনো নির্দিষ্ট জোন সীমাবদ্ধ থাকবে না।
+                              </span>
+                            </div>
+                          </label>
+
+                          <div className="flex items-center justify-end pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveZoneAssignment}
+                              disabled={isSavingAreas}
+                              className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 flex items-center space-x-1.5 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>{isSavingAreas ? 'সেভ হচ্ছে...' : 'জোন অ্যাসাইনমেন্ট সেভ করুন'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 {/* 0.1 Reward Coins Balance Management */}
                 <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50/60 border border-amber-200/80 space-y-3 shadow-xs">
@@ -1873,6 +2184,139 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
           orderId={selectedOrderId}
           onClose={() => setSelectedOrderId(null)}
         />
+      )}
+
+      {/* Role Conversion Modal for Helper with Zone Assignment */}
+      {convertingTargetRole === 'helper' && user && (
+        <div className="fixed inset-0 z-[10030] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-slate-900 border border-emerald-500/30 rounded-3xl p-6 text-white shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center">
+                  <Bike className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">হেলপারে রূপান্তর ও জোন নির্ধারণ</h3>
+                  <p className="text-[11px] text-slate-400">Convert to Helper & Assign Zone</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConvertingTargetRole(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-200">
+              ব্যবহারকারী <strong>{user.displayName}</strong>-কে Helper রোলে রূপান্তর করা হবে। একই সাথে হেলপারের সার্ভিস জোন নির্ধারণ করুন।
+            </div>
+
+            {/* Zone Selection Checklist */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-300">সার্ভিস জোন নির্বাচন করুন:</span>
+                <span className="text-[10px] font-black text-emerald-400">
+                  {convertServeAll ? 'All Zones' : `${convertTargetAreas.length} selected`}
+                </span>
+              </div>
+
+              {/* Quick Dropdown */}
+              {fallbackStore.pricingSettings.allowedDeliveryAreas && fallbackStore.pricingSettings.allowedDeliveryAreas.length > 0 && (
+                <div className="flex items-center justify-between p-2 rounded-xl bg-slate-800/80 border border-slate-700">
+                  <span className="text-[11px] text-slate-400 font-bold">অন্য জোনে দ্রুত অ্যাসাইন করুন:</span>
+                  <select
+                    value={convertTargetAreas.length === 1 && !convertServeAll ? convertTargetAreas[0] : ''}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setConvertTargetAreas([e.target.value]);
+                        setConvertServeAll(false);
+                      }
+                    }}
+                    className="bg-slate-900 text-white text-xs font-bold rounded-lg px-2.5 py-1 border border-slate-700 focus:outline-none cursor-pointer"
+                  >
+                    <option value="">-- জোন নির্বাচন / পরিবর্তন করুন --</option>
+                    {fallbackStore.pricingSettings.allowedDeliveryAreas.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        📍 {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                {(fallbackStore.pricingSettings.allowedDeliveryAreas || []).map((area) => {
+                  const isChecked = convertTargetAreas.includes(area.id);
+                  return (
+                    <label
+                      key={area.id}
+                      className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        isChecked && !convertServeAll
+                          ? 'bg-emerald-900/40 border-emerald-400/60 text-white'
+                          : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2 truncate">
+                        <input
+                          type="checkbox"
+                          disabled={convertServeAll}
+                          checked={isChecked && !convertServeAll}
+                          onChange={() => {
+                            setConvertTargetAreas((prev) =>
+                              prev.includes(area.id)
+                                ? prev.filter((id) => id !== area.id)
+                                : [...prev, area.id]
+                            );
+                          }}
+                          className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 border-slate-600 bg-slate-800"
+                        />
+                        <span className="text-xs font-bold truncate">{area.name}</span>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {/* Serve All Areas Toggle */}
+              <label className="flex items-center space-x-2 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={convertServeAll}
+                  onChange={(e) => {
+                    setConvertServeAll(e.target.checked);
+                    if (e.target.checked) setConvertTargetAreas([]);
+                  }}
+                  className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 border-slate-600 bg-slate-800"
+                />
+                <div className="text-xs">
+                  <span className="font-extrabold text-white block">🌐 উন্মুক্ত সকল জোন (Serve All Areas)</span>
+                  <span className="text-[10px] text-slate-400">এই হেলপার সকল এলাকার অর্ডার দেখতে পারবেন</span>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConvertingTargetRole(null)}
+                className="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer"
+              >
+                বাতিল
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmConvertToHelper}
+                disabled={isConvertingUserRole || (!convertServeAll && convertTargetAreas.length === 0)}
+                className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{isConvertingUserRole ? 'রূপান্তর হচ্ছে...' : 'রূপান্তর নিশ্চিত করুন'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

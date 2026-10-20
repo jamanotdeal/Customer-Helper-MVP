@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Order, HelperApplication, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { countJobsByHelper } from '@/lib/adminMetrics';
+import { isHelperEligibleForOrder } from '@/lib/geofenceUtils';
 import { useModal } from '../CustomModal';
 import { X, Search, Bike, CheckCircle2, User, Phone } from 'lucide-react';
 import { AsyncButton } from '../ui/AsyncButton';
@@ -89,7 +90,17 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
     }
   });
 
-  const helpersList = Array.from(helperMap.values());
+  let helpersList = Array.from(helperMap.values());
+  const allowedAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+  const areasEnabled = fallbackStore.pricingSettings.allowedDeliveryAreasEnabled ?? true;
+
+  if (allowedAreas.length > 0) {
+    helpersList = helpersList.filter((h) => {
+      const u = helperUserById.get(h.userId);
+      if (!u) return false;
+      return isHelperEligibleForOrder(u, order, allowedAreas, areasEnabled);
+    });
+  }
 
   // Filter helpers by query
   const filteredHelpers = helpersList.filter(

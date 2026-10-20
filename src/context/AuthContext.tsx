@@ -25,6 +25,7 @@ import {
   stopDutyService,
   getNativeFcmToken,
 } from '@/lib/native';
+import { getAreasForPoint } from '@/lib/geofenceUtils';
 import { calculateDistanceKm } from '@/lib/pricing';
 import { detectInAppBrowser } from '@/lib/inAppBrowser';
 
@@ -534,6 +535,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
           }
         }).catch(() => {});
+
+        // 4.5. Request location permission on login if customer profile doesn't have map coordinates
+        const hasCoords = Boolean(profile.defaultDeliveryLocation?.lat && profile.defaultDeliveryLocation?.lng);
+        if (!hasCoords && typeof navigator !== 'undefined' && navigator.geolocation) {
+          getNativePosition({ enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 })
+            .then(async (pos) => {
+              if (pos.lat && pos.lng) {
+                const areas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+                const matched = getAreasForPoint({ lat: pos.lat, lng: pos.lng }, areas);
+                const areaId = matched.length > 0 ? matched[0].id : undefined;
+                const locData = {
+                  address: profile.defaultDeliveryLocation?.address || 'Current Location',
+                  lat: pos.lat,
+                  lng: pos.lng,
+                };
+                await fallbackStore.saveCustomerLocation(fbUser.uid, locData, areaId);
+              }
+            })
+            .catch(() => {
+              // Location permission not granted on login; will be required when placing order
+            });
+        }
       }
 
       // Mirror identity into SharedPreferences and start/stop the duty

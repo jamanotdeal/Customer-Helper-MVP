@@ -29,10 +29,11 @@ import { useModal } from '../CustomModal';
 interface AreaDrawerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaveArea: (area: AllowedAreaPolygon, assignedHelpers?: string[], allHelpers?: boolean) => void;
+  onSaveArea: (area: AllowedAreaPolygon, assignedHelpers?: string[], allHelpers?: boolean, assignedAdmins?: string[]) => void;
   areaToEdit?: AllowedAreaPolygon | null;
   existingAreas?: AllowedAreaPolygon[];
   helpers?: UserProfile[];
+  admins?: UserProfile[];
 }
 
 export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
@@ -42,6 +43,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
   areaToEdit,
   existingAreas = [],
   helpers: propHelpers,
+  admins: propAdmins,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -64,7 +66,11 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
   const [allHelpersAllowed, setAllHelpersAllowed] = useState(true);
   const [selectedHelperIds, setSelectedHelperIds] = useState<string[]>([]);
   const [helperSearch, setHelperSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'MAP' | 'HELPERS'>('MAP');
+  const [activeTab, setActiveTab] = useState<'MAP' | 'HELPERS' | 'ADMINS'>('MAP');
+
+  // Admin Assignment State
+  const [selectedAdminIds, setSelectedAdminIds] = useState<string[]>(areaToEdit?.assignedAdminIds || []);
+  const [adminSearch, setAdminSearch] = useState('');
 
   const { showAlert } = useModal();
 
@@ -74,6 +80,13 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
       ? propHelpers
       : Array.from(fallbackStore.users.values())
   ).filter((u) => u.isHelper || u.role === 'helper');
+
+  // All eligible admins
+  const allAdmins: UserProfile[] = (
+    propAdmins && propAdmins.length > 0
+      ? propAdmins
+      : Array.from(fallbackStore.users.values())
+  ).filter((u) => u.isAdmin || u.role === 'admin');
 
   // Invalidate map size on fullscreen toggle
   useEffect(() => {
@@ -97,6 +110,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
       const isAll = areaToEdit.allHelpersAssigned !== false && (!areaToEdit.assignedHelperIds || areaToEdit.assignedHelperIds.length === 0);
       setAllHelpersAllowed(areaToEdit.allHelpersAssigned ?? isAll);
       setSelectedHelperIds(areaToEdit.assignedHelperIds || []);
+      setSelectedAdminIds(areaToEdit.assignedAdminIds || []);
       setDrawMode(areaToEdit.coordinates && areaToEdit.coordinates.length === 4 ? 'RECTANGLE' : 'POLYGON');
     } else {
       setAreaName('');
@@ -104,6 +118,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
       setPoints([]);
       setAllHelpersAllowed(true);
       setSelectedHelperIds([]);
+      setSelectedAdminIds([]);
       setDrawMode('RECTANGLE');
     }
     setRectangleFirstCorner(null);
@@ -426,10 +441,11 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
       country: countryName.trim() || 'Bangladesh',
       coordinates: points,
       assignedHelperIds: allHelpersAllowed ? [] : selectedHelperIds,
+      assignedAdminIds: selectedAdminIds,
       allHelpersAssigned: allHelpersAllowed,
     };
 
-    onSaveArea(area, selectedHelperIds, allHelpersAllowed);
+    onSaveArea(area, selectedHelperIds, allHelpersAllowed, selectedAdminIds);
     onClose();
   };
 
@@ -440,6 +456,16 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
       (h.displayName || '').toLowerCase().includes(q) ||
       (h.phoneNumber || '').includes(q) ||
       (h.email || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredAdmins = allAdmins.filter((a) => {
+    if (!adminSearch.trim()) return true;
+    const q = adminSearch.toLowerCase();
+    return (
+      (a.displayName || '').toLowerCase().includes(q) ||
+      (a.email || '').toLowerCase().includes(q) ||
+      (a.phoneNumber || '').includes(q)
     );
   });
 
@@ -586,6 +612,20 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
                   {allHelpersAllowed ? 'All' : `${selectedHelperIds.length}/${allHelpers.length}`})
                 </span>
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('ADMINS')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
+                  activeTab === 'ADMINS'
+                    ? 'bg-purple-950 text-white shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                <span>
+                  অ্যাডমিন অ্যাসাইন ({selectedAdminIds.length})
+                </span>
+              </button>
             </div>
 
             <div className="flex items-center space-x-1.5">
@@ -670,7 +710,7 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
           {/* HELPER ASSIGNMENT PANEL */}
           <div
             className={`w-full md:w-80 lg:w-96 h-full flex flex-col bg-white border-t md:border-t-0 md:border-l border-gray-200 z-20 shadow-lg md:shadow-none ${
-              activeTab === 'HELPERS' ? 'flex' : 'hidden md:flex'
+              activeTab === 'HELPERS' ? 'flex' : activeTab === 'ADMINS' ? 'hidden' : 'hidden md:flex'
             }`}
           >
             {/* Helper Panel Header */}
@@ -803,6 +843,102 @@ export const AreaDrawerModal: React.FC<AreaDrawerModalProps> = ({
                           checked={isSelected}
                           onChange={() => {}}
                           className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* ADMIN ASSIGNMENT PANEL */}
+          <div
+            className={`w-full md:w-80 lg:w-96 h-full flex flex-col bg-white border-t md:border-t-0 md:border-l border-gray-200 z-20 shadow-lg md:shadow-none ${
+              activeTab === 'ADMINS' ? 'flex' : 'hidden'
+            }`}
+          >
+            {/* Admin Panel Header */}
+            <div className="p-4 border-b border-gray-100 bg-gray-50/80 shrink-0">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                  <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider">
+                    অ্যাডমিন নির্ধারণ (Zone Admin)
+                  </h4>
+                </div>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                  {selectedAdminIds.length} Selected
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500 font-medium mb-2.5">
+                এই জোনে অ্যাসাইনকৃত অ্যাডমিনরা শুধুমাত্র এই এলাকার ডাটা, অর্ডার ও হেলপার দেখতে পারবেন।
+              </p>
+
+              {/* Search */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="অ্যাডমিনের নাম / ইমেইল খুঁজুন..."
+                  value={adminSearch}
+                  onChange={(e) => setAdminSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-medium focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Admin List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {filteredAdmins.length === 0 ? (
+                <div className="p-6 text-center text-xs text-gray-400">কোনো অ্যাডমিন পাওয়া যায়নি।</div>
+              ) : (
+                filteredAdmins.map((a) => {
+                  const isSelected = selectedAdminIds.includes(a.uid);
+
+                  return (
+                    <div
+                      key={a.uid}
+                      onClick={() => {
+                        setSelectedAdminIds((prev) =>
+                          prev.includes(a.uid) ? prev.filter((id) => id !== a.uid) : [...prev, a.uid]
+                        );
+                      }}
+                      className={`p-2.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-blue-50/80 border-blue-300 shadow-xs'
+                          : 'bg-white border-gray-100 hover:border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <div
+                          className={`w-8 h-8 rounded-xl flex items-center justify-center font-extrabold text-xs shrink-0 ${
+                            isSelected
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          {a.displayName?.charAt(0).toUpperCase() || 'A'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-xs text-gray-900 truncate">
+                            {a.displayName || 'Unnamed Admin'}
+                          </div>
+                          <div className="text-[10px] text-gray-500 truncate">
+                            {a.email}
+                          </div>
+                          <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase mt-0.5 bg-purple-100 text-purple-900">
+                            {a.isSuperAdmin ? 'Super Admin' : 'Admin'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 pl-2">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 border-gray-300 cursor-pointer"
                         />
                       </div>
                     </div>

@@ -27,11 +27,14 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
   const [hasSmartphone, setHasSmartphone] = useState(existingPendingApp?.hasSmartphone ?? true);
   const [hasCycle, setHasCycle] = useState(existingPendingApp?.hasCycle ?? false);
   const [hasBike, setHasBike] = useState(existingPendingApp?.hasBike ?? true);
+  const [preferredAreaId, setPreferredAreaId] = useState(existingPendingApp?.preferredAreaId || '');
   
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+
+  const availableAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
 
   const isStoreUser = Boolean(
     user && (
@@ -66,6 +69,7 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
       setHasSmartphone(existingPendingApp.hasSmartphone);
       setHasCycle(existingPendingApp.hasCycle);
       setHasBike(existingPendingApp.hasBike);
+      setPreferredAreaId(existingPendingApp.preferredAreaId || '');
     }
   }, [existingPendingApp, user, onClose]);
 
@@ -108,6 +112,7 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
           hasSmartphone,
           hasCycle,
           hasBike,
+          preferredAreaId: preferredAreaId || undefined,
         });
         setSuccessMessage('আপনার আবেদনের তথ্য সফলভাবে আপডেট করা হয়েছে!');
       } else {
@@ -120,6 +125,7 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
           hasSmartphone,
           hasCycle,
           hasBike,
+          preferredAreaId: preferredAreaId || undefined,
           applicationType: 'dedicated',
         });
         setSuccessMessage('আবেদন সফলভাবে জমা হয়েছে!');
@@ -276,6 +282,26 @@ export const HelperApplicationModal: React.FC<HelperApplicationModalProps> = ({ 
                 />
               </div>
             </div>
+
+            {availableAreas.length > 0 && (
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1">
+                  পছন্দের সার্ভিস জোন / এলাকা (Preferred Zone)
+                </label>
+                <select
+                  value={preferredAreaId}
+                  onChange={(e) => setPreferredAreaId(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none text-sm bg-white font-medium"
+                >
+                  <option value="">জোন নির্বাচন করুন (ঐচ্ছিক)...</option>
+                  {availableAreas.map((area) => (
+                    <option key={area.id} value={area.id}>
+                      📍 {area.name} ({area.country || 'Bangladesh'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="space-y-2 pt-2 border-t border-gray-100">
               <label className="text-xs font-bold text-gray-700 block">অন্যান্য তথ্য</label>
