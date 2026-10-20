@@ -411,6 +411,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [referralRewardCoins, setReferralRewardCoins] = useState<number | string>(
     fallbackStore.pricingSettings?.referralRewardCoins ?? 20
   );
+  const [referredUserRewardCoins, setReferredUserRewardCoins] = useState<number | string>(
+    fallbackStore.pricingSettings?.referredUserRewardCoins ?? 10
+  );
+  const [referredUserRewardOrderLimit, setReferredUserRewardOrderLimit] = useState<number | string>(
+    fallbackStore.pricingSettings?.referredUserRewardOrderLimit ?? 1
+  );
   const [referralMessageTemplate, setReferralMessageTemplate] = useState<string>(
     fallbackStore.pricingSettings?.referralMessageTemplate ??
       'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
@@ -947,6 +953,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setCustomStorePricingEnabled(settings.customStorePricingEnabled === true);
       setCustomStorePricingAmount(settings.customStorePricingAmount ?? 15);
       setReferralRewardCoins(settings.referralRewardCoins ?? 20);
+      setReferredUserRewardCoins(settings.referredUserRewardCoins ?? 10);
+      setReferredUserRewardOrderLimit(settings.referredUserRewardOrderLimit ?? 1);
       setReferralMessageTemplate(
         settings.referralMessageTemplate ??
           'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
@@ -1742,6 +1750,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       customStorePricingEnabled: Boolean(customStorePricingEnabled),
       customStorePricingAmount: customStorePricingAmount !== '' && !isNaN(Number(customStorePricingAmount)) ? Number(customStorePricingAmount) : 15,
       referralRewardCoins: referralRewardCoins !== '' && !isNaN(Number(referralRewardCoins)) ? Number(referralRewardCoins) : 20,
+      referredUserRewardCoins: referredUserRewardCoins !== '' && !isNaN(Number(referredUserRewardCoins)) ? Number(referredUserRewardCoins) : 10,
+      referredUserRewardOrderLimit: referredUserRewardOrderLimit !== '' && !isNaN(Number(referredUserRewardOrderLimit)) ? Math.max(1, Number(referredUserRewardOrderLimit)) : 1,
       referralMessageTemplate: referralMessageTemplate.trim() || undefined,
       allowedAdminTabs: allowedAdminTabs,
       homeSlides: adminSlides.length > 0 ? adminSlides : undefined,
@@ -6571,10 +6581,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            <div className="pt-2 border-t border-amber-200/60 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="pt-2 border-t border-amber-200/60 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-800 block mb-1">
-                  Referral Reward Coins per Delivered Order (প্রতি সফল অর্ডারে রেফারকারী কয়েন পাবেন):
+                  Referrer Reward Coins (রেফারকারী কত কয়েন পাবেন):
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">🪙</span>
@@ -6589,25 +6599,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
                 <p className="text-[10px] text-gray-500 mt-1 font-medium">
-                  ডিফল্ট: ২০ কয়েন। শুধুমাত্র সফলভাবে ডেলিভার্ড (DELIVERED) হওয়া প্রথম অর্ডারে এই বোনাস রেফারকারী অ্যাকাউন্টে যোগ হবে।
+                  রেফার করা বন্ধু ডেলিভারি সম্পন্ন করলে রেফারকারী এই কয়েন পাবেন (ডিফল্ট: ২০)।
                 </p>
               </div>
 
               <div>
                 <label className="text-xs font-bold text-gray-800 block mb-1">
-                  Referral WhatsApp Message (হোয়াটসঅ্যাপে পাঠানোর রেফারেল মেসেজ):
+                  Referred Customer Coins (নতুন কাস্টমার কত কয়েন পাবেন):
                 </label>
-                <textarea
-                  rows={3}
-                  value={referralMessageTemplate}
-                  onChange={(e) => setReferralMessageTemplate(e.target.value)}
-                  placeholder="e.g. আসসালামু আলাইকুম! জামানত দিয়ে সহজে বাজার-সদাই ডেলিভারি নিন। এখনই এই লিঙ্কে অর্ডার করুন: {link}"
-                  className="w-full px-3 py-2.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10 resize-none"
-                />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">🪙</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={referredUserRewardCoins}
+                    onChange={(e) => setReferredUserRewardCoins(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="e.g. 10"
+                    className="w-full pl-9 pr-3 py-3 rounded-2xl border border-gray-200 bg-white text-xs font-black outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10"
+                  />
+                </div>
                 <p className="text-[10px] text-gray-500 mt-1 font-medium">
-                  রেফার লিংক ডায়নামিক ভাবে বসাতে <code className="bg-amber-100 text-amber-900 px-1 py-0.5 rounded font-mono text-[9px] font-bold">{'{link}'}</code> কোডটি ব্যবহার করুন।
+                  রেফারেলের মাধ্যমে যুক্ত নতুন কাস্টমার সফল অর্ডারে এই বোনাস কয়েন পাবেন (ডিফল্ট: ১০)।
                 </p>
               </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1">
+                  Eligible Orders for New Customer (কতটি অর্ডারে প্রযোজ্য):
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">📦</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={referredUserRewardOrderLimit}
+                    onChange={(e) => setReferredUserRewardOrderLimit(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="e.g. 1"
+                    className="w-full pl-9 pr-3 py-3 rounded-2xl border border-gray-200 bg-white text-xs font-black outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1 font-medium">
+                  ১ দিলে শুধুমাত্র ১ম সফল অর্ডারে পাবে, ২ বা ৩ দিলে ততগুলো সফল অর্ডারে কয়েন বোনাস পাবে (ডিফল্ট: ১)।
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <label className="text-xs font-bold text-gray-800 block mb-1">
+                Referral WhatsApp Message (হোয়াটসঅ্যাপে পাঠানোর রেফারেল মেসেজ):
+              </label>
+              <textarea
+                rows={2}
+                value={referralMessageTemplate}
+                onChange={(e) => setReferralMessageTemplate(e.target.value)}
+                placeholder="e.g. আসসালামু আলাইকুম! জামানত দিয়ে সহজে বাজার-সদাই ডেলিভারি নিন। এখনই এই লিঙ্কে অর্ডার করুন: {link}"
+                className="w-full px-3 py-2.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10 resize-none"
+              />
+              <p className="text-[10px] text-gray-500 mt-1 font-medium">
+                রেফার লিংক ডায়নামিক ভাবে বসাতে <code className="bg-amber-100 text-amber-900 px-1 py-0.5 rounded font-mono text-[9px] font-bold">{'{link}'}</code> কোডটি ব্যবহার করুন।
+              </p>
             </div>
           </div>
 

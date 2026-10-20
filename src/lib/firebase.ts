@@ -8805,9 +8805,9 @@ class FallbackStore {
 
     candidatePhones.delete('');
 
-    const referredBy = order.referredBy;
+    const referredBy = order.referredBy || customer?.referredBy;
 
-    // 1. Check in-memory referrals first
+    // 1. Check in-memory pending referrals first
     let matchingReferral: Referral | undefined = Array.from(this.referrals.values()).find(
       (r) =>
         r.status === 'PENDING' &&
@@ -8815,7 +8815,15 @@ class FallbackStore {
         (candidatePhones.has(r.normalizedPhone) || (referredBy && r.referrerId === referredBy))
     );
 
-    // 2. If not found in memory, query Firestore
+    // 2. Check in-memory completed referrals for repeat eligible orders
+    let existingCompletedReferral: Referral | undefined = Array.from(this.referrals.values()).find(
+      (r) =>
+        r.status === 'COMPLETED' &&
+        r.referrerId !== order.customerId &&
+        (r.referredUserId === order.customerId || candidatePhones.has(r.normalizedPhone) || (referredBy && r.referrerId === referredBy))
+    );
+
+    // 3. If not found in memory, query Firestore for pending referral
     if (!matchingReferral) {
       try {
         const phoneList = Array.from(candidatePhones);
@@ -8839,7 +8847,7 @@ class FallbackStore {
       }
     }
 
-    // 3. Also check by referredBy query if still not found
+    // 4. Also check by referredBy query if still not found
     if (!matchingReferral && referredBy && referredBy !== order.customerId) {
       try {
         const q = query(
@@ -8857,47 +8865,131 @@ class FallbackStore {
       }
     }
 
-    if (!matchingReferral) return;
-
-    const rewardCoins = this.pricingSettings.referralRewardCoins ?? 20;
-    const now = new Date().toISOString();
-
-    const updatedReferral: Referral = {
-      ...matchingReferral,
-      status: 'COMPLETED',
-      completedAt: now,
-      completedOrderId: order.id,
-      referredUserId: order.customerId,
-      referredUserName: order.customerName || customer?.displayName || 'Customer',
-      rewardedCoins: rewardCoins,
-    };
-
-    this.referrals.set(updatedReferral.id, updatedReferral);
-    this.scheduleLocalStoreSave();
-    this.notify();
-
-    // Award coins to referrer
-    await this.awardCoinsToCustomer(updatedReferral.referrerId, rewardCoins, order.id);
-
-    // Persist completed referral
-    try {
-      await setDoc(doc(db, 'referrals', updatedReferral.id), cleanForFirestore(updatedReferral), { merge: true });
-    } catch (e) {
-      console.warn('[Firestore] update referral note:', e);
+    // 5. If still no referral found, check if customer was already linked in completed referrals
+    if (!matchingReferral && !existingCompletedReferral && !referredBy) {
+      try {
+        const q = query(
+          collection(db, 'referrals'),
+          where('status', '==', 'COMPLETED'),
+          where('referredUserId', '==', order.customerId),
+          limit(1)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          existingCompletedReferral = snap.docs[0].data() as Referral;
+        }
+      } catch (e) {
+        // ignore
+      }
     }
 
-    // Send high-priority notification to referrer
-    this.addNotification({
-      id: `notif-${Date.now()}-ref-reward-${order.id}`,
-      userId: updatedReferral.referrerId,
-      title: '🎉 রেফারেল রিওয়ার্ড পেয়েছেন!',
-      body: `আপনার রেফার করা বন্ধু (${order.customerName || updatedReferral.friendPhone}) অর্ডার সফলভাবে ডেলিভারি সম্পন্ন করেছেন! আপনি +${rewardCoins} জামানত কয়েন রিওয়ার্ড পেয়েছেন।`,
-      orderId: order.id,
-      read: false,
-      createdAt: now,
-      targetRole: 'customer',
-      type: 'coins_earned',
-    });
+    // If no referral record and no referral link exists for this customer, nothing to do
+    if (!matchingReferral && !existingCompletedReferral && !referredBy) return;
+
+    const now = new Date().toISOString();
+
+    // ── A. REFERRER REWARD: Award coins to the referrer on the 1st completed order ──
+    if (matchingReferral && matchingReferral.status === 'PENDING') {
+      const rewardCoins = this.pricingSettings.referralRewardCoins ?? 20;
+
+      const updatedReferral: Referral = {
+        ...matchingReferral,
+        status: 'COMPLETED',
+        completedAt: now,
+        completedOrderId: order.id,
+        referredUserId: order.customerId,
+        referredUserName: order.customerName || customer?.displayName || 'Customer',
+        rewardedCoins: rewardCoins,
+      };
+
+      this.referrals.set(updatedReferral.id, updatedReferral);
+      this.scheduleLocalStoreSave();
+      this.notify();
+
+      // Award coins to referrer
+      await this.awardCoinsToCustomer(updatedReferral.referrerId, rewardCoins, order.id);
+
+      // Persist completed referral in Firestore
+      try {
+        await setDoc(doc(db, 'referrals', updatedReferral.id), cleanForFirestore(updatedReferral), { merge: true });
+      } catch (e) {
+        console.warn('[Firestore] update referral note:', e);
+      }
+
+      // Send celebration notification to referrer
+      this.addNotification({
+        id: `notif-${Date.now()}-ref-reward-${order.id}`,
+        userId: updatedReferral.referrerId,
+        title: '🎉 রেফারেল রিওয়ার্ড পেয়েছেন!',
+        body: `আপনার রেফার করা বন্ধু (${order.customerName || updatedReferral.friendPhone}) অর্ডার সফলভাবে ডেলিভারি সম্পন্ন করেছেন! আপনি +${rewardCoins} জামানত কয়েন রিওয়ার্ড পেয়েছেন।`,
+        orderId: order.id,
+        read: false,
+        createdAt: now,
+        targetRole: 'customer',
+        type: 'coins_earned',
+      });
+    }
+
+    // ── B. REFERRED CUSTOMER REWARD: Award coins to the newly referred customer ──
+    const customerId = order.customerId;
+    const referredCustomerBonus = this.pricingSettings.referredUserRewardCoins ?? 10;
+    const orderLimit = Math.max(1, this.pricingSettings.referredUserRewardOrderLimit ?? 1);
+
+    // Count how many orders this customer already received referredUserCoinsAwarded for
+    const previousRewardedCount = Array.from(this.orders.values()).filter(
+      (o) => o.customerId === customerId && o.id !== order.id && Boolean(o.referredUserCoinsAwarded)
+    ).length;
+
+    if (!order.referredUserCoinsAwarded && previousRewardedCount < orderLimit && referredCustomerBonus > 0) {
+      // Award coins to the newly referred customer
+      await this.awardCoinsToCustomer(customerId, referredCustomerBonus, order.id);
+
+      // Record on this order
+      order.referredUserCoinsAwarded = referredCustomerBonus;
+      this.orders.set(order.id, { ...order, referredUserCoinsAwarded: referredCustomerBonus });
+      try {
+        await setDoc(doc(db, 'orders', order.id), { referredUserCoinsAwarded: referredCustomerBonus }, { merge: true });
+      } catch (e) {
+        console.warn('[Firestore] update order referredUserCoinsAwarded note:', e);
+      }
+
+      // Update customer profile with referredBy and incremented count
+      const referrerUid = matchingReferral?.referrerId || existingCompletedReferral?.referrerId || referredBy;
+      const newRewardedCount = previousRewardedCount + 1;
+      const custProfile = this.users.get(customerId);
+      if (custProfile) {
+        this.users.set(customerId, {
+          ...custProfile,
+          referredOrdersRewardedCount: newRewardedCount,
+          referredBy: custProfile.referredBy || referrerUid,
+        });
+      }
+      try {
+        await setDoc(
+          doc(db, 'users', customerId),
+          {
+            referredOrdersRewardedCount: newRewardedCount,
+            referredBy: custProfile?.referredBy || referrerUid,
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('[Firestore] update user referredOrdersRewardedCount note:', e);
+      }
+
+      // Send high-priority celebration notification to the newly referred customer
+      this.addNotification({
+        id: `notif-${Date.now()}-ref-customer-bonus-${order.id}`,
+        userId: customerId,
+        title: '🎉 রেফারেল বোনাস কয়েন পেয়েছেন!',
+        body: `রেফারেল সুবিধার মাধ্যমে সফলভাবে ডেলিভারি সম্পন্ন করায় আপনি পেয়েছেন +${referredCustomerBonus} জামানত কয়েন! (${newRewardedCount}/${orderLimit} অর্ডার)`,
+        orderId: order.id,
+        read: false,
+        createdAt: now,
+        targetRole: 'customer',
+        type: 'coins_earned',
+      });
+    }
 
     if (typeof localStorage !== 'undefined') {
       try {

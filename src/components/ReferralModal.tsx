@@ -41,6 +41,8 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ isOpen, onClose })
 
   const ITEMS_PER_PAGE = 3;
   const referralRewardCoins = fallbackStore.pricingSettings.referralRewardCoins ?? 20;
+  const referredUserRewardCoins = fallbackStore.pricingSettings.referredUserRewardCoins ?? 10;
+  const referredUserRewardOrderLimit = fallbackStore.pricingSettings.referredUserRewardOrderLimit ?? 1;
 
   // Sync referrals from fallbackStore
   useEffect(() => {
@@ -188,8 +190,8 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ isOpen, onClose })
                   +{referralRewardCoins} Coins
                 </span>
               </div>
-              <p className="text-[11px] text-amber-100 font-medium mt-0.5">
-                বন্ধুর প্রথম সফল অর্ডারে পাবেন +{referralRewardCoins} জামানত কয়েন
+              <p className="text-[11px] text-amber-100 font-medium mt-0.5 leading-snug">
+                বন্ধু সফল অর্ডার দিলে পাবেন +{referralRewardCoins} কয়েন{referredUserRewardCoins > 0 ? ` (বন্ধুও পাবেন +${referredUserRewardCoins} কয়েন)` : ''}
               </p>
             </div>
           </div>
@@ -269,9 +271,17 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ isOpen, onClose })
                   <span className="font-black text-emerald-800">{activeReferral.friendPhone}</span>
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-emerald-900/80">
-                  <span>বোনাস কয়েন:</span>
+                  <span>আপনার বোনাস কয়েন:</span>
                   <span className="font-black text-emerald-700">+{referralRewardCoins} Coins</span>
                 </div>
+                {referredUserRewardCoins > 0 && (
+                  <div className="flex items-center justify-between text-[11px] text-emerald-900/80">
+                    <span>বন্ধুর বোনাস কয়েন:</span>
+                    <span className="font-black text-amber-700">
+                      +{referredUserRewardCoins} Coins ({referredUserRewardOrderLimit > 1 ? `প্রথম ${referredUserRewardOrderLimit} অর্ডারে` : '১ম অর্ডারে'})
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Referral Link Box */}

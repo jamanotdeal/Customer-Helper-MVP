@@ -139,6 +139,7 @@ export interface Order {
 
   updatedByCustomer?: boolean;
   referredBy?: string; // UID of referrer user who referred this customer
+  referredUserCoinsAwarded?: number; // Referral bonus coins awarded to this customer for this order
   lastEditedAt?: string;
   lastEditedBy?: 'customer' | 'helper' | 'admin';
   editHistory?: OrderEditHistoryItem[];
@@ -252,6 +253,8 @@ export interface UserProfile {
   creditedOrderIds?: string[]; // Order IDs for which completion coins have been credited
   assignedAreaIds?: string[]; // Specific sub-area IDs assigned to this helper
   serveAllAreas?: boolean;   // If true, helper receives orders from all service areas
+  referredBy?: string;       // Referrer UID if customer joined via referral
+  referredOrdersRewardedCount?: number; // Count of delivered orders awarded with referral bonus
 }
 
 export interface HelperApplication {
@@ -616,6 +619,8 @@ export interface PricingSettings {
   insufficientCoinsMessage?: string;         // Admin customizable popup message when coins not enough
   rewardStoreTips?: string;                  // Tips / advice text block written by admin for customers
   referralRewardCoins?: number;              // Coins awarded to referrer upon referred user's first delivered order
+  referredUserRewardCoins?: number;          // Coins awarded to the new referred customer on delivered orders
+  referredUserRewardOrderLimit?: number;     // Number of delivered orders eligible for referred customer bonus (default 1)
   referralMessageTemplate?: string;          // WhatsApp referral message template with {link} placeholder
 
   // Blocked User Custom Modal Settings (Admin Configurable)
