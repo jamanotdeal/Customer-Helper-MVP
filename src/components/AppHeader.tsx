@@ -4,12 +4,13 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle, Edit } from 'lucide-react';
+import { Bell, User, LogOut, ShieldCheck, Bike, ShoppingBag, PlusCircle, CheckCircle2, HeartHandshake, Store, Clock, XCircle, Edit, Share2, ChevronRight } from 'lucide-react';
 import { HelperApplicationModal } from './HelperApplicationModal';
 import { StoreApplicationModal } from './StoreApplicationModal';
 import { EditStoreModal } from './EditStoreModal';
 import { AuthModal } from './AuthModal';
 import { RewardStoreModal, SingleCoinIcon } from './RewardStoreModal';
+import { ReferralModal } from './ReferralModal';
 import { fallbackStore } from '@/lib/firebase';
 
 import { useModal } from './CustomModal';
@@ -42,6 +43,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [showHelperModal, setShowHelperModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [showRewardModal, setShowRewardModal] = useState(false);
+  const [showReferralModal, setShowReferralModal] = useState(false);
+  const [hasCompletedOrder, setHasCompletedOrder] = useState<boolean>(() => {
+    if (!user) return false;
+    if (user.creditedOrderIds && user.creditedOrderIds.length > 0) return true;
+    return Array.from(fallbackStore.orders.values()).some(
+      (o) => o.customerId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+    );
+  });
   const [unreadCount, setUnreadCount] = useState(0);
   const [storeAppStatus, setStoreAppStatus] = useState<string | null>(null);
   const [helperAppStatus, setHelperAppStatus] = useState<string | null>(null);
@@ -50,6 +59,32 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
   const [showBecomeHelperOption, setShowBecomeHelperOption] = useState<boolean>(
     Boolean(fallbackStore.pricingSettings?.showBecomeHelper)
   );
+
+  useEffect(() => {
+    if (!user) {
+      setHasCompletedOrder(false);
+      return;
+    }
+    const check = () => {
+      if (user.creditedOrderIds && user.creditedOrderIds.length > 0) {
+        setHasCompletedOrder(true);
+        return;
+      }
+      const done = Array.from(fallbackStore.orders.values()).some(
+        (o) => o.customerId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+      );
+      if (done) {
+        setHasCompletedOrder(true);
+      } else {
+        fallbackStore.hasUserCompletedOrder(user.uid).then((res) => {
+          if (res) setHasCompletedOrder(true);
+        });
+      }
+    };
+    check();
+    const unsub = fallbackStore.subscribe(check);
+    return () => unsub();
+  }, [user]);
 
   useEffect(() => {
     const syncNotifs = () => {
@@ -281,6 +316,35 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   )}
                 </div>
               </div>
+
+              {/* Refer & Earn Sidebar Option - Placed BEFORE Mode Selection (strictly for customer who completed an order) */}
+              {isCustomerMode && hasCompletedOrder && (
+                <div className="mt-4">
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      setShowReferralModal(true);
+                    }}
+                    className="w-full flex items-center justify-between p-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-50/50 hover:bg-amber-100/60 text-amber-950 font-bold transition-all text-left shadow-xs cursor-pointer active:scale-98"
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-400 to-yellow-300 flex items-center justify-center text-amber-950 shadow-xs ring-1 ring-amber-300 shrink-0">
+                        <Share2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-extrabold flex items-center gap-1.5 leading-tight">
+                          <span>Refer & Earn</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-200 text-amber-900 font-black">
+                            +{fallbackStore.pricingSettings.referralRewardCoins ?? 20}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-amber-800/80 font-normal">বন্ধু রেফার করুন ও কয়েন পান</div>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-amber-600 shrink-0" />
+                  </button>
+                </div>
+              )}
 
               {/* Mode Switcher */}
               <div className="mt-5">
@@ -595,6 +659,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
         <RewardStoreModal
           isOpen={showRewardModal}
           onClose={() => setShowRewardModal(false)}
+        />
+      )}
+
+      {/* Refer & Earn Modal (Customer Only) */}
+      {isCustomerMode && showReferralModal && (
+        <ReferralModal
+          isOpen={showReferralModal}
+          onClose={() => setShowReferralModal(false)}
         />
       )}
     </>

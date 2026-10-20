@@ -18,8 +18,11 @@ import {
   Truck,
   Send,
   Zap,
+  Share2,
+  ChevronRight,
 } from 'lucide-react';
 import { AsyncButton } from './ui/AsyncButton';
+import { ReferralModal } from './ReferralModal';
 
 // Reusable Clean Single Coin Icon
 export const SingleCoinIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
@@ -60,9 +63,44 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
   const [claimNote, setClaimNote] = useState('');
   const [submittingClaim, setSubmittingClaim] = useState(false);
 
+  const [showReferralModal, setShowReferralModal] = useState(false);
+  const [hasCompletedOrder, setHasCompletedOrder] = useState<boolean>(() => {
+    if (!user) return false;
+    if (user.creditedOrderIds && user.creditedOrderIds.length > 0) return true;
+    return Array.from(fallbackStore.orders.values()).some(
+      (o) => o.customerId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+    );
+  });
+
   const [prizes, setPrizes] = useState<RewardPrize[]>([]);
   const [myClaims, setMyClaims] = useState<RewardClaim[]>([]);
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>(fallbackStore.pricingSettings);
+
+  useEffect(() => {
+    if (!user) {
+      setHasCompletedOrder(false);
+      return;
+    }
+    const check = () => {
+      if (user.creditedOrderIds && user.creditedOrderIds.length > 0) {
+        setHasCompletedOrder(true);
+        return;
+      }
+      const done = Array.from(fallbackStore.orders.values()).some(
+        (o) => o.customerId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+      );
+      if (done) {
+        setHasCompletedOrder(true);
+      } else {
+        fallbackStore.hasUserCompletedOrder(user.uid).then((res) => {
+          if (res) setHasCompletedOrder(true);
+        });
+      }
+    };
+    check();
+    const unsub = fallbackStore.subscribe(check);
+    return () => unsub();
+  }, [user]);
 
   // Auto fetch latest active prizes from server whenever modal opens
   useEffect(() => {
@@ -265,6 +303,35 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
             <p className="text-xs text-amber-900 font-medium leading-tight truncate">
               {insufficientMessage || `Need ${requiredCoinsForAction ?? freeDeliveryTarget} coins (You have ${currentCoins} coins)`}
             </p>
+          </div>
+        )}
+
+        {/* Refer to Earn Button - Visible strictly for customers who have already completed an order */}
+        {hasCompletedOrder && (
+          <div className="px-3 pt-2.5 pb-1 shrink-0 bg-white">
+            <button
+              type="button"
+              onClick={() => setShowReferralModal(true)}
+              className="w-full p-2.5 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-600 hover:to-yellow-500 text-purple-950 font-black text-xs shadow-xs flex items-center justify-between transition-all cursor-pointer active:scale-98 border border-amber-300/60"
+            >
+              <div className="flex items-center space-x-2 text-left">
+                <div className="w-7 h-7 rounded-xl bg-purple-950/15 flex items-center justify-center shrink-0">
+                  <Share2 className="w-3.5 h-3.5 text-purple-950" />
+                </div>
+                <div>
+                  <div className="leading-tight flex items-center gap-1.5">
+                    <span>Refer to Earn</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-950/10 text-purple-950 font-black">
+                      +{pricingSettings.referralRewardCoins ?? 20} Coins
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-semibold text-purple-950/80">
+                    বন্ধু রেফার করুন ও তাদের প্রথম অর্ডারে কয়েন জিতুন
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-purple-950 shrink-0" />
+            </button>
           </div>
         )}
 
@@ -590,6 +657,13 @@ export const RewardStoreModal: React.FC<RewardStoreModalProps> = ({
               </div>
             </div>
           </div>
+        )}
+        {/* Referral Modal */}
+        {showReferralModal && (
+          <ReferralModal
+            isOpen={showReferralModal}
+            onClose={() => setShowReferralModal(false)}
+          />
         )}
       </div>
     </div>,

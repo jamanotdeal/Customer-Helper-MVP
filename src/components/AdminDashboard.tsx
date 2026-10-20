@@ -58,6 +58,7 @@ import {
   Zap,
   Gift,
   Coins,
+  Share2,
   Square,
   ThumbsUp,
   ThumbsDown,
@@ -397,6 +398,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showFeeSuggestionsModal, setShowFeeSuggestionsModal] = useState<boolean>(false);
   const [feeSuggestionsModalPage, setFeeSuggestionsModalPage] = useState<number>(1);
   const [feeSuggestionsModalPageSize, setFeeSuggestionsModalPageSize] = useState<number>(5);
+  const [pricingFeeSuggestionsPage, setPricingFeeSuggestionsPage] = useState<number>(1);
+  const [pricingFeeSuggestionsPageSize, setPricingFeeSuggestionsPageSize] = useState<number>(5);
 
   // Custom Store Pricing Admin States
   const [customStorePricingEnabled, setCustomStorePricingEnabled] = useState<boolean>(
@@ -404,6 +407,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
   const [customStorePricingAmount, setCustomStorePricingAmount] = useState<number | string>(
     fallbackStore.pricingSettings?.customStorePricingAmount ?? 15
+  );
+  const [referralRewardCoins, setReferralRewardCoins] = useState<number | string>(
+    fallbackStore.pricingSettings?.referralRewardCoins ?? 20
+  );
+  const [referralMessageTemplate, setReferralMessageTemplate] = useState<string>(
+    fallbackStore.pricingSettings?.referralMessageTemplate ??
+      'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
   );
 
   // Modals state
@@ -936,6 +946,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       // Custom Store pricing sync
       setCustomStorePricingEnabled(settings.customStorePricingEnabled === true);
       setCustomStorePricingAmount(settings.customStorePricingAmount ?? 15);
+      setReferralRewardCoins(settings.referralRewardCoins ?? 20);
+      setReferralMessageTemplate(
+        settings.referralMessageTemplate ??
+          'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
+      );
 
       // Home Banner Slides & Search Not Found Message sync
       setAdminSlides(settings.homeSlides || []);
@@ -1726,6 +1741,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       feeCalculatorCompanyDetails: feeCalculatorCompanyDetails.trim() || undefined,
       customStorePricingEnabled: Boolean(customStorePricingEnabled),
       customStorePricingAmount: customStorePricingAmount !== '' && !isNaN(Number(customStorePricingAmount)) ? Number(customStorePricingAmount) : 15,
+      referralRewardCoins: referralRewardCoins !== '' && !isNaN(Number(referralRewardCoins)) ? Number(referralRewardCoins) : 20,
+      referralMessageTemplate: referralMessageTemplate.trim() || undefined,
       allowedAdminTabs: allowedAdminTabs,
       homeSlides: adminSlides.length > 0 ? adminSlides : undefined,
       searchNotFoundMessage: searchNotFoundMsg.trim() || undefined,
@@ -6540,6 +6557,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
 
+          {/* ── Customer Referral Coin Reward Settings ── */}
+          <div className="border border-amber-200 rounded-3xl p-5 bg-gradient-to-br from-amber-50/70 to-yellow-50/40 space-y-4 shadow-2xs">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="font-extrabold text-sm text-amber-950 flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-amber-600" />
+                  <span>Customer Referral Reward Settings (কাস্টমার রেফারেল কয়েন বোনাস)</span>
+                </h4>
+                <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
+                  কাস্টমাররা তাদের বন্ধুদের হোয়াটসঅ্যাপ নম্বর দিয়ে রেফার করতে পারেন। রেফার করা বন্ধু যখন জামানতে অর্ডার করবেন এবং সেই অর্ডারটি সফলভাবে ডেলিভারি (DELIVERED) হবে, তখন রেফারকারী গ্রাহক এই পরিমাণ জামানত কয়েন উপহার পাবেন।
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-amber-200/60 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1">
+                  Referral Reward Coins per Delivered Order (প্রতি সফল অর্ডারে রেফারকারী কয়েন পাবেন):
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">🪙</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={referralRewardCoins}
+                    onChange={(e) => setReferralRewardCoins(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="e.g. 20"
+                    className="w-full pl-9 pr-3 py-3 rounded-2xl border border-gray-200 bg-white text-xs font-black outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1 font-medium">
+                  ডিফল্ট: ২০ কয়েন। শুধুমাত্র সফলভাবে ডেলিভার্ড (DELIVERED) হওয়া প্রথম অর্ডারে এই বোনাস রেফারকারী অ্যাকাউন্টে যোগ হবে।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1">
+                  Referral WhatsApp Message (হোয়াটসঅ্যাপে পাঠানোর রেফারেল মেসেজ):
+                </label>
+                <textarea
+                  rows={3}
+                  value={referralMessageTemplate}
+                  onChange={(e) => setReferralMessageTemplate(e.target.value)}
+                  placeholder="e.g. আসসালামু আলাইকুম! জামানত দিয়ে সহজে বাজার-সদাই ডেলিভারি নিন। এখনই এই লিঙ্কে অর্ডার করুন: {link}"
+                  className="w-full px-3 py-2.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10 resize-none"
+                />
+                <p className="text-[10px] text-gray-500 mt-1 font-medium">
+                  রেফার লিংক ডায়নামিক ভাবে বসাতে <code className="bg-amber-100 text-amber-900 px-1 py-0.5 rounded font-mono text-[9px] font-bold">{'{link}'}</code> কোডটি ব্যবহার করুন।
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* ── Fee Details Calculator Settings ── */}
           <div className="border border-emerald-200 rounded-2xl p-5 bg-emerald-50/30 space-y-4">
             <h4 className="font-extrabold text-sm text-emerald-950 flex items-center gap-2">
@@ -6680,89 +6751,132 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="p-6 text-center text-xs text-gray-500 bg-white rounded-2xl border border-gray-100">
                 এখনো কোনো ফি সংক্রান্ত প্রস্তাবনা বা মতামত আসেনি।
               </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-purple-900 text-white font-bold">
-                        <th className="p-3">তারিখ</th>
-                        <th className="p-3">ব্যবহারকারী</th>
-                        <th className="p-3">রোল</th>
-                        <th className="p-3">ক্যাটাগরি</th>
-                        <th className="p-3">মতামত/পরামর্শ</th>
-                        <th className="p-3 text-right">অ্যাকশন</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {feeSuggestions.slice(0, 3).map((sug) => (
-                        <tr key={sug.id} className="hover:bg-gray-50/80">
-                          <td className="p-3 whitespace-nowrap text-gray-500 font-medium">
-                            {new Date(sug.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="p-3 font-bold text-gray-900">
-                            {sug.userName}
-                            {sug.userPhone && <span className="block text-[10px] text-gray-500 font-normal">{sug.userPhone}</span>}
-                          </td>
-                          <td className="p-3">
-                            <span
-                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${sug.userRole === 'helper'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-blue-100 text-blue-800'
-                                }`}
-                            >
-                              {sug.userRole === 'helper' ? 'Helper' : 'Customer'}
-                            </span>
-                          </td>
-                          <td className="p-3 font-semibold text-gray-700">{sug.category}</td>
-                          <td className="p-3 text-gray-800 font-medium max-w-xs leading-relaxed">{sug.message}</td>
-                          <td className="p-3 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const confirmed = await showConfirm(
-                                  'মুছে ফেলার নিশ্চিতকরণ',
-                                  'আপনি কি এই প্রস্তাবনাটি মুছে ফেলতে চান?',
-                                  'হ্যাঁ, মুছুন',
-                                  'বাতিল'
-                                );
-                                if (confirmed) {
-                                  await fallbackStore.deleteFeeSuggestion(sug.id);
-                                  setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
-                                }
-                              }}
-                              className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
-                              title="Delete suggestion"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            ) : (() => {
+              const totalItems = feeSuggestions.length;
+              const totalPages = Math.max(1, Math.ceil(totalItems / pricingFeeSuggestionsPageSize));
+              const currentPage = Math.min(Math.max(1, pricingFeeSuggestionsPage), totalPages);
+              const startIndex = (currentPage - 1) * pricingFeeSuggestionsPageSize;
+              const paginatedSuggestions = feeSuggestions.slice(startIndex, startIndex + pricingFeeSuggestionsPageSize);
 
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
-                  <p className="text-xs text-gray-500 font-medium">
-                    {feeSuggestions.length <= 3
-                      ? `মোট ${feeSuggestions.length}টির মধ্যে ${feeSuggestions.length}টি মতামত দেখানো হচ্ছে`
-                      : `প্রথম ৩টি মতামত দেখানো হচ্ছে (মোট ${feeSuggestions.length}টি)`}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFeeSuggestionsModalPage(1);
-                      setShowFeeSuggestionsModal(true);
-                    }}
-                    className="py-2.5 px-4 rounded-xl bg-purple-900 hover:bg-purple-950 active:scale-98 text-white font-extrabold text-xs shadow-sm transition-all flex items-center gap-1.5"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>সকল মতামত দেখুন (Load More)</span>
-                  </button>
+              return (
+                <div className="space-y-3">
+                  {/* Top Bar with Page Size Selector */}
+                  <div className="flex items-center justify-between text-xs px-1">
+                    <span className="font-semibold text-gray-600">
+                      Showing {startIndex + 1} to {Math.min(startIndex + pricingFeeSuggestionsPageSize, totalItems)} of {totalItems} suggestions
+                    </span>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-600">
+                      <span>Per page:</span>
+                      <select
+                        value={pricingFeeSuggestionsPageSize}
+                        onChange={(e) => {
+                          setPricingFeeSuggestionsPageSize(Number(e.target.value));
+                          setPricingFeeSuggestionsPage(1);
+                        }}
+                        className="px-2 py-1 rounded-xl border border-gray-200 bg-white font-bold text-xs outline-none focus:border-purple-600 cursor-pointer"
+                      >
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-xs">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-purple-900 text-white font-bold">
+                          <th className="p-3">তারিখ</th>
+                          <th className="p-3">ব্যবহারকারী</th>
+                          <th className="p-3">রোল</th>
+                          <th className="p-3">ক্যাটাগরি</th>
+                          <th className="p-3">মতামত/পরামর্শ</th>
+                          <th className="p-3 text-right">অ্যাকশন</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {paginatedSuggestions.map((sug) => (
+                          <tr key={sug.id} className="hover:bg-gray-50/80">
+                            <td className="p-3 whitespace-nowrap text-gray-500 font-medium">
+                              {new Date(sug.createdAt).toLocaleDateString()}
+                            </td>
+                            <td className="p-3 font-bold text-gray-900">
+                              {sug.userName}
+                              {sug.userPhone && (
+                                <span className="block text-[10px] text-gray-500 font-normal">{sug.userPhone}</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <span
+                                className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                  sug.userRole === 'helper'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {sug.userRole === 'helper' ? 'Helper' : 'Customer'}
+                              </span>
+                            </td>
+                            <td className="p-3 font-semibold text-gray-700">{sug.category}</td>
+                            <td className="p-3 text-gray-800 font-medium max-w-xs leading-relaxed">{sug.message}</td>
+                            <td className="p-3 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const confirmed = await showConfirm(
+                                    'মুছে ফেলার নিশ্চিতকরণ',
+                                    'আপনি কি এই প্রস্তাবনাটি মুছে ফেলতে চান?',
+                                    'হ্যাঁ, মুছুন',
+                                    'বাতিল'
+                                  );
+                                  if (confirmed) {
+                                    await fallbackStore.deleteFeeSuggestion(sug.id);
+                                    setFeeSuggestions(Array.from(fallbackStore.feeSuggestions.values()));
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors cursor-pointer"
+                                title="Delete suggestion"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Controls */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                    <p className="text-xs text-gray-500 font-medium">
+                      Showing {startIndex + 1} to {Math.min(startIndex + pricingFeeSuggestionsPageSize, totalItems)} of {totalItems} entries
+                    </p>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        disabled={currentPage <= 1}
+                        onClick={() => setPricingFeeSuggestionsPage((p) => Math.max(1, p - 1))}
+                        className="px-3 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-xs font-extrabold text-purple-950 px-2">
+                        {currentPage} / {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={currentPage >= totalPages}
+                        onClick={() => setPricingFeeSuggestionsPage((p) => Math.min(totalPages, p + 1))}
+                        className="px-3 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           <button

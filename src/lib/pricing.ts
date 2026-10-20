@@ -369,6 +369,8 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
 • প্রতিটি ডেলিভারি সফলভাবে সম্পন্ন হলে আপনি কয়েন পাবেন।
 • নির্দিষ্ট সার্ভিসে (যেমন: বাজার-সদাই বা মিক্স কাজ) বেশি কয়েন পাওয়ার সুযোগ রয়েছে।
 • অর্জিত কয়েন দিয়ে ১০০% ফ্রি ডেলিভারি চার্জ অথবা আকর্ষণীয় উপহার ও ডিসকাউন্ট ভাউচার ক্লেইম করতে পারবেন।`,
+  referralRewardCoins: 20,
+  referralMessageTemplate: 'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}',
   // Blocked User Custom Modal Defaults
   blockedUserModalTitle: 'অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)',
   blockedUserModalSubtitle: 'আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে',

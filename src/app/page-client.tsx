@@ -139,6 +139,28 @@ export default function PageClient() {
     }
   }, [user?.uid, activeMode]);
 
+  // Capture referral ref from URL if visited via a referral link
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const ref = params.get('ref');
+      const phone = params.get('phone');
+      if (ref) {
+        localStorage.setItem(
+          'jamanot_pending_referral',
+          JSON.stringify({
+            referrerId: ref,
+            phone: phone || '',
+            createdAt: Date.now(),
+          })
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Auto-dispatch locally queued scheduled orders when service time opens
   useEffect(() => {
     const tryDispatch = async () => {

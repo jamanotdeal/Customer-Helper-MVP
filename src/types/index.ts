@@ -138,6 +138,7 @@ export interface Order {
   dedicatedNotifId?: string;
 
   updatedByCustomer?: boolean;
+  referredBy?: string; // UID of referrer user who referred this customer
   lastEditedAt?: string;
   lastEditedBy?: 'customer' | 'helper' | 'admin';
   editHistory?: OrderEditHistoryItem[];
@@ -614,6 +615,8 @@ export interface PricingSettings {
   insufficientCoinsTitle?: string;           // Admin customizable popup title when coins not enough
   insufficientCoinsMessage?: string;         // Admin customizable popup message when coins not enough
   rewardStoreTips?: string;                  // Tips / advice text block written by admin for customers
+  referralRewardCoins?: number;              // Coins awarded to referrer upon referred user's first delivered order
+  referralMessageTemplate?: string;          // WhatsApp referral message template with {link} placeholder
 
   // Blocked User Custom Modal Settings (Admin Configurable)
   blockedUserModalTitle?: string;
@@ -749,10 +752,28 @@ export interface CoinTransaction {
   id: string;
   userId: string;
   amount: number;
-  type: 'EARNED_ORDER' | 'CLAIM_REDEEM' | 'ADMIN_ADJUST' | 'FREE_DELIVERY';
+  type: 'EARNED_ORDER' | 'CLAIM_REDEEM' | 'ADMIN_ADJUST' | 'FREE_DELIVERY' | 'REFERRAL_REWARD';
   orderId?: string;
   claimId?: string;
   description: string;
   createdAt: string;
 }
+
+export interface Referral {
+  id: string;
+  referrerId: string;
+  referrerName: string;
+  referrerPhone?: string;
+  referrerEmail?: string;
+  friendPhone: string;
+  normalizedPhone: string;
+  status: 'PENDING' | 'COMPLETED';
+  createdAt: string;
+  completedAt?: string;
+  completedOrderId?: string;
+  rewardedCoins?: number;
+  referredUserId?: string;
+  referredUserName?: string;
+}
+
 

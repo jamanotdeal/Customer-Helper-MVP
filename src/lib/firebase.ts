@@ -60,6 +60,7 @@ import {
   ServerAddress,
   LocationData,
   StoreProduct,
+  Referral,
 } from '@/types';
 
 import { DEFAULT_PRICING_SETTINGS, calculateHelperCommission, isHelperWithinOrderRadius, getCoinsForService } from './pricing';
@@ -451,6 +452,32 @@ export function cleanForFirestore<T>(data: T): T {
   if (data === undefined || data === null) return data;
   return JSON.parse(JSON.stringify(data));
 }
+
+// Normalize phone numbers for matching referrals and WhatsApp
+export function normalizePhoneNumber(raw?: string): string {
+  if (!raw) return '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.startsWith('880')) {
+    return '0' + digits.slice(3);
+  }
+  if (digits.length === 10 && digits.startsWith('1')) {
+    return '0' + digits;
+  }
+  return digits;
+}
+
+export function formatWhatsAppNumber(raw?: string): string {
+  const norm = normalizePhoneNumber(raw);
+  if (!norm) return '';
+  if (norm.startsWith('01')) {
+    return '88' + norm;
+  }
+  if (!norm.startsWith('88') && norm.length === 11) {
+    return '88' + norm;
+  }
+  return norm;
+}
+
 
 /**
  * The top-level fields in which `after` differs from `before`, as an updateDoc
@@ -848,6 +875,7 @@ class FallbackStore {
   public scheduledNotifications: Map<string, AppNotification> = new Map();
   public rewardPrizes: Map<string, RewardPrize> = new Map();
   public rewardClaims: Map<string, RewardClaim> = new Map();
+  public referrals: Map<string, Referral> = new Map();
   public coinTransactions: Map<string, CoinTransaction[]> = new Map();
   public serverAddresses: Map<string, ServerAddress> = new Map();
   public pricingSettings: PricingSettings = DEFAULT_PRICING_SETTINGS;
@@ -1480,6 +1508,13 @@ class FallbackStore {
         });
       }
 
+      const parsedReferrals = this.safeParse<[string, Referral][]>('jamanot_referrals_store');
+      if (parsedReferrals && Array.isArray(parsedReferrals)) {
+        parsedReferrals.forEach(([id, r]) => {
+          if (id && r) this.referrals.set(id, r);
+        });
+      }
+
       const parsedServerAddrs = this.safeParse<[string, ServerAddress][]>('jamanot_server_addresses');
       if (parsedServerAddrs && Array.isArray(parsedServerAddrs)) {
         parsedServerAddrs.forEach(([id, addr]) => {
@@ -1540,6 +1575,7 @@ class FallbackStore {
       localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
       localStorage.setItem('jamanot_reward_prizes_store', JSON.stringify(Array.from(this.rewardPrizes.entries())));
       localStorage.setItem('jamanot_reward_claims_store', JSON.stringify(Array.from(this.rewardClaims.entries())));
+      localStorage.setItem('jamanot_referrals_store', JSON.stringify(Array.from(this.referrals.entries())));
       localStorage.setItem('jamanot_server_addresses', JSON.stringify(Array.from(this.serverAddresses.entries())));
       localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
@@ -2545,6 +2581,24 @@ class FallbackStore {
             this.notify();
           },
           (err) => console.warn('[Firestore] Customer rewardClaims sync note:', err)
+        )
+      );
+
+      // Own referrals (realtime)
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'referrals'), where('referrerId', '==', userId), limit(100)),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.referrals.delete(change.doc.id);
+              } else {
+                this.referrals.set(change.doc.id, change.doc.data() as Referral);
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] Customer referrals sync note:', err)
         )
       );
 
@@ -4348,6 +4402,21 @@ class FallbackStore {
       if (first !== null) order = { ...order, isFirstOrder: first };
     }
 
+    // Attach pending referral referrer if present and not already set
+    if (!order.referredBy && typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('jamanot_pending_referral');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.referrerId && parsed.referrerId !== order.customerId) {
+            order = { ...order, referredBy: parsed.referrerId };
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
     // 1. Temporarily place in local memory
     this.orders.set(order.id, order);
     this.notify();
@@ -5186,6 +5255,13 @@ class FallbackStore {
         targetRole: 'customer',
         type: 'coins_earned',
       });
+    }
+
+    // Process referral reward for referrer when order is successfully DELIVERED
+    if (updated.status === 'DELIVERED' && previousStatus !== 'DELIVERED') {
+      this.processOrderReferralReward(updated).catch((e) =>
+        console.warn('[Firestore] Error processing referral reward:', e)
+      );
     }
 
     // Auto-settle previous due payments when an order with appliedDuePayment is DELIVERED
@@ -8598,6 +8674,238 @@ class FallbackStore {
       return false;
     }
   }
+
+  // ─── Referral System ───────────────────────────────────────────────────────
+
+  public async createReferral(data: {
+    referrerId: string;
+    referrerName: string;
+    friendPhone: string;
+    referrerPhone?: string;
+    referrerEmail?: string;
+  }): Promise<Referral> {
+    const normalized = normalizePhoneNumber(data.friendPhone);
+    if (!normalized || normalized.length < 10) {
+      throw new Error('দয়া করে সঠিক মোবাইল/হোয়াটসঅ্যাপ নম্বর দিন');
+    }
+
+    // Check if referral for this number already exists by this referrer
+    const existing = Array.from(this.referrals.values()).find(
+      (r) => r.referrerId === data.referrerId && r.normalizedPhone === normalized
+    );
+    if (existing) {
+      return existing;
+    }
+
+    const id = `ref_${data.referrerId}_${normalized}`;
+    const referral: Referral = {
+      id,
+      referrerId: data.referrerId,
+      referrerName: data.referrerName,
+      referrerPhone: data.referrerPhone,
+      referrerEmail: data.referrerEmail,
+      friendPhone: data.friendPhone.trim(),
+      normalizedPhone: normalized,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    };
+
+    this.referrals.set(id, referral);
+    this.scheduleLocalStoreSave();
+    this.notify();
+
+    try {
+      await setDoc(doc(db, 'referrals', id), cleanForFirestore(referral), { merge: true });
+    } catch (e: any) {
+      console.warn('[Firestore] createReferral save note:', e?.message || e);
+    }
+
+    return referral;
+  }
+
+  public async fetchReferralsForUser(userId: string): Promise<Referral[]> {
+    if (!userId) return [];
+    try {
+      const q = query(
+        collection(db, 'referrals'),
+        where('referrerId', '==', userId),
+        limit(200)
+      );
+      const snap = await getDocs(q);
+      const list: Referral[] = [];
+      snap.docs.forEach((d) => {
+        const ref = d.data() as Referral;
+        this.referrals.set(d.id, ref);
+        list.push(ref);
+      });
+      this.scheduleLocalStoreSave();
+      this.notify();
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] fetchReferralsForUser error:', e);
+      return Array.from(this.referrals.values()).filter((r) => r.referrerId === userId);
+    }
+  }
+
+  public async fetchAllReferrals(): Promise<Referral[]> {
+    try {
+      const q = query(collection(db, 'referrals'), orderBy('createdAt', 'desc'), limit(500));
+      const snap = await getDocs(q);
+      const list: Referral[] = [];
+      snap.docs.forEach((d) => {
+        const ref = d.data() as Referral;
+        this.referrals.set(d.id, ref);
+        list.push(ref);
+      });
+      this.scheduleLocalStoreSave();
+      this.notify();
+      return list;
+    } catch (e) {
+      console.warn('[Firestore] fetchAllReferrals error:', e);
+      return Array.from(this.referrals.values());
+    }
+  }
+
+  public async hasUserCompletedOrder(userId: string): Promise<boolean> {
+    if (!userId) return false;
+    const user = this.users.get(userId);
+    if (user?.creditedOrderIds && user.creditedOrderIds.length > 0) return true;
+    if (
+      Array.from(this.orders.values()).some(
+        (o) => o.customerId === userId && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED')
+      )
+    ) {
+      return true;
+    }
+    try {
+      const q = query(
+        collection(db, 'orders'),
+        where('customerId', '==', userId),
+        where('status', '==', 'DELIVERED'),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      return !snap.empty;
+    } catch {
+      return false;
+    }
+  }
+
+  public async processOrderReferralReward(order: Order): Promise<void> {
+    if (!order || !order.id || !order.customerId) return;
+
+    // Collect candidate phone numbers for the customer who placed this order
+    const candidatePhones = new Set<string>();
+    if (order.customerPhone) candidatePhones.add(normalizePhoneNumber(order.customerPhone));
+    if (order.alternativePhone) candidatePhones.add(normalizePhoneNumber(order.alternativePhone));
+
+    const customer = this.users.get(order.customerId);
+    if (customer?.phoneNumber) candidatePhones.add(normalizePhoneNumber(customer.phoneNumber));
+    if (customer?.alternativePhone) candidatePhones.add(normalizePhoneNumber(customer.alternativePhone));
+
+    candidatePhones.delete('');
+
+    const referredBy = order.referredBy;
+
+    // 1. Check in-memory referrals first
+    let matchingReferral: Referral | undefined = Array.from(this.referrals.values()).find(
+      (r) =>
+        r.status === 'PENDING' &&
+        r.referrerId !== order.customerId &&
+        (candidatePhones.has(r.normalizedPhone) || (referredBy && r.referrerId === referredBy))
+    );
+
+    // 2. If not found in memory, query Firestore
+    if (!matchingReferral) {
+      try {
+        const phoneList = Array.from(candidatePhones);
+        if (phoneList.length > 0) {
+          const q = query(
+            collection(db, 'referrals'),
+            where('status', '==', 'PENDING'),
+            where('normalizedPhone', 'in', phoneList.slice(0, 10)),
+            limit(1)
+          );
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const found = snap.docs[0].data() as Referral;
+            if (found.referrerId !== order.customerId) {
+              matchingReferral = found;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Firestore] processOrderReferralReward query note:', e);
+      }
+    }
+
+    // 3. Also check by referredBy query if still not found
+    if (!matchingReferral && referredBy && referredBy !== order.customerId) {
+      try {
+        const q = query(
+          collection(db, 'referrals'),
+          where('referrerId', '==', referredBy),
+          where('status', '==', 'PENDING'),
+          limit(10)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          matchingReferral = snap.docs[0].data() as Referral;
+        }
+      } catch (e) {
+        console.warn('[Firestore] processOrderReferralReward referredBy query note:', e);
+      }
+    }
+
+    if (!matchingReferral) return;
+
+    const rewardCoins = this.pricingSettings.referralRewardCoins ?? 20;
+    const now = new Date().toISOString();
+
+    const updatedReferral: Referral = {
+      ...matchingReferral,
+      status: 'COMPLETED',
+      completedAt: now,
+      completedOrderId: order.id,
+      referredUserId: order.customerId,
+      referredUserName: order.customerName || customer?.displayName || 'Customer',
+      rewardedCoins: rewardCoins,
+    };
+
+    this.referrals.set(updatedReferral.id, updatedReferral);
+    this.scheduleLocalStoreSave();
+    this.notify();
+
+    // Award coins to referrer
+    await this.awardCoinsToCustomer(updatedReferral.referrerId, rewardCoins, order.id);
+
+    // Persist completed referral
+    try {
+      await setDoc(doc(db, 'referrals', updatedReferral.id), cleanForFirestore(updatedReferral), { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] update referral note:', e);
+    }
+
+    // Send high-priority notification to referrer
+    this.addNotification({
+      id: `notif-${Date.now()}-ref-reward-${order.id}`,
+      userId: updatedReferral.referrerId,
+      title: '🎉 রেফারেল রিওয়ার্ড পেয়েছেন!',
+      body: `আপনার রেফার করা বন্ধু (${order.customerName || updatedReferral.friendPhone}) অর্ডার সফলভাবে ডেলিভারি সম্পন্ন করেছেন! আপনি +${rewardCoins} জামানত কয়েন রিওয়ার্ড পেয়েছেন।`,
+      orderId: order.id,
+      read: false,
+      createdAt: now,
+      targetRole: 'customer',
+      type: 'coins_earned',
+    });
+
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem('jamanot_pending_referral');
+      } catch (_) {}
+    }
+  }
+
   // ─── Store Application CRUD ───────────────────────────────────────────────
 
   public async submitStoreApp(app: StoreApplication) {

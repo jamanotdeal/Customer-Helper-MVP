@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { UserProfile, Order, UserRole } from '@/types';
+import { UserProfile, Order, UserRole, Referral } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
@@ -27,6 +27,9 @@ import {
   Sparkles,
   Coins,
   Edit2,
+  Share2,
+  ExternalLink,
+  CheckCircle2,
 } from 'lucide-react';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
@@ -64,8 +67,44 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
   const { user: currentUser } = useAuth();
   const { showAlert, showConfirm } = useModal();
-  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMER_ORDERS' | 'HELPER_DELIVERIES' | 'WALLET' | 'MANAGEMENT'>('OVERVIEW');
+  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMER_ORDERS' | 'HELPER_DELIVERIES' | 'WALLET' | 'REFERRALS' | 'MANAGEMENT'>('OVERVIEW');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+
+  // Referrals state for this user
+  const [userReferrals, setUserReferrals] = useState<Referral[]>(() => {
+    return Array.from(fallbackStore.referrals.values())
+      .filter((r) => r.referrerId === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    fallbackStore.fetchReferralsForUser(userId).then((list) => {
+      if (!cancelled) {
+        setUserReferrals(
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        );
+      }
+    });
+
+    const syncRefs = () => {
+      const list = Array.from(fallbackStore.referrals.values())
+        .filter((r) => r.referrerId === userId)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setUserReferrals(list);
+    };
+
+    const unsub = fallbackStore.subscribe(syncRefs);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [userId]);
+
+  // Referral is strictly calculated for successfully delivered orders
+  const deliveredReferrals = userReferrals.filter((r) => r.status === 'COMPLETED');
+  const totalDeliveredReferrals = deliveredReferrals.length;
+  const pendingReferrals = userReferrals.filter((r) => r.status !== 'COMPLETED');
 
   // Label management state
   const [newLabelInput, setNewLabelInput] = useState('');
@@ -566,6 +605,22 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
               Wallet Transactions ({walletTxs.length})
             </button>
             <button
+              onClick={() => setActiveTab('REFERRALS')}
+              data-active={activeTab === 'REFERRALS'}
+              className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                activeTab === 'REFERRALS'
+                  ? 'bg-white border-gray-200 text-purple-950 shadow-sm font-bold'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 font-semibold'
+              }`}
+            >
+              <span>Referrals</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                totalDeliveredReferrals > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-600'
+              }`}>
+                {totalDeliveredReferrals}
+              </span>
+            </button>
+            <button
               onClick={() => setActiveTab('MANAGEMENT')}
               data-active={activeTab === 'MANAGEMENT'}
               className={`py-2.5 px-4 rounded-t-2xl border-t border-x transition-all whitespace-nowrap shrink-0 ${
@@ -746,6 +801,70 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Referrals & Growth Summary Card */}
+                <div className="bg-gradient-to-br from-emerald-50/70 via-teal-50/40 to-slate-50 p-4 rounded-2xl border border-emerald-200/80 space-y-3 shadow-xs">
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <div>
+                      <h4 className="font-extrabold text-xs text-emerald-950 uppercase tracking-wider flex items-center space-x-1.5">
+                        <Share2 className="w-4 h-4 text-emerald-600" />
+                        <span>রেফারেল পরিসংখ্যান (Referrals & Invited Users)</span>
+                      </h4>
+                      <p className="text-[10px] text-gray-500 font-semibold mt-0.5">
+                        * শুধুমাত্র সফলভাবে ডেলিভারি (DELIVERED) সম্পন্ন হওয়া অর্ডারসমূহ সফল রেফারেল হিসেবে গণ্য হয়।
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('REFERRALS')}
+                      className="py-1 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-[10px] transition-all flex items-center space-x-1 shadow-xs cursor-pointer active:scale-95"
+                    >
+                      <span>বিস্তারিত তালিকা ({totalDeliveredReferrals})</span>
+                      <ChevronRight className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                    <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs">
+                      <span className="text-[10px] font-extrabold text-emerald-800 uppercase block">
+                        Total Successfully Referred
+                      </span>
+                      <div className="text-xl font-black text-emerald-950 flex items-center space-x-1.5 mt-0.5">
+                        <span>👥 {totalDeliveredReferrals}</span>
+                        <span className="text-xs font-bold text-gray-500">Users</span>
+                      </div>
+                      <span className="text-[10px] text-emerald-700 font-semibold block mt-0.5">
+                        Successfully delivered orders only
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs">
+                      <span className="text-[10px] font-extrabold text-emerald-800 uppercase block">
+                        Referral Coins Earned
+                      </span>
+                      <div className="text-xl font-black text-amber-900 flex items-center space-x-1.5 mt-0.5">
+                        <span>🪙 {deliveredReferrals.reduce((sum, r) => sum + (r.rewardedCoins || 20), 0)}</span>
+                        <span className="text-xs font-bold text-gray-500">Coins</span>
+                      </div>
+                      <span className="text-[10px] text-gray-500 block mt-0.5">
+                        Credited to user balance
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs">
+                      <span className="text-[10px] font-extrabold text-emerald-800 uppercase block">
+                        Pending First Order
+                      </span>
+                      <div className="text-xl font-black text-gray-800 flex items-center space-x-1.5 mt-0.5">
+                        <span>⏳ {pendingReferrals.length}</span>
+                        <span className="text-xs font-bold text-gray-500">Invited</span>
+                      </div>
+                      <span className="text-[10px] text-gray-500 block mt-0.5">
+                        Awaiting first delivered order
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Profile Details Cards */}
@@ -1254,6 +1373,159 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                 </div>
               );
             })()}
+
+            {/* TAB: REFERRALS HISTORY & DETAILS */}
+            {activeTab === 'REFERRALS' && (
+              <div className="space-y-4">
+                {/* Referrals Metric Header */}
+                <div className="p-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-2xl shadow-sm flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
+                      <Share2 className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white">
+                        Customer Referral History (রেফারেল হিস্ট্রি)
+                      </h3>
+                      <p className="text-[11px] text-emerald-100 font-medium">
+                        সফল রেফারেল কেবল তখনই গণনা করা হয় যখন নতুন গ্রাহকের প্রথম অর্ডারটি সফলভাবে ডেলিভারি (DELIVERED) সম্পন্ন হয়।
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right bg-white/10 px-3 py-1.5 rounded-xl border border-white/20">
+                    <div className="text-[10px] font-extrabold uppercase text-emerald-100">Total Delivered Referrals</div>
+                    <div className="text-xl font-black text-white">{totalDeliveredReferrals} Users</div>
+                  </div>
+                </div>
+
+                {/* Section: Delivered Referrals ("to whoms") */}
+                <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-2xs space-y-3 p-4">
+                  <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                    <h4 className="font-black text-xs text-gray-900 flex items-center gap-1.5 uppercase tracking-wider">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>সফলভাবে রেফারকৃত গ্রাহকগণ (Successfully Referred Users - {totalDeliveredReferrals})</span>
+                    </h4>
+                    <span className="text-[10px] font-bold text-gray-500">
+                      ক্যালকুলেটেড: শুধুমাত্র DELIVERED অর্ডার
+                    </span>
+                  </div>
+
+                  {deliveredReferrals.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500 bg-gray-50/60 rounded-xl border border-dashed border-gray-200">
+                      <Share2 className="w-8 h-8 text-gray-300 mx-auto mb-1.5" />
+                      <p className="font-bold text-xs text-gray-700">কোনো সফল রেফারেল ডেলিভারি পাওয়া যায়নি</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        রেফার করা বন্ধু প্রথম অর্ডার সফলভাবে ডেলিভারি সম্পন্ন করলে এখানে তালিকাভুক্ত হবে।
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-emerald-50/70 text-emerald-950 font-bold border-b border-emerald-100">
+                            <th className="p-2.5">রেফারেল ফোন (WhatsApp)</th>
+                            <th className="p-2.5">গ্রাহকের নাম (User Name)</th>
+                            <th className="p-2.5">ডেলিভার্ড অর্ডার (Order ID)</th>
+                            <th className="p-2.5">ডেলিভারির তারিখ</th>
+                            <th className="p-2.5">অর্জিত কয়েন</th>
+                            <th className="p-2.5 text-right">স্ট্যাটাস</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {deliveredReferrals.map((ref) => (
+                            <tr key={ref.id} className="hover:bg-emerald-50/30 transition-colors">
+                              <td className="p-2.5 font-bold text-gray-900">
+                                <a
+                                  href={`https://wa.me/${ref.normalizedPhone.startsWith('01') ? '88' + ref.normalizedPhone : ref.normalizedPhone}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-emerald-700 hover:underline flex items-center gap-1"
+                                >
+                                  <span>{ref.friendPhone}</span>
+                                  <ExternalLink className="w-3 h-3 text-emerald-500" />
+                                </a>
+                              </td>
+                              <td className="p-2.5 font-semibold text-gray-800">
+                                {ref.referredUserName || 'Customer'}
+                              </td>
+                              <td className="p-2.5 font-mono text-[11px] font-bold text-purple-700">
+                                {ref.completedOrderId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedOrderId(ref.completedOrderId || null)}
+                                    className="hover:underline flex items-center gap-1 text-purple-700 font-extrabold cursor-pointer"
+                                  >
+                                    <span>#{ref.completedOrderId}</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </button>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td className="p-2.5 text-gray-600 font-medium whitespace-nowrap">
+                                {ref.completedAt ? new Date(ref.completedAt).toLocaleString() : '—'}
+                              </td>
+                              <td className="p-2.5 font-extrabold text-amber-700 whitespace-nowrap">
+                                🪙 +{ref.rewardedCoins || 20} Coins
+                              </td>
+                              <td className="p-2.5 text-right whitespace-nowrap">
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-black text-[10px] border border-emerald-200">
+                                  ✓ DELIVERED
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Section: Pending Referrals (Invited, awaiting first delivered order) */}
+                {pendingReferrals.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-2xs space-y-3 p-4">
+                    <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                      <h4 className="font-black text-xs text-amber-900 flex items-center gap-1.5 uppercase tracking-wider">
+                        <Clock className="w-4 h-4 text-amber-600" />
+                        <span>অপেক্ষমান রেফারেল (Pending First Order - {pendingReferrals.length})</span>
+                      </h4>
+                      <span className="text-[10px] text-gray-500">
+                        এখনো প্রথম অর্ডার সম্পন্ন হয়নি (নট কাউন্টেড)
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-amber-50/50 text-amber-950 font-bold border-b border-amber-100">
+                            <th className="p-2.5">হোয়াটসঅ্যাপ নম্বর</th>
+                            <th className="p-2.5">রেফার তৈরির তারিখ</th>
+                            <th className="p-2.5 text-right">স্ট্যাটাস</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {pendingReferrals.map((ref) => (
+                            <tr key={ref.id} className="hover:bg-amber-50/20">
+                              <td className="p-2.5 font-bold text-gray-800 font-mono">
+                                {ref.friendPhone}
+                              </td>
+                              <td className="p-2.5 text-gray-500 font-medium">
+                                {new Date(ref.createdAt).toLocaleString()}
+                              </td>
+                              <td className="p-2.5 text-right">
+                                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[10px] border border-amber-200">
+                                  অপেক্ষমান (Pending)
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* TAB 5: MANAGEMENT, LABELING, BLOCKING & DELETION */}
             {activeTab === 'MANAGEMENT' && (

@@ -7,7 +7,7 @@ import { fallbackStore, db, versionOf, createChangeGate } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
 import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { getDocs, getDoc, onSnapshot } from '@/lib/firestoreMetered';
-import { RequestComposer } from './RequestComposer';
+import { CustomRequestModal } from './CustomRequestModal';
 import { OrderCard } from './OrderCard';
 import { StoreWallet } from './StoreWallet';
 import { StoreProductManager } from './StoreProductManager';
@@ -213,7 +213,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const [showRequestComposer, setShowRequestComposer] = useState(false);
+  const [showCustomRequestModal, setShowCustomRequestModal] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedShopOrderId, setSelectedShopOrderId] = useState<string | null>(null);
 
@@ -360,7 +360,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (!user) {
       setSelectedOrderId(null);
       setSelectedShopOrderId(null);
-      setShowRequestComposer(false);
+      setShowCustomRequestModal(false);
     }
   }, [user]);
 
@@ -1026,25 +1026,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         />
       );
     }
-    if (showRequestComposer) {
-      return (
-        <div className="space-y-4 pb-24">
-          <button
-            onClick={() => setShowRequestComposer(false)}
-            className="flex items-center space-x-2 text-sm font-bold text-emerald-600 hover:text-emerald-900 transition-colors"
-          >
-            <ArrowRight className="w-4 h-4 rotate-180" />
-            <span>ড্যাশবোর্ডে ফিরুন</span>
-          </button>
-          <RequestComposer
-            onOrderCreated={(newOrder) => {
-              setSelectedOrderId(newOrder.id);
-              setShowRequestComposer(false);
-            }}
-          />
-        </div>
-      );
-    }
 
     return (
       <div className="space-y-5 pb-24 animate-in fade-in duration-200">
@@ -1524,7 +1505,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             <div className="space-y-3">
               {/* Create Request Button inside My Request Tab */}
               <button
-                onClick={() => setShowRequestComposer(true)}
+                onClick={() => {
+                  if (isStoreBlocked) {
+                    setShowBlockedModal(true);
+                    return;
+                  }
+                  setShowCustomRequestModal(true);
+                }}
                 className="w-full flex items-center justify-between p-4 rounded-2xl bg-white border-2 border-dashed border-emerald-300 hover:border-emerald-500 hover:bg-emerald-50/50 transition-all group shadow-sm mb-1"
               >
                 <div className="flex items-center space-x-3">
@@ -1590,6 +1577,19 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                   <ShoppingBag className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                   <h4 className="font-bold text-gray-900 text-sm mb-1">কোনো রিকুয়েস্ট নেই</h4>
                   <p className="text-xs text-gray-500 mb-4">উপরের "Create Request" বাটনে ক্লিক করে রিকুয়েস্ট করুন।</p>
+                  <button
+                    onClick={() => {
+                      if (isStoreBlocked) {
+                        setShowBlockedModal(true);
+                        return;
+                      }
+                      setShowCustomRequestModal(true);
+                    }}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 font-bold text-xs hover:bg-emerald-100 transition-all border border-emerald-200"
+                  >
+                    <PlusCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Create Request</span>
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1733,6 +1733,15 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           targetRole="store"
         />
       )}
+
+      {/* Custom Request Form Modal */}
+      <CustomRequestModal
+        isOpen={showCustomRequestModal}
+        onClose={() => setShowCustomRequestModal(false)}
+        onOrderCreated={() => {
+          setShowCustomRequestModal(false);
+        }}
+      />
     </>
   );
 };
