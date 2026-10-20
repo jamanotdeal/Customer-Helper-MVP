@@ -111,7 +111,11 @@ export const getItemQuantityNum = (item: { qty?: string | number; quantity?: num
  * 1. From item.price (if set and > 0)
  * 2. From connected active ShopOrders (via itemsWithPrice matching item ID or normalized name)
  */
-export const getItemUnitPrice = (it: OrderItem, shopOrders: ShopOrder[] = []): number | undefined => {
+export const getItemUnitPrice = (
+  it: OrderItem,
+  shopOrders: ShopOrder[] = [],
+  parentOrderId?: string
+): number | undefined => {
   if (!it) return undefined;
 
   // 1. If it's a custom item, direct price is only counted as confirmed product cost
@@ -128,9 +132,12 @@ export const getItemUnitPrice = (it: OrderItem, shopOrders: ShopOrder[] = []): n
     }
   }
 
-  // 2. From active ShopOrders
+  // 2. From active ShopOrders (strictly scoped to this order)
   const activeSOs = shopOrders.filter(
-    (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    (so) =>
+      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
   );
   const cleanName = (it.name || '').toLowerCase().trim();
   const itNorm = normalizeItemName(it.name || '');
@@ -213,12 +220,19 @@ export const getShopItemPriceDisplay = (
 /**
  * Accurately calculates total product cost for an order across all items
  * (multiplying each item's unit price by its current quantity) without double-counting.
+ * Strictly guarantees that only ShopOrders belonging to this order (so.parentOrderId === order.id) are counted.
  */
 export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] = []): number => {
-  const activeSOs = shopOrders.filter((so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
+  if (!order) return 0;
+  const activeSOs = shopOrders.filter(
+    (so) =>
+      (!order.id || !so.parentOrderId || so.parentOrderId === order.id) &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
+  );
   const items = order.items || [];
 
-  // If order has no structured items, cost is simply the sum of active shop orders
+  // If order has no structured items, cost is simply the sum of active shop orders for this order
   if (items.length === 0) {
     const totalSOs = activeSOs.reduce((sum, so) => sum + (Number(so.price) || 0), 0);
     if (totalSOs > 0) return Math.round(totalSOs * 100) / 100;
@@ -230,7 +244,7 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
 
   // 1. Calculate cost from structured items (unitPrice * quantity)
   for (const it of items) {
-    const unitPrice = getItemUnitPrice(it, activeSOs);
+    const unitPrice = getItemUnitPrice(it, activeSOs, order.id);
     if (unitPrice !== undefined && unitPrice > 0) {
       const qty = getItemQuantityNum(it);
       itemsSum += unitPrice * qty;
@@ -260,7 +274,7 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
  * - Cost confirmed (custom item with price > 0 or has buyFrom source)
  * - Assigned or sent to an active shop order (Store order or MySelf order)
  */
-export const isItemInProcess = (item: OrderItem, shopOrders: ShopOrder[] = []): boolean => {
+export const isItemInProcess = (item: OrderItem, shopOrders: ShopOrder[] = [], parentOrderId?: string): boolean => {
   if (!item) return false;
 
   // 1. If explicitly marked as purchased/completed
@@ -277,7 +291,10 @@ export const isItemInProcess = (item: OrderItem, shopOrders: ShopOrder[] = []): 
 
   // 4. Check active shop orders
   const activeSOs = shopOrders.filter(
-    (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    (so) =>
+      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
   );
   if (activeSOs.length === 0) return false;
 

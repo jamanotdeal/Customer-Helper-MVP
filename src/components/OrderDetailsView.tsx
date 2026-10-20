@@ -179,17 +179,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
     : 0;
 
-  const validShopOrders = shopOrders.filter(so => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
+  const validShopOrders = shopOrders.filter(so => (!orderId || so.parentOrderId === orderId) && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
   const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
   const customStorePricing = calculateCustomStoreFee(order, validShopOrders, fallbackStore.pricingSettings);
   const effectiveCustomStoreFee = customStorePricing.totalFee;
   const unpricedItems = useMemo(() => {
     if (!order?.items) return [];
     return order.items.filter((it) => {
-      const p = getItemUnitPrice(it, validShopOrders);
+      const p = getItemUnitPrice(it, validShopOrders, orderId);
       return p === undefined || p <= 0;
     });
-  }, [order?.items, validShopOrders]);
+  }, [order?.items, validShopOrders, orderId]);
 
   const estdPricing = order ? calculateEstimatedFee({
     distanceKm: Math.ceil(distanceKm),
@@ -201,13 +201,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   // Auto-sync productCost in the database if item prices or quantities updated
   useEffect(() => {
     if (!order?.id || effectiveProductCost <= 0) return;
+    const hasOnlyOwnShopOrders = validShopOrders.every((so) => so.parentOrderId === order.id);
+    if (!hasOnlyOwnShopOrders) return;
     if (order.productCost !== effectiveProductCost) {
       fallbackStore.updateOrder(order.id, (o) => ({
         ...o,
         productCost: effectiveProductCost,
       }));
     }
-  }, [order?.id, order?.productCost, effectiveProductCost]);
+  }, [order?.id, order?.productCost, effectiveProductCost, validShopOrders]);
 
   // Timer: check every 30s if the customer should see "Admin Accepted" banner.
   // Also re-checked the moment the order changes: a helper accepting it used to

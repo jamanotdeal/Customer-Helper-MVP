@@ -392,6 +392,7 @@ export const ExploreHelperView: React.FC = () => {
       }
       return (
         <HelperActiveOrderView
+          key={targetOrder.id}
           order={targetOrder}
           helperLocation={user?.helperLocation}
           onBack={() => setSelectedOrderId(null)}

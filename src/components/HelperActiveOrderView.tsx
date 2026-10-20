@@ -52,7 +52,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     return () => unsub();
   }, [rawOrder.id, rawOrder]);
 
-  const order = liveOrder;
+  // Always use the latest order matching rawOrder.id to prevent stale order data leaking
+  const order = (liveOrder && liveOrder.id === rawOrder.id)
+    ? liveOrder
+    : (fallbackStore.resolveOrderLocations(fallbackStore.orders.get(rawOrder.id) || rawOrder));
   const { user, openAuthModal } = useAuth();
   const isAcceptedByThisHelper = !!order.helperId && user?.uid === order.helperId;
   const isAccepting = useIsAccepting(order.id);
@@ -95,9 +98,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [weightInput, setWeightInput] = useState(order.weightKg !== undefined ? String(order.weightKg) : '0');
 
   useEffect(() => {
-    if (order.productCost !== undefined) setProductCostInput(String(order.productCost));
-    if (order.weightKg !== undefined) setWeightInput(String(order.weightKg));
-  }, [order.productCost, order.weightKg]);
+    setProductCostInput(order.productCost !== undefined ? String(order.productCost) : '');
+    setWeightInput(order.weightKg !== undefined ? String(order.weightKg) : '0');
+    setFeeInput(order.deliveryFee ? String(order.deliveryFee) : '');
+    setHelperNoteInput(order.helperNote || '');
+  }, [order.id, order.productCost, order.weightKg, order.deliveryFee, order.helperNote]);
 
   const [activeMapPicker, setActiveMapPicker] = useState<'pickup' | 'delivery' | null>(null);
   const [showMapModal, setShowMapModal] = useState(false);
@@ -543,6 +548,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const targetNorm = normalizeItemName(itemName);
     if (!targetNorm) return null;
     for (const so of shopOrders) {
+      if (so.parentOrderId && so.parentOrderId !== order.id) continue;
       if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') continue;
 
       // 1. Exact match in itemsWithPrice by itemId or normalized name
@@ -1047,6 +1053,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       if (price === undefined) {
         const targetNorm = normalizeItemName(it.name || '');
         for (const so of shopOrders) {
+          if (so.parentOrderId && so.parentOrderId !== order.id) continue;
           if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') continue;
           if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
             const match = so.itemsWithPrice.find((ip) => {
@@ -1071,7 +1078,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   }, [order.items, shopOrders]);
 
   useEffect(() => {
-    const calculatedProductCost = calculateOrderProductCost(order, shopOrders);
+    const validSOs = shopOrders.filter((so) => so.parentOrderId === order.id);
+    const calculatedProductCost = calculateOrderProductCost(order, validSOs);
     if (calculatedProductCost > 0 && order.productCost !== calculatedProductCost) {
       fallbackStore.updateOrder(order.id, (o) => ({
         ...o,
@@ -1531,7 +1539,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const customerLabels = customerProfile?.labels || [];
 
   const activeProductCost = useMemo(() => {
-    return calculateOrderProductCost(order, shopOrders);
+    const validSOs = shopOrders.filter((so) => so.parentOrderId === order.id);
+    return calculateOrderProductCost(order, validSOs);
   }, [order, shopOrders]);
 
   const estdPricing = calculateEstimatedFee({
@@ -1699,9 +1708,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }
 
     const activeShopOrders = shopOrders.filter(
-      (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+      (so) => so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
     );
-    const effectiveCost = calculateOrderProductCost(order, shopOrders);
+    const effectiveCost = calculateOrderProductCost(order, activeShopOrders);
     if (effectiveCost <= 0) {
       showAlert(
         'Product Cost Required',

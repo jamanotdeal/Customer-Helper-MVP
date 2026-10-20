@@ -5667,10 +5667,14 @@ class FallbackStore {
   private _shopOrdersByParent: { version: number; index: Map<string, ShopOrder[]> } | null = null;
 
   public getShopOrdersForOrder(parentOrderId: string): ShopOrder[] {
+    if (!parentOrderId || typeof parentOrderId !== 'string' || !parentOrderId.trim()) {
+      return [];
+    }
     const version = versionOf(this.shopOrders);
     if (!this._shopOrdersByParent || this._shopOrdersByParent.version !== version) {
       const index = new Map<string, ShopOrder[]>();
       this.shopOrders.forEach((so) => {
+        if (!so.parentOrderId) return;
         const siblings = index.get(so.parentOrderId);
         if (siblings) siblings.push(so);
         else index.set(so.parentOrderId, [so]);

@@ -222,6 +222,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   if (selectedOrderId) {
     return (
       <OrderDetailsView
+        key={selectedOrderId}
         orderId={selectedOrderId}
         onBack={() => {
           setSelectedOrderId(null);

@@ -195,6 +195,7 @@ export const CustomerOrdersPage: React.FC<CustomerOrdersPageProps> = ({
   if (selectedOrderId) {
     return (
       <OrderDetailsView
+        key={selectedOrderId}
         orderId={selectedOrderId}
         onBack={() => setSelectedOrderId(null)}
       />

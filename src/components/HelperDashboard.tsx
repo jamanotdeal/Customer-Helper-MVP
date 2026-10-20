@@ -679,6 +679,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
       return (
         <HelperActiveOrderView
+          key={targetOrder.id}
           order={targetOrder}
           helperLocation={user?.helperLocation}
           onBack={() => setSelectedOrderId(null)}

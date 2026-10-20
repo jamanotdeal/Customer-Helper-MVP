@@ -1021,6 +1021,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     if (selectedOrderId) {
       return (
         <OrderDetailsView
+          key={selectedOrderId}
           orderId={selectedOrderId}
           onBack={() => setSelectedOrderId(null)}
         />
