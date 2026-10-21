@@ -52,8 +52,11 @@ export const ProductVariantSelectorModal: React.FC<ProductVariantSelectorModalPr
       id: product?.storeId || 'store',
       name: product?.storeName || 'Store',
       type: 'Retail',
-      address: '',
-    } as Shop;
+      contactPerson: '',
+      whatsapp: '',
+      location: { latitude: 0, longitude: 0, address: '' },
+      createdAt: new Date().toISOString(),
+    } as unknown as Shop;
   }, [shop, product]);
 
   // Handle escape key

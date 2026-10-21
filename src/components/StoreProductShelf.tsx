@@ -21,6 +21,7 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
   selectedItems,
   onAddItem,
   onRemoveItem,
+  onUpdateQty,
   onOpenCustomItemModal,
 }) => {
   const [shops, setShops] = useState<Shop[]>([]);
