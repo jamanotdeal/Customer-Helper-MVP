@@ -133,10 +133,10 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     return getLocalYYYYMMDD(d);
   };
 
-  // Date Range Filtering State - Default to LAST_7
-  const [startDate, setStartDate] = useState<string>(getDaysAgoStr(6));
+  // Date Range Filtering State - Default to TODAY
+  const [startDate, setStartDate] = useState<string>(getTodayStr());
   const [endDate, setEndDate] = useState<string>(getTodayStr());
-  const [activePreset, setActivePreset] = useState<PresetType>('LAST_7');
+  const [activePreset, setActivePreset] = useState<PresetType>('TODAY');
   const [showCustomPicker, setShowCustomPicker] = useState<boolean>(false);
 
   const handlePresetSelect = (preset: PresetType) => {

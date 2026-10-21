@@ -55,6 +55,27 @@ export const StorePage: React.FC<StorePageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close category dropdown when clicked outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        categoryDropdownRef.current &&
+        !categoryDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsCategoryDropdownOpen(false);
+      }
+    };
+    if (isCategoryDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isCategoryDropdownOpen]);
 
   // Cart state from CartContext (synced to localStorage)
   const {
@@ -118,6 +139,13 @@ export const StorePage: React.FC<StorePageProps> = ({
       uncategorizedCount: uncat,
     };
   }, [products]);
+
+  // Filtered categories for custom dropdown search
+  const filteredDropdownCategories = useMemo(() => {
+    if (!categorySearchQuery.trim()) return categoriesWithCount;
+    const q = categorySearchQuery.toLowerCase();
+    return categoriesWithCount.filter((c) => c.name.toLowerCase().includes(q));
+  }, [categoriesWithCount, categorySearchQuery]);
 
   // Filtered products
   const filteredProducts = useMemo(() => {
@@ -293,44 +321,239 @@ export const StorePage: React.FC<StorePageProps> = ({
           )}
         </div>
 
-        {/* Category Selection Box */}
+        {/* Custom Category Dropdown */}
         {(categoriesWithCount.length > 0 || uncategorizedCount > 0) && (
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-600 flex items-center gap-1.5">
-                <Tag className="w-4 h-4 shrink-0" />
-                <span className="text-[11px] font-bold text-gray-500 hidden sm:inline">ক্যাটাগরি:</span>
+          <div className="relative" ref={categoryDropdownRef}>
+            {/* Trigger Button */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setIsCategoryDropdownOpen((prev) => !prev)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsCategoryDropdownOpen((prev) => !prev);
+                }
+              }}
+              className={`w-full px-3.5 py-2.5 rounded-2xl border transition-all flex items-center justify-between gap-2 cursor-pointer shadow-2xs select-none ${
+                isCategoryDropdownOpen
+                  ? 'bg-emerald-50/40 border-emerald-500 ring-2 ring-emerald-500/20'
+                  : selectedCategory !== 'all'
+                  ? 'bg-emerald-50/30 border-emerald-400'
+                  : 'bg-white border-gray-200/90 hover:border-gray-300'
+              }`}
+            >
+              {/* Left Side: Icon & Selected Label */}
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <div
+                  className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                    selectedCategory !== 'all'
+                      ? 'bg-emerald-500 text-white shadow-xs'
+                      : 'bg-emerald-50 text-emerald-600'
+                  }`}
+                >
+                  <Tag className="w-3.5 h-3.5" />
+                </div>
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span className="text-[11px] font-bold text-gray-400 shrink-0 hidden sm:inline">
+                    ক্যাটাগরি:
+                  </span>
+                  <span className="text-xs sm:text-sm font-extrabold text-gray-900 truncate">
+                    {selectedCategory === 'all'
+                      ? 'সকল ক্যাটাগরি'
+                      : selectedCategory === '__uncategorized__'
+                      ? 'অন্যান্য / আনক্যাটাগরাইজড'
+                      : selectedCategory}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-black bg-emerald-100/80 text-emerald-800 shrink-0">
+                    {selectedCategory === 'all'
+                      ? `${products.length} টি`
+                      : selectedCategory === '__uncategorized__'
+                      ? `${uncategorizedCount} টি`
+                      : `${categoriesWithCount.find((c) => c.name === selectedCategory)?.count || 0} টি`}
+                  </span>
+                </div>
               </div>
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full pl-9 sm:pl-24 pr-8 py-2 text-xs sm:text-sm font-bold text-gray-800 bg-white border border-gray-200/90 rounded-2xl focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all shadow-2xs appearance-none cursor-pointer"
-              >
-                <option value="all">📂 সকল ক্যাটাগরি ({products.length} টি পণ্য)</option>
-                {categoriesWithCount.map((cat) => (
-                  <option key={cat.name} value={cat.name}>
-                    🏷️ {cat.name} ({cat.count})
-                  </option>
-                ))}
-                {uncategorizedCount > 0 && categoriesWithCount.length > 0 && (
-                  <option value="__uncategorized__">
-                    📦 অন্যান্য / আনক্যাটাগরাইজড ({uncategorizedCount})
-                  </option>
+
+              {/* Right Side: Clear Button & Animated Chevron */}
+              <div className="flex items-center gap-1 shrink-0">
+                {selectedCategory !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      hapticFeedback('selection');
+                      setSelectedCategory('all');
+                      setIsCategoryDropdownOpen(false);
+                    }}
+                    className="p-1 rounded-full text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                    title="ক্যাটাগরি রিসেট করুন"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 )}
-              </select>
-              <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <div
+                  className={`transition-transform duration-200 text-gray-400 ${
+                    isCategoryDropdownOpen ? 'rotate-180 text-emerald-600' : ''
+                  }`}
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </div>
+              </div>
             </div>
 
-            {selectedCategory !== 'all' && (
-              <button
-                type="button"
-                onClick={() => setSelectedCategory('all')}
-                className="shrink-0 px-3 py-2 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
-                title="ক্যাটাগরি রিসেট করুন"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">সকল পণ্য</span>
-              </button>
+            {/* Dropdown Menu */}
+            {isCategoryDropdownOpen && (
+              <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-100 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 p-2 space-y-1.5">
+                {/* Search in dropdown if more than 5 categories */}
+                {categoriesWithCount.length > 5 && (
+                  <div className="relative px-1 pt-1 pb-1">
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={categorySearchQuery}
+                      onChange={(e) => setCategorySearchQuery(e.target.value)}
+                      placeholder="ক্যাটাগরি খুঁজুন..."
+                      autoFocus
+                      className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl bg-gray-50 border border-gray-200 focus:bg-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all"
+                    />
+                    {categorySearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setCategorySearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="max-h-64 overflow-y-auto space-y-1 overscroll-contain pr-0.5">
+                  {/* Option: All Categories */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      hapticFeedback('selection');
+                      setSelectedCategory('all');
+                      setIsCategoryDropdownOpen(false);
+                      setCategorySearchQuery('');
+                    }}
+                    className={`w-full px-3 py-2.5 rounded-xl text-left text-xs sm:text-sm font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                      selectedCategory === 'all'
+                        ? 'bg-emerald-50 text-emerald-900 font-black shadow-2xs'
+                        : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm">📂</span>
+                      <span className="truncate">সকল ক্যাটাগরি</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                          selectedCategory === 'all'
+                            ? 'bg-emerald-200/80 text-emerald-900'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {products.length}
+                      </span>
+                      {selectedCategory === 'all' && (
+                        <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                      )}
+                    </div>
+                  </button>
+
+                  <div className="border-t border-gray-100 my-1" />
+
+                  {/* Option list: Categories */}
+                  {filteredDropdownCategories.length === 0 && categorySearchQuery ? (
+                    <div className="py-4 text-center text-xs text-gray-400">
+                      কোনো ক্যাটাগরি পাওয়া যায়নি
+                    </div>
+                  ) : (
+                    filteredDropdownCategories.map((cat) => {
+                      const isSelected = selectedCategory === cat.name;
+                      return (
+                        <button
+                          key={cat.name}
+                          type="button"
+                          onClick={() => {
+                            hapticFeedback('selection');
+                            setSelectedCategory(cat.name);
+                            setIsCategoryDropdownOpen(false);
+                            setCategorySearchQuery('');
+                          }}
+                          className={`w-full px-3 py-2.5 rounded-xl text-left text-xs sm:text-sm font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-emerald-50 text-emerald-900 font-black shadow-2xs'
+                              : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm">🏷️</span>
+                            <span className="truncate">{cat.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                                isSelected
+                                  ? 'bg-emerald-200/80 text-emerald-900'
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {cat.count}
+                            </span>
+                            {isSelected && (
+                              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+
+                  {/* Option: Uncategorized */}
+                  {uncategorizedCount > 0 &&
+                    (!categorySearchQuery ||
+                      'অন্যান্য আনক্যাটাগরাইজড'.includes(categorySearchQuery.toLowerCase())) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          hapticFeedback('selection');
+                          setSelectedCategory('__uncategorized__');
+                          setIsCategoryDropdownOpen(false);
+                          setCategorySearchQuery('');
+                        }}
+                        className={`w-full px-3 py-2.5 rounded-xl text-left text-xs sm:text-sm font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                          selectedCategory === '__uncategorized__'
+                            ? 'bg-emerald-50 text-emerald-900 font-black shadow-2xs'
+                            : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm">📦</span>
+                          <span className="truncate">অন্যান্য / আনক্যাটাগরাইজড</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              selectedCategory === '__uncategorized__'
+                                ? 'bg-emerald-200/80 text-emerald-900'
+                                : 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {uncategorizedCount}
+                          </span>
+                          {selectedCategory === '__uncategorized__' && (
+                            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    )}
+                </div>
+              </div>
             )}
           </div>
         )}
