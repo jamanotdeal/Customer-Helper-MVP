@@ -3,9 +3,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Shop, StoreProduct, OrderItem } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { ProductVariantSelectorModal } from './ProductVariantSelectorModal';
 import {
   Store, Package, Plus, Minus, Check, AlertTriangle,
-  Search, Tag, Sparkles, ShoppingBag, ChevronRight
+  Search, Tag, Sparkles, ShoppingBag, ChevronRight, Layers,
 } from 'lucide-react';
 
 interface StoreProductShelfProps {
@@ -26,6 +27,7 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
   const [products, setProducts] = useState<StoreProduct[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedShopFilter, setSelectedShopFilter] = useState<string>('ALL');
+  const [variantModalProduct, setVariantModalProduct] = useState<StoreProduct | null>(null);
 
   useEffect(() => {
     const sync = () => {
@@ -67,12 +69,21 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
   }, [products, selectedShopFilter, searchQuery]);
 
   // Check if an item is already in selectedItems
-  const getItemCount = (productId: string) => {
-    const item = selectedItems.find((it) => it.id === productId || it.id === `prod-${productId}`);
+  const getItemCount = (p: StoreProduct) => {
+    if (p.priceOptions && p.priceOptions.length > 0) {
+      return selectedItems
+        .filter((it) => it.id === p.id || it.id === `prod-${p.id}` || it.id.startsWith(`prod-${p.id}_`))
+        .reduce((sum, it) => sum + (parseInt(it.qty || '1', 10) || 1), 0);
+    }
+    const item = selectedItems.find((it) => it.id === p.id || it.id === `prod-${p.id}`);
     return item ? parseInt(item.qty || '1', 10) || 1 : 0;
   };
 
   const handleAddProduct = (p: StoreProduct) => {
+    if (p.priceOptions && p.priceOptions.length > 0) {
+      setVariantModalProduct(p);
+      return;
+    }
     const shop = fallbackStore.shops.get(p.storeId);
     const hasDiscount = Boolean(p.discountRate && p.discountRate > 0);
     const finalPrice = hasDiscount
@@ -195,7 +206,8 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
             const discountedPrice = hasDiscount
               ? Math.round(p.price * (1 - (p.discountRate || 0) / 100))
               : p.price;
-            const isAdded = getItemCount(p.id) > 0;
+            const isAdded = getItemCount(p) > 0;
+            const hasVariants = Boolean(p.priceOptions && p.priceOptions.length > 0);
 
             return (
               <div
@@ -207,7 +219,15 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
                 }`}
               >
                 {/* Top: Photo & Badges */}
-                <div className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center">
+                <div
+                  className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center cursor-pointer"
+                  onClick={() => {
+                    if (p.inStock) {
+                      if (hasVariants) setVariantModalProduct(p);
+                      else handleAddProduct(p);
+                    }
+                  }}
+                >
                   {p.photoUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -256,16 +276,30 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
                       </span>
                     )}
                   </div>
-                  <div className="flex items-baseline gap-1 pt-0.5">
-                    <span className="font-extrabold text-emerald-700 text-xs">
-                      ৳{discountedPrice}
-                    </span>
-                    {hasDiscount && (
-                      <span className="text-[10px] text-gray-400 line-through">
-                        ৳{p.price}
+                  {hasVariants ? (
+                    <div className="space-y-0.5 pt-0.5">
+                      <div className="flex items-baseline gap-1">
+                        <span className="font-extrabold text-emerald-700 text-xs">
+                          ৳{Math.min(...p.priceOptions!.map((o) => o.price))} - ৳{Math.max(...p.priceOptions!.map((o) => o.price))}
+                        </span>
+                      </div>
+                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                        <Layers className="w-2.5 h-2.5" />
+                        <span>{p.priceOptions!.length}টি সাইজ</span>
                       </span>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-baseline gap-1 pt-0.5">
+                      <span className="font-extrabold text-emerald-700 text-xs">
+                        ৳{discountedPrice}
+                      </span>
+                      {hasDiscount && (
+                        <span className="text-[10px] text-gray-400 line-through">
+                          ৳{p.price}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Bottom Action Button */}
@@ -276,6 +310,45 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
                   >
                     অনুপলব্ধ (Out of Stock)
                   </button>
+                ) : hasVariants ? (
+                  !isAdded ? (
+                    <button
+                      type="button"
+                      onClick={() => setVariantModalProduct(p)}
+                      className="w-full py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-[11px] shadow-xs transition-all flex items-center justify-center space-x-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add</span>
+                    </button>
+                  ) : (
+                    <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-xs">
+                      <button
+                        type="button"
+                        onClick={() => setVariantModalProduct(p)}
+                        className="w-7 h-7 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                        aria-label="Decrease quantity"
+                      >
+                        <Minus className="w-3.5 h-3.5 stroke-[3]" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setVariantModalProduct(p)}
+                        className="font-black text-xs px-2 text-white text-center select-none flex-1 py-0.5 cursor-pointer hover:bg-emerald-700/50 rounded transition-colors"
+                      >
+                        {getItemCount(p)}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setVariantModalProduct(p)}
+                        className="w-7 h-7 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                        aria-label="Increase quantity"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                      </button>
+                    </div>
+                  )
                 ) : isAdded ? (
                   <button
                     type="button"
@@ -301,6 +374,32 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
           })}
         </div>
       )}
+
+      {/* ── PRODUCT VARIANT SELECTOR MODAL ── */}
+      <ProductVariantSelectorModal
+        isOpen={Boolean(variantModalProduct)}
+        onClose={() => setVariantModalProduct(null)}
+        product={variantModalProduct}
+        shop={variantModalProduct?.storeId ? fallbackStore.shops.get(variantModalProduct.storeId) : undefined}
+        customItems={selectedItems}
+        onCustomAdd={onAddItem}
+        onCustomRemove={onRemoveItem}
+        onCustomUpdateQty={(itemId, delta) => {
+          const it = selectedItems.find((i) => i.id === itemId);
+          if (it) {
+            const currentQty = parseInt(it.qty || '1', 10) || 1;
+            const newQty = currentQty + delta;
+            if (newQty <= 0) {
+              onRemoveItem(itemId);
+            } else if (onUpdateQty) {
+              onUpdateQty(itemId, String(newQty));
+            } else {
+              onRemoveItem(itemId);
+              onAddItem({ ...it, qty: String(newQty), quantity: newQty });
+            }
+          }
+        }}
+      />
     </div>
   );
 };

@@ -8,6 +8,7 @@ import { useModal } from './CustomModal';
 import { isShopOpenNow } from './StoreGrid';
 import { AddCustomItemModal } from './AddCustomItemModal';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
+import { ProductVariantSelectorModal } from './ProductVariantSelectorModal';
 import { hapticFeedback } from '@/lib/native';
 import { calculateEstimatedFee, calculateDistanceKm } from '@/lib/pricing';
 import { useCart } from '@/context/CartContext';
@@ -35,6 +36,7 @@ import {
   Calculator,
   Tag,
   ChevronDown,
+  Layers,
 } from 'lucide-react';
 
 interface StorePageProps {
@@ -90,6 +92,7 @@ export const StorePage: React.FC<StorePageProps> = ({
     subtotal,
   } = useCart();
   const [showAddCustomModal, setShowAddCustomModal] = useState(false);
+  const [variantModalProduct, setVariantModalProduct] = useState<StoreProduct | null>(null);
 
   const isOpen = isShopOpenNow(shop);
 
@@ -170,13 +173,22 @@ export const StorePage: React.FC<StorePageProps> = ({
   }, [products, selectedCategory, searchQuery]);
 
   // Quantity in cart helper
-  const getItemQty = (productId: string): number => {
-    const found = cartItems.find((item) => item.id === productId);
+  const getItemQty = (product: StoreProduct): number => {
+    if (product.priceOptions && product.priceOptions.length > 0) {
+      return cartItems
+        .filter((item) => item.id === product.id || item.id.startsWith(`${product.id}_`))
+        .reduce((sum, item) => sum + (item.quantity || 1), 0);
+    }
+    const found = cartItems.find((item) => item.id === product.id);
     return found?.quantity || 0;
   };
 
   // Add / increase product in cart
   const handleIncrease = (product: StoreProduct) => {
+    if (product.priceOptions && product.priceOptions.length > 0) {
+      setVariantModalProduct(product);
+      return;
+    }
     hapticFeedback('selection');
     const hasDiscount = Boolean(product.discountRate && product.discountRate > 0);
     const effectivePrice = hasDiscount
@@ -604,11 +616,12 @@ export const StorePage: React.FC<StorePageProps> = ({
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {filteredProducts.map((product) => {
-              const qty = getItemQty(product.id);
+              const qty = getItemQty(product);
               const hasDiscount = Boolean(product.discountRate && product.discountRate > 0);
               const discountedPrice = hasDiscount
                 ? Math.round(product.price * (1 - (product.discountRate || 0) / 100))
                 : product.price;
+              const hasVariants = Boolean(product.priceOptions && product.priceOptions.length > 0);
               const isOutOfStock = !product.inStock;
               const isStoreClosed = !isOpen;
 
@@ -622,7 +635,15 @@ export const StorePage: React.FC<StorePageProps> = ({
                   } ${isOutOfStock ? 'opacity-60' : ''}`}
                 >
                   {/* Photo & Badges */}
-                  <div className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center">
+                  <div
+                    className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center cursor-pointer"
+                    onClick={() => {
+                      if (!isOutOfStock) {
+                        if (hasVariants) setVariantModalProduct(product);
+                        else handleIncrease(product);
+                      }
+                    }}
+                  >
                     {product.photoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -680,16 +701,30 @@ export const StorePage: React.FC<StorePageProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="flex items-baseline gap-1.5 pt-0.5">
-                      <span className="font-black text-emerald-700 text-xs sm:text-sm">
-                        ৳{discountedPrice}
-                      </span>
-                      {hasDiscount && (
-                        <span className="text-[10px] text-gray-400 line-through">
-                          ৳{product.price}
+                    {hasVariants ? (
+                      <div className="space-y-0.5 pt-0.5">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-black text-emerald-700 text-xs sm:text-sm">
+                            ৳{Math.min(...product.priceOptions!.map((o) => o.price))} - ৳{Math.max(...product.priceOptions!.map((o) => o.price))}
+                          </span>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded-md">
+                          <Layers className="w-2.5 h-2.5" />
+                          <span>{product.priceOptions!.length}টি সাইজ</span>
                         </span>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-baseline gap-1.5 pt-0.5">
+                        <span className="font-black text-emerald-700 text-xs sm:text-sm">
+                          ৳{discountedPrice}
+                        </span>
+                        {hasDiscount && (
+                          <span className="text-[10px] text-gray-400 line-through">
+                            ৳{product.price}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Right after pricing: "+ Buy" or Increment/Decrement */}
@@ -702,6 +737,45 @@ export const StorePage: React.FC<StorePageProps> = ({
                       >
                         অনুপলব্ধ (স্টক শেষ)
                       </button>
+                    ) : hasVariants ? (
+                      qty === 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setVariantModalProduct(product)}
+                          className="w-full py-2 sm:py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
+                        >
+                          <Plus className="w-4 h-4 stroke-[3]" />
+                          <span>Buy</span>
+                        </button>
+                      ) : (
+                        <div className="w-full flex items-center justify-between bg-emerald-600 text-white rounded-xl p-0.5 shadow-md">
+                          <button
+                            type="button"
+                            onClick={() => setVariantModalProduct(product)}
+                            className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                            aria-label="Decrease quantity"
+                          >
+                            <Minus className="w-4 h-4 stroke-[3]" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setVariantModalProduct(product)}
+                            className="font-black text-xs sm:text-sm px-2 text-white text-center select-none flex-1 py-1 cursor-pointer hover:bg-emerald-700/50 rounded transition-colors"
+                          >
+                            {qty}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setVariantModalProduct(product)}
+                            className="w-8 h-8 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                            aria-label="Increase quantity"
+                          >
+                            <Plus className="w-4 h-4 stroke-[3]" />
+                          </button>
+                        </div>
+                      )
                     ) : qty === 0 ? (
                       <button
                         type="button"
@@ -750,6 +824,14 @@ export const StorePage: React.FC<StorePageProps> = ({
         onClose={() => setShowAddCustomModal(false)}
         onAddItem={handleAddCustomItem}
         defaultBuyFrom={shop.name}
+      />
+
+      {/* ── PRODUCT VARIANT SELECTOR MODAL ── */}
+      <ProductVariantSelectorModal
+        isOpen={Boolean(variantModalProduct)}
+        onClose={() => setVariantModalProduct(null)}
+        product={variantModalProduct}
+        shop={shop}
       />
     </div>
   );

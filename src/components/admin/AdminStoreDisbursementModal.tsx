@@ -39,15 +39,25 @@ interface AdminStoreDisbursementModalProps {
   shop: Shop;
   onClose: () => void;
   onDisbursed?: () => void;
+  initialPreset?: DatePreset;
 }
 
 type TabType = 'OVERVIEW' | 'HELPERS' | 'ORDERS' | 'HISTORY' | 'ANALYTICS';
 type DatePreset = 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM';
 
+// Helper date utility (formats local YYYY-MM-DD)
+const getLocalYYYYMMDD = (d: Date = new Date()): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalProps> = ({
   shop,
   onClose,
   onDisbursed,
+  initialPreset = 'TODAY',
 }) => {
   // Wallets and history here are summed over every order, withdrawal and
   // shop order, which the admin panel reads only when a view like this opens.
@@ -56,9 +66,35 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const { showConfirm, showAlert } = useModal();
 
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
-  const [activePreset, setActivePreset] = useState<DatePreset>('ALL_TIME');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [activePreset, setActivePreset] = useState<DatePreset>(initialPreset);
+  const [startDate, setStartDate] = useState<string>(() => {
+    const today = new Date();
+    if (initialPreset === 'TODAY') return getLocalYYYYMMDD(today);
+    if (initialPreset === 'YESTERDAY') {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      return getLocalYYYYMMDD(y);
+    }
+    if (initialPreset === 'LAST_7') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      return getLocalYYYYMMDD(d);
+    }
+    if (initialPreset === 'THIS_MONTH') {
+      return getLocalYYYYMMDD(new Date(today.getFullYear(), today.getMonth(), 1));
+    }
+    return '';
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    const today = new Date();
+    if (initialPreset === 'TODAY' || initialPreset === 'LAST_7' || initialPreset === 'THIS_MONTH') return getLocalYYYYMMDD(today);
+    if (initialPreset === 'YESTERDAY') {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      return getLocalYYYYMMDD(y);
+    }
+    return '';
+  });
 
   // Search queries
   const [helperSearch, setHelperSearch] = useState('');
@@ -71,14 +107,6 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const [paymentMethod, setPaymentMethod] = useState<string>('Bank Transfer');
   const [accountRefNote, setAccountRefNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Helper date utility
-  const getLocalYYYYMMDD = (d: Date = new Date()): string => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
 
   const handlePresetSelect = (preset: DatePreset) => {
     setActivePreset(preset);
@@ -359,7 +387,14 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const filteredOrders = useMemo(() => {
     return normalizedStoreOrders.filter((o) => {
       if (!startDate && !endDate) return true;
-      const orderDateStr = o.createdAt ? o.createdAt.slice(0, 10) : '';
+      let orderDateStr = '';
+      if (o.createdAt) {
+        try {
+          orderDateStr = getLocalYYYYMMDD(new Date(o.createdAt));
+        } catch {
+          orderDateStr = o.createdAt.slice(0, 10);
+        }
+      }
       if (startDate && orderDateStr < startDate) return false;
       if (endDate && orderDateStr > endDate) return false;
       return true;
@@ -905,7 +940,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                 {/* Net Sales Payable / Due */}
                 <div className="bg-white p-4 rounded-2xl border border-emerald-100 shadow-xs space-y-1 bg-gradient-to-br from-emerald-50/50 to-white">
                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">
-                    {activePreset === 'ALL_TIME' ? 'Unpaid Balance (Due)' : `Unpaid Net Sales (${activePreset})`}
+                    {activePreset === 'ALL_TIME' ? 'Unpaid Balance (Due)' : `Unpaid Net Sales (${activePreset === 'TODAY' ? 'Today' : activePreset === 'YESTERDAY' ? 'Yesterday' : activePreset === 'LAST_7' ? 'Last 7 Days' : activePreset === 'THIS_MONTH' ? 'This Month' : 'Custom'})`}
                   </span>
                   <span className="text-xl font-black text-emerald-700 block font-mono">
                     ৳{(activePreset === 'ALL_TIME' ? currentAvailableBalance : rangeMetrics.unpaidNet).toLocaleString('en-US')}

@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { StoreProduct } from '@/types';
+import { StoreProduct, ProductPriceOption } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from './CustomModal';
 import { getCategoriesForStoreType } from '@/lib/pricing';
 import {
   Plus, Search, Edit3, Trash2, Package, Check, X,
   Image as ImageIcon, Upload, Tag, AlertCircle,
-  ChevronDown, RefreshCw,
+  ChevronDown, RefreshCw, Layers,
 } from 'lucide-react';
 
 interface StoreProductManagerProps {
@@ -66,6 +66,16 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Multiple Pricing Options State
+  interface PriceOptionDraft {
+    id?: string;
+    name: string;
+    price: string;
+    unit: string;
+  }
+  const [hasMultiplePrices, setHasMultiplePrices] = useState(false);
+  const [priceOptions, setPriceOptions] = useState<PriceOptionDraft[]>([]);
 
   // Multi-select
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -130,6 +140,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   const resetForm = () => {
     setName(''); setUnit('১ কেজি'); setCategory(''); setIsCustomCategory(false);
     setPrice(''); setDiscountRate(''); setInStock(true); setPhotoUrl(''); setFormError('');
+    setHasMultiplePrices(false); setPriceOptions([]);
   };
 
   const handleOpenAdd = () => {
@@ -150,8 +161,52 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     setDiscountRate(p.discountRate && p.discountRate > 0 ? String(p.discountRate) : '');
     setInStock(p.inStock !== false);
     setPhotoUrl(p.photoUrl || '');
+    if (p.priceOptions && p.priceOptions.length > 0) {
+      setHasMultiplePrices(true);
+      setPriceOptions(p.priceOptions.map((po) => ({
+        id: po.id,
+        name: po.name || '',
+        price: String(po.price || ''),
+        unit: po.unit || '',
+      })));
+    } else {
+      setHasMultiplePrices(false);
+      setPriceOptions([]);
+    }
     setFormError('');
     setIsModalOpen(true);
+  };
+
+  const handleToggleMultiplePrices = () => {
+    if (!hasMultiplePrices) {
+      setHasMultiplePrices(true);
+      if (priceOptions.length === 0) {
+        setPriceOptions([
+          { name: 'Small', price: price ? String(price) : '', unit: unit || '' },
+          { name: 'Medium', price: '', unit: unit || '' },
+          { name: 'Large', price: '', unit: unit || '' },
+        ]);
+      }
+    } else {
+      setHasMultiplePrices(false);
+    }
+  };
+
+  const addPriceOptionRow = () => {
+    setPriceOptions((prev) => [
+      ...prev,
+      { name: '', price: '', unit: unit || '' },
+    ]);
+  };
+
+  const updatePriceOptionRow = (index: number, field: 'name' | 'price' | 'unit', value: string) => {
+    setPriceOptions((prev) =>
+      prev.map((opt, i) => (i === index ? { ...opt, [field]: value } : opt))
+    );
+  };
+
+  const removePriceOptionRow = (index: number) => {
+    setPriceOptions((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -165,9 +220,46 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setFormError('পণ্যের নাম অবশ্যই দিতে হবে।'); return; }
+
+    let validOptions: ProductPriceOption[] | undefined = undefined;
+    if (hasMultiplePrices) {
+      if (priceOptions.length < 2) {
+        setFormError('একাধিক মূল্যের জন্য কমপক্ষে ২টি সাইজ/ভ্যারিয়েন্ট যোগ করুন।');
+        return;
+      }
+      const parsedOpts: ProductPriceOption[] = [];
+      for (let i = 0; i < priceOptions.length; i++) {
+        const opt = priceOptions[i];
+        const optName = opt.name.trim();
+        const optPriceClean = toEnglishDigits(opt.price).replace(/[৳,]/g, '').trim();
+        const optPriceNum = optPriceClean ? parseFloat(optPriceClean) : NaN;
+        if (!optName) {
+          setFormError(`সাইজ #${i + 1} এর নাম লিখুন (যেমন: Small / Medium / Large)`);
+          return;
+        }
+        if (isNaN(optPriceNum) || optPriceNum < 0) {
+          setFormError(`"${optName}" সাইজের সঠিক বিক্রয়মূল্য উল্লেখ করুন।`);
+          return;
+        }
+        parsedOpts.push({
+          id: opt.id || `opt_${Date.now()}_${i}`,
+          name: optName,
+          price: optPriceNum,
+          unit: opt.unit.trim() || undefined,
+        });
+      }
+      validOptions = parsedOpts;
+    }
+
     const cleanPrice = toEnglishDigits(price).replace(/[৳,]/g, '').trim();
-    const numPrice = cleanPrice ? parseFloat(cleanPrice) : NaN;
-    if (isNaN(numPrice) || numPrice < 0) { setFormError('সঠিক বিক্রয়মূল্য উল্লেখ করুন।'); return; }
+    let numPrice = cleanPrice ? parseFloat(cleanPrice) : NaN;
+    if (hasMultiplePrices && validOptions && validOptions.length > 0 && (isNaN(numPrice) || numPrice <= 0)) {
+      numPrice = Math.min(...validOptions.map((o) => o.price));
+    } else if (isNaN(numPrice) || numPrice < 0) {
+      setFormError('সঠিক বিক্রয়মূল্য উল্লেখ করুন।');
+      return;
+    }
+
     const cleanDiscount = toEnglishDigits(discountRate).replace(/%/g, '').trim();
     const numDiscount = cleanDiscount ? parseFloat(cleanDiscount) : 0;
     if (cleanDiscount && (isNaN(numDiscount) || numDiscount < 0 || numDiscount > 100)) {
@@ -179,21 +271,33 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
       if (editingProduct) {
         await fallbackStore.saveStoreProduct({
           ...editingProduct,
-          name: name.trim(), unit: unit.trim() || '১ পিস', price: numPrice,
+          name: name.trim(),
+          unit: unit.trim() || '১ পিস',
+          price: numPrice,
+          priceOptions: hasMultiplePrices && validOptions && validOptions.length > 0 ? validOptions : undefined,
           discountRate: numDiscount > 0 ? numDiscount : undefined,
-          category: category.trim() || undefined, inStock,
-          photoUrl: photoUrl || undefined, updatedAt: now,
+          category: category.trim() || undefined,
+          inStock,
+          photoUrl: photoUrl || undefined,
+          updatedAt: now,
         });
         showAlert('সফল হয়েছে!', 'পণ্যটির তথ্য আপডেট করা হয়েছে।', 'success');
       } else {
         const newId = `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         await fallbackStore.saveStoreProduct({
-          id: newId, storeId, storeName: storeName || '',
-          name: name.trim(), unit: unit.trim() || '১ পিস', price: numPrice,
+          id: newId,
+          storeId,
+          storeName: storeName || '',
+          name: name.trim(),
+          unit: unit.trim() || '১ পিস',
+          price: numPrice,
+          priceOptions: hasMultiplePrices && validOptions && validOptions.length > 0 ? validOptions : undefined,
           discountRate: numDiscount > 0 ? numDiscount : undefined,
-          category: category.trim() || undefined, inStock,
+          category: category.trim() || undefined,
+          inStock,
           photoUrl: photoUrl || undefined,
-          createdAt: now, updatedAt: now,
+          createdAt: now,
+          updatedAt: now,
         });
         showAlert('সফল হয়েছে!', 'নতুন পণ্যটি যোগ করা হয়েছে।', 'success');
       }
@@ -392,10 +496,31 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                         </span>
                       )}
                     </div>
-                    <div className="mt-1.5 flex items-baseline gap-1.5">
-                      <span className="text-emerald-700 font-extrabold text-sm">৳{discountedPrice}</span>
-                      {hasDiscount && <span className="text-gray-400 line-through text-[11px]">৳{p.price}</span>}
-                    </div>
+                    {p.priceOptions && p.priceOptions.length > 0 ? (
+                      <div className="mt-1.5 space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-emerald-700 font-extrabold text-sm">
+                            ৳{Math.min(...p.priceOptions.map((o) => o.price))} - ৳{Math.max(...p.priceOptions.map((o) => o.price))}
+                          </span>
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-extrabold">
+                            <Layers className="w-2.5 h-2.5" />
+                            <span>{p.priceOptions.length}টি সাইজ</span>
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {p.priceOptions.map((opt, idx) => (
+                            <span key={idx} className="text-[10px] bg-gray-100 text-gray-700 font-medium px-1.5 py-0.5 rounded">
+                              {opt.name}: ৳{opt.price}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-1.5 flex items-baseline gap-1.5">
+                        <span className="text-emerald-700 font-extrabold text-sm">৳{discountedPrice}</span>
+                        {hasDiscount && <span className="text-gray-400 line-through text-[11px]">৳{p.price}</span>}
+                      </div>
+                    )}
                   </div>
                 </div>
                 {/* Actions */}
@@ -492,8 +617,19 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
               {/* Price + Discount */}
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">বিক্রয়মূল্য (৳) <span className="text-rose-500">*</span></label>
-                  <input type="number" step="0.01" min="0" required value={price} onChange={(e) => setPrice(e.target.value)} placeholder="যেমন: 75" className="w-full px-3 py-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-xs font-bold" />
+                  <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                    {hasMultiplePrices ? 'শুরুর / ডিফল্ট মূল্য (৳)' : 'বিক্রয়মূল্য (৳)'} {!hasMultiplePrices && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required={!hasMultiplePrices}
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder={hasMultiplePrices ? 'স্বয়ংক্রিয়ভাবে যুক্ত হবে' : 'যেমন: 75'}
+                    className="w-full px-3 py-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-xs font-bold"
+                  />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -502,6 +638,88 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                   </div>
                   <input type="number" min="0" max="100" step="any" value={discountRate} onChange={(e) => setDiscountRate(e.target.value)} placeholder="যেমন: 5" className="w-full px-3 py-2.5 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-xs font-bold" />
                 </div>
+              </div>
+
+              {/* Multiple Sizes & Pricing Section */}
+              <div className="p-3 rounded-2xl bg-indigo-50/40 border border-indigo-100 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-indigo-600" />
+                    <div>
+                      <h5 className="font-extrabold text-gray-900 text-xs">একাধিক সাইজ / মূল্য (Multiple Sizes)</h5>
+                      <p className="text-[10px] text-gray-500">যেমন: Small, Medium, Large বা হাফ/ফুল প্লেট</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleMultiplePrices}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${hasMultiplePrices ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ${hasMultiplePrices ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+
+                {hasMultiplePrices && (
+                  <div className="space-y-2 pt-1 border-t border-indigo-100">
+                    <div className="grid grid-cols-12 gap-1.5 text-[10px] font-bold text-gray-600 px-1">
+                      <span className="col-span-5">সাইজের নাম (Size) *</span>
+                      <span className="col-span-4">বিক্রয়মূল্য (৳) *</span>
+                      <span className="col-span-2">একক (Unit)</span>
+                      <span className="col-span-1"></span>
+                    </div>
+
+                    {priceOptions.map((opt, index) => (
+                      <div key={index} className="grid grid-cols-12 gap-1.5 items-center bg-white p-1.5 rounded-xl border border-indigo-100 shadow-2xs">
+                        <input
+                          type="text"
+                          required
+                          placeholder="যেমন: Small"
+                          value={opt.name}
+                          onChange={(e) => updatePriceOptionRow(index, 'name', e.target.value)}
+                          className="col-span-5 px-2 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-500 text-xs font-semibold outline-none"
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          required
+                          placeholder="মূল্য ৳"
+                          value={opt.price}
+                          onChange={(e) => updatePriceOptionRow(index, 'price', e.target.value)}
+                          className="col-span-4 px-2 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-500 text-xs font-bold text-emerald-700 outline-none"
+                        />
+                        <input
+                          type="text"
+                          placeholder={unit || '১ পিস'}
+                          value={opt.unit}
+                          onChange={(e) => updatePriceOptionRow(index, 'unit', e.target.value)}
+                          className="col-span-2 px-1.5 py-1.5 rounded-lg border border-gray-200 focus:border-indigo-500 text-[11px] outline-none"
+                        />
+                        <div className="col-span-1 flex justify-center">
+                          {priceOptions.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => removePriceOptionRow(index)}
+                              className="p-1 text-gray-400 hover:text-rose-600 rounded cursor-pointer"
+                              title="মুছুন"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={addPriceOptionRow}
+                      className="w-full py-1.5 px-3 rounded-xl border border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>নতুন সাইজ ও মূল্য যোগ করুন</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Stock toggle */}

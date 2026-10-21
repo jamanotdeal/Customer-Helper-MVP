@@ -8229,6 +8229,9 @@ class FallbackStore {
     if (!cleanProduct.description) {
       delete cleanProduct.description;
     }
+    if (!cleanProduct.priceOptions || cleanProduct.priceOptions.length === 0) {
+      delete cleanProduct.priceOptions;
+    }
 
     this.storeProducts.set(cleanProduct.id, cleanProduct);
     this.scheduleLocalStoreSave();
@@ -8246,6 +8249,9 @@ class FallbackStore {
       }
       if (!cleanProduct.description) {
         firestoreData.description = deleteField();
+      }
+      if (!cleanProduct.priceOptions || cleanProduct.priceOptions.length === 0) {
+        firestoreData.priceOptions = deleteField();
       }
 
       await setDoc(doc(db, 'store_products', cleanProduct.id), firestoreData, { merge: true });

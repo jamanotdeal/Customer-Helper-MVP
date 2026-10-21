@@ -28,6 +28,7 @@ export interface OrderItem {
   photoUrl?: string;
   unit?: string;
   discountRate?: number;
+  selectedOptionName?: string;
 }
 
 
@@ -342,6 +343,14 @@ export interface Shop {
   featuredAt?: string;        // Timestamp when marked as featured
 }
 
+export interface ProductPriceOption {
+  id?: string;
+  name: string;               // e.g. "Small", "Medium", "Large" or "১/২ প্লেট", "ফুল প্লেট", "250ml", "1 Liter"
+  price: number;              // specific price for this size/option
+  unit?: string;              // optional unit override (e.g. "১ পিস", "১ গ্লাস")
+  discountRate?: number;      // optional discount percentage specific to this size
+}
+
 export interface StoreProduct {
   id: string;
   storeId: string;
@@ -350,6 +359,7 @@ export interface StoreProduct {
   photoUrl?: string;
   price: number;
   unit: string;               // e.g. "১ কেজি", "১ লিটার", "১ প্যাকেট", "১ পিস"
+  priceOptions?: ProductPriceOption[]; // Multiple size / pricing options
   discountRate?: number;      // discount percentage e.g. 5 means 5%
   inStock: boolean;           // stock switch status (true = in stock, false = out of stock)
   category?: string;
