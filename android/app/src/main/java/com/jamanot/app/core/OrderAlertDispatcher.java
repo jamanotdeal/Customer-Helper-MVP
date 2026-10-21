@@ -97,8 +97,12 @@ public final class OrderAlertDispatcher {
      * — the app opening included — has actually happened.
      */
     public static Task<Void> onNewOrderPush(Context c, String notifId, String title, String body, String orderId) {
+        return onNewOrderPush(c, notifId, title, body, orderId, null);
+    }
+
+    public static Task<Void> onNewOrderPush(Context c, String notifId, String title, String body, String orderId, @Nullable String preloadedPayload) {
         if (notifId == null || Prefs.markSeen(c, notifId)) {
-            return handleNewOrder(c, notifId, title, body, orderId);
+            return handleNewOrder(c, notifId, title, body, orderId, preloadedPayload, true);
         }
         Task<Void> running = IN_FLIGHT.get(notifId);
         if (running == null) outcome(notifId, "duplicate"); // Alerted earlier by the listener.
@@ -113,6 +117,11 @@ public final class OrderAlertDispatcher {
      *         process alive until then.
      */
     public static Task<Void> handleNewOrder(Context c, String notifId, String title, String body, String orderId) {
+        return handleNewOrder(c, notifId, title, body, orderId, null, false);
+    }
+
+    public static Task<Void> handleNewOrder(Context c, String notifId, String title, String body, String orderId,
+                                            @Nullable String preloadedPayload, boolean isFromPush) {
         Context app = c.getApplicationContext();
         TaskCompletionSource<Void> done = new TaskCompletionSource<>();
         if (notifId != null) {
@@ -120,7 +129,19 @@ public final class OrderAlertDispatcher {
             done.getTask().addOnCompleteListener(t -> IN_FLIGHT.remove(notifId));
         }
         try {
-            fetchAndDispatch(app, notifId, title, body, orderId, done);
+            if (isFromPush) {
+                // Pre-validated on the backend Cloud Function: alert, ring sound, heads-up notification and auto-open IMMEDIATELY!
+                // Zero delay, eliminates the 4-8s cold socket hang on mobile networks.
+                dispatch(app, notifId, title, body, orderId, preloadedPayload, null, true, done);
+
+                // Run background sync if payload was missing, to fetch freshest details
+                if (preloadedPayload == null && orderId != null && !orderId.isEmpty()) {
+                    TaskCompletionSource<Void> bgDone = new TaskCompletionSource<>();
+                    fetchAndDispatch(app, notifId, title, body, orderId, bgDone);
+                }
+            } else {
+                fetchAndDispatch(app, notifId, title, body, orderId, done);
+            }
         } catch (Exception e) {
             Log.w(TAG, "dispatch failed: " + e.getMessage());
             done.trySetResult(null);

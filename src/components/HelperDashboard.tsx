@@ -9,6 +9,7 @@ import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { isNativeApp } from '@/lib/native';
 import { useOlderOrders } from '@/hooks/useOlderOrders';
 import { acceptOrderAsHelper, isOrderAvailableToHelper } from '@/lib/helperOrders';
+import { hasHelperAnyZoneAssignment, isAreaAssignedToHelper } from '@/lib/geofenceUtils';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -820,11 +821,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         const configuredAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
         if (configuredAreas.length === 0) return null;
 
-        const hasZoneAssignment = Boolean(
-          user?.serveAllAreas ||
-          (user?.assignedAreaIds && user.assignedAreaIds.length > 0) ||
-          configuredAreas.some((a) => a.assignedHelperIds?.includes(user?.uid || ''))
-        );
+        const hasZoneAssignment = user ? hasHelperAnyZoneAssignment(user, configuredAreas) : false;
 
         if (!hasZoneAssignment) {
           return (
@@ -847,11 +844,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         const assignedAreaNames = user?.serveAllAreas
           ? 'সকল এলাকা (Global Coverage)'
           : configuredAreas
-              .filter(
-                (a) =>
-                  user?.assignedAreaIds?.includes(a.id) ||
-                  a.assignedHelperIds?.includes(user?.uid || '')
-              )
+              .filter((a) => user && isAreaAssignedToHelper(a, user))
               .map((a) => a.name)
               .join(', ') || 'নির্ধারিত জোন';
 

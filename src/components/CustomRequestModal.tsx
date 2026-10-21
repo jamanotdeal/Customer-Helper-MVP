@@ -29,6 +29,7 @@ interface CustomRequestModalProps {
   initialService?: string;
   initialDescription?: string;
   onOrderCreated?: (order: Order) => void;
+  onSelectService?: (service: string) => void;
 }
 
 const getServiceIcon = (svcName: string) => {
@@ -47,6 +48,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
   initialService,
   initialDescription,
   onOrderCreated,
+  onSelectService,
 }) => {
   const { user, openAuthModal, updateCustomerPreferences } = useAuth();
   const { showAlert, showConfirm } = useModal();
@@ -54,7 +56,14 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
   const [services, setServices] = useState<string[]>(() => {
     return fallbackStore.pricingSettings.services || DEFAULT_SERVICES;
   });
-  const [selectedService, setSelectedService] = useState(initialService || '');
+  const [selectedService, setSelectedService] = useState<string>(() => {
+    if (initialService) return initialService;
+    try {
+      return localStorage.getItem('customer_selected_service') || '';
+    } catch {
+      return '';
+    }
+  });
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
@@ -105,9 +114,30 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
 
   useEffect(() => {
     if (initialService !== undefined) {
-      setSelectedService(initialService);
+      if (initialService) {
+        setSelectedService(initialService);
+      } else {
+        try {
+          const saved = localStorage.getItem('customer_selected_service');
+          if (saved) setSelectedService(saved);
+        } catch {}
+      }
     }
   }, [initialService]);
+
+  const handleSelectServiceItem = (svc: string) => {
+    setSelectedService(svc);
+    setIsDropdownOpen(false);
+    try {
+      if (svc) {
+        localStorage.setItem('customer_selected_service', svc);
+      }
+    } catch {}
+    if (onSelectService) {
+      onSelectService(svc);
+    }
+    if (error) setError('');
+  };
 
   useEffect(() => {
     if (initialDescription !== undefined) {
@@ -167,7 +197,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
 
     if (!selectedService || !selectedService.trim()) {
       setError('সার্ভিস নির্বাচন করা বাধ্যতামূলক। অনুগ্রহ করে একটি সার্ভিস বেছে নিন।');
-      setIsDropdownOpen(true);
+      openDropdown();
       return;
     }
 
@@ -504,9 +534,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
                           role="option"
                           aria-selected={isSelected}
                           onClick={() => {
-                            setSelectedService(svc);
-                            setIsDropdownOpen(false);
-                            if (error) setError('');
+                            handleSelectServiceItem(svc);
                           }}
                           className={`w-full flex items-center justify-between px-3.5 py-2.5 text-left transition-colors cursor-pointer group ${isSelected
                             ? 'bg-emerald-50/80 text-emerald-950 font-black'

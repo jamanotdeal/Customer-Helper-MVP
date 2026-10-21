@@ -277,19 +277,14 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
           }`}
           ref={dropdownRef}
         >
-          {/* Animated Tooltip Bubble pointing to the dropdown */}
+          {/* Animated Tooltip Bubble pointing to the dropdown (Contained to prevent horizontal scrolling) */}
           {isHighlighted && (
-            <div className="absolute -top-10 sm:-top-11 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-bounce">
-              <div className="bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 text-amber-950 font-black text-[11px] sm:text-xs px-3.5 py-1.5 rounded-full shadow-xl border-2 border-amber-200 flex items-center gap-1.5 whitespace-nowrap">
-                <span>{currentService ? 'সার্ভিস পরিবর্তন করতে এখানে চাপুন' : 'সার্ভিস বেছে নিতে এখানে চাপুন'}</span>
-                <span className="text-sm">👇</span>
+            <div className="absolute -top-9 sm:-top-10 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-bounce max-w-[calc(100vw-32px)]">
+              <div className="bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 text-amber-950 font-black text-[11px] sm:text-xs px-3 py-1 rounded-full shadow-lg border border-amber-200 flex items-center gap-1.5 truncate">
+                <span className="truncate">{currentService ? 'সার্ভিস পরিবর্তন করতে চাপুন' : 'সার্ভিস বেছে নিতে চাপুন'}</span>
+                <span className="text-xs shrink-0">👇</span>
               </div>
             </div>
-          )}
-
-          {/* Glowing Ping Aura */}
-          {isHighlighted && (
-            <div className="absolute -inset-1 rounded-2xl bg-amber-400/50 animate-ping pointer-events-none" />
           )}
 
           <button
@@ -301,9 +296,9 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
             }}
             className={`relative w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 text-white shadow-md active:scale-[0.99] ${
               isHighlighted
-                ? 'border-amber-300 ring-4 ring-amber-400 ring-offset-2 ring-offset-white shadow-xl shadow-amber-400/40 animate-pulse'
+                ? 'border-amber-300 ring-2 ring-amber-300 shadow-lg shadow-amber-400/30 animate-pulse'
                 : isDropdownOpen
-                ? 'border-emerald-300 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-600/30'
+                ? 'border-emerald-300 ring-2 ring-emerald-400/40 shadow-lg shadow-emerald-600/25'
                 : 'border-emerald-500/80 hover:border-emerald-400 hover:shadow-lg shadow-emerald-600/20'
             }`}
             aria-expanded={isDropdownOpen}
@@ -315,7 +310,7 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
                   <Layers className="w-5 h-5 text-white" />
                 </span>
                 <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-300 opacity-80" />
+                  <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-amber-300 opacity-80" />
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400" />
                 </span>
               </div>

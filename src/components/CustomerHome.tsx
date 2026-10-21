@@ -183,7 +183,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
       (servicesList.includes(textToPass) ||
        ['বাজার-সদাই করে দিন', 'ফার্মেসি থেকে ওষুধ এনে দিন', 'খাবার আনানো', 'মেডিসিন এনে দিন', 'খাবার এনে দিন', 'কাপড় আয়রনে দেওয়া বা আনা', 'পার্সেল পাঠানো বা আনা'].includes(textToPass))
     );
-    const selectedSvc = isServiceMatch ? (textToPass as string) : '';
+    const selectedSvc = isServiceMatch ? (textToPass as string) : (selectedService || '');
     const desc = (!isServiceMatch && typeof textToPass === 'string') ? textToPass : '';
 
     // If items are available in cart, open Cart Summary highlighting custom option
@@ -247,7 +247,7 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   }
 
   return (
-    <div className="space-y-4 pb-28 relative">
+    <div className="space-y-4 pb-28 relative overflow-x-hidden max-w-full">
       {/* ── 0. Out of Service Hours Admin Message Banner (Right Before Slide) ── */}
       {isMounted && !timingStatus.isOpen && (
         <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border-2 border-amber-400/80 shadow-md shadow-amber-500/10 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
@@ -295,12 +295,18 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
           setCustomRequestInitialHint('');
           setCustomRequestInitialDesc('');
         }}
-        initialService={customRequestInitialHint}
+        initialService={customRequestInitialHint || selectedService}
         initialDescription={customRequestInitialDesc}
+        onSelectService={(svc) => {
+          handleSelectService(svc);
+        }}
         onOrderCreated={(order) => {
           setShowCustomRequestModal(false);
           setCustomRequestInitialHint('');
           setCustomRequestInitialDesc('');
+          if (order.service) {
+            handleSelectService(order.service);
+          }
           setSelectedOrderId(order.id);
         }}
       />

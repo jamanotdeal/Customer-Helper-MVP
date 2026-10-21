@@ -3775,6 +3775,28 @@ class FallbackStore {
           next = { ...next, isHelper: true, helperType: targetType };
           changed = true;
         }
+
+        // Sync assigned areas from approved application if not set on user
+        const appAreas = approved.assignedAreaIds || (approved.preferredAreaId ? [approved.preferredAreaId] : []);
+        if (appAreas.length > 0 && (!next.assignedAreaIds || next.assignedAreaIds.length === 0)) {
+          next = { ...next, assignedAreaIds: appAreas };
+          changed = true;
+        }
+      }
+
+      // Sync any area where this helper is explicitly in assignedHelperIds
+      if (next.isHelper || next.role === 'helper') {
+        const fleetAreaIds = (this.pricingSettings.allowedDeliveryAreas || [])
+          .filter((a) => a.assignedHelperIds?.includes(next.uid))
+          .map((a) => a.id);
+        if (fleetAreaIds.length > 0) {
+          const currentAreas = next.assignedAreaIds || [];
+          const mergedAreas = Array.from(new Set([...currentAreas, ...fleetAreaIds]));
+          if (mergedAreas.length !== currentAreas.length) {
+            next = { ...next, assignedAreaIds: mergedAreas };
+            changed = true;
+          }
+        }
       }
     } catch (e: any) {
       console.warn('[Firestore] syncApprovedRolesForUser helper note:', e?.message || e);
@@ -5098,12 +5120,17 @@ class FallbackStore {
       }
     }
 
-    // Product cost addition / update notification to customer (suppressed if updated by helper)
+    // Order is only considered accepted if it has moved past PENDING and has a helper assigned
+    const isOrderAccepted = updated.status !== 'PENDING' && !!updated.helperId;
+
+    // Product cost addition / update notification to customer
+    // Suppressed if updated by customer themselves, or before order is accepted by a helper
     if (
       updated.productCost !== undefined &&
       existing.productCost !== updated.productCost &&
       updated.customerId &&
-      updated.lastEditedBy !== 'helper'
+      updated.lastEditedBy !== 'customer' &&
+      isOrderAccepted
     ) {
       this.addNotification({
         id: coalescedNotifId('cost', updated.id),
@@ -5118,12 +5145,13 @@ class FallbackStore {
       });
     }
 
-    // Delivery fee update notification to customer & helper (customer notification suppressed if updated by helper)
+    // Delivery fee update notification to customer & helper
+    // Suppressed if updated by customer themselves, or before order is accepted by a helper
     if (
       existing.deliveryFee !== undefined &&
       (existing.deliveryFee !== updated.deliveryFee || existing.originalDeliveryFee !== updated.originalDeliveryFee)
     ) {
-      if (updated.customerId && updated.lastEditedBy !== 'helper') {
+      if (updated.customerId && updated.lastEditedBy !== 'customer' && isOrderAccepted) {
         this.addNotification({
           id: coalescedNotifId('fee-change', updated.id),
           userId: updated.customerId,
@@ -5138,7 +5166,7 @@ class FallbackStore {
       }
 
       const helperTarget = updated.helperId || existing.helperId;
-      if (helperTarget) {
+      if (helperTarget && isOrderAccepted) {
         this.addNotification({
           id: coalescedNotifId('fee-change-hlp', updated.id),
           userId: helperTarget,
@@ -5154,14 +5182,12 @@ class FallbackStore {
     }
 
     // Customer edit notification to helper
+    // Suppressed before order is accepted by a helper: an unassigned/pending order update is seen in the open list
     if (
       updated.lastEditedBy === 'customer' &&
-      existing.lastEditedAt !== updated.lastEditedAt
+      existing.lastEditedAt !== updated.lastEditedAt &&
+      isOrderAccepted
     ) {
-      // The assigned helper only. An unassigned order used to be broadcast to
-      // every helper on each customer edit — and when the edit raced an
-      // accept, every helper was alerted about an order already taken. Helpers
-      // browsing open orders see the edit in the list itself.
       const helperTarget = updated.helperId;
       if (helperTarget) this.addNotification({
         id: coalescedNotifId('cust-edit', updated.id),

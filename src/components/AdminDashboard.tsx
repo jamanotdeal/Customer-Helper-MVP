@@ -2821,6 +2821,93 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 animate-in fade-in duration-200">
+      {/* Zone Scope & Administration Bar (Between Header and Main Dashboard Block) */}
+      <div className="bg-white/90 backdrop-blur-md border border-purple-200/80 rounded-2xl p-3 sm:px-4 sm:py-3 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center space-x-2.5 min-w-0">
+          <div className="p-2 rounded-xl bg-purple-50 text-purple-700 shrink-0 border border-purple-200/60 shadow-xs">
+            <MapPin className="w-4 h-4 text-purple-700" />
+          </div>
+          <div className="min-w-0">
+            <span className="text-[10px] font-black text-purple-700 uppercase tracking-wider block">
+              {isSuperAdmin ? 'অ্যাডমিন জোন কন্ট্রোল (Zone Scope)' : 'আপনার বরাদ্দকৃত সার্ভিস এলাকা (Assigned Zone)'}
+            </span>
+            {isSuperAdmin ? (
+              <span className="text-xs font-extrabold text-gray-900 block truncate">
+                {selectedZoneFilter === 'ALL'
+                  ? `🌐 সব জোন সক্রিয় (${allowedDeliveryAreas.length}টি এলাকা)`
+                  : `📍 নির্বাচিত জোন: ${allowedDeliveryAreas.find((a) => a.id === selectedZoneFilter)?.name || selectedZoneFilter}`}
+              </span>
+            ) : assignedZoneNames ? (
+              <span className="text-xs font-extrabold text-gray-900 block truncate">
+                📍 {assignedZoneNames}
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-red-600 block">
+                ⚠️ কোনো জোন বরাদ্দ করা হয়নি (No Zone Assigned)
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Dropdown Selector / Badges */}
+        <div className="flex items-center space-x-2 self-start sm:self-center shrink-0">
+          {isSuperAdmin ? (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-950 text-xs font-black shadow-xs">
+              <span className="text-[11px] text-purple-700 font-bold hidden xs:inline">ফিল্টার:</span>
+              <select
+                value={selectedZoneFilter}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedZoneFilter(val);
+                  fallbackStore.setAdminZoneFilter(val);
+                }}
+                className="bg-transparent text-purple-950 font-black text-xs focus:outline-none cursor-pointer pr-1"
+              >
+                <option value="ALL">🌐 সব জোন (All Zones - {allowedDeliveryAreas.length})</option>
+                {allowedDeliveryAreas.map((area) => (
+                  <option key={area.id} value={area.id}>
+                    📍 {area.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            adminAssignedAreaIds.length > 1 ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs font-black shadow-xs">
+                <span className="text-[11px] text-emerald-700 font-bold">জোন ফিল্টার:</span>
+                <select
+                  value={selectedZoneFilter}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedZoneFilter(val);
+                    fallbackStore.setAdminZoneFilter(val);
+                  }}
+                  className="bg-transparent text-emerald-950 font-black text-xs focus:outline-none cursor-pointer pr-1"
+                >
+                  <option value="ALL">🌐 সকল নির্ধারিত জোন ({adminAssignedAreaIds.length})</option>
+                  {adminAssignedAreaIds.map((id) => {
+                    const a = allowedDeliveryAreas.find((area) => area.id === id);
+                    return (
+                      <option key={id} value={id}>
+                        📍 {a?.name || id}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            ) : adminAssignedAreaIds.length === 1 ? (
+              <span className="px-3 py-1 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-black">
+                জোন সক্রিয়
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full bg-red-100 border border-red-300 text-red-800 text-xs font-black">
+                অ্যাসাইনমেন্ট আবশ্যক
+              </span>
+            )
+          )}
+        </div>
+      </div>
+
       {/* Top Banner & Header */}
       <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-purple-900 rounded-3xl p-6 text-white shadow-xl shadow-purple-950/10 border border-purple-800/30">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -11869,14 +11956,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             setEditingArea(null);
           }}
           onSaveArea={async (savedArea, assignedHelperIds, allHelpers, assignedAdminIds) => {
+            const finalSavedArea: AllowedAreaPolygon = {
+              ...savedArea,
+              allHelpersAssigned: Boolean(allHelpers),
+              assignedHelperIds: allHelpers ? [] : (assignedHelperIds || []),
+              assignedAdminIds: assignedAdminIds || [],
+            };
+
             const updatedAreas = (() => {
-              const idx = allowedDeliveryAreas.findIndex((a) => a.id === savedArea.id);
+              const idx = allowedDeliveryAreas.findIndex((a) => a.id === finalSavedArea.id);
               if (idx > -1) {
                 const next = [...allowedDeliveryAreas];
-                next[idx] = savedArea;
+                next[idx] = finalSavedArea;
                 return next;
               }
-              return [...allowedDeliveryAreas, savedArea];
+              return [...allowedDeliveryAreas, finalSavedArea];
             })();
 
             setAllowedDeliveryAreas(updatedAreas);

@@ -273,12 +273,12 @@ async function addStoreAccounts(db, recipients, notif) {
 }
 
 /** Drops helpers outside the dispatch radius for a new-order broadcast. */
-async function applyGeofence(db, recipients, notif) {
+async function applyGeofence(db, recipients, notif, existingOrderSnap = null) {
   if (notif.type !== 'new_order') return recipients;
   if (!HELPER_GROUPS.has(notif.userId)) return recipients;
   if (!notif.orderId) return recipients;
 
-  const orderSnap = await db.doc(`orders/${notif.orderId}`).get();
+  const orderSnap = existingOrderSnap || await db.doc(`orders/${notif.orderId}`).get();
   if (!orderSnap.exists) return recipients; // Cannot verify — a missed order costs more than a spurious alert.
   const order = orderSnap.data();
 
@@ -728,7 +728,7 @@ function clip(text, max) {
  * `createdAtMs` (server time the notification was written) and `sentAt` (when
  * this function handed it to FCM) let the phone log how late it arrived.
  */
-function buildData(notifId, notif, timing = {}) {
+function buildData(notifId, notif, timing = {}, orderData = null) {
   const data = {
     tag: notifId,
     title: clip(notif.title || 'Jamanot', MAX_TITLE_CHARS),
@@ -739,6 +739,27 @@ function buildData(notifId, notif, timing = {}) {
   if (notif.orderId) data.orderId = String(notif.orderId);
   if (timing.createdAtMs) data.createdAtMs = String(timing.createdAtMs);
   if (timing.sentAt) data.sentAt = String(timing.sentAt);
+  if (orderData && typeof orderData === 'object') {
+    try {
+      const compactOrder = {
+        id: String(notif.orderId),
+        title: orderData.title || '',
+        status: orderData.status || '',
+        items: Array.isArray(orderData.items) ? orderData.items : [],
+        pickupLocation: orderData.pickupLocation || null,
+        deliveryLocation: orderData.deliveryLocation || null,
+        deliveryFee: orderData.deliveryFee || 0,
+        productCost: orderData.productCost || 0,
+        additionalNote: orderData.additionalNote || '',
+        customerPhone: orderData.customerPhone || '',
+        createdAt: orderData.createdAt || '',
+      };
+      const json = JSON.stringify({ order: compactOrder });
+      if (json.length < 2500) {
+        data.orderPayload = json;
+      }
+    } catch (_) {}
+  }
   return data;
 }
 
@@ -825,9 +846,8 @@ exports.pushOnNotificationCreate = onDocumentCreated(
   {
     document: 'notifications/{notifId}',
     region: REGION,
-    // Cost guardrails. The work per notification is a few Firestore reads and
-    // one FCM call, so the smallest instance is plenty, and capping instances
-    // means a burst of writes can never scale this into a surprise bill.
+    // Keep 1 instance warm to eliminate 3-8s cold-start delays so pushes fire in milliseconds
+    minInstances: 1,
     memory: '256MiB',
     maxInstances: 10,
     timeoutSeconds: 60,
@@ -877,9 +897,16 @@ exports.pushOnNotificationCreate = onDocumentCreated(
     // removed here, before it can become a push or a tray entry.
     if (await suppressDuplicateDedicated(db, notifId, notif)) return;
 
-    let recipients = await resolveRecipients(db, notif.userId);
-    recipients = await addStoreAccounts(db, recipients, notif);
-    recipients = await applyGeofence(db, recipients, notif);
+    // Parallelize recipient resolution & order fetching for new orders to eliminate sequential DB wait
+    const isNewOrder = notif.type === 'new_order' && notif.orderId && HELPER_GROUPS.has(notif.userId);
+    const [rawRecipients, orderSnap] = await Promise.all([
+      resolveRecipients(db, notif.userId),
+      isNewOrder ? db.doc(`orders/${notif.orderId}`).get().catch(() => null) : Promise.resolve(null),
+    ]);
+
+    let recipients = await addStoreAccounts(db, rawRecipients, notif);
+    recipients = await applyGeofence(db, recipients, notif, orderSnap);
+    const orderData = orderSnap && orderSnap.exists ? orderSnap.data() : null;
     const resolvedAt = Date.now();
 
     // One device token can belong to several accounts (a shared phone); send once
@@ -901,10 +928,26 @@ exports.pushOnNotificationCreate = onDocumentCreated(
 
     const sentAt = Date.now();
     const message = {
-      data: buildData(notifId, notif, { createdAtMs, sentAt }),
+      data: buildData(notifId, notif, { createdAtMs, sentAt }, orderData),
       android: {
-        priority: 'high', // Wakes an idle or app-standby device.
+        priority: 'high', // Wakes an idle or app-standby device immediately.
         ttl: TTL_MS,
+      },
+      webpush: {
+        headers: {
+          Urgency: 'high',
+        },
+        notification: {
+          title: clip(notif.title || 'Jamanot', MAX_TITLE_CHARS),
+          body: clip(notif.body, MAX_BODY_CHARS),
+          icon: '/Jamanot-Logo.png',
+          badge: '/Jamanot-Logo.png',
+          tag: notifId,
+          renotify: true,
+        },
+        fcmOptions: {
+          link: '/',
+        },
       },
       apns: {
         headers: { 'apns-priority': '10' },

@@ -117,12 +117,53 @@ export function getPolygonCenter(coordinates: { lat: number; lng: number }[]): {
 /**
  * Determines whether a helper is authorized to receive a notification & view an order
  * based on mandatory sub-area / zone assignments.
+/**
+ * Checks whether an area includes / is assigned to a specific helper:
+ * - If the helper has serveAllAreas enabled
+ * - If the area's ID is in helper.assignedAreaIds
+ * - If the helper's UID is in area.assignedHelperIds
+ * - If the area allows all helpers (allHelpersAssigned is true or not false when assignedHelperIds is empty)
+ */
+export function isAreaAssignedToHelper(
+  area: AllowedAreaPolygon,
+  helper: UserProfile
+): boolean {
+  if (!helper) return false;
+  if (helper.serveAllAreas === true) return true;
+  if (helper.assignedAreaIds && helper.assignedAreaIds.includes(area.id)) return true;
+  if (area.assignedHelperIds && area.assignedHelperIds.includes(helper.uid)) return true;
+  // If the area allows all helpers (allHelpersAssigned is true or unset/not false when assignedHelperIds is empty)
+  if (
+    area.allHelpersAssigned !== false &&
+    (!area.assignedHelperIds || area.assignedHelperIds.length === 0)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Checks whether a helper has any assigned zones or global coverage across configured areas.
+ */
+export function hasHelperAnyZoneAssignment(
+  helper: UserProfile,
+  areas?: AllowedAreaPolygon[]
+): boolean {
+  if (!helper) return false;
+  if (helper.serveAllAreas === true) return true;
+  if (helper.assignedAreaIds && helper.assignedAreaIds.length > 0) return true;
+  if (!areas || areas.length === 0) return true;
+  return areas.some((a) => isAreaAssignedToHelper(a, helper));
+}
+
+/**
+ * Checks whether an order is eligible for a helper based on defined delivery zones.
  *
  * Rules:
  *  1. Helper MUST be assigned to at least one zone (or serveAllAreas === true).
- *     If a helper has NO assigned zone → they get NO requests ("otherwise no request will gt").
+ *     If a helper has NO assigned zone → they get NO requests.
  *  2. Helper only receives orders whose pickup or delivery location falls within
- *     one of their assigned zones.
+ *     one of their assigned zones (including areas where all helpers are allowed).
  *  3. helper.serveAllAreas === true grants global eligibility.
  */
 export function isHelperEligibleForOrder(
@@ -131,6 +172,9 @@ export function isHelperEligibleForOrder(
   areas?: AllowedAreaPolygon[],
   areasEnabled?: boolean
 ): boolean {
+  if (areasEnabled === false) {
+    return true;
+  }
   // If geofencing / sub-areas are not configured or empty, no zones exist yet
   if (!areas || areas.length === 0) {
     return true;
@@ -141,13 +185,8 @@ export function isHelperEligibleForOrder(
     return true;
   }
 
-  // ── Requirement: Helper must be assigned to a zone ──────────────────────────
-  const hasPersonalAssignment = Boolean(helper.assignedAreaIds && helper.assignedAreaIds.length > 0);
-  const isAssignedInAreaFleet = areas.some((a) => a.assignedHelperIds?.includes(helper.uid));
-  const hasAnyAssignment = hasPersonalAssignment || isAssignedInAreaFleet;
-
-  // Unassigned helpers receive NO orders
-  if (!hasAnyAssignment) {
+  // ── Requirement: Helper must be assigned to at least one zone ────────────────
+  if (!hasHelperAnyZoneAssignment(helper, areas)) {
     return false;
   }
 
@@ -155,16 +194,17 @@ export function isHelperEligibleForOrder(
 
   // If order was explicitly tagged with an areaId
   if (order.areaId) {
-    if (helper.assignedAreaIds?.includes(order.areaId)) return true;
     const targetArea = areas.find((a) => a.id === order.areaId);
-    if (targetArea?.assignedHelperIds?.includes(helper.uid)) return true;
+    if (targetArea && isAreaAssignedToHelper(targetArea, helper)) return true;
+    if (helper.assignedAreaIds?.includes(order.areaId)) return true;
   }
   if (order.areaIds && order.areaIds.length > 0) {
-    const hasOverlap = order.areaIds.some(
-      (aid) =>
-        helper.assignedAreaIds?.includes(aid) ||
-        areas.find((a) => a.id === aid)?.assignedHelperIds?.includes(helper.uid)
-    );
+    const hasOverlap = order.areaIds.some((aid) => {
+      if (helper.assignedAreaIds?.includes(aid)) return true;
+      const targetArea = areas.find((a) => a.id === aid);
+      if (targetArea && isAreaAssignedToHelper(targetArea, helper)) return true;
+      return false;
+    });
     if (hasOverlap) return true;
   }
 
@@ -174,15 +214,7 @@ export function isHelperEligibleForOrder(
   }
 
   // Helper is eligible if the order falls into at least one of their assigned zones
-  return matchingAreas.some((area) => {
-    if (area.assignedHelperIds && area.assignedHelperIds.includes(helper.uid)) {
-      return true;
-    }
-    if (helper.assignedAreaIds && helper.assignedAreaIds.includes(area.id)) {
-      return true;
-    }
-    return false;
-  });
+  return matchingAreas.some((area) => isAreaAssignedToHelper(area, helper));
 }
 
 /**
@@ -220,11 +252,12 @@ export function isHelperInZone(
   zoneId: string,
   areas?: AllowedAreaPolygon[]
 ): boolean {
+  if (!helper) return false;
   if (helper.serveAllAreas) return true;
   if (helper.assignedAreaIds && helper.assignedAreaIds.includes(zoneId)) return true;
   if (areas) {
     const area = areas.find((a) => a.id === zoneId);
-    if (area?.assignedHelperIds?.includes(helper.uid)) return true;
+    if (area && isAreaAssignedToHelper(area, helper)) return true;
   }
   return false;
 }
@@ -304,7 +337,16 @@ export function isUserInZoneScope(
 
   // Area polygon helper or admin assignment
   if (areas && areas.length > 0) {
-    if (areas.some((a) => zoneIds.includes(a.id) && (a.assignedHelperIds?.includes(user.uid) || a.assignedAdminIds?.includes(user.uid)))) {
+    if (
+      areas.some((a) => {
+        if (!zoneIds.includes(a.id)) return false;
+        if (a.assignedAdminIds?.includes(user.uid)) return true;
+        if (user.isHelper || user.role === 'helper') {
+          return isAreaAssignedToHelper(a, user);
+        }
+        return false;
+      })
+    ) {
       return true;
     }
   }

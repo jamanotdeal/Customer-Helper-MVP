@@ -156,8 +156,9 @@ public class JamanotMessagingService extends FirebaseMessagingService {
             // FCM worker thread) so the process isn't frozen or reclaimed
             // before the app has been opened — including when the listener got
             // there first (see onNewOrderPush).
+            String orderPayload = data.get("orderPayload");
             try {
-                Tasks.await(OrderAlertDispatcher.onNewOrderPush(this, notifId, title, body, orderId),
+                Tasks.await(OrderAlertDispatcher.onNewOrderPush(this, notifId, title, body, orderId, orderPayload),
                         DISPATCH_TIMEOUT_S, TimeUnit.SECONDS);
             } catch (Exception e) {
                 Log.w(TAG, "new_order dispatch still pending: " + e.getMessage());
