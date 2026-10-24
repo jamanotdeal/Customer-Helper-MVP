@@ -11,7 +11,7 @@ import {
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
-  ShoppingBag, Store, AlertCircle,
+  ShoppingBag, Store, AlertCircle, UserX,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
 import { ServiceIcon } from './ServiceIcon';
@@ -212,12 +212,34 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   }, [order?.id, order?.productCost, effectiveProductCost, validShopOrders]);
 
   // Timer: check every 30s if the customer should see "Admin Accepted" banner.
+  // For blocked user orders: after 5 minutes of placing order, always show "No available Helper found"
+  const [isBlocked5MinsPassed, setIsBlocked5MinsPassed] = useState<boolean>(() => {
+    const current = fallbackStore.orders.get(orderId);
+    if (!current?.isBlockedUserOrder || !current?.createdAt) return false;
+    return (Date.now() - new Date(current.createdAt).getTime()) >= 5 * 60 * 1000;
+  });
+
+  useEffect(() => {
+    const checkBlockedStatus = () => {
+      const current = fallbackStore.orders.get(orderId);
+      if (!current?.isBlockedUserOrder || !current?.createdAt) {
+        setIsBlocked5MinsPassed(false);
+        return;
+      }
+      const passed = (Date.now() - new Date(current.createdAt).getTime()) >= 5 * 60 * 1000;
+      setIsBlocked5MinsPassed(passed);
+    };
+    checkBlockedStatus();
+    const interval = setInterval(checkBlockedStatus, 10000);
+    return () => clearInterval(interval);
+  }, [orderId, order?.createdAt, order?.isBlockedUserOrder]);
+
   // Also re-checked the moment the order changes: a helper accepting it used to
   // leave "Admin finding helper for you..." up until the next tick.
   useEffect(() => {
     const checkAdminAccepted = () => {
       const current = fallbackStore.orders.get(orderId);
-      if (!current || current.helperId || current.status !== 'PENDING') {
+      if (!current || current.helperId || current.status !== 'PENDING' || current.isBlockedUserOrder) {
         setShowAdminAccepted(false);
         return;
       }
@@ -229,7 +251,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     checkAdminAccepted(); // run immediately
     const interval = setInterval(checkAdminAccepted, 30000);
     return () => clearInterval(interval);
-  }, [orderId, order?.status, order?.helperId]);
+  }, [orderId, order?.status, order?.helperId, order?.isBlockedUserOrder]);
 
   // If user is not logged in or logs out, automatically close all modals and exit details view
   useEffect(() => {
@@ -338,9 +360,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     },
     {
       status: 'ACCEPTED',
-      label: showAdminAccepted ? 'Admin Accepted' : 'Helper Assigned',
-      icon: UserCheck,
-      desc: showAdminAccepted ? 'Admin finding helper for you...' : 'Helper is heading to pickup'
+      label: order.isBlockedUserOrder && isBlocked5MinsPassed
+        ? 'No Helper'
+        : showAdminAccepted
+          ? 'Admin Accepted'
+          : 'Helper Assigned',
+      icon: order.isBlockedUserOrder && isBlocked5MinsPassed ? UserX : UserCheck,
+      desc: order.isBlockedUserOrder && isBlocked5MinsPassed
+        ? 'No available Helper found'
+        : showAdminAccepted
+          ? 'Admin finding helper for you...'
+          : 'Helper is heading to pickup',
     },
     { status: 'PURCHASED_EXECUTED', label: 'Processing', icon: Package, desc: 'Items collected from shop' },
     { status: 'ON_THE_WAY', label: 'On The Way', icon: Truck, desc: 'Coming to your location' },
@@ -639,6 +669,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         {!isCanceled && (() => {
           const helperStepState = getStepState('ACCEPTED');
           const showHelperDetails = (helperStepState === 'CURRENT' || helperStepState === 'COMPLETED') && Boolean(order.helperId || order.helperName || showAdminAccepted);
+          const showBlockedBadge = Boolean(order.isBlockedUserOrder) && isBlocked5MinsPassed && order.status === 'PENDING';
 
           return (
             <div className="bg-white rounded-3xl border border-gray-100 px-2.5 sm:px-4 py-3 shadow-soft">
@@ -680,9 +711,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         {step.label}
                       </p>
 
-                      {/* Indicator pointing towards helper info */}
-                      {step.status === 'ACCEPTED' && showHelperDetails && (
-                        <div className="flex items-center justify-center mt-0.5 text-emerald-600">
+                      {/* Indicator pointing towards helper info or blocked badge */}
+                      {step.status === 'ACCEPTED' && (showHelperDetails || showBlockedBadge) && (
+                        <div className={`flex items-center justify-center mt-0.5 ${showBlockedBadge ? 'text-red-500' : 'text-emerald-600'}`}>
                           <ChevronDown className="w-3 h-3" />
                         </div>
                       )}
@@ -691,8 +722,29 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 })}
               </div>
 
-              {/* Helper detail card (shown when helper assigned) */}
-              {showHelperDetails && (
+              {/* Blocked customer: "No available Helper found" badge (only after 5 minutes) */}
+              {showBlockedBadge && (
+                <div className="mt-2.5 relative animate-in fade-in duration-300">
+                  <div className="absolute -top-1.5 left-[25%] -translate-x-1/2 w-3 h-3 bg-red-50 border-t border-l border-red-200 rotate-45 z-10" />
+                  <div className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-red-50 border border-red-200 relative z-0">
+                    <div className="w-8 h-8 rounded-full bg-red-100 border border-red-300 text-red-600 flex items-center justify-center shrink-0">
+                      <UserX className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] font-bold text-red-700 uppercase tracking-wider leading-none mb-1">Helper Search</p>
+                      <p className="font-extrabold text-xs text-red-900 leading-tight">No available Helper found</p>
+                      <p className="text-[10px] text-red-600 font-medium mt-0.5">আপনার এলাকায় এই মুহূর্তে কোনো হেল্পার পাওয়া যাচ্ছে না</p>
+                    </div>
+                    <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500 text-white text-[10px] font-extrabold shadow-xs">
+                      <AlertCircle className="w-3 h-3" />
+                      <span>Not Found</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Helper detail card (shown when helper assigned and not a blocked order) */}
+              {showHelperDetails && !showBlockedBadge && (
                 <div className="mt-2.5 relative">
                   {/* Indicator caret pointing to Helper Assigned step */}
                   <div className="absolute -top-1.5 left-[25%] -translate-x-1/2 w-3 h-3 bg-gray-50 border-t border-l border-gray-200/80 rotate-45 z-10" />

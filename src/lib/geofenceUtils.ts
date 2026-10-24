@@ -208,7 +208,13 @@ export function isHelperEligibleForOrder(
     if (hasOverlap) return true;
   }
 
-  // If order coordinates do not fall into any defined area polygon:
+  // If the order does not belong to any defined area polygon or zone tag:
+  // It is an unzoned order, so any active assigned helper can receive/handle it.
+  if (!order.areaId && (!order.areaIds || order.areaIds.length === 0) && matchingAreas.length === 0) {
+    return true;
+  }
+
+  // If order was tagged with areas but helper does not serve them, and order coordinates do not fall into any defined area polygon:
   if (matchingAreas.length === 0) {
     return false;
   }

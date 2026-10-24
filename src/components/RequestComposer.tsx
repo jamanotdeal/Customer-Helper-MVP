@@ -397,10 +397,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       openAuthModal();
       return;
     }
-    if (user.isBlocked) {
-      setShowBlockedModal(true);
-      return;
-    }
     setIsExpanded(true);
   };
 
@@ -412,11 +408,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
 
     if (!isUserAuthenticated(user)) {
       openAuthModal();
-      return;
-    }
-
-    if (user.isBlocked) {
-      setShowBlockedModal(true);
       return;
     }
 
@@ -747,21 +738,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
 
   return (
     <div className="w-full bg-white rounded-3xl shadow-xl shadow-emerald-950/5 border border-emerald-100 p-4 sm:p-6 transition-all duration-300">
-      {user?.isBlocked && (
-        <div
-          onClick={() => setShowBlockedModal(true)}
-          className="mb-4 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start space-x-3 cursor-pointer hover:bg-red-100/70 transition-colors shadow-xs"
-        >
-          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-          <div className="space-y-0.5">
-            <h4 className="font-extrabold text-xs sm:text-sm text-red-950">আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে</h4>
-            <p className="text-[11px] text-red-800 font-medium">
-              নিরাপত্তা বা নীতিমালার কারণে নতুন রিকোয়েস্ট তৈরি করা সাময়িকভাবে বন্ধ আছে। বিস্তারিত জানতে ক্লিক করুন।
-            </p>
-          </div>
-        </div>
-      )}
-
       {user && !timingStatus.isOpen ? (
         <div className="text-center py-6 px-4 space-y-4 animate-in fade-in duration-300">
           <div className="inline-flex p-4 rounded-3xl bg-amber-50 border border-amber-200 text-amber-800 shadow-xs">

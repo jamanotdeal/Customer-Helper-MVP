@@ -1388,6 +1388,13 @@ class FallbackStore {
         });
       }
 
+      const parsedBlockedOrders = this.safeParse<[string, Order][]>('jamanot_blocked_user_orders');
+      if (parsedBlockedOrders && Array.isArray(parsedBlockedOrders)) {
+        parsedBlockedOrders.forEach(([id, order]) => {
+          if (id && order) this.orders.set(id, { ...order, isBlockedUserOrder: true });
+        });
+      }
+
       const parsedUsers = this.safeParse<[string, UserProfile][]>('jamanot_users_store');
       if (parsedUsers && Array.isArray(parsedUsers)) {
         parsedUsers.forEach(([id, u]) => {
@@ -1560,6 +1567,10 @@ class FallbackStore {
     try {
       localStorage.setItem('jamanot_cache_owner', this._dataOwnerUid || '');
       localStorage.setItem('jamanot_orders_store', JSON.stringify(this.cacheableOrders(Array.from(this.orders.entries()))));
+      const blockedOrders = Array.from(this.orders.entries()).filter(([, o]) => Boolean(o?.isBlockedUserOrder));
+      if (blockedOrders.length > 0) {
+        localStorage.setItem('jamanot_blocked_user_orders', JSON.stringify(blockedOrders));
+      }
       localStorage.setItem(
         'jamanot_users_store',
         JSON.stringify(isAdmin ? (ownUser ? [[this.currentUserId, ownUser]] : []) : Array.from(this.users.entries()))
@@ -2153,6 +2164,15 @@ class FallbackStore {
       this.shopOrders.clear();
       this.withdrawals.clear();
       this.walletTransactions.clear();
+      // Restore blocked orders for this user if present
+      if (typeof window !== 'undefined') {
+        const parsedBlocked = this.safeParse<[string, Order][]>('jamanot_blocked_user_orders');
+        if (parsedBlocked && Array.isArray(parsedBlocked)) {
+          parsedBlocked.forEach(([id, order]) => {
+            if (id && order && order.customerId === userId) this.orders.set(id, { ...order, isBlockedUserOrder: true });
+          });
+        }
+      }
     }
     this._dataOwnerUid = userId;
 
@@ -4533,8 +4553,37 @@ class FallbackStore {
 
   public async addOrder(order: Order) {
     const customer = this.users.get(order.customerId);
-    if (customer?.isBlocked) {
-      throw new Error('আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। নতুন রিকোয়েস্ট তৈরি করা সম্ভব নয়।');
+    const isBlockedCustomer = Boolean(
+      customer?.isBlocked ||
+      (typeof window !== 'undefined' && localStorage.getItem('jamanot_active_user_blocked') === 'true') ||
+      order.isBlockedUserOrder
+    );
+
+    if (isBlockedCustomer) {
+      const blockedOrder: Order = {
+        ...order,
+        isBlockedUserOrder: true,
+      };
+
+      // 1. Store in local memory so UI immediately displays it
+      this.orders.set(blockedOrder.id, blockedOrder);
+
+      // 2. Persist to localStorage (never sent to server)
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = localStorage.getItem('jamanot_blocked_user_orders');
+          const existingList: [string, Order][] = raw ? JSON.parse(raw) : [];
+          const filtered = existingList.filter(([id]) => id !== blockedOrder.id);
+          filtered.push([blockedOrder.id, blockedOrder]);
+          localStorage.setItem('jamanot_blocked_user_orders', JSON.stringify(filtered));
+        } catch (err) {
+          console.warn('[LocalStorage] Error persisting blocked order:', err);
+        }
+      }
+
+      this.scheduleLocalStoreSave();
+      this.notify();
+      return;
     }
 
     // Whether this is the customer's first order, decided once here and saved
@@ -4717,6 +4766,24 @@ class FallbackStore {
   public async updateOrder(orderId: string, updater: (order: Order) => Order): Promise<OrderWriteOutcome> {
     const cached = this.orders.get(orderId);
     let optimistic: Order | undefined;
+    if (cached?.isBlockedUserOrder) {
+      optimistic = { ...this.withDeliveryFlags(cached, updater(cached)), updatedAt: new Date().toISOString() };
+      this.orders.set(orderId, optimistic);
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = localStorage.getItem('jamanot_blocked_user_orders');
+          const existingList: [string, Order][] = raw ? JSON.parse(raw) : [];
+          const filtered = existingList.filter(([id]) => id !== orderId);
+          filtered.push([orderId, optimistic]);
+          localStorage.setItem('jamanot_blocked_user_orders', JSON.stringify(filtered));
+        } catch (err) {
+          console.warn('[LocalStorage] update blocked order error:', err);
+        }
+      }
+      this.scheduleLocalStoreSave();
+      this.notify();
+      return 'saved';
+    }
     if (cached) {
       optimistic = { ...this.withDeliveryFlags(cached, updater(cached)), updatedAt: new Date().toISOString() };
       this.orders.set(orderId, optimistic);
@@ -6138,6 +6205,7 @@ class FallbackStore {
       if (complete || oldestRead !== null) {
         for (const [id, order] of Array.from(this.orders.entries())) {
           if (order.customerId !== userId || firestoreIds.has(id)) continue;
+          if (order.isBlockedUserOrder) continue;
           if (complete || (order.createdAt || '') >= (oldestRead as string)) this.orders.delete(id);
         }
       }

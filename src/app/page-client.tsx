@@ -94,11 +94,11 @@ export default function PageClient() {
   const showsHelperAlerts = Boolean(user && isHelperUser && !isStoreUser && !isAdminView);
 
   useEffect(() => {
-    if (user?.isBlocked && !hasPromptedBlockedUser) {
+    if (user?.isBlocked && !hasPromptedBlockedUser && (isHelperUser || isStoreUser)) {
       setShowBlockedModal(true);
       setHasPromptedBlockedUser(true);
     }
-  }, [user?.isBlocked, hasPromptedBlockedUser]);
+  }, [user?.isBlocked, hasPromptedBlockedUser, isHelperUser, isStoreUser]);
 
   // An order change that was refused because the order had moved on (or been
   // deleted) since this device last saw it. The store has already put the

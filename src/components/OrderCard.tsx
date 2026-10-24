@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store } from 'lucide-react';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store, UserX } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
 import { calculateDistanceKm } from '@/lib/pricing';
@@ -166,6 +166,22 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     setElapsed(isDone ? getDeliveryDurationText(order) : getElapsedTime(order));
   }, [order, isDone, tick]);
 
+
+  // For blocked user orders: track if 5 minutes have passed since order creation
+  const [isBlocked5MinsPassed, setIsBlocked5MinsPassed] = useState<boolean>(() => {
+    if (!order.isBlockedUserOrder || !order.createdAt) return false;
+    return (Date.now() - new Date(order.createdAt).getTime()) >= 5 * 60 * 1000;
+  });
+
+  useEffect(() => {
+    if (!order.isBlockedUserOrder || !order.createdAt) return;
+    const check = () => {
+      setIsBlocked5MinsPassed((Date.now() - new Date(order.createdAt).getTime()) >= 5 * 60 * 1000);
+    };
+    check();
+    const t = setInterval(check, 10000);
+    return () => clearInterval(t);
+  }, [order.isBlockedUserOrder, order.createdAt]);
 
   // Dynamic card container classes for helper views
   const getHelperCardContainerStyle = () => {
@@ -358,6 +374,18 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-600 text-white font-black shrink-0 shadow-xs">
                 নির্ধারিত সময়ে সক্রিয় হবে
+              </span>
+            </div>
+          )}
+
+          {/* Blocked order badge: shown only after 5 minutes of placing the order */}
+          {order.isBlockedUserOrder && isBlocked5MinsPassed && order.status === 'PENDING' && (
+            <div className="mb-3.5 flex items-center gap-2 p-2.5 rounded-2xl bg-red-50 border border-red-200 animate-in fade-in duration-300">
+              <UserX className="w-4 h-4 text-red-600 shrink-0" />
+              <span className="text-xs font-extrabold text-red-800 leading-tight flex-1">No available Helper found</span>
+              <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-extrabold">
+                <AlertCircle className="w-2.5 h-2.5" />
+                <span>Not Found</span>
               </span>
             </div>
           )}

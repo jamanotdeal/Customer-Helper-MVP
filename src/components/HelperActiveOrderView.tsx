@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderStatus, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem } from '@/types';
+import { Order, OrderStatus, LocationData, Shop, ShopOrder, ShopOrderStatus, ShopOrderItemPrice, OrderEditChange, OrderEditHistoryItem, OrderItem, UserProfile } from '@/types';
 import { fallbackStore, ShopOrderError } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
@@ -354,6 +354,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [storePickerCategory, setStorePickerCategory] = useState('ALL');
   const [cancellingShopOrderId, setCancellingShopOrderId] = useState<string | null>(null);
   const [convertConfirmTarget, setConvertConfirmTarget] = useState<{ sid: string; storeName: string; itemCount: number } | null>(null);
+  const [convertSingleItemTarget, setConvertSingleItemTarget] = useState<{ id: string; name: string; storeName?: string } | null>(null);
   const [orderNowConfirmTarget, setOrderNowConfirmTarget] = useState<{
     sid: string;
     storeName: string;
@@ -451,6 +452,69 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       }));
 
       showAlert('কাস্টম আইটেমে রূপান্তর সফল', `${storeName}-এর পণ্যগুলো কাস্টম আইটেমে যুক্ত করা হয়েছে। আপনি এখন যেকোনো দোকান থেকে কিনতে পারবেন।`, 'success');
+    } catch (err: any) {
+      showAlert('ত্রুটি', 'রূপান্তর করতে সমস্যা হয়েছে: ' + (err?.message || err), 'error');
+    }
+  };
+
+  const handleConvertSingleItemToCustom = async (itemId: string, itemName: string) => {
+    try {
+      const itemToConvert = (order.items || []).find((it) => it.id === itemId);
+      if (!itemToConvert) return;
+
+      const sid = itemToConvert.storeId;
+      if (sid) {
+        // If this was the only remaining item for this store, cancel active shop order
+        const remainingStoreItems = (order.items || []).filter(
+          (it) => it.storeId === sid && it.id !== itemId
+        );
+
+        if (remainingStoreItems.length === 0) {
+          const activeSOs = shopOrders.filter(
+            (so) => so.shopId === sid && so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+          );
+          for (const so of activeSOs) {
+            await fallbackStore.updateShopOrder(
+              so.id,
+              (prev) => ({
+                ...prev,
+                status: 'CANCELED',
+                statusHistory: [
+                  ...(prev.statusHistory || []),
+                  {
+                    status: 'CANCELED',
+                    timestamp: new Date().toISOString(),
+                    actor: order.helperName || 'Helper',
+                    note: `পণ্য (${itemName}) কাস্টমে রূপান্তর করা হয়েছে`,
+                  },
+                ],
+              }),
+              'helper'
+            );
+          }
+        }
+      }
+
+      const updatedItems = (order.items || []).map((it) => {
+        if (it.id === itemId) {
+          return {
+            ...it,
+            isCustom: true,
+            buyFrom: it.storeName || it.buyFrom,
+            storeId: undefined,
+            storeName: undefined,
+          };
+        }
+        return it;
+      });
+
+      await fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        items: updatedItems,
+        updatedAt: new Date().toISOString(),
+      }));
+
+      showAlert('কাস্টম আইটেমে রূপান্তর সফল', `"${itemName}" কাস্টম আইটেমে রূপান্তর করা হয়েছে। আপনি এখন যেকোনো দোকান থেকে কিনতে পারবেন।`, 'success');
     } catch (err: any) {
       showAlert('ত্রুটি', 'রূপান্তর করতে সমস্যা হয়েছে: ' + (err?.message || err), 'error');
     }
@@ -1535,8 +1599,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     window.open(url, '_blank');
   };
 
-  const customerProfile = fallbackStore.users.get(order.customerId);
-  const customerLabels = customerProfile?.labels || [];
+  const [customerUser, setCustomerUser] = useState<UserProfile | null>(() => fallbackStore.users.get(order.customerId) || null);
+
+  useEffect(() => {
+    if (order.customerId) {
+      const existing = fallbackStore.users.get(order.customerId);
+      if (existing) {
+        setCustomerUser(existing);
+      }
+      fallbackStore.getUserForUpdate(order.customerId).then((u) => {
+        if (u) setCustomerUser(u);
+      }).catch((e) => console.warn('[HelperActiveOrderView] load user error:', e));
+    }
+  }, [order.customerId]);
+
+  const customerProfile = customerUser || fallbackStore.users.get(order.customerId);
+  const customerLabels: string[] = customerProfile?.labels || [];
 
   const activeProductCost = useMemo(() => {
     const validSOs = shopOrders.filter((so) => so.parentOrderId === order.id);
@@ -2635,13 +2713,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-gray-900 text-sm">{order.customerName}</span>
-                    {customerLabels.map((lbl, idx) => (
-                      <span key={idx} className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
-                        {lbl}
-                      </span>
-                    ))}
                   </div>
-                  <span className="text-[11px] text-gray-500 mt-0.5 block">
+                  {customerLabels.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {customerLabels.map((lbl, idx) => (
+                        <span key={idx} className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow-xs uppercase tracking-wider flex items-center gap-1">
+                          🏷️ {lbl}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <span className="text-[11px] text-gray-500 mt-1 block">
                     {order.alternativePhone || order.customerPhone ? '📞 Contact visible after acceptance' : 'No contact provided'}
                   </span>
                 </div>
@@ -2844,16 +2926,105 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               : 'bg-white/95 border-gray-200/80 hover:border-gray-300'
                             } ${isDone ? 'cursor-default' : 'cursor-pointer active:scale-[0.99]'}`}
                         >
-                          <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden bg-gray-100 border-gray-200 text-gray-700">
+                          <div
+                            className={`relative w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden transition-all select-none ${
+                              isSelected
+                                ? 'ring-2 ring-amber-500 border-amber-500 shadow-xs'
+                                : isPurchased
+                                  ? 'border-emerald-500 shadow-xs'
+                                  : 'bg-gray-100 border-gray-200'
+                            }`}
+                          >
                             {hasPhoto ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={it.photoUrl!} alt={it.name} className="w-full h-full object-cover" />
                             ) : isCustomItem ? (
-                              <Sparkles className="w-4.5 h-4.5 text-amber-600" />
+                              <Sparkles className="w-5 h-5 text-amber-600" />
                             ) : isPurchased ? (
-                              <Check className="w-4.5 h-4.5 text-emerald-600" />
+                              <Check className="w-5 h-5 text-emerald-600" />
                             ) : (
                               <ServiceIcon service={order.service} className="w-6 h-6 text-emerald-600" />
+                            )}
+
+                            {/* Full-size Checkbox overlay (same size as image/icon) for custom items */}
+                            {isCustomBlock && !isDone && !connectedSO && (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleCustomItemSelection(it.id);
+                                }}
+                                className={`absolute inset-0 w-full h-full rounded-xl flex items-center justify-center cursor-pointer transition-all ${
+                                  isSelected
+                                    ? 'bg-amber-500/90 text-white shadow-inner'
+                                    : hasPhoto
+                                      ? 'bg-black/20 hover:bg-black/30 border-2 border-dashed border-amber-400'
+                                      : 'bg-amber-50/70 hover:bg-amber-100 border-2 border-amber-400'
+                                }`}
+                                title={isSelected ? 'আনচেক করতে ক্লিক করুন' : 'চেক করতে ক্লিক করুন'}
+                              >
+                                {isSelected ? (
+                                  <Check className="w-6 h-6 text-white stroke-[3] drop-shadow-xs" />
+                                ) : (
+                                  <div className="w-5 h-5 rounded-md border-2 border-amber-600 bg-white/90 shadow-xs flex items-center justify-center" />
+                                )}
+                              </div>
+                            )}
+
+                            {/* Full-size Check overlay (same size as image/icon) for purchased items */}
+                            {isPurchased && (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!isDone && parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                                }}
+                                title="আনচেক করতে ক্লিক করুন (Click to uncheck)"
+                                className="absolute inset-0 w-full h-full rounded-xl bg-emerald-600/90 text-white flex items-center justify-center cursor-pointer shadow-inner transition-all group/uncheck"
+                              >
+                                <Check className="w-6 h-6 stroke-[3] group-hover/uncheck:hidden drop-shadow-xs" />
+                                <X className="w-6 h-6 hidden group-hover/uncheck:block drop-shadow-xs" />
+                              </div>
+                            )}
+
+                            {/* Full-size status overlay for store items before store acceptance */}
+                            {!isPurchased && isStoreBlock && !isDone && !groupSOAccepted && (
+                              <div
+                                title="দোকানের অর্ডার আগে পাঠান / Accept হওয়ার পর চেক করা যাবে"
+                                className="absolute inset-0 w-full h-full rounded-xl bg-amber-900/15 backdrop-blur-[0.5px] border border-amber-300 flex items-center justify-center"
+                              >
+                                <Clock className="w-5 h-5 text-amber-700 drop-shadow-xs" />
+                              </div>
+                            )}
+
+                            {/* Full-size check button for store items once store accepted */}
+                            {!isPurchased && isStoreBlock && !isDone && groupSOAccepted && (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                                }}
+                                title="চেক করতে ক্লিক করুন (Click to check)"
+                                className="absolute inset-0 w-full h-full rounded-xl bg-black/10 hover:bg-emerald-500/20 border-2 border-dashed border-gray-300 hover:border-emerald-500 flex items-center justify-center cursor-pointer transition-all group/storecheck"
+                              >
+                                <div className="w-5 h-5 rounded-md border-2 border-gray-400 group-hover/storecheck:border-emerald-600 bg-white/90 shadow-xs flex items-center justify-center transition-colors">
+                                  <Check className="w-3 h-3 text-transparent group-hover/storecheck:text-emerald-600 transition-colors" />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Full-size check button for regular unassigned items */}
+                            {!isPurchased && !isDone && !isCustomBlock && !isStoreBlock && (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                                }}
+                                title="চেক করতে ক্লিক করুন (Click to check)"
+                                className="absolute inset-0 w-full h-full rounded-xl bg-black/10 hover:bg-emerald-500/20 border-2 border-dashed border-gray-300 hover:border-emerald-500 flex items-center justify-center cursor-pointer transition-all group/regcheck"
+                              >
+                                <div className="w-5 h-5 rounded-md border-2 border-gray-400 group-hover/regcheck:border-emerald-600 bg-white/90 shadow-xs flex items-center justify-center transition-colors">
+                                  <Check className="w-3 h-3 text-transparent group-hover/regcheck:text-emerald-600 transition-colors" />
+                                </div>
+                              </div>
                             )}
                           </div>
 
@@ -2905,6 +3076,28 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             ) : null}
 
+                            {/* Convert Single Item to Custom Button */}
+                            {!isCustomItem && !isDone && (
+                              <div className="mt-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConvertSingleItemTarget({
+                                      id: it.id,
+                                      name: it.name,
+                                      storeName: sName,
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[10px] text-amber-800 hover:text-amber-900 font-bold bg-amber-50 hover:bg-amber-100 border border-amber-300/80 px-2 py-0.5 rounded-md transition-all active:scale-95 cursor-pointer"
+                                  title="এই পণ্যটিকে কাস্টম আইটেমে রূপান্তর করুন"
+                                >
+                                  <Sparkles className="w-2.5 h-2.5 text-amber-600" />
+                                  <span>Make Custom</span>
+                                </button>
+                              </div>
+                            )}
+
                             {/* Saved on this phone but not yet confirmed by the server: the store can't see it yet. */}
                             {effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id) && (
                               <div className="mt-1">
@@ -2933,7 +3126,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2.5 shrink-0">
+                          <div className="flex items-center gap-2 shrink-0">
                             {hasPrice ? (
                               <div className="text-right">
                                 <span className="font-mono font-black text-gray-900 text-sm sm:text-base block">
@@ -2946,68 +3139,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </span>
                             ) : null}
 
-                            <div onClick={(e) => e.stopPropagation()}>
-                              {isPurchased ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!isDone && parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
-                                  }}
-                                  title="আনচেক করতে ক্লিক করুন (Click to uncheck)"
-                                  className="w-6 h-6 rounded-full bg-emerald-500/20 hover:bg-rose-500/20 border border-emerald-500/40 hover:border-rose-400 flex items-center justify-center transition-all cursor-pointer group/uncheck"
-                                >
-                                  <Check className="w-3.5 h-3.5 text-emerald-600 group-hover/uncheck:hidden" />
-                                  <X className="w-3.5 h-3.5 text-rose-600 hidden group-hover/uncheck:block" />
-                                </button>
-                              ) : isStoreBlock && !isDone ? (
-                                // Store block: show check button only if store accepted; else show a locked icon
-                                groupSOAccepted ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
-                                    }}
-                                    title="চেক করতে ক্লিক করুন (Click to check)"
-                                    className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-emerald-50 border border-gray-300 hover:border-emerald-400 flex items-center justify-center transition-all cursor-pointer"
-                                  >
-                                    <Check className="w-3 h-3 text-gray-400 hover:text-emerald-600" />
-                                  </button>
-                                ) : (
-                                  <span
-                                    title="দোকানের অর্ডার আগে পাঠান / Accept হওয়ার পর চেক করা যাবে"
-                                    className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-300 flex items-center justify-center"
-                                  >
-                                    <Clock className="w-3 h-3 text-amber-500" />
-                                  </span>
-                                )
-                              ) : !isDone && !isCustomBlock ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
-                                  }}
-                                  title="চেক করতে ক্লিক করুন (Click to check)"
-                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-emerald-50 border border-gray-300 hover:border-emerald-400 flex items-center justify-center transition-all cursor-pointer"
-                                >
-                                  <Check className="w-3 h-3 text-gray-400 hover:text-emerald-600" />
-                                </button>
-                              ) : isCustomBlock && !isDone && !connectedSO ? (
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={() => handleToggleCustomItemSelection(it.id)}
-                                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                                />
-                              ) : isCustomBlock && !isDone && connectedSO ? (
-                                <button
-                                  type="button"
-                                  onClick={() => openViewRequestDetails(connectedSO)}
-                                  className="p-1 px-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-bold border border-gray-300 transition-all cursor-pointer"
-                                >
-                                  Details
-                                </button>
-                              ) : null}
-                            </div>
+                            {isCustomBlock && !isDone && connectedSO && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openViewRequestDetails(connectedSO);
+                                }}
+                                className="p-1 px-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-bold border border-gray-300 transition-all cursor-pointer shrink-0"
+                              >
+                                Details
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -3480,17 +3623,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       <span className="font-black text-gray-900 text-xs font-mono tracking-wide">
                         {order.alternativePhone || order.customerPhone || 'Not provided'}
                       </span>
-                      {customerLabels.length > 0 && customerLabels.map((lbl, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow-sm border border-amber-300/30 uppercase tracking-wider shrink-0"
-                        >
-                          ⭐ {lbl}
-                        </span>
-                      ))}
                     </div>
                     {/* Line 2: Customer name */}
                     <p className="text-[11px] text-gray-650 font-bold mt-0.5">{order.customerName}</p>
+                    {/* Line 3: Customer labels under customer name */}
+                    {customerLabels.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {customerLabels.map((lbl, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow-xs border border-amber-300/30 uppercase tracking-wider shrink-0"
+                          >
+                            🏷️ {lbl}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   {/* Call / WhatsApp buttons */}
                   {(order.alternativePhone || order.customerPhone) && (
@@ -4359,7 +4507,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
               <div className="flex items-center justify-between text-xs mt-1.5">
                 <span className="text-gray-500 font-bold uppercase tracking-wide">Customer</span>
-                <span className="font-bold text-gray-800">{order.customerName}</span>
+                <div className="text-right">
+                  <span className="font-bold text-gray-800">{order.customerName}</span>
+                  {customerLabels.length > 0 && (
+                    <div className="flex flex-wrap justify-end gap-1 mt-0.5">
+                      {customerLabels.map((lbl, idx) => (
+                        <span key={idx} className="bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-black px-1.5 py-0.2 rounded">
+                          🏷️ {lbl}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               {order.deliveryFee !== undefined && (
                 <div className="flex items-center justify-between text-xs mt-1.5">
@@ -4551,6 +4710,79 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   setConvertConfirmTarget(null);
                   if (target) {
                     await handleConvertStoreToCustom(target.sid, target.storeName);
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-amber-500/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>হ্যাঁ, Make Custom করুন</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Convert Single Item to Custom Confirmation Modal */}
+      {convertSingleItemTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-amber-200">
+            <button
+              type="button"
+              onClick={() => setConvertSingleItemTarget(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-3 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <Sparkles className="w-6 h-6 text-amber-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-black text-base text-gray-900 leading-tight">Make Custom নিশ্চিতকরণ</h3>
+                <span className="text-[11px] text-amber-700 font-bold">সিঙ্গেল আইটেম কাস্টমে রূপান্তর</span>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/80 p-3.5 rounded-2xl border border-amber-200/80 space-y-2">
+              <div className="flex items-start gap-2">
+                <Package className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block">পণ্যের নাম:</span>
+                  <span className="text-sm font-black text-gray-900 break-words block leading-snug">
+                    {convertSingleItemTarget.name}
+                  </span>
+                  {convertSingleItemTarget.storeName && (
+                    <span className="text-[11px] text-gray-500 block mt-0.5">
+                      দোকান: {convertSingleItemTarget.storeName}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] font-semibold text-amber-900/90 leading-relaxed pt-1.5 border-t border-amber-200/60">
+                এই পণ্যটি কাস্টম আইটেমে রূপান্তর হবে। আপনি যেকোনো দোকান থেকে এটি কিনতে পারবেন অথবা অন্য দোকানে রিকোয়েস্ট পাঠাতে পারবেন।
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed font-medium">
+              আপনি কি নিশ্চিতভাবে এই পণ্যটিকে কাস্টম আইটেমে রূপান্তর করতে চান?
+            </p>
+
+            <div className="flex space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setConvertSingleItemTarget(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-colors cursor-pointer"
+              >
+                বাতিল
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = convertSingleItemTarget;
+                  setConvertSingleItemTarget(null);
+                  if (target) {
+                    await handleConvertSingleItemToCustom(target.id, target.name);
                   }
                 }}
                 className="flex-1 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-amber-500/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
