@@ -298,7 +298,12 @@ async function applyGeofence(db, recipients, notif, existingOrderSnap = null) {
   const radiusKm = typeof configured === 'number' && configured > 0 ? configured : DEFAULT_RADIUS_KM;
 
   let filtered = recipients.filter((r) => withinRadius(r.profile.helperLocation, order, radiusKm));
-  if (pricing && Array.isArray(pricing.allowedDeliveryAreas) && pricing.allowedDeliveryAreas.length > 0) {
+  if (
+    pricing &&
+    pricing.allowedDeliveryAreasEnabled !== false &&
+    Array.isArray(pricing.allowedDeliveryAreas) &&
+    pricing.allowedDeliveryAreas.length > 0
+  ) {
     filtered = filtered.filter((r) =>
       isHelperEligibleForOrderBackend({ ...r.profile, uid: r.uid }, order, pricing.allowedDeliveryAreas)
     );
@@ -346,9 +351,21 @@ function isHelperEligibleForOrderBackend(helperProfile, order, areas) {
     const target = areas.find((a) => a.id === order.areaId);
     if (target && Array.isArray(target.assignedHelperIds) && target.assignedHelperIds.includes(helperProfile.uid)) return true;
   }
+  if (Array.isArray(order.areaIds)) {
+    const served = order.areaIds.some((aid) => {
+      if (Array.isArray(helperProfile.assignedAreaIds) && helperProfile.assignedAreaIds.includes(aid)) return true;
+      const target = areas.find((a) => a.id === aid);
+      return Boolean(target && Array.isArray(target.assignedHelperIds) && target.assignedHelperIds.includes(helperProfile.uid));
+    });
+    if (served) return true;
+  }
 
+  // An order outside every zone, and tagged with none, is unzoned: any helper
+  // assigned to a zone may take it — as isHelperEligibleForOrder in
+  // geofenceUtils.ts decides on the phone.
+  const tagged = order.areaId || (Array.isArray(order.areaIds) && order.areaIds.length > 0);
   if (matching.length === 0) {
-    return false;
+    return !tagged;
   }
 
   return matching.some((area) => {
@@ -755,7 +772,9 @@ function buildData(notifId, notif, timing = {}, orderData = null) {
         createdAt: orderData.createdAt || '',
       };
       const json = JSON.stringify({ order: compactOrder });
-      if (json.length < 2500) {
+      // FCM caps the whole data payload at 4 KB in bytes; Bengali text is
+      // 3 bytes a character, so measure bytes, not characters.
+      if (Buffer.byteLength(json, 'utf8') < 2000) {
         data.orderPayload = json;
       }
     } catch (_) {}
