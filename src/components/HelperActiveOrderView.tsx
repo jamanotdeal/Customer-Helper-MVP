@@ -367,6 +367,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     shopOrderId: string;
     storeName: string;
   } | null>(null);
+  const [cancelItemConfirmTarget, setCancelItemConfirmTarget] = useState<{
+    id: string;
+    name: string;
+    storeId?: string;
+    storeName?: string;
+    price?: number;
+  } | null>(null);
+  const [isCancellingItem, setIsCancellingItem] = useState(false);
   // Modal shown when helper tries to interact with a store item before store has accepted
   const [storeOrderRequiredTarget, setStoreOrderRequiredTarget] = useState<{
     sid: string;
@@ -382,6 +390,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const handleCancelShopOrder = async (shopOrderId: string) => {
     setCancellingShopOrderId(shopOrderId);
     try {
+      const targetSO = shopOrders.find((s) => s.id === shopOrderId);
       await fallbackStore.updateShopOrder(
         shopOrderId,
         (so) => ({
@@ -393,17 +402,309 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               status: 'CANCELED',
               timestamp: new Date().toISOString(),
               actor: order.helperName || 'Helper',
-              note: 'হেলপার রিকোয়েস্ট বাতিল করেছেন',
+              note: 'হেলপার অর্ডার বাতিল করেছেন',
             },
           ],
         }),
         'helper'
       );
-      showAlert('রিকোয়েস্ট বাতিল', 'দোকানের রিকোয়েস্ট বাতিল করা হয়েছে।', 'info');
+
+      // Uncheck purchased state of items in order.items for this shop so helper can re-order or buy elsewhere
+      if (targetSO?.shopId) {
+        fallbackStore.updateOrder(order.id, (o) => ({
+          ...o,
+          items: (o.items || []).map((it) => {
+            if (it.storeId === targetSO.shopId) {
+              return { ...it, purchased: false };
+            }
+            return it;
+          }),
+        }));
+      }
+
+      showAlert('অর্ডার বাতিল', 'দোকানের অর্ডার বাতিল করা হয়েছে।', 'info');
     } catch (err: any) {
-      showAlert('ত্রুটি', 'রিকোয়েস্ট বাতিল করা যায়নি: ' + (err?.message || err), 'error');
+      showAlert('ত্রুটি', 'অর্ডার বাতিল করা যায়নি: ' + (err?.message || err), 'error');
     } finally {
       setCancellingShopOrderId(null);
+    }
+  };
+
+  const handleCancelItem = async (itemId: string, itemName: string, storeId?: string) => {
+    setIsCancellingItem(true);
+    try {
+      // 1. Fallback for note items (if order only has additionalNote)
+      if (itemId.startsWith('note-item-')) {
+        const noteParts = (order.additionalNote || '')
+          .split(/,|\r?\n/)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        const remainingParts = noteParts.filter((_, idx) => `note-item-${idx}` !== itemId);
+
+        if (remainingParts.length === 0) {
+          const cancelHistoryItem = {
+            id: `sh-${Date.now()}`,
+            status: 'CANCELED' as OrderStatus,
+            timestamp: new Date().toISOString(),
+            actor: `Helper (${order.helperName || 'Helper'})`,
+            note: `সকল পণ্য বাতিল হওয়ায় পুরো অর্ডার বাতিল করা হয়েছে (সর্বশেষ পণ্য: ${itemName})`,
+          };
+          await fallbackStore.updateOrder(order.id, (o) => ({
+            ...o,
+            status: 'CANCELED',
+            cancelledAt: new Date().toISOString(),
+            cancellationReason: `হেলপার পণ্য বাতিল করেছেন (${itemName})`,
+            additionalNote: '',
+            productCost: 0,
+            statusHistory: [...(o.statusHistory || []), cancelHistoryItem],
+          }));
+
+          const activeSOs = shopOrders.filter(
+            (so) => so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+          );
+          for (const so of activeSOs) {
+            await fallbackStore.updateShopOrder(
+              so.id,
+              (prev) => ({
+                ...prev,
+                status: 'CANCELED',
+                statusHistory: [
+                  ...(prev.statusHistory || []),
+                  {
+                    status: 'CANCELED',
+                    timestamp: new Date().toISOString(),
+                    actor: order.helperName || 'Helper',
+                    note: 'মূল অর্ডার বাতিল হওয়ায় দোকান অর্ডার বাতিল করা হয়েছে',
+                  },
+                ],
+              }),
+              'helper'
+            );
+          }
+          showAlert('অর্ডার বাতিল', 'সকল পণ্য বাতিল হওয়ায় অর্ডারটি বাতিল করা হয়েছে।', 'info');
+          return;
+        }
+
+        const newNote = remainingParts.join('\n');
+        await fallbackStore.updateOrder(order.id, (o) => ({
+          ...o,
+          additionalNote: newNote,
+          updatedAt: new Date().toISOString(),
+          statusHistory: [
+            ...(o.statusHistory || []),
+            {
+              id: `sh-${Date.now()}`,
+              status: o.status,
+              timestamp: new Date().toISOString(),
+              actor: `Helper (${order.helperName || 'Helper'})`,
+              note: `পণ্য বাতিল করা হয়েছে: ${itemName}`,
+            },
+          ],
+        }));
+        showAlert('পণ্য বাতিল সফল', `"${itemName}" বাতিল করা হয়েছে।`, 'success');
+        return;
+      }
+
+      // 2. Structured items in order.items
+      const allCurrentItems = order.items || [];
+      const remainingItems = allCurrentItems.filter((it) => it.id !== itemId);
+
+      if (remainingItems.length === 0) {
+        // Last item cancelled -> Cancel entire delivery order
+        const cancelHistoryItem = {
+          id: `sh-${Date.now()}`,
+          status: 'CANCELED' as OrderStatus,
+          timestamp: new Date().toISOString(),
+          actor: `Helper (${order.helperName || 'Helper'})`,
+          note: `সকল পণ্য বাতিল হওয়ায় পুরো অর্ডার বাতিল করা হয়েছে (সর্বশেষ পণ্য: ${itemName})`,
+        };
+        await fallbackStore.updateOrder(order.id, (o) => ({
+          ...o,
+          status: 'CANCELED',
+          cancelledAt: new Date().toISOString(),
+          cancellationReason: `হেলপার পণ্য বাতিল করেছেন (${itemName})`,
+          items: [],
+          productCost: 0,
+          statusHistory: [...(o.statusHistory || []), cancelHistoryItem],
+        }));
+
+        const activeSOs = shopOrders.filter(
+          (so) => so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+        );
+        for (const so of activeSOs) {
+          await fallbackStore.updateShopOrder(
+            so.id,
+            (prev) => ({
+              ...prev,
+              status: 'CANCELED',
+              statusHistory: [
+                ...(prev.statusHistory || []),
+                {
+                  status: 'CANCELED',
+                  timestamp: new Date().toISOString(),
+                  actor: order.helperName || 'Helper',
+                  note: 'মূল অর্ডার বাতিল হওয়ায় দোকান অর্ডার বাতিল করা হয়েছে',
+                },
+              ],
+            }),
+            'helper'
+          );
+        }
+        showAlert('অর্ডার বাতিল', 'সকল পণ্য বাতিল হওয়ায় অর্ডারটি বাতিল করা হয়েছে।', 'info');
+        return;
+      }
+
+      // 3. Handle Store Order / ShopOrder updates if item was assigned to a store
+      const sid = storeId || allCurrentItems.find((it) => it.id === itemId)?.storeId;
+      if (sid) {
+        const remainingStoreItems = remainingItems.filter((it) => it.storeId === sid);
+        const activeSOs = shopOrders.filter(
+          (so) => so.shopId === sid && so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+        );
+
+        if (remainingStoreItems.length === 0) {
+          // No more items for this store -> Cancel active shop orders for this store
+          for (const so of activeSOs) {
+            await fallbackStore.updateShopOrder(
+              so.id,
+              (prev) => ({
+                ...prev,
+                status: 'CANCELED',
+                statusHistory: [
+                  ...(prev.statusHistory || []),
+                  {
+                    status: 'CANCELED',
+                    timestamp: new Date().toISOString(),
+                    actor: order.helperName || 'Helper',
+                    note: `দোকানের পণ্য (${itemName}) বাতিল করা হয়েছে`,
+                  },
+                ],
+              }),
+              'helper'
+            );
+          }
+        } else {
+          // Remove this item from active shop order itemsWithPrice
+          const targetNorm = normalizeItemName(itemName);
+          for (const so of activeSOs) {
+            if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+              const updatedIWP = so.itemsWithPrice.filter(
+                (ip) => ip.itemId !== itemId && ip.originalId !== itemId && normalizeItemName(ip.name) !== targetNorm
+              );
+              const newSOPrice = updatedIWP.reduce((sum, ip) => sum + (Number(ip.price) || 0), 0);
+              await fallbackStore.updateShopOrder(
+                so.id,
+                (prev) => ({
+                  ...prev,
+                  itemsWithPrice: updatedIWP,
+                  price: newSOPrice,
+                  statusHistory: [
+                    ...(prev.statusHistory || []),
+                    {
+                      status: prev.status,
+                      timestamp: new Date().toISOString(),
+                      actor: order.helperName || 'Helper',
+                      note: `পণ্য (${itemName}) বাদ দেওয়া হয়েছে`,
+                    },
+                  ],
+                }),
+                'helper'
+              );
+            }
+          }
+        }
+      }
+
+      // 4. Handle Custom ShopOrder (shopId: 'myself') if item was in custom cost
+      const myselfSOs = shopOrders.filter(
+        (so) => so.shopId === 'myself' && so.parentOrderId === order.id && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+      );
+      const targetNorm = normalizeItemName(itemName);
+      for (const so of myselfSOs) {
+        if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+          const hasThisItem = so.itemsWithPrice.some(
+            (ip) => ip.itemId === itemId || ip.originalId === itemId || normalizeItemName(ip.name) === targetNorm
+          );
+          if (hasThisItem) {
+            const updatedIWP = so.itemsWithPrice.filter(
+              (ip) => ip.itemId !== itemId && ip.originalId !== itemId && normalizeItemName(ip.name) !== targetNorm
+            );
+            if (updatedIWP.length === 0) {
+              await fallbackStore.deleteShopOrder(so.id);
+            } else {
+              const newPrice = updatedIWP.reduce((sum, ip) => sum + (Number(ip.price) || 0), 0);
+              await fallbackStore.updateShopOrder(
+                so.id,
+                (prev) => ({
+                  ...prev,
+                  itemsWithPrice: updatedIWP,
+                  price: newPrice,
+                }),
+                'helper'
+              );
+            }
+          }
+        }
+      }
+
+      // 5. Clean up selection & sub-item states
+      setSelectedCustomItemIds((prev) => prev.filter((id) => id !== itemId));
+      setCheckedSubItems((prev) => {
+        const next = { ...prev };
+        delete next[itemId];
+        Object.keys(next).forEach((k) => {
+          if (k.startsWith(`${itemId}-`)) delete next[k];
+        });
+        return next;
+      });
+
+      // 6. Recalculate product cost
+      const newProductCost = calculateOrderProductCost({ ...order, items: remainingItems }, shopOrders);
+
+      // 7. Edit & status history
+      const nowIso = new Date().toISOString();
+      const historyItem = {
+        id: `sh-${Date.now()}`,
+        status: order.status,
+        timestamp: nowIso,
+        actor: `Helper (${order.helperName || 'Helper'})`,
+        note: `পণ্য বাতিল করা হয়েছে: ${itemName}`,
+      };
+      const editItem: OrderEditHistoryItem = {
+        id: `ed-${Date.now()}`,
+        timestamp: nowIso,
+        editedBy: 'helper',
+        editedByName: order.helperName || 'Helper',
+        changes: [
+          {
+            field: 'Items',
+            oldValue: itemName,
+            newValue: 'বাতিল (Cancelled)',
+          },
+          {
+            field: 'Product Cost',
+            oldValue: order.productCost !== undefined ? `৳${order.productCost}` : '0',
+            newValue: `৳${newProductCost}`,
+          },
+        ],
+      };
+
+      await fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        items: remainingItems,
+        productCost: newProductCost > 0 ? newProductCost : undefined,
+        updatedAt: nowIso,
+        lastEditedAt: nowIso,
+        lastEditedBy: 'helper',
+        editHistory: [...(o.editHistory || []), editItem],
+        statusHistory: [...(o.statusHistory || []), historyItem],
+      }));
+
+      showAlert('পণ্য বাতিল সফল', `"${itemName}" সফলভাবে বাতিল করা হয়েছে।`, 'success');
+    } catch (err: any) {
+      showAlert('ত্রুটি', 'পণ্য বাতিল করতে সমস্যা হয়েছে: ' + (err?.message || err), 'error');
+    } finally {
+      setIsCancellingItem(false);
     }
   };
 
@@ -3076,24 +3377,47 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             ) : null}
 
-                            {/* Convert Single Item to Custom Button */}
-                            {!isCustomItem && !isDone && (
-                              <div className="mt-1">
+                            {/* Actions under item name: Make Custom & Cancel Item */}
+                            {!isDone && (
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                {/* Convert Single Item to Custom Button */}
+                                {!isCustomItem && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setConvertSingleItemTarget({
+                                        id: it.id,
+                                        name: it.name,
+                                        storeName: sName,
+                                      });
+                                    }}
+                                    className="inline-flex items-center gap-1 text-[10px] text-amber-800 hover:text-amber-900 font-bold bg-amber-50 hover:bg-amber-100 border border-amber-300/80 px-2 py-0.5 rounded-md transition-all active:scale-95 cursor-pointer"
+                                    title="এই পণ্যটিকে কাস্টম আইটেমে রূপান্তর করুন"
+                                  >
+                                    <Sparkles className="w-2.5 h-2.5 text-amber-600" />
+                                    <span>Make Custom</span>
+                                  </button>
+                                )}
+
+                                {/* Cancel Item Button */}
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setConvertSingleItemTarget({
+                                    setCancelItemConfirmTarget({
                                       id: it.id,
                                       name: it.name,
+                                      storeId: it.storeId,
                                       storeName: sName,
+                                      price: priceDetails?.totalPrice ?? (it.price ? Number(it.price) * getItemQuantityNum(it) : 0),
                                     });
                                   }}
-                                  className="inline-flex items-center gap-1 text-[10px] text-amber-800 hover:text-amber-900 font-bold bg-amber-50 hover:bg-amber-100 border border-amber-300/80 px-2 py-0.5 rounded-md transition-all active:scale-95 cursor-pointer"
-                                  title="এই পণ্যটিকে কাস্টম আইটেমে রূপান্তর করুন"
+                                  className="inline-flex items-center gap-1 text-[10px] text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md transition-all active:scale-95 cursor-pointer"
+                                  title="এই পণ্যটি অর্ডার থেকে বাতিল করুন"
                                 >
-                                  <Sparkles className="w-2.5 h-2.5 text-amber-600" />
-                                  <span>Make Custom</span>
+                                  <X className="w-2.5 h-2.5 text-rose-600" />
+                                  <span>Cancel Item</span>
                                 </button>
                               </div>
                             )}
@@ -3228,13 +3552,24 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                       </button>
                                     )}
 
-                                    {/* 2. Pending status + cancel icon button */}
-                                    {!isDone && groupStatus === 'PENDING' && (
+                                    {/* Active Store Order Status & Cancel Button until delivered */}
+                                    {!isDone && groupSO && !isCancelledGroup && groupStatus !== 'DELIVERED' && (
                                       <div className="flex items-center gap-1">
-                                        <span className="flex items-center gap-1 px-2 py-1 bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold">
-                                          <Clock className="w-3 h-3 text-amber-700 animate-spin" />
-                                          <span>Pending...</span>
-                                        </span>
+                                        {groupStatus === 'PENDING' ? (
+                                          <span className="flex items-center gap-1 px-2 py-1 bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold">
+                                            <Clock className="w-3 h-3 text-amber-700 animate-spin" />
+                                            <span>Pending...</span>
+                                          </span>
+                                        ) : isAcceptedGroup ? (
+                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                            <Check className="w-3 h-3" />
+                                            <span>{groupStatus === 'PREPARING' ? 'Preparing' : 'Accepted'}</span>
+                                          </span>
+                                        ) : (
+                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-teal-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                            <span>{groupStatus === 'READY' ? 'Ready' : groupStatus === 'HANDOVER' ? 'Handover' : groupStatus}</span>
+                                          </span>
+                                        )}
                                         <button
                                           type="button"
                                           disabled={cancellingShopOrderId === groupSO?.id}
@@ -3247,18 +3582,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                               });
                                             }
                                           }}
-                                          title="রিকোয়েস্ট বাতিল করুন (Cancel Request)"
-                                          className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer"
+                                          title="দোকানের অর্ডার বাতিল করুন (Cancel Store Order)"
+                                          className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer shrink-0"
                                         >
                                           <X className="w-3.5 h-3.5" />
                                         </button>
                                       </div>
                                     )}
 
-                                    {/* 2. Accepted status */}
-                                    {!isDone && isAcceptedGroup && (
-                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
-                                        <Check className="w-3 h-3" /><span>Accepted</span>
+                                    {/* Delivered status (no cancel button once delivered) */}
+                                    {!isDone && groupSO && groupStatus === 'DELIVERED' && (
+                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                        <Check className="w-3 h-3" /><span>Delivered</span>
                                       </span>
                                     )}
                                   </div>
@@ -3430,6 +3765,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             <div className="flex items-center space-x-2">
                               <input type="checkbox" checked={isChecked} onChange={() => { }} className="w-3.5 h-3.5 accent-amber-700 rounded cursor-pointer" />
                               <span className={`flex-1 ${isChecked ? 'line-through text-amber-900' : ''}`}>{itemStr}</span>
+                              {!isDone && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCancelItemConfirmTarget({
+                                      id: `note-item-${idx}`,
+                                      name: itemStr,
+                                    });
+                                  }}
+                                  title="পণ্যটি বাতিল করুন"
+                                  className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-100 rounded-md transition-colors shrink-0 cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
                             </div>
                             {connectedShopOrder && (
                               <div className="mt-1.5 pt-1.5 border-t border-amber-300/60 flex items-center justify-between text-[10px] font-bold">
@@ -5020,8 +5371,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <AlertTriangle className="w-6 h-6 text-rose-600" />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="font-black text-base text-gray-900 leading-tight">রিকোয়েস্ট বাতিল নিশ্চিতকরণ</h3>
-                <span className="text-[11px] text-rose-600 font-bold">দোকান অর্ডার প্রত্যাহার</span>
+                <h3 className="font-black text-base text-gray-900 leading-tight">দোকান অর্ডার বাতিল</h3>
+                <span className="text-[11px] text-rose-600 font-bold">অর্ডার প্রত্যাহার নিশ্চিতকরণ</span>
               </div>
             </div>
 
@@ -5036,7 +5387,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
               <div className="text-[11px] font-semibold text-rose-900/90 leading-relaxed pt-1.5 border-t border-rose-200/60">
-                আপনি কি নিশ্চিতভাবে এই দোকানে পাঠানো অর্ডার রিকোয়েস্টটি বাতিল করতে চান? বাতিল করার পর আপনি আবার নতুন করে রিকোয়েস্ট পাঠাতে পারবেন।
+                আপনি কি নিশ্চিতভাবে এই দোকানে পাঠানো অর্ডারটি বাতিল করতে চান? বাতিল করার পর আপনি আবার নতুন করে অর্ডার পাঠাতে বা পণ্যগুলোকে কাস্টমে রূপান্তর করতে পারবেন।
               </div>
             </div>
 
@@ -5061,6 +5412,91 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               >
                 <X className="w-4 h-4" />
                 <span>হ্যাঁ, বাতিল করুন</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel Single Item Confirmation Custom Modal ── */}
+      {cancelItemConfirmTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-rose-200">
+            <button
+              type="button"
+              disabled={isCancellingItem}
+              onClick={() => setCancelItemConfirmTarget(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-3 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6 text-rose-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-black text-base text-gray-900 leading-tight">পণ্য বাতিল নিশ্চিতকরণ</h3>
+                <span className="text-[11px] text-rose-600 font-bold">অর্ডার থেকে পণ্য বাদ দেওয়া</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/80 p-3.5 rounded-2xl border border-rose-200/80 space-y-2">
+              <div className="flex items-start gap-2">
+                <Package className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-black text-rose-800 uppercase tracking-wider block">পণ্যের নাম:</span>
+                  <span className="text-sm font-black text-gray-900 break-words block leading-snug">
+                    {cancelItemConfirmTarget.name}
+                  </span>
+                  {cancelItemConfirmTarget.storeName && (
+                    <span className="text-[11px] text-gray-600 block mt-0.5 font-bold">
+                      দোকান: {cancelItemConfirmTarget.storeName}
+                    </span>
+                  )}
+                  {cancelItemConfirmTarget.price !== undefined && cancelItemConfirmTarget.price > 0 && (
+                    <span className="text-[11px] font-mono text-gray-600 block">
+                      মূল্য: ৳{cancelItemConfirmTarget.price}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] font-semibold text-rose-900/90 leading-relaxed pt-1.5 border-t border-rose-200/60">
+                {(order.items || []).filter((i) => i.id !== cancelItemConfirmTarget.id).length === 0
+                  ? 'সতর্কতা: এটি এই অর্ডারের একমাত্র/সর্বশেষ পণ্য। এটি বাতিল করলে পুরো ডেলিভারি অর্ডারটি বাতিল হয়ে যাবে।'
+                  : 'আপনি কি নিশ্চিতভাবে এই পণ্যটি বাতিল করতে চান? বাতিল করার পর মোট পণ্যের খরচ স্বয়ংক্রিয়ভাবে পুনরায় সমন্বয় করা হবে।'}
+              </div>
+            </div>
+
+            <div className="flex space-x-2 pt-1">
+              <button
+                type="button"
+                disabled={isCancellingItem}
+                onClick={() => setCancelItemConfirmTarget(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-colors cursor-pointer disabled:opacity-60"
+              >
+                না, ফিরে যান
+              </button>
+              <button
+                type="button"
+                disabled={isCancellingItem}
+                onClick={async () => {
+                  const target = cancelItemConfirmTarget;
+                  setCancelItemConfirmTarget(null);
+                  if (target) {
+                    await handleCancelItem(target.id, target.name, target.storeId);
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-rose-600/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {isCancellingItem ? (
+                  <span className="animate-spin">...</span>
+                ) : (
+                  <>
+                    <X className="w-4 h-4" />
+                    <span>হ্যাঁ, বাতিল করুন</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

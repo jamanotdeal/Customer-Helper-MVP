@@ -178,6 +178,11 @@ export const HomeSearchBox: React.FC<HomeSearchBoxProps> = ({
         (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
       );
       const validShopIds = new Set(unblockedShops.map((s) => s.id));
+      unblockedShops.forEach((s) => {
+        if (s.ownerUserId) validShopIds.add(s.ownerUserId);
+        if (s.id.startsWith('store-')) validShopIds.add(s.id.replace('store-', ''));
+        if (s.ownerUserId) validShopIds.add(`store-${s.ownerUserId}`);
+      });
       setAllShops(unblockedShops);
       setAllProducts(
         Array.from(fallbackStore.storeProducts.values()).filter(

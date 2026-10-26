@@ -67,9 +67,7 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   );
   const [activeTab, setActiveTab] = React.useState<'details' | 'items'>('details');
   const [storeProductsCount, setStoreProductsCount] = React.useState<number>(() => {
-    return Array.from(fallbackStore.storeProducts.values()).filter(
-      (p) => p.storeId === shop.id || (shop.ownerUserId && p.storeId === shop.ownerUserId)
-    ).length;
+    return fallbackStore.getProductsForShop(shop.id, shop.ownerUserId).length;
   });
 
   const shopPhotoInputRef = React.useRef<HTMLInputElement>(null);
@@ -112,13 +110,12 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
 
   React.useEffect(() => {
     const updateCount = () => {
-      const cnt = Array.from(fallbackStore.storeProducts.values()).filter(
-        (p) => p.storeId === shop.id || (shop.ownerUserId && p.storeId === shop.ownerUserId)
-      ).length;
+      const cnt = fallbackStore.getProductsForShop(shop.id, shop.ownerUserId).length;
       setStoreProductsCount(cnt);
     };
+    updateCount();
     const unsub = fallbackStore.subscribe(updateCount);
-    fallbackStore.loadStoreProducts();
+    fallbackStore.loadStoreProductsForShop(shop.id, shop.ownerUserId);
     return () => unsub();
   }, [shop.id, shop.ownerUserId]);
 

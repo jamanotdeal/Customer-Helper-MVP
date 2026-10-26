@@ -39,6 +39,11 @@ export const StoreProductShelf: React.FC<StoreProductShelfProps> = ({
       setShops(allShops);
 
       const approvedShopIds = new Set(allShops.map((s) => s.id));
+      allShops.forEach((s) => {
+        if (s.ownerUserId) approvedShopIds.add(s.ownerUserId);
+        if (s.id.startsWith('store-')) approvedShopIds.add(s.id.replace('store-', ''));
+        if (s.ownerUserId) approvedShopIds.add(`store-${s.ownerUserId}`);
+      });
       const allProds = Array.from(fallbackStore.storeProducts.values()).filter(
         (p) => !p.storeId || approvedShopIds.has(p.storeId)
       );

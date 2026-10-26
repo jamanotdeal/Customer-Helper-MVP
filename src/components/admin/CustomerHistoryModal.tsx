@@ -41,6 +41,26 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [, setOrderFetchTick] = useState(0);
+  const [isFetchingCustomerOrders, setIsFetchingCustomerOrders] = useState(false);
+
+  React.useEffect(() => {
+    if (!customerId && !customerPhone) return;
+    let cancelled = false;
+    setIsFetchingCustomerOrders(true);
+    fallbackStore
+      .fetchOrdersForUser(customerId, 'customer')
+      .catch((err) => console.warn('[CustomerHistoryModal] fetchOrdersForUser error:', err))
+      .finally(() => {
+        if (!cancelled) {
+          setIsFetchingCustomerOrders(false);
+          setOrderFetchTick((v) => v + 1);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId, customerPhone]);
 
   // Local YYYY-MM-DD Helper
   const getLocalYYYYMMDD = (d: Date = new Date()): string => {

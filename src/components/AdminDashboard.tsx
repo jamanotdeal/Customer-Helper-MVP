@@ -288,10 +288,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (selectedZoneFilter === 'ALL') return null; // view all zones
       return [selectedZoneFilter];
     }
-    // For regular admins: strictly their assigned zones only, no option to change
-    if (adminAssignedAreaIds.length === 0) {
-      return []; // Not assigned to any zone
-    }
+    // For regular admins: strictly their assigned zones only, cannot change
     return adminAssignedAreaIds;
   }, [isSuperAdmin, selectedZoneFilter, adminAssignedAreaIds]);
 
@@ -1055,11 +1052,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // order id is also looked up on the server, so it is found straight away
   // even while that history is still loading.
   useEffect(() => {
-    if (activeTab !== 'ORDERS') return;
-    const q = ordersAppliedSearchQuery.trim().replace(/^#/, '');
-    if (!/^[A-Za-z0-9_-]{3,40}$/.test(q) || fallbackStore.orders.has(q)) return;
-    fallbackStore.getOrderFromServer(q).catch(() => { });
-  }, [activeTab, ordersAppliedSearchQuery]);
+    if (activeTab !== 'ORDERS' && activeTab !== 'STORE_ORDERS') return;
+    const rawQ = activeTab === 'ORDERS' ? ordersAppliedSearchQuery : storeOrdersAppliedSearchQuery;
+    const q = rawQ.trim();
+    if (!q || q.length < 2) return;
+    setIsFetchingServer(true);
+    fallbackStore
+      .searchAdminOrdersFromServer(q)
+      .catch((err) => {
+        console.warn('[AdminDashboard] searchAdminOrdersFromServer error:', err);
+      })
+      .finally(() => {
+        setIsFetchingServer(false);
+      });
+  }, [activeTab, ordersAppliedSearchQuery, storeOrdersAppliedSearchQuery]);
 
   // The selected days of orders — and of shop orders while Store Orders is
   // open — read from the server. Runs after the admin listeners above are set
@@ -1113,8 +1119,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const currentQuery = activeTab === 'USERS_LIST' ? usersAppliedSearchQuery : helpersAppliedSearchQuery;
       const hasFilter = Boolean(currentQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= users.length;
-      if (!hasFilter && !needsPageFetch) {
-        setServerUsers(null);
+      if (!hasFilter && !needsPageFetch && serverUsers !== null) {
         return;
       }
 
@@ -1137,8 +1142,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (activeTab !== 'SHOPS') return;
       const hasFilter = Boolean(shopsAppliedSearchQuery.trim() || shopsCategoryFilter !== 'ALL' || shopsFeaturedFilter !== 'ALL' || statusFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= shops.length;
-      if (!hasFilter && !needsPageFetch) {
-        setServerShops(null);
+      if (!hasFilter && !needsPageFetch && serverShops !== null) {
         return;
       }
 
@@ -1168,8 +1172,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (activeTab !== 'WITHDRAWALS') return;
       const hasFilter = Boolean(withdrawalsAppliedSearchQuery.trim() || withdrawalsStartDate || withdrawalsEndDate || withdrawalStatusFilter !== 'ALL' || withdrawalTypeFilter !== 'ALL');
       const needsPageFetch = (currentPage - 1) * pageSize >= withdrawals.length;
-      if (!hasFilter && !needsPageFetch) {
-        setServerWithdrawals(null);
+      if (!hasFilter && !needsPageFetch && serverWithdrawals !== null) {
         return;
       }
 
@@ -1192,8 +1195,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (activeTab !== 'FEEDBACK') return;
       const hasFilter = Boolean(feedbackAppliedSearchQuery.trim());
       const needsPageFetch = (currentPage - 1) * pageSize >= feedbacks.length;
-      if (!hasFilter && !needsPageFetch) {
-        setServerFeedbacks(null);
+      if (!hasFilter && !needsPageFetch && serverFeedbacks !== null) {
         return;
       }
 
@@ -1216,8 +1218,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (activeTab !== 'CUSTOM_MODALS') return;
       const hasFilter = Boolean(customModalsAppliedSearchQuery.trim());
       const needsPageFetch = (currentPage - 1) * pageSize >= customModals.length;
-      if (!hasFilter && !needsPageFetch) {
-        setServerCustomModals(null);
+      if (!hasFilter && !needsPageFetch && serverCustomModals !== null) {
         return;
       }
 
@@ -1377,8 +1378,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const scopedAllOrders = useMemo(() => {
     if (!isZoneFiltered || !targetZoneIds) return allOrders;
-    return allOrders.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas));
-  }, [allOrders, isZoneFiltered, targetZoneIds, allowedDeliveryAreas]);
+    return allOrders.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas, { users, shops }));
+  }, [allOrders, isZoneFiltered, targetZoneIds, allowedDeliveryAreas, users, shops]);
 
   // Needs Attention Queue calculations — computed from overall allOrders dataset for complete accuracy across DB
   const { cancellingRequests, notAcceptedRequests, feeAdjustmentsPending, delayedOrders } = useMemo(() => {
@@ -2054,14 +2055,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // Zone scoping filter
     if (isZoneFiltered && targetZoneIds) {
-      list = list.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas));
+      list = list.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas, { users, shops }));
     }
 
-    // Date range — the days read from the server for this list. An exact
-    // order id typed into search is shown whatever its date (it is fetched on
-    // its own, see the effect on ordersAppliedSearchQuery).
+    // Date range — the days read from the server for this list.
+    // When a search query is applied, matched orders outside the date range are kept.
+    const hasSearch = Boolean(ordersAppliedSearchQuery.trim());
     const exactIdSearch = ordersAppliedSearchQuery.trim().replace(/^#/, '');
-    list = list.filter((o) => o.id === exactIdSearch || isInRange(o.createdAt, rangeStartIso, rangeEndIso));
+    if (!hasSearch) {
+      list = list.filter((o) => isInRange(o.createdAt, rangeStartIso, rangeEndIso));
+    } else {
+      list = list.filter((o) => o.id === exactIdSearch || isInRange(o.createdAt, rangeStartIso, rangeEndIso) || true);
+    }
 
     // Search query filter
     if (ordersAppliedSearchQuery.trim()) {
@@ -2118,15 +2123,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getProcessedStoreOrders = (rawShopOrders: ShopOrder[]) => {
     let list = [...rawShopOrders];
 
-    // Date range — the days read from the server for this list.
-    list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
+    // Date range — when search is applied, we don't restrict to today
+    const hasStoreSearch = Boolean(storeOrdersAppliedSearchQuery.trim());
+    if (!hasStoreSearch) {
+      list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
+    }
 
     // Zone scoping filter
     if (isZoneFiltered && targetZoneIds) {
       list = list.filter((so) => {
         const parentOrder = fallbackStore.orders.get(so.parentOrderId) || allOrders.find((o) => o.id === so.parentOrderId);
         if (parentOrder) {
-          return isOrderInAnyZone(parentOrder, targetZoneIds, allowedDeliveryAreas);
+          return isOrderInAnyZone(parentOrder, targetZoneIds, allowedDeliveryAreas, { users, shops });
         }
         return false;
       });
@@ -2617,7 +2625,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     () => (activeTab === 'ORDERS' ? getProcessedOrders(serverOrders !== null ? serverOrders : allOrders) : []),
     // getProcessedOrders reads exactly the filters listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy, isZoneFiltered, targetZoneIds, allowedDeliveryAreas]
+    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy, isZoneFiltered, targetZoneIds, allowedDeliveryAreas, users, shops]
   );
   // Which order is each customer's first — for the "first order" badge.
   const firstOrderIds = React.useMemo(
@@ -2872,38 +2880,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </select>
             </div>
           ) : (
-            adminAssignedAreaIds.length > 1 ? (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs font-black shadow-xs">
-                <span className="text-[11px] text-emerald-700 font-bold">জোন ফিল্টার:</span>
-                <select
-                  value={selectedZoneFilter}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSelectedZoneFilter(val);
-                    fallbackStore.setAdminZoneFilter(val);
-                  }}
-                  className="bg-transparent text-emerald-950 font-black text-xs focus:outline-none cursor-pointer pr-1"
-                >
-                  <option value="ALL">🌐 সকল নির্ধারিত জোন ({adminAssignedAreaIds.length})</option>
-                  {adminAssignedAreaIds.map((id) => {
-                    const a = allowedDeliveryAreas.find((area) => area.id === id);
-                    return (
-                      <option key={id} value={id}>
-                        📍 {a?.name || id}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-            ) : adminAssignedAreaIds.length === 1 ? (
-              <span className="px-3 py-1 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-black">
-                জোন সক্রিয়
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs font-black shadow-xs">
+              <span className="text-[11px] text-emerald-700 font-bold">নির্ধারিত জোন:</span>
+              <span className="text-xs font-extrabold text-emerald-900 truncate max-w-[240px]">
+                {assignedZoneNames || 'কোনো জোন বরাদ্দ নেই'}
               </span>
-            ) : (
-              <span className="px-3 py-1 rounded-full bg-red-100 border border-red-300 text-red-800 text-xs font-black">
-                অ্যাসাইনমেন্ট আবশ্যক
-              </span>
-            )
+            </div>
           )}
         </div>
       </div>

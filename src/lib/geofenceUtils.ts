@@ -229,13 +229,67 @@ export function isHelperEligibleForOrder(
 export function isOrderInZone(
   order: Order,
   zoneId: string,
-  areas?: AllowedAreaPolygon[]
+  areas?: AllowedAreaPolygon[],
+  extraContext?: {
+    users?: Map<string, UserProfile> | UserProfile[];
+    shops?: Map<string, any> | any[];
+  }
 ): boolean {
+  if (!order || !zoneId) return false;
   if (order.areaId === zoneId) return true;
   if (order.areaIds && order.areaIds.includes(zoneId)) return true;
-  if (!areas || areas.length === 0) return false;
-  const matched = getAreasForOrder(order, areas);
-  return matched.some((a) => a.id === zoneId);
+
+  if (areas && areas.length > 0) {
+    const matched = getAreasForOrder(order, areas);
+    if (matched.some((a) => a.id === zoneId)) return true;
+
+    // Check if zone name appears in delivery or pickup address text
+    const targetArea = areas.find((a) => a.id === zoneId);
+    if (targetArea && targetArea.name) {
+      const areaNameLower = targetArea.name.toLowerCase().trim();
+      const delivAddr = order.deliveryLocation?.address?.toLowerCase() || '';
+      const pickupAddr = order.pickupLocation?.address?.toLowerCase() || '';
+      if (areaNameLower.length >= 3 && (delivAddr.includes(areaNameLower) || pickupAddr.includes(areaNameLower))) {
+        return true;
+      }
+    }
+  }
+
+  // Check helper assignment if helperId is present
+  if (order.helperId && extraContext?.users) {
+    const helper = extraContext.users instanceof Map
+      ? extraContext.users.get(order.helperId)
+      : Array.isArray(extraContext.users)
+      ? extraContext.users.find((u) => u.uid === order.helperId)
+      : undefined;
+    if (helper && isHelperInZone(helper, zoneId, areas)) return true;
+  }
+
+  // Check customer assignment if customerId is present
+  if (order.customerId && extraContext?.users) {
+    const customer = extraContext.users instanceof Map
+      ? extraContext.users.get(order.customerId)
+      : Array.isArray(extraContext.users)
+      ? extraContext.users.find((u) => u.uid === order.customerId)
+      : undefined;
+    if (customer) {
+      if (customer.assignedAreaIds?.includes(zoneId) || customer.areaId === zoneId) return true;
+    }
+  }
+
+  // Check shop assignment if shopId is present
+  if (order.shopId && extraContext?.shops) {
+    const shop = extraContext.shops instanceof Map
+      ? extraContext.shops.get(order.shopId)
+      : Array.isArray(extraContext.shops)
+      ? extraContext.shops.find((s) => s.id === order.shopId)
+      : undefined;
+    if (shop) {
+      if ((shop as any).areaId === zoneId || (shop as any).areaIds?.includes(zoneId)) return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -244,10 +298,14 @@ export function isOrderInZone(
 export function isOrderInAnyZone(
   order: Order,
   zoneIds: string[],
-  areas?: AllowedAreaPolygon[]
+  areas?: AllowedAreaPolygon[],
+  extraContext?: {
+    users?: Map<string, UserProfile> | UserProfile[];
+    shops?: Map<string, any> | any[];
+  }
 ): boolean {
   if (!zoneIds || zoneIds.length === 0) return false;
-  return zoneIds.some((zid) => isOrderInZone(order, zid, areas));
+  return zoneIds.some((zid) => isOrderInZone(order, zid, areas, extraContext));
 }
 
 /**
@@ -367,6 +425,15 @@ export function isUserInZoneScope(
     const relevantOrders = userOrders.filter((o) => o.customerId === user.uid || o.helperId === user.uid);
     if (relevantOrders.length > 0) {
       return relevantOrders.some((o) => isOrderInAnyZone(o, zoneIds, areas));
+    }
+  }
+
+  // Saved location coordinates of the user
+  const loc = user.defaultDeliveryLocation || user.helperLocation || (user as any).location;
+  if (areas && areas.length > 0 && loc?.lat && loc?.lng) {
+    const userAreas = getAreasForPoint({ lat: loc.lat, lng: loc.lng }, areas);
+    if (userAreas.some((a) => zoneIds.includes(a.id))) {
+      return true;
     }
   }
 

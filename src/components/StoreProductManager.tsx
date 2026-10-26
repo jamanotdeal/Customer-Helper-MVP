@@ -81,21 +81,44 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
+  // Progressive infinite scroll pagination
+  const INITIAL_PAGE_SIZE = 16;
+  const PAGE_INCREMENT = 16;
+  const [displayLimit, setDisplayLimit] = useState(INITIAL_PAGE_SIZE);
+  const observerTargetRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
+    let isMounted = true;
     const sync = () => {
       const shopObj = fallbackStore.shops.get(storeId);
-      const all = Array.from(fallbackStore.storeProducts.values()).filter(
-        (p) => p.storeId === storeId || (shopObj?.ownerUserId && p.storeId === shopObj.ownerUserId)
-      );
+      const all = fallbackStore.getProductsForShop(storeId, shopObj?.ownerUserId);
       all.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-      setProducts(all);
-      setPricingSettings({ ...fallbackStore.pricingSettings });
+      if (isMounted) {
+        setProducts(all);
+        setPricingSettings({ ...fallbackStore.pricingSettings });
+      }
     };
     sync();
+
+    // Directly load products for this shop from Firestore
+    const shopObj = fallbackStore.shops.get(storeId);
+    fallbackStore
+      .loadStoreProductsForShop(storeId, shopObj?.ownerUserId)
+      .finally(() => {
+        if (isMounted) sync();
+      });
+
     const unsub = fallbackStore.subscribe(sync);
-    fallbackStore.loadStoreProducts();
-    return () => unsub();
+    return () => {
+      isMounted = false;
+      unsub();
+    };
   }, [storeId]);
+
+  // Reset pagination on filter change
+  useEffect(() => {
+    setDisplayLimit(INITIAL_PAGE_SIZE);
+  }, [categoryFilter, stockFilter, searchQuery]);
 
   const storeType = useMemo(() => {
     const shopObj = fallbackStore.shops.get(storeId);
@@ -131,6 +154,34 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
     }
     return true;
   }), [products, categoryFilter, stockFilter, searchQuery]);
+
+  const visibleProducts = useMemo(() => {
+    return filteredProducts.slice(0, displayLimit);
+  }, [filteredProducts, displayLimit]);
+
+  const hasMore = visibleProducts.length < filteredProducts.length;
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const target = observerTargetRef.current;
+    if (!target) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setDisplayLimit((prev) => Math.min(prev + PAGE_INCREMENT, filteredProducts.length));
+        }
+      },
+      {
+        root: null,
+        rootMargin: '250px',
+        threshold: 0.05,
+      }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, filteredProducts.length, PAGE_INCREMENT]);
 
   const inStockCount = products.filter((p) => p.inStock).length;
   const outOfStockCount = products.filter((p) => !p.inStock).length;
@@ -459,7 +510,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {filteredProducts.map((p) => {
+          {visibleProducts.map((p) => {
             const hasDiscount = Boolean(p.discountRate && p.discountRate > 0);
             const discountedPrice = hasDiscount ? Math.round(p.price * (1 - (p.discountRate || 0) / 100)) : p.price;
             const isSelected = selectedIds.has(p.id);
@@ -540,6 +591,34 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
               </div>
             );
           })}
+
+          {hasMore && (
+            <div
+              ref={observerTargetRef}
+              className="col-span-full py-4 flex flex-col items-center justify-center gap-2"
+            >
+              <div className="flex items-center gap-2 text-xs font-bold text-gray-700 bg-gray-50 px-4 py-2 rounded-full border border-gray-200">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                <span>আরও পণ্য লোড হচ্ছে... ({visibleProducts.length}/{filteredProducts.length})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDisplayLimit((prev) => Math.min(prev + PAGE_INCREMENT, filteredProducts.length))}
+                className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
+              >
+                ক্লিক করে আরও দেখুন ({filteredProducts.length - visibleProducts.length} টি বাকি)
+              </button>
+            </div>
+          )}
+
+          {!hasMore && filteredProducts.length > INITIAL_PAGE_SIZE && (
+            <div className="col-span-full py-3 text-center">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full border border-gray-100">
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                সবগুলো {filteredProducts.length} টি পণ্য দেখানো হয়েছে
+              </span>
+            </div>
+          )}
         </div>
       )}
 

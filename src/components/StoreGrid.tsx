@@ -582,17 +582,23 @@ const StoreDetailModal: React.FC<StoreDetailModalProps> = ({ shop, isOwner, onCl
   const [activeTab, setActiveTab] = useState<'products' | 'manage'>('products');
 
   useEffect(() => {
+    let isMounted = true;
     const sync = () => {
-      const all = Array.from(fallbackStore.storeProducts.values()).filter(
-        (p) => p.storeId === shop.id
-      );
-      setProducts(all);
+      const all = fallbackStore.getProductsForShop(shop.id, shop.ownerUserId);
+      if (isMounted) setProducts(all);
     };
     sync();
+    fallbackStore
+      .loadStoreProductsForShop(shop.id, shop.ownerUserId)
+      .finally(() => {
+        if (isMounted) sync();
+      });
     const unsub = fallbackStore.subscribe(sync);
-    fallbackStore.loadStoreProducts();
-    return () => unsub();
-  }, [shop.id]);
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, [shop.id, shop.ownerUserId]);
 
   const filteredProducts = products.filter((p) => {
     if (!searchQuery.trim()) return true;

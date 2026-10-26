@@ -110,20 +110,52 @@ export const StorePage: React.FC<StorePageProps> = ({
     return () => unsub();
   }, [shop, onBack, showAlert]);
 
-  // Sync products for this store
+  // Progressive / Infinite scroll pagination
+  const INITIAL_PAGE_SIZE = 12;
+  const PAGE_INCREMENT = 12;
+  const [displayLimit, setDisplayLimit] = useState(INITIAL_PAGE_SIZE);
+  const observerTargetRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync products for this store with immediate targeted fetch
   useEffect(() => {
+    let isMounted = true;
     const sync = () => {
-      const all = Array.from(fallbackStore.storeProducts.values()).filter(
-        (p) => p.storeId === shop.id
-      );
-      setProducts(all);
-      setIsLoading(false);
+      const all = fallbackStore.getProductsForShop(shop.id, shop.ownerUserId);
+      if (isMounted) {
+        setProducts(all);
+        if (all.length > 0 || fallbackStore.isShopProductsFetched(shop.id)) {
+          setIsLoading(false);
+        }
+      }
     };
+
+    // Instant local memory sync
     sync();
+
+    // Directly load products for this shop from Firestore without waiting for 5m cache
+    fallbackStore
+      .loadStoreProductsForShop(shop.id, shop.ownerUserId)
+      .finally(() => {
+        if (isMounted) {
+          sync();
+          setIsLoading(false);
+        }
+      });
+
+    // Also trigger global store products cache update in background if needed
     fallbackStore.loadStoreProducts();
+
     const unsub = fallbackStore.subscribe(sync);
-    return () => unsub();
-  }, [shop.id]);
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, [shop.id, shop.ownerUserId]);
+
+  // Reset pagination whenever category or search filter changes
+  useEffect(() => {
+    setDisplayLimit(INITIAL_PAGE_SIZE);
+  }, [selectedCategory, searchQuery]);
 
   // Extract categories with item counts
   const { categoriesWithCount, uncategorizedCount } = useMemo(() => {
@@ -171,6 +203,36 @@ export const StorePage: React.FC<StorePageProps> = ({
       return true;
     });
   }, [products, selectedCategory, searchQuery]);
+
+  // Progressive slice of products for infinite scroll
+  const visibleProducts = useMemo(() => {
+    return filteredProducts.slice(0, displayLimit);
+  }, [filteredProducts, displayLimit]);
+
+  const hasMore = visibleProducts.length < filteredProducts.length;
+
+  // IntersectionObserver to auto-load next batch on scroll
+  useEffect(() => {
+    if (!hasMore || isLoading) return;
+    const target = observerTargetRef.current;
+    if (!target) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setDisplayLimit((prev) => Math.min(prev + PAGE_INCREMENT, filteredProducts.length));
+        }
+      },
+      {
+        root: null,
+        rootMargin: '250px',
+        threshold: 0.05,
+      }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, isLoading, filteredProducts.length, PAGE_INCREMENT]);
 
   // Quantity in cart helper
   const getItemQty = (product: StoreProduct): number => {
@@ -615,7 +677,7 @@ export const StorePage: React.FC<StorePageProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {filteredProducts.map((product) => {
+            {visibleProducts.map((product) => {
               const qty = getItemQty(product);
               const hasDiscount = Boolean(product.discountRate && product.discountRate > 0);
               const discountedPrice = hasDiscount
@@ -814,6 +876,37 @@ export const StorePage: React.FC<StorePageProps> = ({
                 </div>
               );
             })}
+
+            {/* Infinite Scroll Loader & Sentinel */}
+            {hasMore && (
+              <div
+                ref={observerTargetRef}
+                className="col-span-full py-5 flex flex-col items-center justify-center gap-2"
+              >
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-800 bg-emerald-50 px-4 py-2 rounded-full border border-emerald-100 shadow-2xs">
+                  <Sparkles className="w-4 h-4 animate-spin text-emerald-600" />
+                  <span>আরও পণ্য লোড হচ্ছে... ({visibleProducts.length}/{filteredProducts.length})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDisplayLimit((prev) => Math.min(prev + PAGE_INCREMENT, filteredProducts.length));
+                  }}
+                  className="text-[11px] font-bold text-gray-500 hover:text-emerald-700 underline cursor-pointer"
+                >
+                  ক্লিক করে আরও দেখুন ({filteredProducts.length - visibleProducts.length} টি বাকি)
+                </button>
+              </div>
+            )}
+
+            {!hasMore && filteredProducts.length > INITIAL_PAGE_SIZE && (
+              <div className="col-span-full py-4 text-center">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 bg-gray-50 px-3.5 py-1.5 rounded-full border border-gray-100">
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  সবগুলো {filteredProducts.length} টি পণ্য দেখানো হয়েছে
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

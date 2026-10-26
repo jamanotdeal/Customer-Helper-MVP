@@ -69,6 +69,9 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     fallbackStore.loadWalletTransactionsFor(helperId).then(() => {
       if (!cancelled) setTxVersion((v) => v + 1);
     });
+    fallbackStore.fetchOrdersForUser(helperId, 'helper').then(() => {
+      if (!cancelled) setTxVersion((v) => v + 1);
+    });
     return () => {
       cancelled = true;
     };

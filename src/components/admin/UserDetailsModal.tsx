@@ -75,6 +75,9 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     fallbackStore.loadWalletTransactionsFor(userId).then(() => {
       if (!cancelled) setTxVersion((v) => v + 1);
     });
+    fallbackStore.fetchOrdersForUser(userId, 'both').then(() => {
+      if (!cancelled) setTxVersion((v) => v + 1);
+    });
     return () => {
       cancelled = true;
     };

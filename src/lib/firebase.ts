@@ -1936,12 +1936,129 @@ class FallbackStore {
 
   // ─── Store Products: cached read with localStorage backup ─────────────────
   private _storeProductsCachedAt = 0;
-  public loadStoreProducts() {
-    // Signed in, the store_products listener (initListenersForRole) already
-    // holds the whole collection; screens calling this re-read it for nothing.
-    if (this._listenersRole) return;
-    const CACHE_TTL = 5 * 60 * 1000;
-    if (Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
+  private _shopProductsFetchedAt = new Map<string, number>();
+
+  public isShopProductsFetched(shopId: string): boolean {
+    if (!shopId) return false;
+    return (this._shopProductsFetchedAt.get(shopId) || 0) > 0;
+  }
+
+  /** Centralized matching to ensure products linked to shop.id, ownerUserId, or prefixed forms are always found */
+  public getProductsForShop(shopId: string, ownerUserId?: string): StoreProduct[] {
+    if (!shopId) return [];
+    const sId = String(shopId).trim();
+    const cleanSId = sId.startsWith('store-') ? sId.replace('store-', '') : sId;
+    const storePrefixedSId = `store-${cleanSId}`;
+
+    const oId = ownerUserId ? String(ownerUserId).trim() : '';
+    const cleanOId = oId ? (oId.startsWith('store-') ? oId.replace('store-', '') : oId) : '';
+    const storePrefixedOId = cleanOId ? `store-${cleanOId}` : '';
+
+    return Array.from(this.storeProducts.values()).filter((p) => {
+      if (!p || !p.storeId) return false;
+      const pid = String(p.storeId).trim();
+      return (
+        pid === sId ||
+        pid === cleanSId ||
+        pid === storePrefixedSId ||
+        (Boolean(oId) && (pid === oId || pid === cleanOId || pid === storePrefixedOId))
+      );
+    });
+  }
+
+  /**
+   * Directly queries Firestore for a specific shop's products.
+   * This avoids waiting for the global 5-minute cache or downloading all stores' products.
+   */
+  public async loadStoreProductsForShop(
+    shopId: string,
+    ownerUserId?: string,
+    force = false
+  ): Promise<StoreProduct[]> {
+    if (!shopId) return [];
+    const lastFetched = this._shopProductsFetchedAt.get(shopId) || 0;
+    const existing = this.getProductsForShop(shopId, ownerUserId);
+    // If recently fetched within 30s and we already have products, return cached
+    if (!force && Date.now() - lastFetched < 30 * 1000 && existing.length > 0) {
+      return existing;
+    }
+
+    const sId = String(shopId).trim();
+    const cleanSId = sId.startsWith('store-') ? sId.replace('store-', '') : sId;
+    const oId = ownerUserId ? String(ownerUserId).trim() : '';
+    const cleanOId = oId ? (oId.startsWith('store-') ? oId.replace('store-', '') : oId) : '';
+
+    const candidateIds = Array.from(
+      new Set(
+        [
+          sId,
+          cleanSId,
+          `store-${cleanSId}`,
+          oId,
+          cleanOId,
+          cleanOId ? `store-${cleanOId}` : '',
+        ].filter(Boolean) as string[]
+      )
+    );
+
+    try {
+      const q = query(
+        collection(db, 'store_products'),
+        where('storeId', 'in', candidateIds.slice(0, 10))
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach((docSnap) => {
+        const p = docSnap.data() as StoreProduct;
+        const id = p.id || docSnap.id;
+        this.storeProducts.set(id, { ...p, id });
+      });
+      this._shopProductsFetchedAt.set(shopId, Date.now());
+      if (oId) this._shopProductsFetchedAt.set(oId, Date.now());
+      this.scheduleLocalStoreSave();
+      this.notify();
+      return this.getProductsForShop(shopId, ownerUserId);
+    } catch (err) {
+      console.warn('[Firestore] loadStoreProductsForShop "in" query note, trying fallback query:', err);
+      try {
+        const directQ = query(collection(db, 'store_products'), where('storeId', '==', sId));
+        const snap = await getDocs(directQ);
+        snap.forEach((docSnap) => {
+          const p = docSnap.data() as StoreProduct;
+          const id = p.id || docSnap.id;
+          this.storeProducts.set(id, { ...p, id });
+        });
+        if (cleanSId !== sId) {
+          const snap2 = await getDocs(query(collection(db, 'store_products'), where('storeId', '==', cleanSId)));
+          snap2.forEach((docSnap) => {
+            const p = docSnap.data() as StoreProduct;
+            const id = p.id || docSnap.id;
+            this.storeProducts.set(id, { ...p, id });
+          });
+        }
+        if (oId && oId !== sId) {
+          const snap3 = await getDocs(query(collection(db, 'store_products'), where('storeId', '==', oId)));
+          snap3.forEach((docSnap) => {
+            const p = docSnap.data() as StoreProduct;
+            const id = p.id || docSnap.id;
+            this.storeProducts.set(id, { ...p, id });
+          });
+        }
+        this._shopProductsFetchedAt.set(shopId, Date.now());
+        if (oId) this._shopProductsFetchedAt.set(oId, Date.now());
+        this.scheduleLocalStoreSave();
+        this.notify();
+      } catch (e2) {
+        console.warn('[Firestore] direct loadStoreProductsForShop fallback note:', e2);
+      }
+      return this.getProductsForShop(shopId, ownerUserId);
+    }
+  }
+
+  public loadStoreProducts(force = false) {
+    // If listeners already hold a live collection and we have data, skip unless forced
+    if (!force && this._listenersRole && this.storeProducts.size > 0) return;
+    const CACHE_TTL = 60 * 1000; // 1-minute TTL
+    if (!force && Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
     getDocs(collection(db, 'store_products'))
       .then((snapshot) => {
         // Full replacement — ensures deleted products are purged from local cache
@@ -4529,6 +4646,117 @@ class FallbackStore {
     this.orders.set(orderId, order);
     this.notify();
     return order;
+  }
+
+  /**
+   * Admin: search orders on the server by ID, customer phone, customer name, etc.
+   * Ensures that searching on the admin panel finds orders even if they were created outside
+   * the currently loaded date range.
+   */
+  public async searchAdminOrdersFromServer(searchTerm: string): Promise<Order[]> {
+    const raw = searchTerm.trim();
+    const cleanId = raw.replace(/^#/, '');
+    if (!cleanId) return [];
+    await this.whenNetworkReady();
+    const ordersCol = collection(db, 'orders');
+    const matched = new Map<string, Order>();
+
+    const addDocs = (snapDocs: QueryDocumentSnapshot<DocumentData>[]) => {
+      snapDocs.forEach((d) => {
+        const o = this.resolveOrderLocations(d.data() as Order);
+        if (o) {
+          const id = o.id || d.id;
+          matched.set(id, o);
+          this.orders.set(id, o);
+        }
+      });
+    };
+
+    // 1. Direct document ID lookup
+    try {
+      const snapDoc = await getDocFromServer(doc(db, 'orders', cleanId));
+      if (snapDoc.exists()) {
+        const o = this.resolveOrderLocations(snapDoc.data() as Order);
+        if (o) {
+          const id = o.id || snapDoc.id;
+          matched.set(id, o);
+          this.orders.set(id, o);
+        }
+      }
+    } catch { }
+
+    // 2. Exact or normalized phone lookup
+    const digitsOnly = raw.replace(/\D/g, '');
+    const phoneCandidates = Array.from(new Set([
+      raw,
+      cleanId,
+      digitsOnly,
+      digitsOnly.length === 10 ? `0${digitsOnly}` : digitsOnly,
+      `+88${digitsOnly.startsWith('88') ? digitsOnly.slice(2) : digitsOnly}`,
+      digitsOnly.startsWith('88') ? digitsOnly.slice(2) : digitsOnly,
+    ])).filter((p) => p && p.length >= 6);
+
+    for (const phone of phoneCandidates) {
+      try {
+        const [snap1, snap2] = await Promise.all([
+          getDocs(query(ordersCol, where('customerPhone', '==', phone), limit(25))),
+          getDocs(query(ordersCol, where('alternativePhone', '==', phone), limit(25))),
+        ]);
+        addDocs(snap1.docs);
+        addDocs(snap2.docs);
+      } catch { }
+    }
+
+    // 3. Customer name search
+    try {
+      const snapName = await getDocs(query(ordersCol, where('customerName', '==', raw), limit(25)));
+      addDocs(snapName.docs);
+    } catch { }
+
+    if (matched.size > 0) {
+      this.notify();
+    }
+    return Array.from(matched.values());
+  }
+
+  /**
+   * Fetches customer or helper orders from server for details and history modals
+   */
+  public async fetchOrdersForUser(userId: string, role?: 'customer' | 'helper' | 'both'): Promise<Order[]> {
+    if (!userId || !db) return [];
+    await this.whenNetworkReady();
+    const ordersCol = collection(db, 'orders');
+    const matched = new Map<string, Order>();
+    try {
+      if (role !== 'helper') {
+        const snap = await getDocs(query(ordersCol, where('customerId', '==', userId), limit(100)));
+        snap.docs.forEach((d) => {
+          const o = this.resolveOrderLocations(d.data() as Order);
+          if (o) {
+            const id = o.id || d.id;
+            this.orders.set(id, o);
+            matched.set(id, o);
+          }
+        });
+      }
+      if (role !== 'customer') {
+        const snap = await getDocs(query(ordersCol, where('helperId', '==', userId), limit(100)));
+        snap.docs.forEach((d) => {
+          const o = this.resolveOrderLocations(d.data() as Order);
+          if (o) {
+            const id = o.id || d.id;
+            this.orders.set(id, o);
+            matched.set(id, o);
+          }
+        });
+      }
+      if (matched.size > 0) {
+        this.notify();
+      }
+    } catch (e: any) {
+      console.warn('[Firestore] fetchOrdersForUser note:', e?.message || e);
+    }
+    return Array.from(matched.values());
   }
 
   /**
@@ -8302,6 +8530,10 @@ class FallbackStore {
     }
 
     this.storeProducts.set(cleanProduct.id, cleanProduct);
+    this._storeProductsCachedAt = 0;
+    if (cleanProduct.storeId) {
+      this._shopProductsFetchedAt.delete(cleanProduct.storeId);
+    }
     this.scheduleLocalStoreSave();
     this.notify();
     try {
@@ -8329,6 +8561,10 @@ class FallbackStore {
   }
 
   public async deleteStoreProduct(productId: string) {
+    const existing = this.storeProducts.get(productId);
+    if (existing?.storeId) {
+      this._shopProductsFetchedAt.delete(existing.storeId);
+    }
     this.storeProducts.delete(productId);
     this._storeProductsCachedAt = 0; // force fresh Firestore fetch on next loadStoreProducts()
     this.scheduleLocalStoreSave();
@@ -8343,6 +8579,9 @@ class FallbackStore {
   public async toggleProductStock(productId: string, inStock?: boolean) {
     const existing = this.storeProducts.get(productId);
     if (!existing) return;
+    if (existing.storeId) {
+      this._shopProductsFetchedAt.delete(existing.storeId);
+    }
     const newStock = inStock !== undefined ? inStock : !existing.inStock;
     const updated: StoreProduct = {
       ...existing,
