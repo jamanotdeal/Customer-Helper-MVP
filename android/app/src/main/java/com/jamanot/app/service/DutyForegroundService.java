@@ -70,6 +70,8 @@ public class DutyForegroundService extends Service {
 
     private FirebaseFirestore db;
     private ListenerRegistration notifReg;
+    /** The targets notifReg listens on. */
+    private List<String> listenTargets;
     private ListenerRegistration pricingReg;
     private LocationTracker locationTracker;
 
@@ -173,7 +175,20 @@ public class DutyForegroundService extends Service {
     // ── Firestore ───────────────────────────────────────────────────────────
 
     private void attachListeners() {
-        if (notifReg != null) return;
+        if (notifReg != null) {
+            // Who this device answers for can change while the service runs:
+            // a store switched to another of its shops, or its owner resolved
+            // after sign-in. Listen for the new targets.
+            List<String> now = OrderMatcher.queryTargets(this);
+            if (now.equals(listenTargets)) return;
+            Log.i(TAG, "Targets changed " + listenTargets + " -> " + now + " — re-listening.");
+            notifReg.remove();
+            notifReg = null;
+            firstSnapshotHandled = false;
+            listenTargets = now;
+            attachNotifListener(now, true);
+            return;
+        }
 
         try {
             db = FirebaseFirestore.getInstance();
@@ -183,6 +198,7 @@ public class DutyForegroundService extends Service {
         }
 
         List<String> targets = OrderMatcher.queryTargets(this);
+        listenTargets = targets;
         Log.i(TAG, "Listening on notifications for targets=" + targets);
 
         // Deliberately the same query shape as the web listener, so behaviour

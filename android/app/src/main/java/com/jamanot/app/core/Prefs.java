@@ -25,6 +25,7 @@ public final class Prefs {
     private static final String K_HELPER_TYPE = "helperType";
     private static final String K_STORE_APPROVED = "isStoreApproved";
     private static final String K_STORE_ID = "storeId";
+    private static final String K_STORE_OWNER_UID = "storeOwnerUid";
     private static final String K_ACTIVE_MODE = "activeMode";
     private static final String K_ON_DUTY = "onDuty";
     private static final String K_LAT = "helperLat";
@@ -64,6 +65,12 @@ public final class Prefs {
     public static boolean isStoreApproved(Context c) { return sp(c).getBoolean(K_STORE_APPROVED, false); }
 
     public static String storeId(Context c) { return sp(c).getString(K_STORE_ID, null); }
+
+    /** Owner of the shop in storeId, as JS resolved it; null when unknown. */
+    public static String storeOwnerUid(Context c) {
+        String v = sp(c).getString(K_STORE_OWNER_UID, null);
+        return v == null || v.isEmpty() ? null : v;
+    }
 
     /** The shop id store orders are filed under — same fallback as initListenersForRole. */
     public static String effectiveStoreId(Context c) {
@@ -239,6 +246,7 @@ public final class Prefs {
         public String helperType;
         public Boolean isStoreApproved;
         public String storeId;
+        public String storeOwnerUid;
         public String activeMode;
         public Boolean onDuty;
         public Double lat;
@@ -259,6 +267,7 @@ public final class Prefs {
         if (s.helperType != null) e.putString(K_HELPER_TYPE, s.helperType);
         if (s.isStoreApproved != null) e.putBoolean(K_STORE_APPROVED, s.isStoreApproved);
         if (s.storeId != null) e.putString(K_STORE_ID, s.storeId);
+        if (s.storeOwnerUid != null) e.putString(K_STORE_OWNER_UID, s.storeOwnerUid);
         if (s.activeMode != null) e.putString(K_ACTIVE_MODE, s.activeMode);
         if (s.onDuty != null) e.putBoolean(K_ON_DUTY, s.onDuty);
         if (s.lat != null && s.lng != null) {

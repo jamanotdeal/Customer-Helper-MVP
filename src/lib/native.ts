@@ -595,6 +595,8 @@ export interface NativeUserState {
   helperType?: 'commuter' | 'dedicated' | null;
   isStoreApproved?: boolean;
   storeId?: string | null;
+  /** Owner of the shop in storeId; '' clears it. */
+  storeOwnerUid?: string | null;
   activeMode?: string | null;
   onDuty?: boolean;
   lat?: number | null;

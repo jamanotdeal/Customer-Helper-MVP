@@ -396,6 +396,7 @@ public class JamanotNativePlugin extends Plugin {
         s.helperType = call.getString("helperType");
         s.isStoreApproved = call.getBoolean("isStoreApproved");
         s.storeId = call.getString("storeId");
+        s.storeOwnerUid = call.getString("storeOwnerUid");
         s.activeMode = call.getString("activeMode");
         s.onDuty = call.getBoolean("onDuty");
         s.lat = call.getDouble("lat");

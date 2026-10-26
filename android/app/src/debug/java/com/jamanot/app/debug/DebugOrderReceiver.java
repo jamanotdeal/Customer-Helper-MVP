@@ -7,6 +7,7 @@ import android.util.Log;
 
 import com.google.android.gms.tasks.Tasks;
 import com.jamanot.app.core.OrderAlertDispatcher;
+import com.jamanot.app.core.OrderMatcher;
 
 import java.util.concurrent.TimeUnit;
 
@@ -19,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  * <pre>
  * adb shell am broadcast -a com.google.android.c2dm.intent.RECEIVE \
  *     -n com.jamanot.app/.debug.DebugOrderReceiver \
- *     --es orderId &lt;id&gt; [--es title "..."] [--es body "..."]
+ *     --es orderId &lt;id&gt; [--es title "..."] [--es body "..."] [--es userId &lt;uid&gt;]
  * </pre>
  */
 public class DebugOrderReceiver extends BroadcastReceiver {
@@ -37,6 +38,14 @@ public class DebugOrderReceiver extends BroadcastReceiver {
         String replayOf = intent.getStringExtra("notifId");
         if (replayOf != null) notifId = replayOf;
         Log.i(TAG, "replaying new_order " + orderId + " as " + notifId);
+
+        // With a userId, the push's addressee is checked the way
+        // JamanotMessagingService checks it.
+        String userId = intent.getStringExtra("userId");
+        if (userId != null && !OrderMatcher.targets(app, userId)) {
+            Log.i(TAG, "replay " + notifId + " not for the account signed in here — dropped.");
+            return;
+        }
 
         // Same shape as JamanotMessagingService: wait on the dispatch off the
         // main thread, inside the receiver's lifetime.

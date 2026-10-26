@@ -157,6 +157,13 @@ async function pushNativeState(
     listenerRole === 'store' ||
     (listenerRole === 'customer' && customerHasActiveOrder(profile.uid));
 
+  // Store notifications are addressed to the shop's owner, and a staff
+  // account's own uid never matches; Java needs the owner to accept them.
+  const storeOwnerUid =
+    listenerRole === 'store' && profile.storeId
+      ? await fallbackStore.resolveShopOwnerId(profile.storeId).catch(() => null)
+      : null;
+
   await syncNativeUserState({
     uid: profile.uid,
     role: listenerRole,
@@ -164,6 +171,7 @@ async function pushNativeState(
     helperType: profile.helperType || 'commuter',
     isStoreApproved: !!profile.isStoreApproved,
     storeId: profile.storeId || null,
+    storeOwnerUid: storeOwnerUid || '',
     activeMode: profile.lastActiveMode || listenerRole,
     onDuty,
     lat: profile.helperLocation?.lat ?? null,
@@ -396,6 +404,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Re-init store listeners for the new store
     if (user?.uid) {
       fallbackStore.initListenersForRole('store', user.uid, user.helperType, storeId);
+      // Java alerts for the active store too; it must follow the switch.
+      pushNativeState({ ...user, storeId }, 'store').catch(() => {});
     }
   };
 

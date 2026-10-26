@@ -107,12 +107,17 @@ public final class OrderMatcher {
      * The account a store's notifications are addressed to. The app writes them
      * to the shop's owner (resolveShopOwnerId in firebase.ts), but a shop is
      * also run from any account whose storeId points at it — and those never
-     * matched, so a new shop order rang only on the owner's phone. Store shops
-     * are keyed {@code store-<ownerUid>}, the same convention
-     * resolveShopOwnerId falls back on.
+     * matched, so a new shop order rang only on the owner's phone. JS mirrors
+     * the owner it resolved for the shop; without that, store shops are keyed
+     * {@code store-<ownerUid>}, the same convention resolveShopOwnerId falls
+     * back on. Shops added from the admin panel are keyed {@code shop-<time>},
+     * so on those the mirrored owner is the only way staff accounts match —
+     * the push function already sends them the owner's shop orders.
      */
     @Nullable
     static String storeOwnerUid(Context c) {
+        String mirrored = Prefs.storeOwnerUid(c);
+        if (mirrored != null) return mirrored;
         String storeId = Prefs.storeId(c);
         if (storeId == null || !storeId.startsWith("store-")) return null;
         String owner = storeId.substring("store-".length());
