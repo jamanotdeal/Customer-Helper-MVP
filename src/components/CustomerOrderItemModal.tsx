@@ -66,12 +66,10 @@ export const CustomerOrderItemModal: React.FC<CustomerOrderItemModalProps> = ({
     };
   }, [isOpen]);
 
-  // Preload store products if not yet loaded
+  // Preload the products this item may take its photo and price from
   useEffect(() => {
-    if (fallbackStore.storeProducts.size === 0) {
-      fallbackStore.loadStoreProducts();
-    }
-  }, []);
+    fallbackStore.loadProductsForItems(item ? [item] : []);
+  }, [item?.storeId]);
 
   const normalizeItemName = (name: string): string => {
     return (name || '')

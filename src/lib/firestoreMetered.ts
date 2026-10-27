@@ -34,6 +34,7 @@ type Row = { listenReads: number; getReads: number; listens: number; gets: numbe
 
 const rows = new Map<string, Row>();
 const pending = new Map<string, number>(); // reads not yet uploaded, by label
+const events = new Map<string, number>(); // countEvent() calls not yet uploaded, by name
 
 function row(label: string): Row {
   let r = rows.get(label);
@@ -140,6 +141,15 @@ export const getAggregateFromServer: typeof fsGetAggregateFromServer = ((q: any,
     return snap;
   })) as any;
 
+/**
+ * Counts something that is not a read but explains reads — e.g. listener
+ * restarts. Uploaded with the reads, under `events` in the same document, and
+ * left out of `total`.
+ */
+export function countEvent(name: string) {
+  events.set(name, (events.get(name) || 0) + 1);
+}
+
 /** This session's reads, most expensive first. */
 export function readTable() {
   return Array.from(rows.entries())
@@ -187,7 +197,7 @@ export function startReadStatsUpload(db: Firestore, who: () => { uid: string | n
   };
 
   const upload = () => {
-    if (pending.size === 0) return;
+    if (pending.size === 0 && events.size === 0) return;
     const counts: Record<string, any> = {};
     let total = 0;
     pending.forEach((n, label) => {
@@ -195,6 +205,11 @@ export function startReadStatsUpload(db: Firestore, who: () => { uid: string | n
       total += n;
     });
     pending.clear();
+    const eventCounts: Record<string, any> = {};
+    events.forEach((n, name) => {
+      eventCounts[fieldKey(name)] = increment(n);
+    });
+    events.clear();
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
     const { uid, role } = who();
@@ -209,6 +224,7 @@ export function startReadStatsUpload(db: Firestore, who: () => { uid: string | n
         updatedAt: now.toISOString(),
         total: increment(total),
         counts,
+        ...(Object.keys(eventCounts).length > 0 ? { events: eventCounts } : {}),
       },
       { merge: true }
     ).catch(() => {

@@ -69,12 +69,24 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, o
     };
 
     updateCounts();
-    if (user?.uid) {
-      fallbackStore.fetchCustomerOrders(user.uid).catch(() => {});
-    }
     const unsub = fallbackStore.subscribe(updateCounts);
     return () => unsub();
   }, [user, activeMode]);
+
+  // A customer's orders, read once per account rather than on every change to
+  // the profile object (coins, location, …). Store and helper accounts show no
+  // customer count, and for them this was a read per profile update.
+  const isCustomerAccount = Boolean(
+    user &&
+    !(user.isStoreApproved || user.role === 'store') &&
+    !(user.isHelper || user.role === 'helper' || activeMode === 'helper')
+  );
+  useEffect(() => {
+    if (user?.uid && isCustomerAccount) {
+      fallbackStore.fetchCustomerOrders(user.uid).catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid, isCustomerAccount]);
 
   if (!user) return null;
 

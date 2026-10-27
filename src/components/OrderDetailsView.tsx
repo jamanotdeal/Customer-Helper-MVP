@@ -122,6 +122,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     };
   }, [orderId]);
 
+  // Products the items take their photos from: only their shops', for the
+  // roles that do not hold every product (see loadProductsForItems).
+  const itemShopIds = (order?.items || []).map((it) => it.storeId || '').join(',');
+  useEffect(() => {
+    fallbackStore.loadProductsForItems(order?.items);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemShopIds]);
+
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
 
   useEffect(() => {
@@ -129,10 +137,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     const sync = () => setShopOrders(fallbackStore.getShopOrdersForOrder(orderId));
     const unsubStore = fallbackStore.subscribe(sync);
 
-    // Preload store products and shops if not yet cached
-    if (fallbackStore.storeProducts.size === 0) {
-      fallbackStore.loadStoreProducts();
-    }
+    // Preload shops if not yet cached (products: see the effect below)
     if (fallbackStore.shops.size === 0 && db) {
       getDocs(collection(db, 'shops'))
         .then((snap) => {

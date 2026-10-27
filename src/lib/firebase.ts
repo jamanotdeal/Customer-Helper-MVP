@@ -30,7 +30,7 @@ import {
 } from 'firebase/firestore';
 import type { Query, QuerySnapshot, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 // Reads go through the meter (see firestoreMetered.ts) so their cost can be attributed.
-import { onSnapshot, getDocs, getDoc, getDocFromServer, startReadStatsUpload } from './firestoreMetered';
+import { onSnapshot, getDocs, getDoc, getDocFromServer, startReadStatsUpload, countEvent } from './firestoreMetered';
 import {
   getMessaging,
   getToken,
@@ -1525,20 +1525,12 @@ class FallbackStore {
         });
       }
 
-      const parsedStoreProducts = this.safeParse<[string, StoreProduct][]>('jamanot_store_products_store');
-      if (parsedStoreProducts && Array.isArray(parsedStoreProducts)) {
-        parsedStoreProducts.forEach(([id, p]) => {
-          if (id && p) this.storeProducts.set(id, p);
-        });
-      }
-
-
-      const parsedShopOrders = this.safeParse<[string, ShopOrder][]>('jamanot_shop_orders_store');
-      if (parsedShopOrders && Array.isArray(parsedShopOrders)) {
-        parsedShopOrders.forEach(([id, so]) => {
-          if (id && so) this.shopOrders.set(id, so);
-        });
-      }
+      // No longer cached (see saveLocalStore). Neither had been written for
+      // months — the store products write always overflowed localStorage, and
+      // the shop orders came after it — so what is there is an old copy, and
+      // shop orders deleted since would never be removed from it.
+      localStorage.removeItem('jamanot_store_products_store');
+      localStorage.removeItem('jamanot_shop_orders_store');
 
       const parsedFbs = this.safeParse<[string, OrderFeedback][]>('jamanot_feedbacks_store');
       if (parsedFbs && Array.isArray(parsedFbs)) {
@@ -1629,6 +1621,10 @@ class FallbackStore {
     return newestFirst.filter(([, o], i) => i < MAX_CACHED_ORDERS || isOpen(o));
   }
 
+  // What each localStorage key last held when it was written successfully —
+  // see saveLocalStore.
+  private _savedVersions: Map<string, string> = new Map();
+
   private saveLocalStore() {
     if (typeof window === 'undefined') return;
     // Admin holds platform-wide users, ledgers and shop orders. They are
@@ -1636,40 +1632,62 @@ class FallbackStore {
     // and each cold start slower; keep just the admin's own profile.
     const isAdmin = Boolean(this._listenersRole?.startsWith('admin:'));
     const ownUser = this.currentUserId ? this.users.get(this.currentUserId) : undefined;
+
+    // Every key is written on its own. The WebView allows about 5 million
+    // characters per origin, and a write past that throws: when all keys
+    // shared one try, the first one too big took every key after it down, and
+    // the server addresses and feedbacks behind it were read again in full on
+    // each launch. A key that fails is removed rather than left holding an old
+    // copy. `version` skips the serialising when the collection has not
+    // changed since its last successful write; without one the key is always
+    // written (small or untracked collections).
+    const put = (key: string, value: () => unknown, version?: string) => {
+      if (version !== undefined && this._savedVersions.get(key) === version) return;
+      try {
+        localStorage.setItem(key, JSON.stringify(value()));
+        if (version !== undefined) this._savedVersions.set(key, version);
+      } catch (e) {
+        this._savedVersions.delete(key);
+        try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
+        console.warn(`Local storage persist error (${key}):`, e);
+      }
+    };
+    const v = (map: Map<unknown, unknown>, ...more: unknown[]) => [versionOf(map), ...more].join('|');
+
     try {
       localStorage.setItem('jamanot_cache_owner', this._dataOwnerUid || '');
-      localStorage.setItem('jamanot_orders_store', JSON.stringify(this.cacheableOrders(Array.from(this.orders.entries()))));
-      const blockedOrders = Array.from(this.orders.entries()).filter(([, o]) => Boolean(o?.isBlockedUserOrder));
-      if (blockedOrders.length > 0) {
-        localStorage.setItem('jamanot_blocked_user_orders', JSON.stringify(blockedOrders));
-      }
-      localStorage.setItem(
-        'jamanot_users_store',
-        JSON.stringify(isAdmin ? (ownUser ? [[this.currentUserId, ownUser]] : []) : Array.from(this.users.entries()))
-      );
-      localStorage.setItem('jamanot_helper_apps_store', JSON.stringify(Array.from(this.helperApplications.entries())));
-      localStorage.setItem('jamanot_store_apps_store', JSON.stringify(Array.from(this.storeApplications.entries())));
-      localStorage.setItem('jamanot_wallets_store', JSON.stringify(Array.from(this.wallets.entries())));
-      localStorage.setItem('jamanot_wallet_txs_store', JSON.stringify(isAdmin ? [] : Array.from(this.walletTransactions.entries())));
-      localStorage.setItem('jamanot_withdrawals_store', JSON.stringify(Array.from(this.withdrawals.entries())));
-      localStorage.setItem('jamanot_notifications_store', JSON.stringify(Array.from(this.notifications.entries())));
-      localStorage.setItem('jamanot_admin_notifs_history_store', JSON.stringify(Array.from(this.adminNotificationsHistory.entries())));
-      localStorage.setItem('jamanot_scheduled_notifs_store', JSON.stringify(Array.from(this.scheduledNotifications.entries())));
-      localStorage.setItem('jamanot_shops_store', JSON.stringify(Array.from(this.shops.entries())));
-      localStorage.setItem('jamanot_store_products_store', JSON.stringify(Array.from(this.storeProducts.entries())));
-
-      localStorage.setItem('jamanot_shop_orders_store', JSON.stringify(isAdmin ? [] : Array.from(this.shopOrders.entries())));
-      localStorage.setItem('jamanot_feedbacks_store', JSON.stringify(Array.from(this.orderFeedbacks.entries())));
-      localStorage.setItem('jamanot_modals_store', JSON.stringify(Array.from(this.customModals.entries())));
-      localStorage.setItem('jamanot_fee_suggestions_store', JSON.stringify(Array.from(this.feeSuggestions.entries())));
-      localStorage.setItem('jamanot_reward_prizes_store', JSON.stringify(Array.from(this.rewardPrizes.entries())));
-      localStorage.setItem('jamanot_reward_claims_store', JSON.stringify(Array.from(this.rewardClaims.entries())));
-      localStorage.setItem('jamanot_referrals_store', JSON.stringify(Array.from(this.referrals.entries())));
-      localStorage.setItem('jamanot_server_addresses', JSON.stringify(Array.from(this.serverAddresses.entries())));
-      localStorage.setItem('jamanot_pricing_store', JSON.stringify(this.pricingSettings));
     } catch (e) {
-      console.warn('Local storage persist error:', e);
+      console.warn('Local storage persist error (jamanot_cache_owner):', e);
     }
+    put('jamanot_orders_store', () => this.cacheableOrders(Array.from(this.orders.entries())), v(this.orders));
+    const blockedOrders = Array.from(this.orders.entries()).filter(([, o]) => Boolean(o?.isBlockedUserOrder));
+    if (blockedOrders.length > 0) {
+      put('jamanot_blocked_user_orders', () => blockedOrders, v(this.orders));
+    }
+    put(
+      'jamanot_users_store',
+      () => (isAdmin ? (ownUser ? [[this.currentUserId, ownUser]] : []) : Array.from(this.users.entries())),
+      v(this.users, isAdmin ? `admin:${this.currentUserId}` : '')
+    );
+    put('jamanot_helper_apps_store', () => Array.from(this.helperApplications.entries()), v(this.helperApplications));
+    put('jamanot_store_apps_store', () => Array.from(this.storeApplications.entries()), v(this.storeApplications));
+    put('jamanot_wallets_store', () => Array.from(this.wallets.entries()), v(this.wallets));
+    put('jamanot_wallet_txs_store', () => (isAdmin ? [] : Array.from(this.walletTransactions.entries())), v(this.walletTransactions, isAdmin));
+    put('jamanot_withdrawals_store', () => Array.from(this.withdrawals.entries()), v(this.withdrawals));
+    put('jamanot_notifications_store', () => Array.from(this.notifications.entries()));
+    put('jamanot_admin_notifs_history_store', () => Array.from(this.adminNotificationsHistory.entries()), v(this.adminNotificationsHistory));
+    put('jamanot_scheduled_notifs_store', () => Array.from(this.scheduledNotifications.entries()));
+    put('jamanot_shops_store', () => Array.from(this.shops.entries()), v(this.shops));
+    // Not cached: store products (their photos are inline, ~22 MB, far past
+    // what localStorage holds) and shop orders (see loadFromLocalStorage).
+    put('jamanot_feedbacks_store', () => Array.from(this.orderFeedbacks.entries()), v(this.orderFeedbacks));
+    put('jamanot_modals_store', () => Array.from(this.customModals.entries()), v(this.customModals));
+    put('jamanot_fee_suggestions_store', () => Array.from(this.feeSuggestions.entries()), v(this.feeSuggestions));
+    put('jamanot_reward_prizes_store', () => Array.from(this.rewardPrizes.entries()));
+    put('jamanot_reward_claims_store', () => Array.from(this.rewardClaims.entries()));
+    put('jamanot_referrals_store', () => Array.from(this.referrals.entries()));
+    put('jamanot_server_addresses', () => Array.from(this.serverAddresses.entries()));
+    put('jamanot_pricing_store', () => this.pricingSettings);
   }
 
   /**
@@ -1984,12 +2002,17 @@ class FallbackStore {
   }
 
   // ─── Shops: one-time read with 30-minute localStorage cache ───────────────
+  // The read in flight, so that callers in the same moment (the constructor
+  // and the store grid, on a visitor's launch) share it.
+  private _shopsLoad: Promise<void> | null = null;
+
   public loadShops() {
     // Signed in, the shops listener (initListenersForRole) holds every shop.
     if (this._listenersRole) return;
     const CACHE_TTL = 30 * 60 * 1000;
     if (Date.now() - this._shopsCachedAt < CACHE_TTL && this.shops.size > 0) return;
-    getDocs(collection(db, 'shops'))
+    if (this._shopsLoad) return;
+    this._shopsLoad = getDocs(collection(db, 'shops'))
       .then((snapshot) => {
         this.shops.clear();
         snapshot.forEach((docSnap) => {
@@ -1999,7 +2022,10 @@ class FallbackStore {
         this.scheduleLocalStoreSave();
         this.notify();
       })
-      .catch((err) => console.warn('[Firestore] Shops getDocs note:', err));
+      .catch((err) => console.warn('[Firestore] Shops getDocs note:', err))
+      .finally(() => {
+        this._shopsLoad = null;
+      });
   }
 
   private _loadShopsCached() {
@@ -2224,6 +2250,30 @@ class FallbackStore {
     }
   }
 
+  /**
+   * Makes sure the products an order's items may take a photo or price from
+   * are loaded. Customers and the admin hold every product live, so nothing
+   * is read for them. Helpers and stores do not (see initListenersForRole): for
+   * them only the shops the items came from are read — an item with no shop
+   * is matched against what is already held. A visitor gets the whole
+   * collection, as before.
+   */
+  public loadProductsForItems(items: { storeId?: string }[] | undefined) {
+    const role = this._listenersRole?.split(':')[0];
+    if (role === 'customer' || role === 'admin') return;
+    if (!role) {
+      if (this.storeProducts.size === 0) this.loadStoreProducts();
+      return;
+    }
+    const shopIds = new Set<string>();
+    (items || []).forEach((it) => {
+      if (it?.storeId) shopIds.add(it.storeId);
+    });
+    shopIds.forEach((shopId) => {
+      this.loadStoreProductsForShop(shopId).catch(() => {});
+    });
+  }
+
   public loadStoreProducts(force = false) {
     // If listeners already hold a live collection and we have data, skip unless forced
     if (!force && this._listenersRole && this.storeProducts.size > 0) return;
@@ -2252,7 +2302,9 @@ class FallbackStore {
   // ─── Custom modals: read with 10-minute cache (public for all visitors) ────────
   public loadModalsCached() {
     const CACHE_TTL = 10 * 60 * 1000;
-    if (Date.now() - this._modalsCachedAt < CACHE_TTL && this.customModals.size > 0) return;
+    // No size check: the collection is often empty, and an empty answer is
+    // as current as any. With one, every listener start read it again.
+    if (Date.now() - this._modalsCachedAt < CACHE_TTL) return;
     getDocs(collection(db, 'customModals'))
       .then((snapshot) => {
         this.customModals.clear();
@@ -2443,6 +2495,9 @@ class FallbackStore {
     // Tear down previous set before starting new one
     this.teardownListeners();
     this._listenersRole = roleKey;
+    // A start is normal a few times a session; thousands a day is a role
+    // flip-flopping (seen on store staff accounts in October 2026).
+    countEvent(`init:${role}`);
 
     // Another account on this device: drop the previous one's orders and
     // ledgers rather than mixing them into this account's lists. A role switch
@@ -2555,26 +2610,32 @@ class FallbackStore {
       );
     }
 
-    // ── Store Products: realtime sync across all users ──
-    unsubs.push(
-      onSnapshot(
-        collection(db, 'store_products'),
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === 'removed') {
-              this.storeProducts.delete(change.doc.id);
-            } else {
-              const p = change.doc.data() as StoreProduct;
-              const id = p.id || change.doc.id;
-              this.storeProducts.set(id, { ...p, id });
-            }
-          });
-          this.scheduleLocalStoreSave();
-          this.notify();
-        },
-        (err) => console.warn('[Firestore] store_products realtime sync note:', err)
-      )
-    );
+    // ── Store Products: realtime, for the roles that browse every shop ──
+    // Customers search and browse all products; the admin manages them.
+    // Helpers never show them, and a store reads only its own shop's
+    // (loadStoreProductsForShop). The collection carries its photos inline —
+    // about 22 MB in October 2026 — and all listeners share one connection,
+    // so for a helper this held back the order list by ~10 s on every launch.
+    if (role === 'customer' || role === 'admin') {
+      unsubs.push(
+        onSnapshot(
+          collection(db, 'store_products'),
+          (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                this.storeProducts.delete(change.doc.id);
+              } else {
+                const p = change.doc.data() as StoreProduct;
+                const id = p.id || change.doc.id;
+                this.storeProducts.set(id, { ...p, id });
+              }
+            });
+            this.notify();
+          },
+          (err) => console.warn('[Firestore] store_products realtime sync note:', err)
+        )
+      );
+    }
 
     // ── Shops: realtime sync across all users ──
     unsubs.push(
@@ -2599,7 +2660,11 @@ class FallbackStore {
 
     // ── STORE role ────────────────────────────────────────────────────────────
     if (role === 'store') {
-      const effectiveStoreId = storeId || `store-${userId}`;
+      // Several callers pass no storeId. The profile's comes before the
+      // store-<uid> guess, which only fits an owner whose shop was created
+      // from an application; a staff account's shop is keyed otherwise.
+      const knownStoreId = storeId || this.users.get(userId)?.storeId;
+      const effectiveStoreId = knownStoreId || `store-${userId}`;
       this.storeListenerShopId = effectiveStoreId;
 
       // Live user profile sync (so role/permission updates or store deletions take effect immediately)
@@ -2624,11 +2689,18 @@ class FallbackStore {
       );
 
       // Live shop doc sync (so if shop is deleted by admin, store mode exits immediately)
+      let shopSeen = false;
       unsubs.push(
         onSnapshot(
           doc(db, 'shops', effectiveStoreId),
           (docSnap) => {
             if (!docSnap.exists()) {
+              // Only the server can say the shop is gone: offline, the SDK
+              // reports a document it has never held as missing. And a guessed
+              // id that never existed is not a deletion — taking the account
+              // out of store mode over it restarted every listener, and the
+              // profile put it straight back.
+              if (docSnap.metadata.fromCache || (!knownStoreId && !shopSeen)) return;
               this.shops.delete(effectiveStoreId);
               const current = this.users.get(userId);
               if (current && (current.storeId === effectiveStoreId || current.isStore || current.isStoreApproved || current.role === 'store')) {
@@ -2644,6 +2716,7 @@ class FallbackStore {
               }
               this.notify();
             } else {
+              shopSeen = true;
               const s = docSnap.data() as Shop;
               this.shops.set(effectiveStoreId, { ...s, id: effectiveStoreId });
               this.notify();
