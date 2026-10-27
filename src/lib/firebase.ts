@@ -2021,8 +2021,9 @@ class FallbackStore {
   private _shopsLoad: Promise<void> | null = null;
 
   public loadShops() {
-    // Signed in, the shops listener (initListenersForRole) holds every shop.
-    if (this._listenersRole) return;
+    // Signed in, the shops listener (initListenersForRole) holds every shop —
+    // or will in a moment: a returning user's screens mount before it starts.
+    if (this._listenersRole || this._hasSignedInUser()) return;
     const CACHE_TTL = 30 * 60 * 1000;
     if (Date.now() - this._shopsCachedAt < CACHE_TTL && this.shops.size > 0) return;
     if (this._shopsLoad) return;
@@ -2289,8 +2290,15 @@ class FallbackStore {
   }
 
   public loadStoreProducts(force = false) {
-    // If listeners already hold a live collection and we have data, skip unless forced
-    if (!force && this._listenersRole && this.storeProducts.size > 0) return;
+    if (!force) {
+      // Customers and the admin hold every product live (initListenersForRole).
+      const role = this._listenersRole?.split(':')[0];
+      if (role === 'customer' || role === 'admin') return;
+      // Listeners running, or about to: a returning user's screens mount
+      // before initListenersForRole runs, and reading here as well downloaded
+      // the collection twice on each launch. The cached copy shows meanwhile.
+      if ((this._listenersRole || this._hasSignedInUser()) && this.storeProducts.size > 0) return;
+    }
     const CACHE_TTL = 60 * 1000; // 1-minute TTL
     if (!force && Date.now() - this._storeProductsCachedAt < CACHE_TTL && this.storeProducts.size > 0) return;
     getDocs(collection(db, 'store_products'))

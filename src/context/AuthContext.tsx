@@ -508,6 +508,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       fallbackStore.currentUserId = fbUser.uid;
 
+      // Which listeners a profile gets (step 3).
+      const listenerRoleOf = (p: UserProfile): 'customer' | 'helper' | 'admin' | 'store' =>
+        (p.isAdmin || p.role === 'admin' || isUserAdminEmail(fbUser.email))
+          ? 'admin'
+          : (p.isStoreApproved || p.role === 'store')
+          ? 'store'
+          : (p.isHelper || p.role === 'helper')
+          ? 'helper'
+          : 'customer';
+      // A profile this device saved on an earlier launch (buildProfile creates
+      // one otherwise).
+      const knownOnDevice = isUserAuthenticated(fallbackStore.users.get(fbUser.uid));
+
       // 1. Immediately build and apply profile from local cache/memory so React state has user instantly
       let profile = buildProfile(fbUser, currentSavedMode);
       if (profile.displayName && !fbUser.displayName) {
@@ -523,6 +536,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (persistedStoreId) setActiveStoreIdState(persistedStoreId);
       applyProfile(profile, currentSavedMode, false);
       setLoading(false);
+
+      // A returning account's listeners start now, from the role and shop
+      // saved on this device, rather than after step 2's two round trips to
+      // the server (Firestore is in the US) — about 3-4 s of an empty screen
+      // on each launch. Step 3 corrects them if the server says otherwise.
+      if (knownOnDevice) {
+        fallbackStore.initListenersForRole(listenerRoleOf(profile), fbUser.uid, profile.helperType, profile.storeId);
+      }
 
       // 2. Fetch and synchronize roles/store data from Firestore
       try {
@@ -541,14 +562,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('[AuthContext] Background user profile sync note:', e);
       }
 
-      // 3. Initialize role-scoped Firestore listeners
-      const listenerRole: 'customer' | 'helper' | 'admin' | 'store' = (profile.isAdmin || profile.role === 'admin' || isUserAdminEmail(fbUser.email))
-        ? 'admin'
-        : (profile.isStoreApproved || profile.role === 'store')
-        ? 'store'
-        : (profile.isHelper || profile.role === 'helper')
-        ? 'helper'
-        : 'customer';
+      // 3. Initialize role-scoped Firestore listeners. A no-op when the ones
+      // started from the saved profile are already right. The role is part
+      // of what identifies them, the shop is not: a store whose shop changed
+      // since the saved profile has them restarted here.
+      const listenerRole = listenerRoleOf(profile);
+      if (
+        listenerRole === 'store' &&
+        profile.storeId &&
+        fallbackStore.isListeningAs('store', fbUser.uid) &&
+        fallbackStore.storeListenerShopId !== profile.storeId
+      ) {
+        fallbackStore.teardownListeners();
+      }
       fallbackStore.initListenersForRole(listenerRole, fbUser.uid, profile.helperType, profile.storeId);
 
       // 4. On customer login: load saved delivery and pickup addresses
