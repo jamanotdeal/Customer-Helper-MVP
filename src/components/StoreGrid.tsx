@@ -229,11 +229,48 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
         serviceStoreTypeMap
       )
     );
-    return sortShopsByFeedbackAndNew(
+    const sorted = sortShopsByFeedbackAndNew(
       matched,
       fallbackStore.orderFeedbacks,
       fallbackStore.orders
     );
+
+    // Deduplicate duplicate shops with identical normalized name and contact,
+    // prioritizing the shop entry that actually has products loaded in storeProducts
+    const deduplicated: Shop[] = [];
+
+    for (const shop of sorted) {
+      const normName = (shop.name || '').replace(/\s+/g, '').toLowerCase();
+      const shopPhones = [shop.managerWhatsapp, shop.whatsapp]
+        .map((p) => (p || '').replace(/\D/g, ''))
+        .filter(Boolean);
+
+      const existingIdx = deduplicated.findIndex((s) => {
+        const sNormName = (s.name || '').replace(/\s+/g, '').toLowerCase();
+        if (sNormName !== normName) return false;
+        const sPhones = [s.managerWhatsapp, s.whatsapp]
+          .map((p) => (p || '').replace(/\D/g, ''))
+          .filter(Boolean);
+        return (
+          shopPhones.length === 0 ||
+          sPhones.length === 0 ||
+          shopPhones.some((p) => sPhones.includes(p))
+        );
+      });
+
+      if (existingIdx === -1) {
+        deduplicated.push(shop);
+      } else {
+        const existing = deduplicated[existingIdx];
+        const existingCount = fallbackStore.getProductsForShop(existing.id, existing.ownerUserId).length;
+        const currentCount = fallbackStore.getProductsForShop(shop.id, shop.ownerUserId).length;
+        if (currentCount > existingCount) {
+          deduplicated[existingIdx] = shop;
+        }
+      }
+    }
+
+    return deduplicated;
   }, [shops, currentService, serviceStoreTypeMap]);
 
   const visible = filteredShops.slice(0, visibleCount);

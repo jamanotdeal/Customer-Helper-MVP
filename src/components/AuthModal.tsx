@@ -145,33 +145,43 @@ export const AuthModal: React.FC = () => {
             </div>
           )}
 
-          {/* Premium Google Sign-In Button */}
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={isSubmitting}
-            className="w-full flex items-center justify-center space-x-3 py-3 px-4 bg-white hover:bg-gray-50 active:bg-gray-100 border border-gray-200/90 rounded-2xl shadow-xs text-sm font-bold text-gray-700 transition-all transform active:scale-[0.99] disabled:opacity-60 cursor-pointer"
-          >
-            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.15C3.26 21.3 7.31 24 12 24z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.28 14.24c-.25-.72-.38-1.49-.38-2.24s.13-1.52.38-2.24V6.61H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.39l3.99-3.15z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.61l3.99 3.15c.95-2.85 3.6-4.96 6.72-4.96z"
-              />
-            </svg>
-            <span className="tracking-wide">Google দিয়ে এগিয়ে যান</span>
-          </button>
+          {/* Highlighted Google Sign-In Button */}
+          <div className="relative pt-1.5">
+            <span className="absolute -top-1 right-4 z-10 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wide bg-emerald-600 text-white shadow-sm ring-2 ring-white">
+              <Sparkles className="w-2.5 h-2.5" />
+              <span>Click Here</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={isSubmitting}
+              className="relative w-full flex items-center justify-center space-x-3 py-3.5 px-4 bg-gradient-to-r from-emerald-50/50 via-white to-emerald-50/50 hover:from-emerald-100/60 hover:via-emerald-50/40 hover:to-emerald-100/60 active:from-emerald-100 active:to-emerald-100 border-2 border-emerald-500/50 hover:border-emerald-600 rounded-2xl shadow-[0_4px_16px_rgba(16,185,129,0.12)] hover:shadow-[0_6px_20px_rgba(16,185,129,0.2)] transition-all duration-200 transform active:scale-[0.99] disabled:opacity-60 cursor-pointer group"
+            >
+              <div className="w-7 h-7 rounded-xl bg-white flex items-center justify-center shadow-xs border border-gray-200 group-hover:scale-105 transition-transform shrink-0">
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.15C3.26 21.3 7.31 24 12 24z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.28 14.24c-.25-.72-.38-1.49-.38-2.24s.13-1.52.38-2.24V6.61H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.39l3.99-3.15z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.61l3.99 3.15c.95-2.85 3.6-4.96 6.72-4.96z"
+                  />
+                </svg>
+              </div>
+              <span className="text-sm font-black text-gray-800 group-hover:text-emerald-800 tracking-wide transition-colors">
+                Google দিয়ে এগিয়ে যান
+              </span>
+            </button>
+          </div>
 
           {/* Manual Auth Form Section (Hidden if Admin turned off manualAuthEnabled) */}
           {manualAuthEnabled && (
@@ -191,11 +201,10 @@ export const AuthModal: React.FC = () => {
                     setAuthMode('login');
                     setErrorMessage(null);
                   }}
-                  className={`py-2 text-xs font-black rounded-xl transition-all duration-150 ${
-                    authMode === 'login'
+                  className={`py-2 text-xs font-black rounded-xl transition-all duration-150 ${authMode === 'login'
                       ? 'bg-white text-emerald-800 shadow-xs'
                       : 'text-gray-500 hover:text-gray-800'
-                  }`}
+                    }`}
                 >
                   লগইন
                 </button>
@@ -205,11 +214,10 @@ export const AuthModal: React.FC = () => {
                     setAuthMode('register');
                     setErrorMessage(null);
                   }}
-                  className={`py-2 text-xs font-black rounded-xl transition-all duration-150 ${
-                    authMode === 'register'
+                  className={`py-2 text-xs font-black rounded-xl transition-all duration-150 ${authMode === 'register'
                       ? 'bg-white text-emerald-800 shadow-xs'
                       : 'text-gray-500 hover:text-gray-800'
-                  }`}
+                    }`}
                 >
                   রেজিস্ট্রেশন
                 </button>

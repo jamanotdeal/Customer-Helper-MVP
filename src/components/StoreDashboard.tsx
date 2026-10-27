@@ -1328,13 +1328,22 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                 {parsedItems.map((item, idx) => {
                                   const priceInfo = getShopItemPriceDisplay(item, so.price);
                                   return (
-                                    <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-gray-100/60 last:border-b-0">
-                                      <div className="flex items-center space-x-1.5 min-w-0 pr-2">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
-                                        <span className="font-bold text-gray-800 break-words">{item.name}</span>
-                                        {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
+                                    <div key={idx} className="flex items-start justify-between text-xs py-1.5 border-b border-gray-100/60 last:border-b-0 gap-2">
+                                      <div className="flex-1 min-w-0 pr-1">
+                                        <div className="flex items-center space-x-1.5 min-w-0 flex-wrap">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                                          <span className="font-bold text-gray-800 break-words">{item.name}</span>
+                                          {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
+                                        </div>
+                                        {priceInfo.lineTotal <= 0 && (
+                                          <div className="mt-0.5 pl-3">
+                                            <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 font-semibold inline-block">
+                                              মূল্য বাকি
+                                            </span>
+                                          </div>
+                                        )}
                                       </div>
-                                      {priceInfo.lineTotal > 0 ? (
+                                      {priceInfo.lineTotal > 0 && (
                                         <div className="text-right shrink-0">
                                           {priceInfo.isMultiQty ? (
                                             <div className="flex items-center gap-1.5 justify-end">
@@ -1351,10 +1360,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                             </span>
                                           )}
                                         </div>
-                                      ) : (
-                                        <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 font-semibold shrink-0">
-                                          মূল্য বাকি
-                                        </span>
                                       )}
                                     </div>
                                   );

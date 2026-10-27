@@ -1954,15 +1954,69 @@ class FallbackStore {
     const cleanOId = oId ? (oId.startsWith('store-') ? oId.replace('store-', '') : oId) : '';
     const storePrefixedOId = cleanOId ? `store-${cleanOId}` : '';
 
+    const validCandidateIds = new Set<string>([
+      sId,
+      cleanSId,
+      storePrefixedSId,
+      ...(oId ? [oId, cleanOId, storePrefixedOId] : []),
+    ]);
+
+    const targetShop =
+      this.shops.get(shopId) ||
+      (cleanSId ? this.shops.get(cleanSId) : undefined) ||
+      (storePrefixedSId ? this.shops.get(storePrefixedSId) : undefined);
+
+    if (targetShop) {
+      if (targetShop.assignedUserIds && Array.isArray(targetShop.assignedUserIds)) {
+        for (const uid of targetShop.assignedUserIds) {
+          if (!uid) continue;
+          const u = String(uid).trim();
+          validCandidateIds.add(u);
+          validCandidateIds.add(u.replace(/^store-/, ''));
+          validCandidateIds.add(`store-${u.replace(/^store-/, '')}`);
+        }
+      }
+
+      // Check sister duplicate shops with identical normalized name and contact
+      const normName = (targetShop.name || '').replace(/\s+/g, '').toLowerCase();
+      const targetPhones = [targetShop.whatsapp, targetShop.managerWhatsapp]
+        .map((p) => (p || '').replace(/\D/g, ''))
+        .filter(Boolean);
+
+      if (normName) {
+        for (const [otherId, otherShop] of this.shops.entries()) {
+          if (otherId === shopId) continue;
+          const otherNormName = (otherShop.name || '').replace(/\s+/g, '').toLowerCase();
+          const otherPhones = [otherShop.whatsapp, otherShop.managerWhatsapp]
+            .map((p) => (p || '').replace(/\D/g, ''))
+            .filter(Boolean);
+
+          const phoneMatches =
+            targetPhones.length === 0 ||
+            otherPhones.length === 0 ||
+            targetPhones.some((p) => otherPhones.includes(p));
+
+          if (otherNormName === normName && phoneMatches) {
+            const cleanOtherId = String(otherId).replace(/^store-/, '');
+            validCandidateIds.add(otherId);
+            validCandidateIds.add(cleanOtherId);
+            validCandidateIds.add(`store-${cleanOtherId}`);
+            if (otherShop.ownerUserId) {
+              const cleanOtherOwner = String(otherShop.ownerUserId).replace(/^store-/, '');
+              validCandidateIds.add(otherShop.ownerUserId);
+              validCandidateIds.add(cleanOtherOwner);
+              validCandidateIds.add(`store-${cleanOtherOwner}`);
+            }
+          }
+        }
+      }
+    }
+
     return Array.from(this.storeProducts.values()).filter((p) => {
       if (!p || !p.storeId) return false;
       const pid = String(p.storeId).trim();
-      return (
-        pid === sId ||
-        pid === cleanSId ||
-        pid === storePrefixedSId ||
-        (Boolean(oId) && (pid === oId || pid === cleanOId || pid === storePrefixedOId))
-      );
+      const cleanPid = pid.replace(/^store-/, '');
+      return validCandidateIds.has(pid) || validCandidateIds.has(cleanPid);
     });
   }
 
@@ -1985,6 +2039,7 @@ class FallbackStore {
 
     const sId = String(shopId).trim();
     const cleanSId = sId.startsWith('store-') ? sId.replace('store-', '') : sId;
+    const storePrefixedSId = `store-${cleanSId}`;
     const oId = ownerUserId ? String(ownerUserId).trim() : '';
     const cleanOId = oId ? (oId.startsWith('store-') ? oId.replace('store-', '') : oId) : '';
 
@@ -1993,7 +2048,7 @@ class FallbackStore {
         [
           sId,
           cleanSId,
-          `store-${cleanSId}`,
+          storePrefixedSId,
           oId,
           cleanOId,
           cleanOId ? `store-${cleanOId}` : '',
@@ -2001,10 +2056,53 @@ class FallbackStore {
       )
     );
 
+    const targetShop =
+      this.shops.get(shopId) ||
+      (cleanSId ? this.shops.get(cleanSId) : undefined) ||
+      (storePrefixedSId ? this.shops.get(storePrefixedSId) : undefined);
+
+    if (targetShop) {
+      if (targetShop.assignedUserIds && Array.isArray(targetShop.assignedUserIds)) {
+        for (const uid of targetShop.assignedUserIds) {
+          if (!uid) continue;
+          const u = String(uid).trim();
+          candidateIds.push(u, u.replace(/^store-/, ''), `store-${u.replace(/^store-/, '')}`);
+        }
+      }
+      const normName = (targetShop.name || '').replace(/\s+/g, '').toLowerCase();
+      const targetPhones = [targetShop.whatsapp, targetShop.managerWhatsapp]
+        .map((p) => (p || '').replace(/\D/g, ''))
+        .filter(Boolean);
+
+      if (normName) {
+        for (const [otherId, otherShop] of this.shops.entries()) {
+          if (otherId === shopId) continue;
+          const otherNormName = (otherShop.name || '').replace(/\s+/g, '').toLowerCase();
+          const otherPhones = [otherShop.whatsapp, otherShop.managerWhatsapp]
+            .map((p) => (p || '').replace(/\D/g, ''))
+            .filter(Boolean);
+
+          const phoneMatches =
+            targetPhones.length === 0 ||
+            otherPhones.length === 0 ||
+            targetPhones.some((p) => otherPhones.includes(p));
+
+          if (otherNormName === normName && phoneMatches) {
+            candidateIds.push(otherId, otherId.replace(/^store-/, ''));
+            if (otherShop.ownerUserId) {
+              candidateIds.push(otherShop.ownerUserId, otherShop.ownerUserId.replace(/^store-/, ''));
+            }
+          }
+        }
+      }
+    }
+
+    const dedupedCandidates = Array.from(new Set(candidateIds.filter(Boolean)));
+
     try {
       const q = query(
         collection(db, 'store_products'),
-        where('storeId', 'in', candidateIds.slice(0, 10))
+        where('storeId', 'in', dedupedCandidates.slice(0, 10))
       );
       const snapshot = await getDocs(q);
       snapshot.forEach((docSnap) => {

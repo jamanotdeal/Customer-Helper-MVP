@@ -517,6 +517,22 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
 
       const nowIso = new Date().toISOString();
       const isHelper = editorRole === 'helper';
+      if (!isHelper && (
+        order.status === 'PURCHASED_EXECUTED' ||
+        order.status === 'ON_THE_WAY' ||
+        order.status === 'ARRIVED' ||
+        order.status === 'DELIVERED' ||
+        order.status === 'CANCELED' ||
+        (order.status as string) === 'CANCELLED'
+      )) {
+        showAlert(
+          'অর্ডার পরিবর্তন সম্ভব নয়',
+          'অর্ডারটি ইতিমধ্যে প্রসেসিং বা সম্পন্ন অবস্থায় রয়েছে। এখন আর এটি পরিবর্তন করা যাবে না।',
+          'error'
+        );
+        setUpdatingOrder(false);
+        return;
+      }
       const actorName = isHelper ? (order.helperName || 'Helper') : (order.customerName || 'Customer');
 
       const editItem: OrderEditHistoryItem = {

@@ -11,7 +11,7 @@ import {
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
-  ShoppingBag, Store, AlertCircle, UserX,
+  Store, AlertCircle, UserX,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
 import { ServiceIcon } from './ServiceIcon';
@@ -421,17 +421,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     setOrder((prev) =>
       prev
         ? {
-            ...prev,
-            status: 'CANCELED',
-            cancelledAt: new Date().toISOString(),
-            cancellationRequest: {
-              requestedBy: 'customer',
-              reason: reasonText,
-              status: 'APPROVED',
-              createdAt: new Date().toISOString(),
-            },
-            statusHistory: [...(prev.statusHistory || []), cancelHistoryEntry],
-          }
+          ...prev,
+          status: 'CANCELED',
+          cancelledAt: new Date().toISOString(),
+          cancellationRequest: {
+            requestedBy: 'customer',
+            reason: reasonText,
+            status: 'APPROVED',
+            createdAt: new Date().toISOString(),
+          },
+          statusHistory: [...(prev.statusHistory || []), cancelHistoryEntry],
+        }
         : null
     );
 
@@ -458,10 +458,12 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const openEditModal = () => {
     if (!canEdit) return;
     if (
+      order.status === 'PURCHASED_EXECUTED' ||
       order.status === 'ON_THE_WAY' ||
       order.status === 'ARRIVED' ||
       order.status === 'DELIVERED' ||
-      (order.status as string) === 'CANCELED'
+      (order.status as string) === 'CANCELED' ||
+      (order.status as string) === 'CANCELLED'
     )
       return;
     setShowEditModal(true);
@@ -476,6 +478,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const canEdit = Boolean(
     user &&
     (isOwnerCustomer || isAdminUser) &&
+    order.status !== 'PURCHASED_EXECUTED' &&
     order.status !== 'ON_THE_WAY' &&
     order.status !== 'ARRIVED' &&
     order.status !== 'DELIVERED' &&
@@ -520,31 +523,24 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
         {/* ── HERO STATUS CARD ── */}
         <div className={`rounded-3xl p-5 text-white shadow-lg ${isDelivered
-            ? 'bg-gradient-to-br from-emerald-600 to-teal-700'
-            : isCanceled
-              ? 'bg-gradient-to-br from-red-600 to-red-700'
-              : 'bg-gradient-to-br from-gray-900 to-gray-800'
+          ? 'bg-gradient-to-br from-emerald-600 to-teal-700'
+          : isCanceled
+            ? 'bg-gradient-to-br from-red-600 to-red-700'
+            : 'bg-gradient-to-br from-gray-900 to-gray-800'
           }`}>
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <span className="p-2 rounded-xl bg-white/20 shrink-0 flex items-center justify-center shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="p-2.5 rounded-xl bg-white/20 shrink-0 flex items-center justify-center shadow-xs">
                 <ServiceIcon service={order.service} className="w-6 h-6 text-white" />
               </span>
-              <h2 className="text-lg font-black">{order.service || order.title || 'Your Order'}</h2>
+              <div className="min-w-0">
+                <h2 className="text-lg font-black leading-tight">{order.service || order.title || 'Your Order'}</h2>
+                <div className="flex items-center gap-1.5 text-xs text-white/70 mt-1">
+                  <Clock className="w-3 h-3 text-white/60 shrink-0" />
+                  <span>{formatPlacedDateTime(order.createdAt)}</span>
+                </div>
+              </div>
             </div>
-            {(order.status !== 'PENDING' || isCanceled) && (
-              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center space-x-1 ${isDelivered ? 'bg-white/20 text-white' : isCanceled ? 'bg-red-300/30 text-red-100' : badge.color
-                }`}>
-                <BadgeIcon className="w-2.5 h-2.5" />
-                <span>{badge.label}</span>
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-white/70 mb-3">
-            <span className="flex items-center space-x-1">
-              <Clock className="w-3 h-3 text-white/60" />
-              <span>Placed: {formatPlacedDateTime(order.createdAt)}</span>
-            </span>
           </div>
 
           {/* Quick cost summary */}
@@ -683,21 +679,19 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                     <div key={step.status} className="flex-1 flex flex-col items-center relative min-w-0">
                       {/* Connector line behind status icons */}
                       {!isLast && (
-                        <div className={`absolute top-[13px] left-[50%] w-full h-[2px] transition-all ${
-                          state === 'COMPLETED'
+                        <div className={`absolute top-[13px] left-[50%] w-full h-[2px] transition-all ${state === 'COMPLETED'
                             ? 'bg-emerald-500'
                             : 'bg-gray-200'
-                        }`} />
+                          }`} />
                       )}
 
                       {/* Step circle */}
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center relative z-10 ring-2 ring-white transition-all ${
-                        state === 'COMPLETED'
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center relative z-10 ring-2 ring-white transition-all ${state === 'COMPLETED'
                           ? 'bg-emerald-600 text-white shadow-sm'
                           : state === 'CURRENT'
                             ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 shadow-md'
                             : 'bg-gray-100 text-gray-400 border border-gray-200'
-                      }`}>
+                        }`}>
                         {state === 'COMPLETED'
                           ? <Check className="w-3.5 h-3.5" />
                           : <StepIcon className={`w-3.5 h-3.5 ${state === 'CURRENT' ? 'animate-pulse' : ''}`} />
@@ -705,9 +699,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       </div>
 
                       {/* Step label */}
-                      <p className={`text-[8.5px] sm:text-[9px] font-bold mt-1.5 text-center leading-tight break-normal w-full px-0.5 ${
-                        state === 'CURRENT' ? 'text-emerald-600' : state === 'COMPLETED' ? 'text-gray-700' : 'text-gray-400'
-                      }`}>
+                      <p className={`text-[8.5px] sm:text-[9px] font-bold mt-1.5 text-center leading-tight break-normal w-full px-0.5 ${state === 'CURRENT' ? 'text-emerald-600' : state === 'COMPLETED' ? 'text-gray-700' : 'text-gray-400'
+                        }`}>
                         {step.label}
                       </p>
 
@@ -879,143 +872,137 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
           <div className="space-y-2">
             {(order.items || []).map((it) => {
-                  const unitPrice = getItemUnitPrice(it, validShopOrders);
-                  const isCalculatedInTotal = unitPrice !== undefined && unitPrice > 0;
+              const unitPrice = getItemUnitPrice(it, validShopOrders);
+              const isCalculatedInTotal = unitPrice !== undefined && unitPrice > 0;
 
-                  const itemPhoto = (() => {
-                    if (it.photoUrl) return it.photoUrl;
-                    if (it.id) {
-                      const p = fallbackStore.storeProducts.get(it.id);
-                      if (p?.photoUrl) return p.photoUrl;
-                    }
-                    const clean = (it.name || '').toLowerCase().trim();
-                    const allProds = Array.from(fallbackStore.storeProducts.values());
-                    const found = allProds.find((p) => {
-                      if (!p.photoUrl) return false;
-                      if ((p.name || '').toLowerCase().trim() === clean) {
-                        return !it.storeId || p.storeId === it.storeId;
-                      }
-                      return false;
-                    });
-                    return found?.photoUrl;
-                  })();
+              const itemPhoto = (() => {
+                if (it.photoUrl) return it.photoUrl;
+                if (it.id) {
+                  const p = fallbackStore.storeProducts.get(it.id);
+                  if (p?.photoUrl) return p.photoUrl;
+                }
+                const clean = (it.name || '').toLowerCase().trim();
+                const allProds = Array.from(fallbackStore.storeProducts.values());
+                const found = allProds.find((p) => {
+                  if (!p.photoUrl) return false;
+                  if ((p.name || '').toLowerCase().trim() === clean) {
+                    return !it.storeId || p.storeId === it.storeId;
+                  }
+                  return false;
+                });
+                return found?.photoUrl;
+              })();
 
-                  const costBreakdown = (() => {
-                    if (!isCalculatedInTotal || unitPrice === undefined) return null;
+              const costBreakdown = (() => {
+                if (!isCalculatedInTotal || unitPrice === undefined) return null;
 
-                    let qtyNum = 1;
-                    if (typeof it.quantity === 'number' && it.quantity > 0) {
-                      qtyNum = it.quantity;
-                    } else if (it.qty) {
-                      const parsed = parseFloat(String(it.qty).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
-                      if (!isNaN(parsed) && parsed > 0) {
-                        qtyNum = parsed;
-                      }
-                    }
+                let qtyNum = 1;
+                if (typeof it.quantity === 'number' && it.quantity > 0) {
+                  qtyNum = it.quantity;
+                } else if (it.qty) {
+                  const parsed = parseFloat(String(it.qty).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
+                  if (!isNaN(parsed) && parsed > 0) {
+                    qtyNum = parsed;
+                  }
+                }
 
-                    const totalPrice = Math.round((unitPrice * qtyNum) * 100) / 100;
-                    const unitDisplay = formatItemQuantityUnit(qtyNum, it.unit, it.qty);
+                const totalPrice = Math.round((unitPrice * qtyNum) * 100) / 100;
+                const unitDisplay = formatItemQuantityUnit(qtyNum, it.unit, it.qty);
 
-                    return {
-                      unitPrice,
-                      qtyNum,
-                      unitDisplay,
-                      totalPrice,
-                    };
-                  })();
+                return {
+                  unitPrice,
+                  qtyNum,
+                  unitDisplay,
+                  totalPrice,
+                };
+              })();
 
-                  const isUnpriced = !isCalculatedInTotal;
+              const isUnpriced = !isCalculatedInTotal;
 
-                  return (
-                    <div
-                      key={it.id}
-                      onClick={() => setSelectedItemForModal({ ...it, photoUrl: itemPhoto || it.photoUrl })}
-                      className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all active:scale-[0.99] group shadow-2xs gap-3 border ${
-                        isUnpriced
-                          ? 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200 hover:border-rose-300 ring-1 ring-rose-200/60'
-                          : 'bg-gray-50 hover:bg-emerald-50/50 hover:border-emerald-200/80 border-gray-100'
-                      }`}
-                      title="আইটেমের দাম ও দোকানের তথ্য দেখতে ক্লিক করুন"
-                    >
-                      {/* Product Image Thumbnail */}
-                      <div className={`w-12 h-12 rounded-xl bg-white border shrink-0 overflow-hidden flex items-center justify-center shadow-2xs transition-colors ${
-                        isUnpriced
-                          ? 'border-rose-200 group-hover:border-rose-300'
-                          : 'border-gray-200/90 group-hover:border-emerald-300'
-                      }`}>
-                        {itemPhoto ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={itemPhoto}
-                            alt={it.name}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div className={`w-full h-full flex items-center justify-center ${
-                            isUnpriced ? 'bg-rose-100/60 text-rose-500' : 'bg-emerald-50/70 text-emerald-600'
-                          }`}>
-                            <ServiceIcon service={order.service} className="w-6 h-6 opacity-100" />
-                          </div>
-                        )}
+              return (
+                <div
+                  key={it.id}
+                  onClick={() => setSelectedItemForModal({ ...it, photoUrl: itemPhoto || it.photoUrl })}
+                  className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all active:scale-[0.99] group shadow-2xs gap-3 border ${isUnpriced
+                      ? 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200 hover:border-rose-300 ring-1 ring-rose-200/60'
+                      : 'bg-gray-50 hover:bg-emerald-50/50 hover:border-emerald-200/80 border-gray-100'
+                    }`}
+                  title="আইটেমের দাম ও দোকানের তথ্য দেখতে ক্লিক করুন"
+                >
+                  {/* Product Image Thumbnail */}
+                  <div className={`w-12 h-12 rounded-xl bg-white border shrink-0 overflow-hidden flex items-center justify-center shadow-2xs transition-colors ${isUnpriced
+                      ? 'border-rose-200 group-hover:border-rose-300'
+                      : 'border-gray-200/90 group-hover:border-emerald-300'
+                    }`}>
+                    {itemPhoto ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={itemPhoto}
+                        alt={it.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className={`w-full h-full flex items-center justify-center ${isUnpriced ? 'bg-rose-100/60 text-rose-500' : 'bg-emerald-50/70 text-emerald-600'
+                        }`}>
+                        <ServiceIcon service={order.service} className="w-6 h-6 opacity-100" />
                       </div>
+                    )}
+                  </div>
 
-                      <div className="flex-1 min-w-0 pr-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`font-semibold transition-colors break-words ${
-                            isUnpriced ? 'text-rose-950 group-hover:text-rose-900' : 'text-gray-800 group-hover:text-emerald-950'
-                          }`}>
-                            {it.name}
-                          </span>
-                          {isUnpriced && it.qty && (
-                            <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold">
-                              {it.qty}
-                            </span>
-                          )}
-                          {!isUnpriced && it.qty && (
-                            <span className="text-[10px] bg-gray-200/80 group-hover:bg-emerald-100 group-hover:text-emerald-800 text-gray-700 px-1.5 py-0.5 rounded font-bold transition-colors">
-                              {it.qty}
-                            </span>
-                          )}
-                          {it.isCustom && (
-                            <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-extrabold">
-                              Custom Item
-                            </span>
-                          )}
-                        </div>
-                        {costBreakdown && (
-                          <p className="text-[11px] font-mono text-gray-500 font-semibold mt-0.5">
-                            {costBreakdown.unitDisplay} × ৳{costBreakdown.unitPrice}
-                          </p>
-                        )}
-
-                        {it.storeName && (
-                          <p className={`text-[10px] font-medium mt-0.5 ${isUnpriced ? 'text-rose-700' : 'text-emerald-700'}`}>
-                            দোকান: {it.storeName}
-                          </p>
-                        )}
-
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {costBreakdown ? (
-                          <div className="text-right">
-                            <span className="font-mono font-black text-gray-900 group-hover:text-emerald-700 transition-colors text-sm sm:text-base">
-                              ৳{costBreakdown.totalPrice}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="font-bold text-rose-700 text-[10px] sm:text-[11px] bg-white px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs shrink-0 flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3 text-rose-500" />
-                            <span>মূল্য বাকি</span>
-                          </span>
-                        )}
-                        <ChevronRight className={`w-3.5 h-3.5 transition-colors ${
-                          isUnpriced ? 'text-rose-400 group-hover:text-rose-600' : 'text-gray-400 group-hover:text-emerald-600'
-                        }`} />
-                      </div>
+                  <div className="flex-1 min-w-0 pr-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`text-xs sm:text-[13px] font-semibold leading-snug transition-colors break-words ${isUnpriced ? 'text-rose-950 group-hover:text-rose-900' : 'text-gray-800 group-hover:text-emerald-950'
+                        }`}>
+                        {it.name}
+                      </span>
+                      {isUnpriced && it.qty && (
+                        <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold">
+                          {it.qty}
+                        </span>
+                      )}
+                      {!isUnpriced && it.qty && (
+                        <span className="text-[10px] bg-gray-200/80 group-hover:bg-emerald-100 group-hover:text-emerald-800 text-gray-700 px-1.5 py-0.5 rounded font-bold transition-colors">
+                          {it.qty}
+                        </span>
+                      )}
+                      {it.isCustom && (
+                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-extrabold">
+                          Custom Item
+                        </span>
+                      )}
                     </div>
-                  );
-                })}
+
+                    {/* Unpriced item badge underneath the heading */}
+                    {isUnpriced && (
+                      <div className="mt-1">
+                        <span className="font-bold text-rose-700 text-[10px] sm:text-[11px] bg-white px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs inline-flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 text-rose-500 shrink-0" />
+                          <span>মূল্য বাকি</span>
+                        </span>
+                      </div>
+                    )}
+
+                    {costBreakdown && (
+                      <p className="text-[11px] font-mono text-gray-600 font-medium mt-1">
+                        {costBreakdown.unitDisplay} × ৳{costBreakdown.unitPrice} = <span className="font-black text-gray-950">৳{costBreakdown.totalPrice}</span>
+                      </p>
+                    )}
+
+                    {it.storeName && (
+                      <p className={`text-[10px] font-medium mt-0.5 ${isUnpriced ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        দোকান: {it.storeName}
+                      </p>
+                    )}
+
+                  </div>
+                  <div className="flex items-center shrink-0">
+                    <ChevronRight className={`w-3.5 h-3.5 transition-colors ${isUnpriced ? 'text-rose-400 group-hover:text-rose-600' : 'text-gray-400 group-hover:text-emerald-600'
+                      }`} />
+                  </div>
+                </div>
+              );
+            })}
 
           </div>
 
@@ -1209,327 +1196,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           )}
         </div>
 
-        {/* ── PURCHASED ITEMS & STORE COST DETAILS (FROM ARRIVED STATUS ONWARDS) ── */}
-        {isArrivedOrDelivered && (validShopOrders.length > 0 || effectiveProductCost > 0 || (order.selectedShopIds && order.selectedShopIds.length > 0)) && (
-          <div className="bg-white rounded-3xl border border-gray-150 p-4 shadow-soft space-y-3 animate-in fade-in duration-200">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-extrabold text-gray-500 uppercase tracking-wider flex items-center space-x-1.5">
-                <ShoppingBag className="w-3.5 h-3.5 text-purple-600" />
-                <span>খরচের Details</span>
-              </h3>
-              <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200">
-                মোট ৳{effectiveProductCost}
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              {validShopOrders.length > 0 ? (
-                validShopOrders.map((so) => {
-                  const isMyself = so.shopId === 'myself';
-                  const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
-                  const storeDisplayName = isMyself
-                    ? (so.sellerName || 'সরাসরি ক্রয় / নিজস্ব কেনাকাটা')
-                    : (so.shopName || shop?.name || so.sellerName || 'দোকান');
-
-                  const ownerNum = !isMyself ? (shop?.whatsapp || '') : '';
-                  const ownerName = shop?.contactPerson;
-
-                  const managerNum = !isMyself ? (shop?.managerWhatsapp || '') : '';
-                  const managerName = shop?.managerName;
-
-                  const customSellerNum = isMyself ? (so.sellerPhone || '') : (!ownerNum && !managerNum ? (so.sellerPhone || '') : '');
-
-                  return (
-                    <div
-                      key={so.id}
-                      className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5"
-                    >
-                      {/* Store / Seller Name & Product Cost */}
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-                          <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
-                            <Store className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <span className="font-extrabold text-xs text-gray-900 leading-tight block">
-                              {storeDisplayName}
-                            </span>
-                            {isMyself && so.sellerPhone ? (
-                              <a
-                                href={`tel:${so.sellerPhone}`}
-                                className="text-[10px] font-bold text-purple-800 hover:text-purple-950 bg-purple-50 hover:bg-purple-100 px-1.5 py-0.5 rounded-md border border-purple-200 inline-flex items-center gap-1 mt-0.5 font-mono transition-colors"
-                              >
-                                <Phone className="w-2.5 h-2.5 text-purple-600 shrink-0" />
-                                <span>{so.sellerPhone}</span>
-                              </a>
-                            ) : null}
-                            {!isMyself && shop?.type && (
-                              <span className="text-[9px] font-bold text-gray-600 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
-                                {shop.type}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
-                            ৳{so.price || 0}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Store Numbers (Manager + Owner for Store) */}
-                      {!isMyself && (ownerNum || managerNum) && (
-                        <div className="flex items-center gap-2 flex-wrap pt-0.5">
-                          {ownerNum && (
-                            <a
-                              href={`tel:${ownerNum}`}
-                              className="text-[10px] font-bold text-emerald-800 hover:text-emerald-900 flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200/80 transition-all active:scale-95 shadow-2xs"
-                              title="কল করুন"
-                            >
-                              <Phone className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                              <span className="font-mono font-black">{ownerNum}</span>
-                            </a>
-                          )}
-
-                          {managerNum && (
-                            <a
-                              href={`tel:${managerNum}`}
-                              className="text-[10px] font-bold text-blue-800 hover:text-blue-900 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200/80 transition-all active:scale-95 shadow-2xs"
-                              title="কল করুন"
-                            >
-                              <Phone className="w-2.5 h-2.5 text-blue-600 shrink-0" />
-                              <span className="font-mono font-black">{managerNum}</span>
-                            </a>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Item Details */}
-                      {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
-                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs space-y-1.5">
-                          {so.itemsWithPrice.map((it, iIdx) => {
-                            const soItemPhoto = (() => {
-                              if (it.itemId) {
-                                const prod = fallbackStore.storeProducts.get(it.itemId);
-                                if (prod?.photoUrl) return prod.photoUrl;
-                              }
-                              const clean = (it.name || '').toLowerCase().trim();
-                              const allProds = Array.from(fallbackStore.storeProducts.values());
-                              const found = allProds.find((p) => p.photoUrl && (p.name || '').toLowerCase().trim() === clean);
-                              return found?.photoUrl;
-                            })();
-
-                            const matchingOrderItem = (order.items || []).find((oi) => {
-                              if (it.itemId && oi.id === it.itemId) return true;
-                              if (it.originalId && oi.id === it.originalId) return true;
-                              const n1 = (oi.name || '').toLowerCase().replace(/\s*[×x]\s*\d+/g, '').trim();
-                              const n2 = (it.name || '').toLowerCase().replace(/\s*[×x]\s*\d+/g, '').trim();
-                              return n1 === n2 || n1.includes(n2) || n2.includes(n1);
-                            });
-
-                            const soCostInfo = (() => {
-                              if (it.price === undefined || isNaN(Number(it.price))) return null;
-                              const unitPrice = Number(it.price);
-                              let qtyNum = 1;
-                              let unitSuffix = '';
-
-                              if (matchingOrderItem) {
-                                if (typeof matchingOrderItem.quantity === 'number' && matchingOrderItem.quantity > 0) {
-                                  qtyNum = matchingOrderItem.quantity;
-                                } else if (matchingOrderItem.qty) {
-                                  const parsed = parseFloat(String(matchingOrderItem.qty).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
-                                  if (!isNaN(parsed) && parsed > 0) qtyNum = parsed;
-                                }
-                              } else if (it.unit) {
-                                const parsed = parseFloat(String(it.unit).replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d))));
-                                if (!isNaN(parsed) && parsed > 0) qtyNum = parsed;
-                              }
-
-                              const unitDisplay = formatItemQuantityUnit(
-                                qtyNum,
-                                matchingOrderItem?.unit || it.unit,
-                                matchingOrderItem?.qty || it.unit
-                              );
-                              const totalPrice = Math.round((unitPrice * qtyNum) * 100) / 100;
-                              return { unitPrice, qtyNum, unitDisplay, totalPrice };
-                            })();
-
-                            return (
-                              <div
-                                key={iIdx}
-                                onClick={() => {
-                                  setSelectedItemForModal(matchingOrderItem || {
-                                    id: it.itemId || it.originalId || `so-it-${iIdx}`,
-                                    name: it.name,
-                                    qty: it.unit || '1',
-                                    price: it.price,
-                                    photoUrl: soItemPhoto,
-                                    storeId: so.shopId !== 'myself' ? so.shopId : undefined,
-                                    storeName: so.shopId !== 'myself' ? so.shopName : so.sellerName,
-                                  });
-                                }}
-                                className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-purple-50/70 cursor-pointer border-b border-gray-100 last:border-b-0 transition-colors group gap-2"
-                                title="আইটেমের বিস্তারিত দেখতে ক্লিক করুন"
-                              >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  {soItemPhoto ? (
-                                    <div className="w-7 h-7 rounded-lg overflow-hidden bg-white border border-gray-200 shrink-0">
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                                      <img src={soItemPhoto} alt={it.name} className="w-full h-full object-cover" />
-                                    </div>
-                                  ) : (
-                                    <div className="w-7 h-7 rounded-lg bg-gray-100 text-gray-500 flex items-center justify-center shrink-0">
-                                      <Package className="w-3.5 h-3.5" />
-                                    </div>
-                                  )}
-                                  <div className="min-w-0">
-                                    <span className="text-gray-800 font-semibold group-hover:text-purple-900 transition-colors truncate block">
-                                      {it.name}
-                                    </span>
-                                    {soCostInfo && (
-                                      <p className="text-[10px] font-mono text-gray-500 font-medium">
-                                        {soCostInfo.unitDisplay} × ৳{soCostInfo.unitPrice}
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  {soCostInfo ? (
-                                    <span className="font-mono font-black text-gray-900 group-hover:text-purple-950 transition-colors text-xs">
-                                      ৳{soCostInfo.totalPrice}
-                                    </span>
-                                  ) : (
-                                    <span className="font-mono font-bold text-gray-900 text-xs">৳{it.price ?? 0}</span>
-                                  )}
-                                  <ChevronRight className="w-3 h-3 text-gray-400 group-hover:text-purple-600 transition-colors" />
-                                </div>
-                              </div>
-                            );
-                          })}
-                          <div className="flex items-center justify-between pt-1 font-black text-xs text-gray-900 border-t border-gray-200">
-                            <span>মোট পণ্যের দাম (Total):</span>
-                            <span className="font-mono text-emerald-800">৳{so.price ?? 0}</span>
-                          </div>
-                        </div>
-                      ) : so.requestText ? (
-                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                          <p className="text-gray-800 font-semibold leading-relaxed">
-                            {so.requestText}
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                /* Fallback if productCost exists but no shopOrders breakdown */
-                (() => {
-                  const shopList = (order.selectedShopIds && order.selectedShopIds.length > 0)
-                    ? order.selectedShopIds.map(id => fallbackStore.shops.get(id) || { id, name: id, whatsapp: '', managerWhatsapp: '', type: '' } as any)
-                    : [];
-
-                  if (shopList.length > 0) {
-                    return shopList.map((shop, idx) => (
-                      <div key={shop.id || idx} className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-                            <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
-                              <Store className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <span className="font-extrabold text-xs text-gray-900 leading-tight block">
-                                {shop.name}
-                              </span>
-                              {shop.type && (
-                                <span className="text-[9px] font-bold text-gray-600 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
-                                  {shop.type}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="text-right shrink-0">
-                            <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
-                              ৳{effectiveProductCost}
-                            </span>
-                          </div>
-                        </div>
-
-                        {(shop.whatsapp || shop.managerWhatsapp) && (
-                          <div className="flex items-center gap-2 flex-wrap pt-0.5">
-                            {shop.whatsapp && (
-                              <a
-                                href={`tel:${shop.whatsapp}`}
-                                className="text-[10px] font-bold text-emerald-800 hover:text-emerald-900 flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200/80 transition-all active:scale-95 shadow-2xs"
-                                title="কল করুন"
-                              >
-                                <Phone className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                                <span className="font-mono font-black">{shop.whatsapp}</span>
-                              </a>
-                            )}
-                            {shop.managerWhatsapp && (
-                              <a
-                                href={`tel:${shop.managerWhatsapp}`}
-                                className="text-[10px] font-bold text-blue-800 hover:text-blue-900 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200/80 transition-all active:scale-95 shadow-2xs"
-                                title="কল করুন"
-                              >
-                                <Phone className="w-2.5 h-2.5 text-blue-600 shrink-0" />
-                                <span className="font-mono font-black">{shop.managerWhatsapp}</span>
-                              </a>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                          <p className="text-gray-700 font-semibold leading-relaxed">
-                            {effectiveProductCost > 0
-                              ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
-                              : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
-                          </p>
-                        </div>
-                      </div>
-                    ));
-                  }
-
-                  return (
-                    <div className="p-3.5 rounded-2xl bg-gray-50/90 border border-gray-200/90 space-y-2.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-                          <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0">
-                            <Store className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <span className="font-extrabold text-xs text-gray-900 leading-tight block">
-                              {order.pickupLocation?.address || 'দোকান / বিক্রেতা'}
-                            </span>
-                            <span className="text-[9px] font-bold text-gray-500 bg-gray-150 px-1.5 py-0.2 rounded-md border border-gray-200 inline-block mt-0.5">
-                              বিক্রেতা / দোকান
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <span className="text-xs font-black text-gray-900 bg-white px-2.5 py-1 rounded-xl border border-gray-200 shadow-xs inline-block">
-                            ৳{effectiveProductCost}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="bg-white p-2.5 rounded-xl border border-gray-200/80 text-xs shadow-2xs">
-                        <p className="text-gray-700 font-semibold leading-relaxed">
-                          {effectiveProductCost > 0
-                            ? 'ক্রয়কৃত পণ্যের মোট মূল্য (হেলপার দ্বারা সংগ্রহ করা হবে)'
-                            : (order.additionalNote || 'পণ্য ক্রয়ের পর মোট বিল চূড়ান্ত করা হবে')}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })()
-              )}
-            </div>
-          </div>
-        )}
 
 
         {/* ── FEE UPDATED NOTICE ── */}

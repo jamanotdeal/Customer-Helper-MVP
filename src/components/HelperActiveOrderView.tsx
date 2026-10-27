@@ -2668,22 +2668,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                       <div className="flex items-start gap-2 min-w-0 flex-1">
                                         <Package className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
                                         <div className="min-w-0 flex-1">
-                                          <span className="text-sm font-extrabold text-gray-900 break-words block">
+                                          <span className="text-xs sm:text-[13px] font-bold text-gray-900 break-words block leading-snug">
                                             {it.name}{getItemQtyDisplay(it)}
                                           </span>
                                           {priceDetails && (
-                                            <p className="text-[11px] font-mono text-gray-500 font-semibold mt-0.5">
-                                              {formatItemQuantityUnit(priceDetails.qty, it.unit, it.qty)} × ৳{priceDetails.unitPrice}
+                                            <p className="text-[11px] font-mono text-gray-600 font-medium mt-1">
+                                              {formatItemQuantityUnit(priceDetails.qty, it.unit, it.qty)} × ৳{priceDetails.unitPrice} = <span className="font-black text-gray-950">৳{priceDetails.totalPrice}</span>
                                             </p>
                                           )}
 
                                         </div>
                                       </div>
-                                      {priceDetails ? (
-                                        <div className="text-right shrink-0">
-                                          <span className="text-sm sm:text-base font-black text-emerald-700 font-mono">৳{priceDetails.totalPrice}</span>
-                                        </div>
-                                      ) : null}
                                     </div>
                                   );
                                 })}
@@ -2718,35 +2713,33 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 const priceDetails = getItemPriceDetails(it);
                                 return (
                                   <div key={it.id} className="px-3 py-2 space-y-1">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
-                                        <Package className="w-3 h-3 text-amber-600 shrink-0" />
-                                        <span className="text-sm font-extrabold text-gray-900 break-words">
-                                          {it.name}{getItemQtyDisplay(it)}
-                                        </span>
-                                        <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0">
-                                          Custom
-                                        </span>
-                                      </div>
-                                      {priceDetails && priceDetails.totalPrice > 0 ? (
-                                        <div className="text-right shrink-0">
-                                          <span className="text-sm font-black text-amber-700 font-mono">৳{priceDetails.totalPrice}</span>
-                                          {priceDetails.qty > 1 ? (
-                                            <span className="block text-[10px] font-bold text-amber-800/70 font-mono">
-                                              {priceDetails.qty} × ৳{priceDetails.unitPrice} = ৳{priceDetails.totalPrice}
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                                        <Package className="w-3 h-3 text-amber-600 shrink-0 mt-0.5" />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="text-xs sm:text-[13px] font-bold text-gray-900 break-words leading-snug">
+                                              {it.name}{getItemQtyDisplay(it)}
                                             </span>
-                                          ) : (
-                                            <span className="block text-[10px] font-bold text-amber-800/60 font-mono">
-                                              1 × ৳{priceDetails.unitPrice} = ৳{priceDetails.totalPrice}
+                                            <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0">
+                                              Custom
                                             </span>
+                                          </div>
+                                          {priceDetails && priceDetails.totalPrice > 0 && (
+                                            <p className="text-[11px] font-mono text-gray-600 font-medium mt-1">
+                                              {priceDetails.qty > 1 ? `${priceDetails.qty} × ৳${priceDetails.unitPrice}` : `1 × ৳${priceDetails.unitPrice}`} = <span className="font-black text-gray-950">৳{priceDetails.totalPrice}</span>
+                                            </p>
                                           )}
                                         </div>
-                                      ) : (
-                                        <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] shrink-0">
+                                      </div>
+                                    </div>
+                                    {(!priceDetails || priceDetails.totalPrice <= 0) && (
+                                      <div className="pl-5 pt-0.5">
+                                        <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] inline-block">
                                           মূল্য বাকি
                                         </span>
-                                      )}
-                                    </div>
+                                      </div>
+                                    )}
                                     {/* Buy from hint */}
                                     {it.buyFrom && (
                                       <p className="text-[10px] text-amber-700 font-semibold pl-5">
@@ -3331,7 +3324,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={`font-black text-sm ${isPurchased ? 'line-through opacity-50' : ''} text-gray-900`}>
+                              <span className={`text-xs sm:text-[13px] font-bold leading-snug break-words ${isPurchased ? 'line-through opacity-50' : ''} text-gray-900`}>
                                 {it.name}{getItemQtyDisplay(it)}
                               </span>
                               {isCustomItem && (
@@ -3339,11 +3332,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               )}
                             </div>
 
-                            {priceDetails && (
-                              <p className="text-[11px] font-mono text-gray-500 font-semibold mt-0.5">
-                                {formatItemQuantityUnit(priceDetails.qty, it.unit, it.qty)} × ৳{priceDetails.unitPrice}
-                              </p>
+                            {!hasPrice && isCustomItem && (
+                              <div className="mt-1">
+                                <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] inline-block">
+                                  মূল্য বাকি
+                                </span>
+                              </div>
                             )}
+
+                            {priceDetails && priceDetails.totalPrice > 0 ? (
+                              <p className="text-[11px] font-mono text-gray-600 font-medium mt-1">
+                                {formatItemQuantityUnit(priceDetails.qty, it.unit, it.qty)} × ৳{priceDetails.unitPrice} = <span className="font-black text-gray-950">৳{priceDetails.totalPrice}</span>
+                              </p>
+                            ) : (effectiveSO?.price && Number(effectiveSO.price) > 0) ? (
+                              <p className="text-[11px] font-mono text-gray-600 font-medium mt-1">
+                                <span className="font-black text-gray-950">৳{Number(effectiveSO.price)}</span>
+                              </p>
+                            ) : null}
 
                             {/* Under each custom order item if helper requested to store or add custom cost then the store name should show */}
                             {isCustomItem ? (
@@ -3451,18 +3456,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            {hasPrice ? (
-                              <div className="text-right">
-                                <span className="font-mono font-black text-gray-900 text-sm sm:text-base block">
-                                  ৳{priceDetails?.totalPrice ?? (effectiveSO?.price ? Number(effectiveSO.price) : (Number(it.price) * getItemQuantityNum(it)))}
-                                </span>
-                              </div>
-                            ) : isCustomItem ? (
-                              <span className="font-extrabold text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 text-[10px] shrink-0">
-                                মূল্য বাকি
-                              </span>
-                            ) : null}
-
                             {isCustomBlock && !isDone && connectedSO && (
                               <button
                                 type="button"
