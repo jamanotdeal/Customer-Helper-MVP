@@ -1,16 +1,26 @@
 rules_version = '2';
 
 // Photos shown in the app: products, shops, home slides, store applications,
-// push notifications, and custom modals.
+// push notification images and custom modals. They used to be saved inside
+// the Firestore documents as base64; see uploadImageIfInline in
+// src/lib/imageUtils.ts and uploadCustomModalImage in src/lib/firebase.ts.
 service firebase.storage {
   match /b/{bucket}/o {
-    // Anyone can view them: visitors browse without signing in.
+    // Anyone can view them: visitors browse shops without signing in.
     match /{folder}/{file} {
       allow read: if folder in ['products', 'shops', 'slides', 'applications', 'notifications', 'migrated', 'custom-modals'];
 
-      // Uploads: signed in (or custom-modals), an image, under 5 MB.
-      allow create: if (request.auth != null || folder == 'custom-modals')
-        && folder in ['products', 'shops', 'slides', 'applications', 'notifications', 'custom-modals']
+      // Uploads: signed in, an image, under 1 MB (the app compresses to about
+      // 50-150 KB first). Every upload has a new name, so nothing is ever
+      // overwritten; and nothing is deleted from the app, since copied
+      // products share one file.
+      allow create: if request.auth != null
+        && folder in ['products', 'shops', 'slides', 'applications', 'notifications']
+        && request.resource.size < 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+
+      // Custom modal banners: any image under 5 MB, signed in or not.
+      allow create: if folder == 'custom-modals'
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }

@@ -1525,11 +1525,17 @@ class FallbackStore {
         });
       }
 
-      // No longer cached (see saveLocalStore). Neither had been written for
-      // months — the store products write always overflowed localStorage, and
-      // the shop orders came after it — so what is there is an old copy, and
-      // shop orders deleted since would never be removed from it.
-      localStorage.removeItem('jamanot_store_products_store');
+      const parsedStoreProducts = this.safeParse<[string, StoreProduct][]>('jamanot_store_products_store');
+      if (parsedStoreProducts && Array.isArray(parsedStoreProducts)) {
+        parsedStoreProducts.forEach(([id, p]) => {
+          if (id && p) this.storeProducts.set(id, p);
+        });
+      }
+
+      // No longer cached (see saveLocalStore). It had not been written for
+      // months — it came after the store products, whose write overflowed
+      // localStorage — so what is there is an old copy, and shop orders
+      // deleted since would never be removed from it.
       localStorage.removeItem('jamanot_shop_orders_store');
 
       const parsedFbs = this.safeParse<[string, OrderFeedback][]>('jamanot_feedbacks_store');
@@ -1678,8 +1684,16 @@ class FallbackStore {
     put('jamanot_admin_notifs_history_store', () => Array.from(this.adminNotificationsHistory.entries()), v(this.adminNotificationsHistory));
     put('jamanot_scheduled_notifs_store', () => Array.from(this.scheduledNotifications.entries()));
     put('jamanot_shops_store', () => Array.from(this.shops.entries()), v(this.shops));
-    // Not cached: store products (their photos are inline, ~22 MB, far past
-    // what localStorage holds) and shop orders (see loadFromLocalStorage).
+    // Product photos are links to Storage since October 2026; one an older
+    // app still saves inline (~40 KB of base64) is left out, as the whole
+    // collection once came to ~22 MB that way. Shop orders are not cached
+    // (see loadFromLocalStorage).
+    put(
+      'jamanot_store_products_store',
+      () => Array.from(this.storeProducts.entries()).map(([id, p]) =>
+        [id, p.photoUrl?.startsWith('data:') ? { ...p, photoUrl: undefined } : p]),
+      v(this.storeProducts)
+    );
     put('jamanot_feedbacks_store', () => Array.from(this.orderFeedbacks.entries()), v(this.orderFeedbacks));
     put('jamanot_modals_store', () => Array.from(this.customModals.entries()), v(this.customModals));
     put('jamanot_fee_suggestions_store', () => Array.from(this.feeSuggestions.entries()), v(this.feeSuggestions));

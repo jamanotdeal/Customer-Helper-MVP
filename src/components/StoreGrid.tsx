@@ -875,7 +875,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product: p, isStoreOpen, shop
       <div className="relative w-full aspect-square rounded-xl bg-gray-50 overflow-hidden mb-2 flex items-center justify-center">
         {p.photoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
+          <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" loading="lazy" decoding="async" />
         ) : (
           <Package className="w-8 h-8 text-gray-300" />
         )}

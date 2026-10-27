@@ -30,7 +30,7 @@ import { AdminBlockModal } from './AdminBlockModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
-import { compressImage } from '@/lib/imageUtils';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
@@ -79,15 +79,25 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
       showAlert('ভুল ফাইল', 'অনুগ্রহ করে একটি ছবি ফাইল নির্বাচন করুন।', 'warning');
       return;
     }
+    let compressed: string;
     try {
-      const compressed = await compressImage(file, 700, 700, 0.85);
-      await fallbackStore.updateShop(shop.id, { photoUrl: compressed });
-      setCurrentShop((prev) => ({ ...prev, photoUrl: compressed }));
-      if (onShopUpdated) onShopUpdated();
-      showAlert('সফল', 'দোকানের প্রোফাইল ছবি সফলভাবে আপডেট করা হয়েছে।', 'success');
+      compressed = await compressImage(file, 700, 700, 0.85);
     } catch {
       showAlert('ত্রুটি', 'ছবি প্রসেস করতে ব্যর্থ হয়েছে।', 'error');
+      return;
     }
+    let photoUrl: string | undefined;
+    try {
+      photoUrl = await uploadImageIfInline(compressed, 'shops');
+    } catch (err) {
+      console.warn('Shop photo upload failed:', err);
+      showAlert('ত্রুটি', IMAGE_UPLOAD_FAILED_MESSAGE, 'error');
+      return;
+    }
+    await fallbackStore.updateShop(shop.id, { photoUrl });
+    setCurrentShop((prev) => ({ ...prev, photoUrl }));
+    if (onShopUpdated) onShopUpdated();
+    showAlert('সফল', 'দোকানের প্রোফাইল ছবি সফলভাবে আপডেট করা হয়েছে।', 'success');
   };
 
   const handleRemoveShopPhoto = async () => {

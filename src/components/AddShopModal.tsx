@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
-import { compressImage } from '@/lib/imageUtils';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { isExpiringImageUrl } from './ShopPhoto';
 
 const EXPIRING_PHOTO_MESSAGE =
@@ -306,10 +306,21 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
       return;
     }
 
+    // A newly picked photo is still a data: URL; it goes to Storage first.
+    let savedPhotoUrl: string | undefined;
     try {
       setSubmitting(true);
       setError('');
+      savedPhotoUrl = await uploadImageIfInline(photoUrl.trim() || undefined, 'shops');
+      if (savedPhotoUrl !== (photoUrl.trim() || undefined)) setPhotoUrl(savedPhotoUrl || '');
+    } catch (err) {
+      console.warn('Shop photo upload failed:', err);
+      setError(IMAGE_UPLOAD_FAILED_MESSAGE);
+      setSubmitting(false);
+      return;
+    }
 
+    try {
       // Build list of previous user IDs associated with this shop
       const prevAssignedIdsSet = new Set<string>();
       if (shopToEdit?.ownerUserId) prevAssignedIdsSet.add(shopToEdit.ownerUserId);
@@ -344,7 +355,7 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         applicationId: shopToEdit?.applicationId,
         createdAt: shopToEdit?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        photoUrl: photoUrl.trim() || undefined,
+        photoUrl: savedPhotoUrl,
         commissionPercent: commPercent,
         canReceiveOrders,
         isFeatured,

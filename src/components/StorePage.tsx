@@ -712,6 +712,8 @@ export const StorePage: React.FC<StorePageProps> = ({
                         src={product.photoUrl}
                         alt={product.name}
                         className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
+                        loading="lazy"
+                        decoding="async"
                       />
                     ) : (
                       <Package className="w-8 h-8 text-gray-300" />

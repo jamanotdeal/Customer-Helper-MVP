@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { useModal } from '../CustomModal';
 import {
   Bell, Send, X, Users, UserCheck, ShieldAlert, Sparkles,
@@ -157,6 +158,7 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
   const [body, setBody] = useState<string>(initialSource?.body || '');
   const [orderId, setOrderId] = useState<string>(initialSource?.orderId || '');
   const [imageUrl, setImageUrl] = useState<string>(initialSource?.imageUrl || '');
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [isSending, setIsSending] = useState<boolean>(false);
 
   /* ── Schedule state ─────────────────────────────────────────────────────── */
@@ -954,16 +956,25 @@ export const AdminPushNotificationModal: React.FC<AdminPushNotificationModalProp
                 className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-medium text-gray-900 focus:outline-none focus:border-purple-600 focus:bg-white"
               />
               <label className="shrink-0 cursor-pointer px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-200 rounded-xl text-xs font-extrabold flex items-center justify-center transition-colors">
-                <span>Upload</span>
+                <span>{uploadingImage ? 'Uploading…' : 'Upload'}</span>
                 <input
                   type="file"
                   accept="image/*"
-                  onChange={(e) => {
+                  disabled={uploadingImage}
+                  onChange={async (e) => {
                     const file = e.target.files?.[0];
-                    if (file) {
-                      const reader = new FileReader();
-                      reader.onloadend = () => setImageUrl(reader.result as string);
-                      reader.readAsDataURL(file);
+                    if (!file) return;
+                    // Stored as a link, not base64: the image rides along in
+                    // the notification document and the push.
+                    setUploadingImage(true);
+                    try {
+                      const url = await uploadImageIfInline(await compressImage(file, 1200, 1200, 0.85), 'notifications');
+                      setImageUrl(url || '');
+                    } catch (err) {
+                      console.warn('Notification image upload failed:', err);
+                      showAlert('ছবি আপলোড ব্যর্থ', IMAGE_UPLOAD_FAILED_MESSAGE, 'error');
+                    } finally {
+                      setUploadingImage(false);
                     }
                   }}
                   className="hidden"

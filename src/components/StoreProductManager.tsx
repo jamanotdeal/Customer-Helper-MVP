@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { StoreProduct, ProductPriceOption } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { useModal } from './CustomModal';
 import { getCategoriesForStoreType } from '@/lib/pricing';
 import {
@@ -317,6 +318,18 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
       setFormError('ছাড়ের হার ০ থেকে ১০০ এর মধ্যে হতে হবে।'); return;
     }
     setIsSubmitting(true); setFormError('');
+    // A newly picked photo is still a data: URL; it goes to Storage first.
+    let savedPhotoUrl: string | undefined;
+    try {
+      savedPhotoUrl = await uploadImageIfInline(photoUrl || undefined, 'products');
+    } catch (err) {
+      console.warn('Product photo upload failed:', err);
+      setFormError(IMAGE_UPLOAD_FAILED_MESSAGE);
+      setIsSubmitting(false);
+      return;
+    }
+    // Held as the link from here on, so a retry after a failed save does not upload again.
+    if (savedPhotoUrl !== (photoUrl || undefined)) setPhotoUrl(savedPhotoUrl || '');
     try {
       const now = new Date().toISOString();
       if (editingProduct) {
@@ -329,7 +342,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
           discountRate: numDiscount > 0 ? numDiscount : undefined,
           category: category.trim() || undefined,
           inStock,
-          photoUrl: photoUrl || undefined,
+          photoUrl: savedPhotoUrl,
           updatedAt: now,
         });
         showAlert('সফল হয়েছে!', 'পণ্যটির তথ্য আপডেট করা হয়েছে।', 'success');
@@ -346,7 +359,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
           discountRate: numDiscount > 0 ? numDiscount : undefined,
           category: category.trim() || undefined,
           inStock,
-          photoUrl: photoUrl || undefined,
+          photoUrl: savedPhotoUrl,
           createdAt: now,
           updatedAt: now,
         });
@@ -530,7 +543,7 @@ export const StoreProductManager: React.FC<StoreProductManagerProps> = ({ storeI
                   <div className="w-14 h-14 rounded-xl bg-gray-50 border border-gray-100 overflow-hidden shrink-0 flex items-center justify-center relative">
                     {p.photoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
+                      <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" loading="lazy" decoding="async" />
                     ) : (
                       <div className="text-gray-300 flex flex-col items-center justify-center p-1 text-[9px] text-center"><ImageIcon className="w-5 h-5 mb-0.5 text-gray-300" /><span>ছবি নেই</span></div>
                     )}

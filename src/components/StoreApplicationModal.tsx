@@ -9,7 +9,7 @@ import { StoreApplication, LocationData } from '@/types';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
 import { MapPickerModal } from './MapPickerModal';
-import { compressImage } from '@/lib/imageUtils';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 
 interface StoreApplicationModalProps {
   onClose: () => void;
@@ -139,9 +139,21 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
       return;
     }
 
+    // A newly picked photo is still a data: URL; it goes to Storage first.
+    let savedPhotoUrl: string | undefined;
     try {
       setSubmitting(true);
       setError('');
+      savedPhotoUrl = await uploadImageIfInline(photoUrl.trim() || undefined, 'applications');
+      if (savedPhotoUrl !== (photoUrl.trim() || undefined)) setPhotoUrl(savedPhotoUrl || '');
+    } catch (err) {
+      console.warn('Store application photo upload failed:', err);
+      setError(IMAGE_UPLOAD_FAILED_MESSAGE);
+      setSubmitting(false);
+      return;
+    }
+
+    try {
       await submitStoreApplication({
         storeName: storeName.trim(),
         storeType,
@@ -152,7 +164,7 @@ export const StoreApplicationModal: React.FC<StoreApplicationModalProps> = ({ on
         managerWhatsapp: managerWhatsapp.trim(),
         location,
         commissionPercent: commPercent,
-        photoUrl: photoUrl.trim() || undefined,
+        photoUrl: savedPhotoUrl,
       });
       setSubmitted(true);
     } catch {

@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
+import { uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
 import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
 import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
@@ -582,14 +583,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        let dataUrl = e.target?.result as string;
         if (ctx) {
           ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          setNewSlideImageUrl(dataUrl);
-        } else {
-          setNewSlideImageUrl(e.target?.result as string);
+          dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         }
-        setIsUploadingSlideImage(false);
+        // Slides are read by every launch with the pricing settings, so the
+        // banner goes to Storage and the settings keep only its link.
+        uploadImageIfInline(dataUrl, 'slides')
+          .then((url) => setNewSlideImageUrl(url || ''))
+          .catch((err) => {
+            console.warn('Slide image upload failed:', err);
+            showAlert('ছবি আপলোড ব্যর্থ', IMAGE_UPLOAD_FAILED_MESSAGE, 'error');
+          })
+          .finally(() => setIsUploadingSlideImage(false));
       };
       img.onerror = () => {
         setIsUploadingSlideImage(false);
@@ -9458,13 +9465,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 const tShop = shopsSource.find((s) => s.id === assignTargetStoreId);
                 if (!tShop) return;
                 setAssignSubmitting(true);
+                // Photos first, all of them, so a failed upload copies nothing
+                // rather than half the selection. A new photo picked here is a
+                // data: URL; so, until it is migrated, is an older product's.
+                const photoFor = new Map<string, string | undefined>();
+                try {
+                  for (const prod of selectedProducts) {
+                    photoFor.set(prod.id, await uploadImageIfInline((assignItemOverrides[prod.id]?.photoUrl || prod.photoUrl) || undefined, 'products'));
+                  }
+                } catch (err) {
+                  console.warn('Product photo upload failed:', err);
+                  showAlert('ছবি আপলোড ব্যর্থ', IMAGE_UPLOAD_FAILED_MESSAGE, 'error');
+                  setAssignSubmitting(false);
+                  return;
+                }
                 try {
                   const now = new Date().toISOString();
                   for (const prod of selectedProducts) {
                     const ov = assignItemOverrides[prod.id];
                     const newId = `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
                     const np = ov?.price ? parseFloat(ov.price) : prod.price;
-                    await fallbackStore.saveStoreProduct({ id: newId, storeId: assignTargetStoreId, storeName: tShop.name, name: ov?.name?.trim() || prod.name, unit: prod.unit, price: isNaN(np) ? prod.price : np, discountRate: prod.discountRate, inStock: true, category: (ov?.category?.trim() || prod.category) || undefined, photoUrl: (ov?.photoUrl || prod.photoUrl) || undefined, createdAt: now, updatedAt: now });
+                    await fallbackStore.saveStoreProduct({ id: newId, storeId: assignTargetStoreId, storeName: tShop.name, name: ov?.name?.trim() || prod.name, unit: prod.unit, price: isNaN(np) ? prod.price : np, discountRate: prod.discountRate, inStock: true, category: (ov?.category?.trim() || prod.category) || undefined, photoUrl: photoFor.get(prod.id), createdAt: now, updatedAt: now });
                   }
                   setAllStoreProducts(Array.from(fallbackStore.storeProducts.values()));
                   setAssignModalOpen(false); setSelectedProductIds(new Set());

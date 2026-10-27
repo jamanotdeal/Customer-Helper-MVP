@@ -32,7 +32,7 @@ export const ShopPhoto: React.FC<ShopPhotoProps> = ({ src, alt, className, fallb
   const { broken, onError } = useBrokenImage(src);
   if (!src || broken) return <>{fallback}</>;
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt={alt} className={className} onError={onError} />;
+  return <img src={src} alt={alt} className={className} onError={onError} loading="lazy" decoding="async" />;
 };
 
 /**

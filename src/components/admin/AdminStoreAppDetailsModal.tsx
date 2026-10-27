@@ -29,7 +29,7 @@ import {
   Upload,
   Image as ImageIcon,
 } from 'lucide-react';
-import { compressImage } from '@/lib/imageUtils';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 
 interface AdminStoreAppDetailsModalProps {
   application: StoreApplication;
@@ -171,6 +171,17 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
       return;
     }
     setSaving(true);
+    // A newly picked photo is still a data: URL; it goes to Storage first.
+    let savedPhotoUrl: string | undefined;
+    try {
+      savedPhotoUrl = await uploadImageIfInline(photoUrl.trim() || undefined, 'applications');
+      if (savedPhotoUrl !== (photoUrl.trim() || undefined)) setPhotoUrl(savedPhotoUrl || '');
+    } catch (err) {
+      console.warn('Store application photo upload failed:', err);
+      showAlert('Error', IMAGE_UPLOAD_FAILED_MESSAGE, 'error');
+      setSaving(false);
+      return;
+    }
     try {
       await fallbackStore.updateStoreApp(application.id, {
         storeName: storeName.trim(),
@@ -189,7 +200,7 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
           lat: locationLat ? parseFloat(locationLat) : application.location?.lat,
           lng: locationLng ? parseFloat(locationLng) : application.location?.lng,
         },
-        photoUrl: photoUrl.trim() || undefined,
+        photoUrl: savedPhotoUrl,
       });
       showAlert('সফল', 'স্টোর আবেদনের তথ্য আপডেট হয়েছে।', 'success');
       onSaved();
