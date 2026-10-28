@@ -22,7 +22,7 @@ import { isNativeApp, onOrderAlertCleared } from '@/lib/native';
 import { setOrderAlarm } from '@/lib/orderAlarm';
 import { getLiveElapsedTimeHMS } from '@/lib/timeUtils';
 import { BlockedUserModal } from './BlockedUserModal';
-import { getShopItemPriceDisplay, getItemQuantityNum } from '@/lib/itemUtils';
+import { getShopItemPriceDisplay, getItemQuantityNum, calculateOrderProductCost } from '@/lib/itemUtils';
 import { PaginationControl } from './admin/PaginationControl';
 import { useParentOrders } from '@/hooks/useParentOrders';
 
@@ -72,16 +72,28 @@ export const extractShopOrderNoteAndItems = (shopOrder: ShopOrder | null) => {
   return { itemsText: requestText, helperNote };
 };
 
+export interface ParsedShopItem {
+  name: string;
+  unit: string;
+  price: string;
+  itemId?: string;
+  originalId?: string;
+  itemIndex: number;
+}
+
 // Helper to divide request text by comma or extract saved items with price
-const parseShopOrderItems = (shopOrder: ShopOrder | null): { name: string; unit: string; price: string }[] => {
+const parseShopOrderItems = (shopOrder: ShopOrder | null): ParsedShopItem[] => {
   if (!shopOrder) return [];
   if (shopOrder.itemsWithPrice && shopOrder.itemsWithPrice.length > 0) {
     return shopOrder.itemsWithPrice
       .filter((item) => !isNoteItem(item.name))
-      .map((item) => ({
+      .map((item, idx) => ({
         name: item.name,
         unit: item.unit || '',
         price: item.price !== undefined && item.price !== null ? String(item.price) : '',
+        itemId: item.itemId,
+        originalId: item.originalId,
+        itemIndex: idx,
       }));
   }
   const { itemsText } = extractShopOrderNoteAndItems(shopOrder);
@@ -92,10 +104,11 @@ const parseShopOrderItems = (shopOrder: ShopOrder | null): { name: string; unit:
     .filter((s) => Boolean(s) && !isNoteItem(s));
 
   if (splitItems.length > 0) {
-    return splitItems.map((name) => ({
+    return splitItems.map((name, idx) => ({
       name,
       unit: '',
       price: '',
+      itemIndex: idx,
     }));
   }
   return [];
@@ -244,6 +257,16 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [storeCancelReason, setStoreCancelReason] = useState('');
   const [storeCancelError, setStoreCancelError] = useState('');
   const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
+
+  // Single Item Cancel Custom Modal State
+  const [itemToCancel, setItemToCancel] = useState<{
+    shopOrderId: string;
+    itemIndex: number;
+    itemName: string;
+    itemUnit?: string;
+    itemPrice?: string | number;
+    parentOrderId: string;
+  } | null>(null);
 
   // Pricing & note state inside details view
   const [costInput, setCostInput] = useState('');
@@ -725,7 +748,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
         if (storeStatusFilter === 'ACTIVE') return isActive;
         if (storeStatusFilter === 'PENDING') return so.status === 'PENDING' && isActive;
-        if (storeStatusFilter === 'ACCEPTED') return so.status === 'ACCEPTED' && isActive;
+        if (storeStatusFilter === 'ACCEPTED') return (so.status === 'ACCEPTED' || so.status === 'PREPARING') && isActive;
+        if (storeStatusFilter === 'READY') return so.status === 'READY' && isActive;
+        if (storeStatusFilter === 'HANDOVER') return so.status === 'HANDOVER' && isActive;
         if (storeStatusFilter === 'DELIVERED') return isDelivered;
         if (storeStatusFilter === 'CANCELED') return isCanceled;
         return so.status === storeStatusFilter;
@@ -997,6 +1022,213 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     setSelectedShopOrderId(null);
   };
 
+  const handleStatusChange = async (soId: string, newStatus: ShopOrderStatus) => {
+    if (isStoreBlocked) {
+      setShowBlockedModal(true);
+      return;
+    }
+    const targetSo = storeShopOrders.find((so) => so.id === soId) || completedShopOrders.find((so) => so.id === soId) || fallbackStore.shopOrders.get(soId);
+    if (!targetSo || targetSo.status === newStatus) return;
+
+    const statusLabels: Record<string, string> = {
+      ACCEPTED: 'গৃহীত (Accepted)',
+      READY: 'প্রস্তুত (Ready)',
+      HANDOVER: 'হস্তান্তর (HandedOver)',
+    };
+
+    const statusEntry = {
+      status: newStatus,
+      timestamp: new Date().toISOString(),
+      actor: user?.displayName || currentShop?.name || 'Store',
+      note: `দোকান স্ট্যাটাস পরিবর্তন করেছে: ${statusLabels[newStatus] || newStatus}`,
+    };
+
+    // 1. Immediate optimistic UI updates
+    setStoreShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === soId
+          ? {
+              ...so,
+              status: newStatus,
+              statusHistory: [...(so.statusHistory || []), statusEntry],
+            }
+          : so
+      )
+    );
+    setCompletedShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === soId
+          ? {
+              ...so,
+              status: newStatus,
+              statusHistory: [...(so.statusHistory || []), statusEntry],
+            }
+          : so
+      )
+    );
+
+    // 2. Immediate memory update
+    const existingInStore = fallbackStore.shopOrders.get(soId);
+    if (existingInStore) {
+      fallbackStore.shopOrders.set(soId, {
+        ...existingInStore,
+        status: newStatus,
+        statusHistory: [...(existingInStore.statusHistory || []), statusEntry],
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // 3. Persist to Firestore silently (no notification to helpers)
+    await fallbackStore.updateShopOrder(
+      soId,
+      (prev) => ({
+        ...prev,
+        status: newStatus,
+        statusHistory: [...(prev.statusHistory || []), statusEntry],
+      }),
+      'silent'
+    );
+  };
+
+  const handleConfirmCancelItem = async () => {
+    if (!itemToCancel) return;
+    const { shopOrderId, itemIndex, itemName, parentOrderId } = itemToCancel;
+    setItemToCancel(null);
+
+    const targetSo = storeShopOrders.find((so) => so.id === shopOrderId) || completedShopOrders.find((so) => so.id === shopOrderId) || fallbackStore.shopOrders.get(shopOrderId);
+    if (!targetSo) return;
+
+    let newItemsWithPrice: ShopOrderItemPrice[] = [];
+    let newRequestText = targetSo.requestText || '';
+    let isAllCancelled = false;
+    let newPrice = 0;
+
+    if (targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0) {
+      const validItems = targetSo.itemsWithPrice.filter((it) => !isNoteItem(it.name));
+      newItemsWithPrice = validItems.filter((_, idx) => idx !== itemIndex);
+      isAllCancelled = newItemsWithPrice.length === 0;
+      newPrice = newItemsWithPrice.reduce((sum, it) => {
+        const p = parseFloat(String(it.price || '0')) || 0;
+        const q = getItemQuantityNum({ unit: it.unit, qty: it.unit });
+        return sum + p * q;
+      }, 0);
+    } else {
+      const { itemsText, helperNote } = extractShopOrderNoteAndItems(targetSo);
+      const splitItems = itemsText
+        .split(/,|\n/)
+        .map((s) => s.replace(/^["'\s]+|["'\s]+$/g, '').trim())
+        .filter((s) => Boolean(s) && !isNoteItem(s));
+
+      const remainingSplit = splitItems.filter((_, idx) => idx !== itemIndex);
+      isAllCancelled = remainingSplit.length === 0;
+      newRequestText = remainingSplit.join(', ') + (helperNote ? `\nনোট: ${helperNote}` : '');
+      newPrice = targetSo.price || 0;
+    }
+
+    const cancelItemHistoryEntry = {
+      status: isAllCancelled ? ('CANCELED' as const) : targetSo.status,
+      timestamp: new Date().toISOString(),
+      actor: user?.displayName || currentShop?.name || 'Store',
+      note: isAllCancelled
+        ? `সকল পণ্য বাতিল হওয়ায় অর্ডার বাতিল হয়েছে (সর্বশেষ পণ্য: ${itemName})`
+        : `পণ্য (${itemName}) দোকান বাতিল করেছে`,
+    };
+
+    const newStatus = isAllCancelled ? ('CANCELED' as const) : targetSo.status;
+
+    // Optimistic local update
+    setStoreShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === shopOrderId
+          ? {
+              ...so,
+              status: newStatus,
+              itemsWithPrice: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? newItemsWithPrice : so.itemsWithPrice,
+              requestText: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? so.requestText : newRequestText,
+              price: newPrice,
+              statusHistory: [...(so.statusHistory || []), cancelItemHistoryEntry],
+            }
+          : so
+      )
+    );
+    setCompletedShopOrders((prev) =>
+      prev.map((so) =>
+        so.id === shopOrderId
+          ? {
+              ...so,
+              status: newStatus,
+              itemsWithPrice: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? newItemsWithPrice : so.itemsWithPrice,
+              requestText: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? so.requestText : newRequestText,
+              price: newPrice,
+              statusHistory: [...(so.statusHistory || []), cancelItemHistoryEntry],
+            }
+          : so
+      )
+    );
+
+    // Update memory cache in fallbackStore
+    const existingInStore = fallbackStore.shopOrders.get(shopOrderId);
+    if (existingInStore) {
+      fallbackStore.shopOrders.set(shopOrderId, {
+        ...existingInStore,
+        status: newStatus,
+        itemsWithPrice: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? newItemsWithPrice : existingInStore.itemsWithPrice,
+        requestText: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? existingInStore.requestText : newRequestText,
+        price: newPrice,
+        statusHistory: [...(existingInStore.statusHistory || []), cancelItemHistoryEntry],
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // Persist shop order update to Firestore with 'silent' role
+    await fallbackStore.updateShopOrder(
+      shopOrderId,
+      (prev) => ({
+        ...prev,
+        status: newStatus,
+        itemsWithPrice: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? newItemsWithPrice : prev.itemsWithPrice,
+        requestText: targetSo.itemsWithPrice && targetSo.itemsWithPrice.length > 0 ? prev.requestText : newRequestText,
+        price: newPrice,
+        statusHistory: [...(prev.statusHistory || []), cancelItemHistoryEntry],
+      }),
+      'silent'
+    );
+
+    // Sync parent order items if cached / exists
+    const parentOrder = fallbackStore.orders.get(parentOrderId);
+    if (parentOrder && parentOrder.items && parentOrder.items.length > 0) {
+      const targetNorm = itemName.trim().toLowerCase();
+      const updatedOrderItems = parentOrder.items.filter((it) => {
+        if (it.storeId && it.storeId !== targetSo.shopId) return true;
+        const itNorm = (it.name || '').trim().toLowerCase();
+        return itNorm !== targetNorm;
+      });
+
+      if (updatedOrderItems.length !== parentOrder.items.length) {
+        const newProductCost = calculateOrderProductCost({ ...parentOrder, items: updatedOrderItems });
+        await fallbackStore.updateOrder(parentOrderId, (o) => ({
+          ...o,
+          items: updatedOrderItems,
+          productCost: newProductCost,
+          statusHistory: [
+            ...(o.statusHistory || []),
+            {
+              id: `sh-${Date.now()}`,
+              status: o.status,
+              timestamp: new Date().toISOString(),
+              actor: `Store (${currentShop?.name || 'দোকান'})`,
+              note: `দোকান পণ্য বাতিল করেছে: ${itemName}`,
+            },
+          ],
+        }));
+      }
+    }
+
+    if (isAllCancelled) {
+      fetchCompletedPage();
+    }
+  };
+
   const renderMainContent = () => {
     if (parentActiveTab === 'wallet') {
       return <StoreWallet />;
@@ -1193,6 +1425,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                     <option value="ACTIVE">Active</option>
                     <option value="PENDING">Pending</option>
                     <option value="ACCEPTED">Confirmed</option>
+                    <option value="READY">Ready</option>
+                    <option value="HANDOVER">Handed Over</option>
                     <option value="DELIVERED">Delivered</option>
                     <option value="CANCELED">Canceled</option>
                   </select>
@@ -1258,6 +1492,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         cardContainerStyle = 'bg-white border border-rose-300 shadow-xs';
                       } else if (so.status === 'PENDING') {
                         cardContainerStyle = 'bg-white border-2 border-amber-400 shadow-md ring-2 ring-amber-100';
+                      } else if (so.status === 'READY') {
+                        cardContainerStyle = 'bg-white border-2 border-teal-500/80 shadow-md';
+                      } else if (so.status === 'HANDOVER') {
+                        cardContainerStyle = 'bg-white border-2 border-indigo-500/80 shadow-md';
                       }
 
                       return (
@@ -1306,6 +1544,14 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
                                   Confirmed
                                 </span>
+                              ) : so.status === 'READY' ? (
+                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 border border-teal-300">
+                                  Ready
+                                </span>
+                              ) : so.status === 'HANDOVER' ? (
+                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-300">
+                                  Handed Over
+                                </span>
                               ) : (
                                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
                                   Pending Action
@@ -1343,24 +1589,43 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                           </div>
                                         )}
                                       </div>
-                                      {priceInfo.lineTotal > 0 && (
-                                        <div className="text-right shrink-0">
-                                          {priceInfo.isMultiQty ? (
-                                            <div className="flex items-center gap-1.5 justify-end">
-                                              <span className="text-[10px] text-gray-400 font-mono">
-                                                ({priceInfo.breakdownText})
-                                              </span>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        {priceInfo.lineTotal > 0 && (
+                                          <div className="text-right">
+                                            {priceInfo.isMultiQty ? (
+                                              <div className="flex items-center gap-1.5 justify-end">
+                                                <span className="text-[10px] text-gray-400 font-mono">
+                                                  ({priceInfo.breakdownText})
+                                                </span>
+                                                <span className="font-extrabold font-mono text-gray-900 text-xs">
+                                                  ৳{priceInfo.lineTotal}
+                                                </span>
+                                              </div>
+                                            ) : (
                                               <span className="font-extrabold font-mono text-gray-900 text-xs">
                                                 ৳{priceInfo.lineTotal}
                                               </span>
-                                            </div>
-                                          ) : (
-                                            <span className="font-extrabold font-mono text-gray-900 text-xs">
-                                              ৳{priceInfo.lineTotal}
-                                            </span>
-                                          )}
-                                        </div>
-                                      )}
+                                            )}
+                                          </div>
+                                        )}
+                                        {isActive && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setItemToCancel({
+                                              shopOrderId: so.id,
+                                              itemIndex: item.itemIndex ?? idx,
+                                              itemName: item.name,
+                                              itemUnit: item.unit,
+                                              itemPrice: priceInfo.lineTotal > 0 ? priceInfo.lineTotal : item.price,
+                                              parentOrderId: so.parentOrderId,
+                                            })}
+                                            title="পণ্য বাতিল করুন (Cancel Item)"
+                                            className="p-1 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 active:scale-90 transition-all cursor-pointer"
+                                          >
+                                            <X className="w-3.5 h-3.5 stroke-[2.5]" />
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
                                   );
                                 })}
@@ -1450,18 +1715,71 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                 <span>Decline (না)</span>
                               </button>
                             </div>
-                          ) : so.status === 'ACCEPTED' && !isCanceled && !isDelivered ? (
-                            <div className="flex items-center justify-between px-3 py-2 bg-emerald-100/50 rounded-xl border border-emerald-200/80">
-                              <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-900">
-                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                <span>Order Confirmed</span>
+                          ) : ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered ? (
+                            <div className="p-3 bg-gray-50/90 rounded-2xl border border-gray-200/80 space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-700">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-gray-500">স্ট্যাটাস:</span>
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                    so.status === 'READY'
+                                      ? 'bg-teal-100 text-teal-800 border border-teal-200'
+                                      : so.status === 'HANDOVER'
+                                      ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  }`}>
+                                    {so.status === 'READY' ? 'Ready' : so.status === 'HANDOVER' ? 'HandedOver' : 'Accepted'}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelOrderClick(so.id)}
+                                  className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline transition-colors cursor-pointer"
+                                >
+                                  Cancel Order
+                                </button>
                               </div>
-                              <button
-                                onClick={() => handleCancelOrderClick(so.id)}
-                                className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline"
-                              >
-                                Cancel Order
-                              </button>
+
+                              {/* Status Switcher Buttons: Accepted, Ready, HandedOver */}
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange(so.id, 'ACCEPTED')}
+                                  className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
+                                    so.status === 'ACCEPTED' || so.status === 'PREPARING'
+                                      ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-300'
+                                      : 'bg-white text-gray-700 hover:bg-emerald-50 hover:text-emerald-700 border border-gray-200'
+                                  }`}
+                                >
+                                  <CheckCircle className={`w-3.5 h-3.5 shrink-0 ${so.status === 'ACCEPTED' || so.status === 'PREPARING' ? 'text-white' : 'text-emerald-600'}`} />
+                                  <span className="truncate">Accepted</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange(so.id, 'READY')}
+                                  className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
+                                    so.status === 'READY'
+                                      ? 'bg-teal-600 text-white shadow-sm ring-2 ring-teal-300'
+                                      : 'bg-white text-gray-700 hover:bg-teal-50 hover:text-teal-700 border border-gray-200'
+                                  }`}
+                                >
+                                  <Package className={`w-3.5 h-3.5 shrink-0 ${so.status === 'READY' ? 'text-white' : 'text-teal-600'}`} />
+                                  <span className="truncate">Ready</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange(so.id, 'HANDOVER')}
+                                  className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
+                                    so.status === 'HANDOVER'
+                                      ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300'
+                                      : 'bg-white text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 border border-gray-200'
+                                  }`}
+                                >
+                                  <Check className={`w-3.5 h-3.5 shrink-0 ${so.status === 'HANDOVER' ? 'text-white' : 'text-indigo-600'}`} />
+                                  <span className="truncate">HandedOver</span>
+                                </button>
+                              </div>
                             </div>
                           ) : isCanceled && so.note ? (
                             <div className="py-1.5 px-3 bg-rose-100/70 rounded-xl border border-rose-200 text-center">
@@ -1686,6 +2004,71 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                 className="flex-1 py-3.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md shadow-red-600/25 transition-all"
               >
                 নিশ্চিত করুন
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel Single Product Item Custom Confirmation Modal ── */}
+      {itemToCancel && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-red-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 flex flex-col">
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
+              <div>
+                <h3 className="font-black text-base text-gray-900 font-sans">পণ্য বাতিল নিশ্চিতকরণ</h3>
+                <p className="text-[11px] text-gray-500 font-semibold mt-0.5">অর্ডার থেকে এই পণ্যটি বাদ দিতে চান?</p>
+              </div>
+              <button
+                onClick={() => setItemToCancel(null)}
+                className="p-2 rounded-full bg-gray-100 text-gray-500 hover:text-gray-700 hover:bg-gray-200 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-3.5">
+              <div className="p-4 rounded-2xl bg-rose-50/80 border border-rose-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-500 uppercase">পণ্যের নাম</span>
+                  {itemToCancel.itemPrice !== undefined && itemToCancel.itemPrice !== null && Number(itemToCancel.itemPrice) > 0 && (
+                    <span className="text-xs font-black font-mono text-emerald-700 bg-white px-2 py-0.5 rounded-lg border border-emerald-200 shadow-xs">
+                      ৳{itemToCancel.itemPrice}
+                    </span>
+                  )}
+                </div>
+                <p className="font-extrabold text-sm text-gray-900 break-words">
+                  {itemToCancel.itemName}
+                  {itemToCancel.itemUnit && (
+                    <span className="text-xs font-semibold text-gray-500 ml-1.5">
+                      ({itemToCancel.itemUnit})
+                    </span>
+                  )}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-start space-x-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-900 font-semibold leading-relaxed">
+                  এই পণ্যটি অর্ডার থেকে মুছে ফেলা হবে এবং অর্ডারের মোট মূল্য সমন্বয় করা হবে। হেলপার বা কাস্টমার রিয়েল-টাইমে আপডেট দেখতে পাবেন।
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 pb-5 pt-3 border-t border-gray-100 shrink-0 flex space-x-2">
+              <button
+                type="button"
+                onClick={() => setItemToCancel(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 active:scale-95 font-bold text-xs transition-all cursor-pointer"
+              >
+                ফিরে যান
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancelItem}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-600/25 active:scale-95 transition-all cursor-pointer"
+              >
+                পণ্যটি বাতিল করুন
               </button>
             </div>
           </div>

@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Order, PricingSettings, Shop, UserProfile, OrderFeedback, ShopOrder } from '@/types';
+import { Order, PricingSettings, Shop, UserProfile, OrderFeedback, ShopOrder, HelperApplication, Wallet } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
 import { PaginationControl } from './PaginationControl';
 import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
-import { TodayCollectionBreakdownModal, TodayStoreOwedItem } from './TodayCollectionBreakdownModal';
+import { TodayCollectionBreakdownModal, TodayStoreOwedItem, TodayHelperPaybackItem, TabType as BreakdownTabType } from './TodayCollectionBreakdownModal';
 import { GrowthAnalytics } from './GrowthAnalytics';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
@@ -26,7 +26,6 @@ import {
   ArrowUpDown,
   BarChart2,
   Search,
-  Wallet,
   Receipt,
   ExternalLink,
   ChevronRight,
@@ -132,6 +131,16 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
   const [showOutstandingModal, setShowOutstandingModal] = useState<boolean>(false);
   const [selectedDisburseShop, setSelectedDisburseShop] = useState<Shop | null>(null);
   const [showTodayBreakdownModal, setShowTodayBreakdownModal] = useState<boolean>(false);
+  const [breakdownModalTab, setBreakdownModalTab] = useState<BreakdownTabType>('HELPER_PAYBACK');
+  const [storeSyncTick, setStoreSyncTick] = useState<number>(0);
+
+  // Subscribe to live fallbackStore updates
+  useEffect(() => {
+    const unsub = fallbackStore.subscribe(() => {
+      setStoreSyncTick((v) => v + 1);
+    });
+    return () => unsub();
+  }, []);
 
   // Reset pages to 1 when date filter or search changes
   useEffect(() => {
@@ -625,13 +634,30 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     let todayNonAcceptableStoreCommission = 0; // commissions from stores that cannot accept order
     const todayStoreBreakdownMap = new Map<string, TodayStoreOwedItem>();
 
+    const appByUserId = new Map<string, HelperApplication>();
+    fallbackStore.helperApplications.forEach((a) => {
+      if (!appByUserId.has(a.userId)) appByUserId.set(a.userId, a);
+    });
+
+    const walletMap = new Map<string, Wallet>();
+    allWallets.forEach((w) => walletMap.set(w.userId, w));
+
+    const todayHelperBreakdownMap = new Map<string, TodayHelperPaybackItem>();
+
     deliveredToday.forEach((o) => {
       const fee = Math.max(o.deliveryFee || 0, minFee);
       todayDeliveryCharges += fee;
+      const helperPayout = calculateHelperCommission(fee, pricing);
+      const platformShare = fee - helperPayout;
+
       const completedTimeStr = new Date(getOrderCompletedTime(o)).toLocaleTimeString('bn-BD', {
         hour: '2-digit',
         minute: '2-digit',
       });
+
+      let orderProductCost = 0;
+      let orderStoreReturnable = 0;
+      let orderStoreCommission = 0;
 
       const attachedShopOrders = shopOrdersByParentMap.get(o.id) || [];
       const validShopOrders = attachedShopOrders.filter(
@@ -642,6 +668,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
         validShopOrders.forEach((so) => {
           const price = so.price || 0;
           if (price <= 0) return;
+          orderProductCost += price;
 
           const isMyself = so.shopId === 'myself';
           const shop = !isMyself
@@ -654,39 +681,50 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
           if (canReceive) {
             todayReturnableStoreAmount += price;
+            orderStoreReturnable += price;
           } else {
             todayNonAcceptableStoreCommission += comm;
+            orderStoreCommission += comm;
           }
 
           const storeKey = shop?.id || so.shopId || 'unknown';
-          const existing = todayStoreBreakdownMap.get(storeKey) || {
+          const isDisbursed = Boolean(so.isPaid || o.isStorePaid || o.isPaid);
+          const existing: TodayStoreOwedItem = todayStoreBreakdownMap.get(storeKey) || {
             storeId: storeKey,
             storeName: shop?.name || so.shopName || (isMyself ? 'কাস্টমার নিজে / অন্য সোর্স' : 'অজানা দোকান'),
             ownerName: shop?.contactPerson || shop?.managerName,
             phone: shop?.whatsapp || shop?.managerWhatsapp,
             canReceiveOrders: canReceive,
+            shop: shop || allShopsList.find((s) => s.id === storeKey || s.ownerUserId === storeKey),
             orderCount: 0,
             totalCost: 0,
-            owedAmount: 0,
+            unpaidAmount: 0,
+            disbursedAmount: 0,
             commissionEarned: 0,
-            orders: [] as TodayStoreOwedItem['orders'],
+            overallUnpaidBalance: 0,
+            orders: [],
           };
 
           existing.orderCount += 1;
           existing.totalCost += price;
-          existing.owedAmount += owed;
+          if (canReceive) {
+            if (isDisbursed) existing.disbursedAmount += price;
+            else existing.unpaidAmount += price;
+          }
           existing.commissionEarned += comm;
           existing.orders.push({
             id: o.id.slice(-6).toUpperCase(),
             title: o.title || so.shopName,
             cost: price,
             time: completedTimeStr,
+            isPaid: isDisbursed,
           });
           todayStoreBreakdownMap.set(storeKey, existing);
         });
       } else if (o.selectedShopIds && o.selectedShopIds.length > 0) {
         const pCost = o.productCost || 0;
         if (pCost > 0) {
+          orderProductCost += pCost;
           const costPerShop = pCost / o.selectedShopIds.length;
           o.selectedShopIds.forEach((shopId) => {
             const shop = shopMap.get(shopId) || allShopsList.find((s) => s.id === shopId);
@@ -697,41 +735,170 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
             if (canReceive) {
               todayReturnableStoreAmount += costPerShop;
+              orderStoreReturnable += costPerShop;
             } else {
               todayNonAcceptableStoreCommission += comm;
+              orderStoreCommission += comm;
             }
 
+            const isDisbursed = Boolean(o.isStorePaid || o.isPaid);
             const storeKey = shop?.id || shopId;
-            const existing = todayStoreBreakdownMap.get(storeKey) || {
+            const existing: TodayStoreOwedItem = todayStoreBreakdownMap.get(storeKey) || {
               storeId: storeKey,
               storeName: shop?.name || 'অজানা দোকান',
               ownerName: shop?.contactPerson || shop?.managerName,
               phone: shop?.whatsapp || shop?.managerWhatsapp,
               canReceiveOrders: canReceive,
+              shop: shop || allShopsList.find((s) => s.id === storeKey || s.ownerUserId === storeKey),
               orderCount: 0,
               totalCost: 0,
-              owedAmount: 0,
+              unpaidAmount: 0,
+              disbursedAmount: 0,
               commissionEarned: 0,
-              orders: [] as TodayStoreOwedItem['orders'],
+              overallUnpaidBalance: 0,
+              orders: [],
             };
 
             existing.orderCount += 1;
             existing.totalCost += costPerShop;
-            existing.owedAmount += owed;
+            if (canReceive) {
+              if (isDisbursed) existing.disbursedAmount += costPerShop;
+              else existing.unpaidAmount += costPerShop;
+            }
             existing.commissionEarned += comm;
             existing.orders.push({
               id: o.id.slice(-6).toUpperCase(),
               title: o.title,
               cost: costPerShop,
               time: completedTimeStr,
+              isPaid: isDisbursed,
             });
             todayStoreBreakdownMap.set(storeKey, existing);
           });
         }
+      } else {
+        orderProductCost += (o.productCost || 0);
+      }
+
+      // Track helper payback for this delivered order
+      const helperId = o.helperId;
+      if (helperId) {
+        const orderTotalCollected = fee + orderProductCost;
+        const orderPayback = platformShare + orderStoreReturnable + orderStoreCommission;
+        const isOrderPaid = Boolean(o.isHelperPaid || o.isPaid);
+
+        let helperItem = todayHelperBreakdownMap.get(helperId);
+        if (!helperItem) {
+          const user = fallbackStore.users.get(helperId);
+          const app = appByUserId.get(helperId);
+          const name = user?.displayName || app?.legalName || app?.userName || `Helper (${helperId.slice(0, 6)})`;
+          const phone = user?.alternativePhone || app?.whatsapp || (user as any)?.phone || user?.email || '';
+          const photoURL = user?.photoURL || (app as any)?.photoURL;
+          const wallet = walletMap.get(helperId);
+
+          const todayPaidBack = allWithdrawals
+            .filter((w) => {
+              if (w.helperId !== helperId || w.status !== 'APPROVED') return false;
+              const t = new Date(w.processedAt || (w as any).approvedAt || w.createdAt || '').getTime();
+              return !isNaN(t) && t >= todayStartMs && t <= todayEndMs;
+            })
+            .reduce((sum, w) => sum + w.amount, 0);
+
+          helperItem = {
+            helperId,
+            name,
+            phone,
+            whatsapp: app?.whatsapp || user?.alternativePhone,
+            photoURL,
+            deliveredOrdersCount: 0,
+            totalCollectedCash: 0,
+            helperEarnings: 0,
+            grossPaybackAmount: 0,
+            paidBackAmount: todayPaidBack,
+            remainingPaybackAmount: 0,
+            walletBalance: wallet?.balance || 0,
+            orders: [],
+          };
+          todayHelperBreakdownMap.set(helperId, helperItem);
+        }
+
+        helperItem.deliveredOrdersCount += 1;
+        helperItem.totalCollectedCash += orderTotalCollected;
+        helperItem.helperEarnings += helperPayout;
+        helperItem.grossPaybackAmount += orderPayback;
+
+        if (isOrderPaid) {
+          helperItem.paidBackAmount += orderPayback;
+        } else {
+          helperItem.remainingPaybackAmount += orderPayback;
+        }
+
+        helperItem.orders.push({
+          id: o.id.slice(-6).toUpperCase(),
+          title: o.title || 'ডেলিভারি অর্ডার',
+          cost: orderProductCost,
+          deliveryFee: fee,
+          helperPayout,
+          platformShare,
+          storeAmount: orderStoreReturnable,
+          storeCommission: orderStoreCommission,
+          totalCollected: orderTotalCollected,
+          paybackAmount: orderPayback,
+          time: completedTimeStr,
+          customerName: o.customerName || (o as any).userName,
+          customerPhone: o.customerPhone || (o as any).phone,
+          isPaid: isOrderPaid,
+        });
       }
     });
 
     const todayStoresList = Array.from(todayStoreBreakdownMap.values());
+
+    const todayHelpersList = Array.from(todayHelperBreakdownMap.values()).sort(
+      (a, b) => b.remainingPaybackAmount - a.remainingPaybackAmount
+    );
+
+    const todayTotalHelperPayback = todayHelpersList.reduce((sum, h) => sum + h.remainingPaybackAmount, 0);
+    const todayTotalHelperEarnings = todayHelpersList.reduce((sum, h) => sum + h.helperEarnings, 0);
+    const todayTotalHelperCashCollected = todayHelpersList.reduce((sum, h) => sum + h.totalCollectedCash, 0);
+
+    const allHelpersWithBalance: TodayHelperPaybackItem[] = allWallets
+      .filter((w) => (w.balance || 0) > 0)
+      .map((w) => {
+        const existing = todayHelperBreakdownMap.get(w.userId);
+        if (existing) return existing;
+
+        const user = fallbackStore.users.get(w.userId);
+        const app = appByUserId.get(w.userId);
+        const name = user?.displayName || app?.legalName || app?.userName || `Helper (${w.userId.slice(0, 6)})`;
+        const phone = user?.alternativePhone || app?.whatsapp || (user as any)?.phone || user?.email || '';
+        const photoURL = user?.photoURL || (app as any)?.photoURL;
+
+        const todayPaidBack = allWithdrawals
+          .filter((wd) => {
+            if (wd.helperId !== w.userId || wd.status !== 'APPROVED') return false;
+            const t = new Date(wd.processedAt || (wd as any).approvedAt || wd.createdAt || '').getTime();
+            return !isNaN(t) && t >= todayStartMs && t <= todayEndMs;
+          })
+          .reduce((sum, wd) => sum + wd.amount, 0);
+
+        return {
+          helperId: w.userId,
+          name,
+          phone,
+          whatsapp: app?.whatsapp || user?.alternativePhone,
+          photoURL,
+          deliveredOrdersCount: 0,
+          totalCollectedCash: 0,
+          helperEarnings: 0,
+          grossPaybackAmount: 0,
+          paidBackAmount: todayPaidBack,
+          remainingPaybackAmount: Math.max(0, w.balance || 0),
+          walletBalance: w.balance || 0,
+          orders: [],
+        };
+      })
+      .sort((a, b) => b.walletBalance - a.walletBalance);
 
     const todayTotalCollectedAmount =
       todayDeliveryCharges + todayNonAcceptableStoreCommission + todayReturnableStoreAmount;
@@ -808,6 +975,11 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
       todayNonAcceptableStoreCommission,
       todayTotalCollectedAmount,
       todayStoresList,
+      todayHelpersList,
+      allHelpersWithBalance,
+      todayTotalHelperPayback,
+      todayTotalHelperEarnings,
+      todayTotalHelperCashCollected,
       todayDeliveredOrdersCount: deliveredToday.length,
       rangeDeliveryCharges,
       rangeReturnableStoreAmount,
@@ -871,7 +1043,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     // lifetimeData.ready: the withdrawals and shop orders read here may land
     // after the orders do.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready]);
+  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready, storeSyncTick]);
 
   // Filtered store commission data by search
   const filteredStoreCommissionData = useMemo(() => {
@@ -1027,8 +1199,12 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
           </div>
 
           {/* 🌟 NEW BLOCK: Todays collected amount (Delivery charges + unaccepted store order commisions + store due amounts) */}
+          {/* 🌟 NEW BLOCK: Todays collected amount (Delivery charges + unaccepted store order commisions + store due amounts) */}
           <div
-            onClick={() => setShowTodayBreakdownModal(true)}
+            onClick={() => {
+              setBreakdownModalTab('HELPER_PAYBACK');
+              setShowTodayBreakdownModal(true);
+            }}
             className="p-6 rounded-3xl bg-gradient-to-br from-emerald-950 via-teal-950 to-slate-950 text-white shadow-xl border border-emerald-800/40 relative overflow-hidden group cursor-pointer hover:border-emerald-500/60 transition-all hover:shadow-2xl"
           >
             {/* Ambient Lighting */}
@@ -1036,13 +1212,16 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
 
             <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4 mb-4">
               <div>
-                <div className="flex items-center space-x-2.5 mb-1.5 flex-wrap">
+                <div className="flex items-center space-x-2.5 mb-1.5 flex-wrap gap-y-1">
                   <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     Today's Live Collection
                   </span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-bold border border-indigo-400/30">
+                    হেলপার পেব্যাক দেখতে ক্লিক করুন ➔
+                  </span>
                   <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[11px] font-bold border border-amber-400/30">
-                    কাকে কত দিতে হবে দেখতে ক্লিক করুন ➔
+                    দোকানের পাওনা হিসাব দেখতে ক্লিক করুন ➔
                   </span>
                   {activePreset !== 'TODAY' && (
                     <span className="text-[11px] text-teal-200/70 font-semibold">
@@ -1054,7 +1233,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
                   Todays collected amount (Delivery charges + unaccepted store order commisions + store due amounts)
                 </h4>
                 <p className="text-xs text-teal-200/80 font-medium mt-0.5">
-                  আজকের ডেলিভারি অর্ডারসমূহ থেকে সর্বমোট আদায়কৃত ক্যাশ ও তার হিসাব বিভাজন
+                  আজকের ডেলিভারি অর্ডারসমূহ থেকে সর্বমোট আদায়কৃত ক্যাশ, হেলপার পেব্যাক ও দোকানের পাওনার হিসাব
                 </p>
               </div>
 
@@ -1070,53 +1249,97 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
               </div>
             </div>
 
-            {/* 3 Smaller Sub-Blocks Underneath */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-              {/* 1. Store Due Amounts */}
-              <div className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors">
+            {/* 4 Smaller Sub-Blocks Underneath */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+              {/* 1. Helper Payback */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBreakdownModalTab('HELPER_PAYBACK');
+                  setShowTodayBreakdownModal(true);
+                }}
+                className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors cursor-pointer group/card"
+              >
+                <div>
+                  <div className="flex items-center justify-between text-xs text-indigo-200 font-extrabold uppercase tracking-wider mb-1">
+                    <span>Helper Payback</span>
+                    <Bike className="w-3.5 h-3.5 text-indigo-300" />
+                  </div>
+                  <div className="text-xl sm:text-2xl font-black text-indigo-200 mb-1 group-hover/card:text-indigo-100">
+                    ৳{analyticsData.todayTotalHelperPayback.toLocaleString()}
+                  </div>
+                </div>
+                <p className="text-[11px] text-indigo-200/80 font-medium leading-snug">
+                  আজ হেলপারদের কোম্পানিকে ফেরত দিতে হবে ({analyticsData.todayHelpersList.length} জন হেলপার) ➔
+                </p>
+              </div>
+
+              {/* 2. Store Due Amounts */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBreakdownModalTab('OWED_STORES');
+                  setShowTodayBreakdownModal(true);
+                }}
+                className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors cursor-pointer group/card"
+              >
                 <div>
                   <div className="flex items-center justify-between text-xs text-amber-200 font-extrabold uppercase tracking-wider mb-1">
                     <span>Store Due Amounts</span>
                     <Store className="w-3.5 h-3.5 text-amber-300" />
                   </div>
-                  <div className="text-xl sm:text-2xl font-black text-amber-100 mb-1">
+                  <div className="text-xl sm:text-2xl font-black text-amber-100 mb-1 group-hover/card:text-white">
                     ৳{analyticsData.todayReturnableStoreAmount.toLocaleString()}
                   </div>
                 </div>
                 <p className="text-[11px] text-amber-200/80 font-medium leading-snug">
-                  টোটাল যে টাকা স্টোরকে দিতে হবে (অর্ডার গ্রহণকারী নিবন্ধিত স্টোরদের প্রদেয় মূল্য)
+                  টোটাল যে টাকা স্টোরকে দিতে হবে (অর্ডার গ্রহণকারী নিবন্ধিত স্টোরদের পাওনা টাকা) ➔
                 </p>
               </div>
 
-              {/* 2. Delivery Charges */}
-              <div className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors">
+              {/* 3. Delivery Charges */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBreakdownModalTab('HELPER_PAYBACK');
+                  setShowTodayBreakdownModal(true);
+                }}
+                className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors cursor-pointer group/card"
+              >
                 <div>
                   <div className="flex items-center justify-between text-xs text-emerald-200 font-extrabold uppercase tracking-wider mb-1">
                     <span>Delivery Charges</span>
                     <Bike className="w-3.5 h-3.5 text-emerald-300" />
                   </div>
-                  <div className="text-xl sm:text-2xl font-black text-emerald-100 mb-1">
+                  <div className="text-xl sm:text-2xl font-black text-emerald-100 mb-1 group-hover/card:text-white">
                     ৳{analyticsData.todayDeliveryCharges.toLocaleString()}
                   </div>
                 </div>
                 <p className="text-[11px] text-emerald-200/80 font-medium leading-snug">
-                  ডেলিভারি চার্জ বাবদ যা এসেছে (আজকের ডেলিভারি ফি সংগ্রহ)
+                  ডেলিভারি চার্জ বাবদ যা এসেছে (আজকের ডেলিভারি ফি সংগ্রহ) ➔
                 </p>
               </div>
 
-              {/* 3. Unaccepted Store Order Commissions */}
-              <div className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors">
+              {/* 4. Unaccepted Store Order Commissions */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBreakdownModalTab('OWED_STORES');
+                  setShowTodayBreakdownModal(true);
+                }}
+                className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 backdrop-blur-md flex flex-col justify-between transition-colors cursor-pointer group/card"
+              >
                 <div>
                   <div className="flex items-center justify-between text-xs text-teal-200 font-extrabold uppercase tracking-wider mb-1">
                     <span>Unaccepted Store Commisions</span>
                     <Sparkles className="w-3.5 h-3.5 text-teal-300" />
                   </div>
-                  <div className="text-xl sm:text-2xl font-black text-teal-100 mb-1">
+                  <div className="text-xl sm:text-2xl font-black text-teal-100 mb-1 group-hover/card:text-white">
                     ৳{analyticsData.todayNonAcceptableStoreCommission.toLocaleString()}
                   </div>
                 </div>
                 <p className="text-[11px] text-teal-200/80 font-medium leading-snug">
-                  যেসব স্টোর অর্ডার গ্রহণ করতে পারে না তাদের থেকে প্রাপ্ত কমিশন
+                  যেসব স্টোর অর্ডার গ্রহণ করতে পারে না তাদের থেকে প্রাপ্ত কমিশন ➔
                 </p>
               </div>
             </div>
@@ -1128,7 +1351,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
                   📊 নির্বাচিত সময়কালের মোট সংগৃহীত: <strong className="text-white">৳{analyticsData.rangeTotalCollectedAmount.toLocaleString()}</strong>
                 </span>
                 <span className="flex items-center gap-3">
-                  <span>স্টোর প্রদেয়: <strong className="text-amber-200">৳{analyticsData.rangeReturnableStoreAmount.toLocaleString()}</strong></span>
+                  <span>দোকানের পাওনা: <strong className="text-amber-200">৳{analyticsData.rangeReturnableStoreAmount.toLocaleString()}</strong></span>
                   <span>•</span>
                   <span>ডেলিভারি ফি: <strong className="text-emerald-200">৳{analyticsData.rangeDeliveryCharges.toLocaleString()}</strong></span>
                   <span>•</span>
@@ -1876,17 +2099,14 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
             )}
           </div>
 
-          {/* Today Collection Breakdown Modal ("কাকে কত টাকা দিতে হবে") */}
+          {/* Collection & Payback Breakdown Modal */}
           {showTodayBreakdownModal && (
             <TodayCollectionBreakdownModal
               isOpen={showTodayBreakdownModal}
               onClose={() => setShowTodayBreakdownModal(false)}
-              todayTotalCollectedAmount={analyticsData.todayTotalCollectedAmount}
-              todayReturnableStoreAmount={analyticsData.todayReturnableStoreAmount}
-              todayDeliveryCharges={analyticsData.todayDeliveryCharges}
-              todayNonAcceptableStoreCommission={analyticsData.todayNonAcceptableStoreCommission}
-              todayDeliveredOrdersCount={analyticsData.todayDeliveredOrdersCount}
-              storesList={analyticsData.todayStoresList}
+              initialTab={breakdownModalTab}
+              pricing={pricing}
+              onDisburseStore={(shop) => setSelectedDisburseShop(shop)}
             />
           )}
 
@@ -1906,6 +2126,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
               onDisbursed={() => {
                 // Refresh is automatic via fallbackStore subscription
               }}
+              initialPreset="TODAY"
             />
           )}
         </>

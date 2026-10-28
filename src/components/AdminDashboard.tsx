@@ -89,6 +89,7 @@ import { AdminOrderDetailsModal } from './admin/AdminOrderDetailsModal';
 import { AssignHelperModal } from './admin/AssignHelperModal';
 import { CustomerHistoryModal } from './admin/CustomerHistoryModal';
 import { HelperHistoryModal } from './admin/HelperHistoryModal';
+import { AdminExportHelperModal } from './admin/AdminExportHelperModal';
 import { UserDetailsModal } from './admin/UserDetailsModal';
 import { RevenueAnalytics } from './admin/RevenueAnalytics';
 import { GrowthAnalytics } from './admin/GrowthAnalytics';
@@ -501,6 +502,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [selectedHelper, setSelectedHelper] = useState<{ id: string; name: string } | null>(null);
+  const [showExportHelperModal, setShowExportHelperModal] = useState<boolean>(false);
+  const [exportHelperTargetId, setExportHelperTargetId] = useState<string | null>(null);
 
   // Block User / Helper / Store with Admin Note Modal state
   const [blockTarget, setBlockTarget] = useState<{
@@ -6317,9 +6320,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         Performance metrics for: <span className="underline">{describeRange(dateRange)}</span>
                       </p>
                     </div>
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 self-start sm:self-auto">
-                      {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExportHelperTargetId(null);
+                          setShowExportHelperModal(true);
+                        }}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs transition-all shadow-sm"
+                        title="Export helper data as Excel / Sheet"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Export Sheet</span>
+                      </button>
+                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-800 self-start sm:self-auto">
+                        {exactActiveHelpers !== null ? exactActiveHelpers.toLocaleString() : totalItems} helpers recorded
+                      </span>
+                    </div>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -6510,6 +6527,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     Block
                                   </button>
                                 )}
+                                <button
+                                  onClick={() => {
+                                    setExportHelperTargetId(h.id);
+                                    setShowExportHelperModal(true);
+                                  }}
+                                  title="Export this helper's performance to Excel / Sheet"
+                                  className="py-1.5 px-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold text-xs transition-all flex items-center gap-1"
+                                >
+                                  <Download className="w-3 h-3 text-emerald-600" />
+                                  <span>Sheet</span>
+                                </button>
                                 <button
                                   onClick={() => setSelectedUserId(h.id)}
                                   className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-all"
@@ -11400,6 +11428,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           helperId={selectedHelper.id}
           helperName={selectedHelper.name}
           onClose={() => setSelectedHelper(null)}
+        />
+      )}
+
+      {/* 4.1 Export Helper Performance Sheet Modal */}
+      {showExportHelperModal && (
+        <AdminExportHelperModal
+          isOpen={showExportHelperModal}
+          onClose={() => {
+            setShowExportHelperModal(false);
+            setExportHelperTargetId(null);
+          }}
+          initialHelperId={exportHelperTargetId}
+          helpers={processedHelpers}
+          allOrders={scopedAllOrders}
+          defaultPreset={dateRange.preset}
+          defaultStartDate={dateRange.preset === 'CUSTOM' ? rangeStartIso?.slice(0, 10) : ''}
+          defaultEndDate={dateRange.preset === 'CUSTOM' ? rangeEndIso?.slice(0, 10) : ''}
         />
       )}
 

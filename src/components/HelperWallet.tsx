@@ -198,20 +198,31 @@ export const HelperWallet: React.FC = () => {
     }
   }, [withdrawalsCurrentPage, withdrawalsTotalPages]);
 
+  // Exact completed time calculation matching admin financial ledger
+  const getOrderCompletedTime = (o: Order): number => {
+    if ((o as any).completedAt) return new Date((o as any).completedAt).getTime();
+    if (o.statusHistory) {
+      const deliveredEntry = o.statusHistory.find(
+        (h) => h.status === 'DELIVERED' || (h.status as string) === 'COMPLETED'
+      );
+      if (deliveredEntry) return new Date(deliveredEntry.timestamp).getTime();
+    }
+    return new Date(o.updatedAt || o.createdAt).getTime();
+  };
+
   // Filtered Delivered Orders based on selected Date Range
   const filteredOrders = useMemo(() => {
     return deliveredOrders
       .filter((ord) => {
-        const orderDate = ord.deliveredAt || ord.updatedAt || ord.createdAt;
-        const t = new Date(orderDate).getTime();
+        const t = getOrderCompletedTime(ord);
         if (isNaN(t)) return true;
         if (startDate && t < new Date(`${startDate}T00:00:00`).getTime()) return false;
         if (endDate && t > new Date(`${endDate}T23:59:59.999`).getTime()) return false;
         return true;
       })
       .sort((a, b) => {
-        const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
-        const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+        const timeA = getOrderCompletedTime(a);
+        const timeB = getOrderCompletedTime(b);
         return timeB - timeA;
       });
   }, [deliveredOrders, startDate, endDate]);
@@ -232,61 +243,111 @@ export const HelperWallet: React.FC = () => {
   }, [breakdownCurrentPage, breakdownTotalPages]);
 
   // Compute Financials helper for any order
-  const getOrderFinancials = (o: Order) => {
+  const computeOrderFin = (o: Order) => {
     const minFee = fallbackStore.pricingSettings.feeCalculatorMinFee ?? 20;
     const baseFeeForHelper = o.isFreeDelivery
       ? Math.max(o.originalDeliveryFee || 0, minFee)
       : Math.max(o.deliveryFee || 0, minFee);
     const helperShare = calculateHelperCommission(baseFeeForHelper, fallbackStore.pricingSettings);
     const platformShare = baseFeeForHelper - helperShare;
+
+    let orderProductCost = 0;
+    let returnableStoreAmount = 0;
+    let nonAcceptableStoreCommission = 0;
+
+    const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter(
+      (so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    );
+
+    if (shopOrders.length > 0) {
+      shopOrders.forEach((so) => {
+        const price = so.price || 0;
+        if (price <= 0) return;
+        orderProductCost += price;
+
+        const isMyself = so.shopId === 'myself';
+        const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
+        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+        let commPct = Number(shop?.commissionPercent) || 0;
+        if (isNaN(commPct) || shop?.commissionPercent === undefined) {
+          const app = Array.from(fallbackStore.storeApplications.values()).find(
+            (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+          );
+          commPct = Number(app?.commissionPercent) || 0;
+        }
+        const comm = !canReceive && commPct > 0 ? Math.round(price * (commPct / 100)) : 0;
+        if (canReceive) {
+          returnableStoreAmount += price;
+        } else {
+          nonAcceptableStoreCommission += comm;
+        }
+      });
+    } else if (o.selectedShopIds && o.selectedShopIds.length > 0) {
+      const pCost = o.productCost || 0;
+      if (pCost > 0) {
+        orderProductCost += pCost;
+        const costPerShop = pCost / o.selectedShopIds.length;
+        o.selectedShopIds.forEach((shopId) => {
+          const shop = fallbackStore.shops.get(shopId);
+          const canReceive = !!shop && shop.canReceiveOrders !== false;
+          let commPct = Number(shop?.commissionPercent) || 0;
+          const comm = !canReceive && commPct > 0 ? Math.round(costPerShop * (commPct / 100)) : 0;
+          if (canReceive) {
+            returnableStoreAmount += costPerShop;
+          } else {
+            nonAcceptableStoreCommission += comm;
+          }
+        });
+      }
+    } else if (o.productCost) {
+      orderProductCost += o.productCost;
+      returnableStoreAmount += o.productCost;
+    }
+
+    const orderTotalCollected = baseFeeForHelper + orderProductCost;
+    const orderPayback = platformShare + returnableStoreAmount + nonAcceptableStoreCommission;
+    const isOrderPaid = Boolean(o.isHelperPaid || o.isPaid);
+
     return {
       baseFeeForHelper,
       helperShare,
       platformShare,
+      orderProductCost,
+      returnableStoreAmount,
+      nonAcceptableStoreCommission,
+      orderTotalCollected,
+      orderPayback,
+      isOrderPaid,
     };
   };
+
+  const getOrderFinancials = computeOrderFin;
 
   // Range Metrics
   const rangeMetrics = useMemo(() => {
     let earned = 0;
     let totalCollected = 0;
-    let commissionDue = 0;
+    let platformShare = 0;
     let paidCommission = 0;
     let totalStoreOrdersAmount = 0;
     let returnableStoreAmount = 0;
     let nonAcceptableStoreCommission = 0;
+    let grossReceivable = 0;
+    let unpaidPayback = 0;
 
     filteredOrders.forEach((o) => {
-      const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
-      earned += helperShare;
-      totalCollected += baseFeeForHelper;
-      commissionDue += platformShare;
+      const fin = computeOrderFin(o);
+      earned += fin.helperShare;
+      totalCollected += fin.orderTotalCollected;
+      platformShare += fin.platformShare;
+      totalStoreOrdersAmount += fin.orderProductCost;
+      returnableStoreAmount += fin.returnableStoreAmount;
+      nonAcceptableStoreCommission += fin.nonAcceptableStoreCommission;
+      grossReceivable += fin.orderPayback;
 
-      const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
-      shopOrders.forEach((so) => {
-        const price = so.price || 0;
-        if (price <= 0) return;
-        totalStoreOrdersAmount += price;
-
-        const isMyself = so.shopId === 'myself';
-        const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
-        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
-
-        if (canReceive) {
-          returnableStoreAmount += price;
-        } else {
-          let commissionRate = Number(shop?.commissionPercent);
-          if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
-            const app = Array.from(fallbackStore.storeApplications.values()).find(
-              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
-            );
-            commissionRate = Number(app?.commissionPercent) || 0;
-          }
-          if (commissionRate > 0) {
-            nonAcceptableStoreCommission += Math.round(price * (commissionRate / 100));
-          }
-        }
-      });
+      if (!fin.isOrderPaid) {
+        unpaidPayback += fin.orderPayback;
+      }
     });
 
     filteredWithdrawals.forEach((w) => {
@@ -295,105 +356,96 @@ export const HelperWallet: React.FC = () => {
       }
     });
 
-    const grossReceivable = totalCollected + returnableStoreAmount + nonAcceptableStoreCommission;
-    const netCommissionDue = Math.max(0, commissionDue - paidCommission);
-    const totalReceivable = Math.max(0, grossReceivable - paidCommission);
+    const currentBal = wallet?.balance ?? 0;
+    let finalPayableRange = 0;
+    if (currentBal <= 0) {
+      finalPayableRange = 0;
+    } else {
+      finalPayableRange = Math.min(unpaidPayback, currentBal);
+    }
 
     return {
       earned,
       totalCollected,
-      commissionDue: netCommissionDue,
+      platformShare,
+      commissionDue: finalPayableRange,
       paidCommission,
       count: filteredOrders.length,
       totalStoreOrdersAmount,
       returnableStoreAmount,
       nonAcceptableStoreCommission,
       grossReceivable,
-      totalReceivable,
+      totalReceivable: finalPayableRange,
     };
-  }, [filteredOrders, filteredWithdrawals, fallbackStore]);
+  }, [filteredOrders, filteredWithdrawals, wallet?.balance]);
 
   // Today's Metrics (local timezone date matching)
   const todayMetrics = useMemo(() => {
     const todayStr = getTodayStr(); // Local YYYY-MM-DD
     let earnedToday = 0;
     let collectedToday = 0;
-    let commissionDueToday = 0;
+    let platformShareToday = 0;
     let returnableStoreAmountToday = 0;
     let nonAcceptableStoreCommissionToday = 0;
+    let grossPaybackToday = 0;
+    let paidPaybackToday = 0;
+    let unpaidPaybackToday = 0;
     const todayOrders: Order[] = [];
 
     deliveredOrders.forEach((o) => {
-      const orderDate = o.deliveredAt || o.updatedAt || o.createdAt;
-      const orderLocalStr = getLocalYYYYMMDD(new Date(orderDate));
+      const completedTime = getOrderCompletedTime(o);
+      const orderLocalStr = getLocalYYYYMMDD(new Date(completedTime));
       if (orderLocalStr === todayStr) {
-        const { baseFeeForHelper, helperShare, platformShare } = getOrderFinancials(o);
-        earnedToday += helperShare;
-        collectedToday += baseFeeForHelper;
-        commissionDueToday += platformShare;
+        const fin = computeOrderFin(o);
+        earnedToday += fin.helperShare;
+        collectedToday += fin.orderTotalCollected;
+        platformShareToday += fin.platformShare;
+        returnableStoreAmountToday += fin.returnableStoreAmount;
+        nonAcceptableStoreCommissionToday += fin.nonAcceptableStoreCommission;
+        grossPaybackToday += fin.orderPayback;
+
+        if (fin.isOrderPaid) {
+          paidPaybackToday += fin.orderPayback;
+        } else {
+          unpaidPaybackToday += fin.orderPayback;
+        }
         todayOrders.push(o);
-
-        const shopOrders = fallbackStore.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
-        shopOrders.forEach((so) => {
-          const price = so.price || 0;
-          if (price <= 0) return;
-
-          const isMyself = so.shopId === 'myself';
-          const shop = !isMyself ? fallbackStore.shops.get(so.shopId) : null;
-          const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
-
-          if (canReceive) {
-            returnableStoreAmountToday += price;
-          } else {
-            let commissionRate = Number(shop?.commissionPercent);
-            if (isNaN(commissionRate) || shop?.commissionPercent === undefined) {
-              const app = Array.from(fallbackStore.storeApplications.values()).find(
-                (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
-              );
-              commissionRate = Number(app?.commissionPercent) || 0;
-            }
-            if (commissionRate > 0) {
-              nonAcceptableStoreCommissionToday += Math.round(price * (commissionRate / 100));
-            }
-          }
-        });
       }
     });
 
-    todayOrders.sort((a, b) => {
-      const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
-      const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
-      return timeB - timeA;
-    });
+    todayOrders.sort((a, b) => getOrderCompletedTime(b) - getOrderCompletedTime(a));
 
-    const grossReceivableToday = collectedToday + returnableStoreAmountToday + nonAcceptableStoreCommissionToday;
-    const totalReceivableToday = Math.max(0, grossReceivableToday - rangeMetrics.paidCommission);
+    const currentBal = wallet?.balance ?? 0;
+    let finalPayableToday = 0;
+    if (currentBal <= 0) {
+      finalPayableToday = 0;
+    } else {
+      finalPayableToday = Math.min(unpaidPaybackToday, currentBal);
+    }
 
     return {
       earnedToday,
       collectedToday,
-      commissionDueToday,
-      countToday: todayOrders.length,
-      todayOrders,
+      platformShareToday,
       returnableStoreAmountToday,
       nonAcceptableStoreCommissionToday,
-      grossReceivableToday,
-      totalReceivableToday,
+      grossPaybackToday,
+      paidPaybackToday,
+      unpaidPaybackToday,
+      totalReceivableToday: finalPayableToday,
+      countToday: todayOrders.length,
+      todayOrders,
     };
-  }, [deliveredOrders, rangeMetrics.paidCommission, fallbackStore]);
+  }, [deliveredOrders, wallet?.balance]);
 
   // Filtered commission due (for display in filtered views)
-  const displayCommissionDue = activePreset === 'TODAY'
-    ? Math.max(0, todayMetrics.commissionDueToday - rangeMetrics.paidCommission)
-    : activePreset === 'ALL_TIME'
-    ? (wallet?.balance !== undefined ? wallet.balance : rangeMetrics.commissionDue)
-    : rangeMetrics.commissionDue;
-
   const currentTotalPayable = activePreset === 'ALL_TIME'
-    ? (wallet?.balance !== undefined ? wallet.balance : rangeMetrics.totalReceivable)
+    ? Math.max(0, wallet?.balance || 0)
     : activePreset === 'TODAY'
     ? todayMetrics.totalReceivableToday
     : rangeMetrics.totalReceivable;
+
+  const displayCommissionDue = currentTotalPayable;
 
   const pendingPayback = withdrawals.find((w) => w.status === 'PENDING');
   const hasPendingPayback = !!pendingPayback;
@@ -620,7 +672,7 @@ export const HelperWallet: React.FC = () => {
               <Info className="w-3 h-3 text-indigo-300/60 group-hover:text-indigo-200" />
             </div>
             <span className="text-base font-black text-indigo-200 block truncate">
-              ৳{rangeMetrics.commissionDue}
+              ৳{activePreset === 'TODAY' ? todayMetrics.platformShareToday : rangeMetrics.platformShare}
             </span>
             <span className="text-[9px] text-indigo-300 font-medium block">প্ল্যাটফর্ম শেয়ার</span>
           </div>
@@ -641,7 +693,7 @@ export const HelperWallet: React.FC = () => {
           <div className="bg-gradient-to-br from-indigo-900/60 to-purple-900/60 border border-indigo-400/30 p-3.5 rounded-2xl space-y-1.5 backdrop-blur-xs col-span-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-indigo-200 font-extrabold block uppercase tracking-wider">
-                মোট প্রদেয় টাকা
+                {activePreset === 'TODAY' ? 'আজকের বাকি পেব্যাক' : 'মোট বাকি টাকা'}
               </span>
               <span className="text-xs font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full">
                 ৳{currentTotalPayable}
@@ -649,17 +701,23 @@ export const HelperWallet: React.FC = () => {
             </div>
             <div className="text-[10px] text-indigo-200/90 space-y-0.5 pt-1 border-t border-indigo-500/20 font-semibold">
               <div className="flex justify-between">
-                <span>সংগৃহীত ডেলিভারি চার্জ:</span>
+                <span>সংগৃহীত মোট ক্যাশ (চার্জ + পণ্য):</span>
                 <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.collectedToday : rangeMetrics.totalCollected}</span>
               </div>
               <div className="flex justify-between">
-                <span>পার্টনার স্টোর অর্ডার:</span>
-                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.returnableStoreAmountToday : rangeMetrics.returnableStoreAmount}</span>
+                <span>প্ল্যাটফর্ম শেয়ার:</span>
+                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.platformShareToday : rangeMetrics.platformShare}</span>
               </div>
               <div className="flex justify-between">
-                <span>নন-পার্টনার স্টোর কমিশন:</span>
-                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.nonAcceptableStoreCommissionToday : rangeMetrics.nonAcceptableStoreCommission}</span>
+                <span>পার্টনার স্টোরের পাওনা:</span>
+                <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.returnableStoreAmountToday : rangeMetrics.returnableStoreAmount}</span>
               </div>
+              {((activePreset === 'TODAY' ? todayMetrics.nonAcceptableStoreCommissionToday : rangeMetrics.nonAcceptableStoreCommission) > 0) && (
+                <div className="flex justify-between">
+                  <span>নন-পার্টনার স্টোর কমিশন:</span>
+                  <span className="font-bold text-white">৳{activePreset === 'TODAY' ? todayMetrics.nonAcceptableStoreCommissionToday : rangeMetrics.nonAcceptableStoreCommission}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -925,7 +983,7 @@ export const HelperWallet: React.FC = () => {
             <form onSubmit={handlePaybackSubmit} className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">
-                  পরিশোধের পরিমাণ (মোট প্রদেয়: ৳{currentTotalPayable})
+                  পরিশোধের পরিমাণ (মোট বাকি: ৳{currentTotalPayable})
                 </label>
                 <input
                   type="number"

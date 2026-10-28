@@ -39,7 +39,9 @@ import {
   AlertCircle,
   Award,
   Store,
+  Download,
 } from 'lucide-react';
+import { exportHelperPerformanceToCSV, HelperExportTarget } from '@/lib/exportUtils';
 import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
@@ -990,6 +992,27 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
     return buildSvgSeries((d) => d.negativeReviewsCount, maxNegativeReviews);
   }, [graphTimelineData, maxNegativeReviews]);
 
+  const handleExportSheet = () => {
+    const helperTarget: HelperExportTarget = {
+      id: helperId,
+      name: userProfile?.displayName || application?.legalName || helperName,
+      phone: userProfile?.phoneNumber || userProfile?.alternativePhone || application?.whatsapp || 'N/A',
+      nid: application?.nid || (userProfile as any)?.nid || 'N/A',
+      helperType: userProfile?.helperType || 'commuter',
+      status: application?.status || 'APPROVED',
+      balance: wallet?.balance,
+      totalEarned: earningsMetrics.totalEarned,
+    };
+    exportHelperPerformanceToCSV({
+      helper: helperTarget,
+      orders: dateFilteredOrders,
+      feedbacks: dateFilteredFeedbacks,
+      periodLabel: presetLabels[activePreset] || (startDate && endDate ? `${startDate} to ${endDate}` : 'All Time'),
+      startDate,
+      endDate,
+    });
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -1034,13 +1057,24 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
                 </p>
               </div>
             </div>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-2xl bg-rose-500/80 hover:bg-rose-600 text-white transition-all shadow-sm cursor-pointer active:scale-95"
-              title="Close"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportSheet}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs transition-all shadow-md cursor-pointer"
+                title="Export this helper's performance to Excel / Sheet"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Export Sheet</span>
+              </button>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-2xl bg-rose-500/80 hover:bg-rose-600 text-white transition-all shadow-sm cursor-pointer active:scale-95"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Date Filter Bar */}

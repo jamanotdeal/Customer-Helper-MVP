@@ -6072,7 +6072,7 @@ class FallbackStore {
   public async updateShopOrder(
     shopOrderId: string,
     updater: (so: ShopOrder) => ShopOrder,
-    actorRole?: 'helper' | 'store'
+    actorRole?: 'helper' | 'store' | 'silent'
   ): Promise<void> {
     let existing = this.shopOrders.get(shopOrderId);
     if (!existing) {
@@ -7304,27 +7304,31 @@ class FallbackStore {
 
       let storeOwed = 0;
       const shopOrders = this.getShopOrdersForOrder(o.id).filter((so) => so.status !== 'CANCELED');
-      shopOrders.forEach((so) => {
-        const price = so.price || 0;
-        if (price <= 0) return;
-        const isMyself = so.shopId === 'myself';
-        const shop = !isMyself ? this.shops.get(so.shopId) : null;
-        const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
-        if (canReceive) {
-          storeOwed += price;
-        } else {
-          let commRate = Number(shop?.commissionPercent);
-          if (isNaN(commRate) || shop?.commissionPercent === undefined) {
-            const app = Array.from(this.storeApplications.values()).find(
-              (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
-            );
-            commRate = Number(app?.commissionPercent) || 0;
+      if (shopOrders.length > 0) {
+        shopOrders.forEach((so) => {
+          const price = so.price || 0;
+          if (price <= 0) return;
+          const isMyself = so.shopId === 'myself';
+          const shop = !isMyself ? this.shops.get(so.shopId) : null;
+          const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
+          if (canReceive) {
+            storeOwed += price;
+          } else {
+            let commRate = Number(shop?.commissionPercent);
+            if (isNaN(commRate) || shop?.commissionPercent === undefined) {
+              const app = Array.from(this.storeApplications.values()).find(
+                (a) => a.id === shop?.applicationId || (shop?.ownerUserId && a.userId === shop.ownerUserId)
+              );
+              commRate = Number(app?.commissionPercent) || 0;
+            }
+            if (commRate > 0) {
+              storeOwed += Math.round(price * (commRate / 100));
+            }
           }
-          if (commRate > 0) {
-            storeOwed += Math.round(price * (commRate / 100));
-          }
-        }
-      });
+        });
+      } else if (o.productCost) {
+        storeOwed += o.productCost;
+      }
 
       const totalOwed = platformShare + storeOwed;
       return {
@@ -7482,13 +7486,15 @@ class FallbackStore {
       updatedAt: new Date().toISOString(),
     };
     this.wallets.set(helperId, updatedWallet);
+
+    // Settle helper orders immediately in local memory & queue remote writes
+    await this.markHelperOrdersAsPaid(helperId, amount, req.id);
     this.notify();
 
     try {
       await setDoc(doc(db, 'wallets', helperId), cleanForFirestore(updatedWallet), { merge: true });
       await setDoc(doc(db, 'walletTransactions', newTx.id), cleanForFirestore(newTx));
       await setDoc(doc(db, 'withdrawals', req.id), cleanForFirestore(req));
-      await this.markHelperOrdersAsPaid(helperId, amount, req.id);
     } catch (e: any) {
       console.warn('[Firestore] recordHelperPayback note (saved locally):', e?.message || e);
     }
