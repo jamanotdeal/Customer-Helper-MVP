@@ -2404,6 +2404,25 @@ class FallbackStore {
     // ── Server Addresses: live, but only what changed since this device's copy ──
     unsubs.push(this._syncServerAddresses());
 
+    // ── Own user profile: realtime for EVERY role (admin, customer, helper, store) ──
+    // Ensures role promotions/revocations, coins updates, and profile edits are live on all devices
+    unsubs.push(
+      onSnapshot(
+        doc(db, 'users', userId),
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const u = docSnap.data() as UserProfile;
+            ensureDeviceRegistered(userId, u);
+            const current = this.users.get(userId);
+            const merged = this.mergeUserProfile(userId, u);
+            if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
+            this.notify();
+          }
+        },
+        (err) => console.warn('[Firestore] Own user doc sync note:', err)
+      )
+    );
+
     // ── Own applications: realtime for every non-admin role ───────────────────
     // Without these the maps are only ever filled from this device's
     // localStorage and from writes made on this device, so an application
@@ -4174,6 +4193,9 @@ class FallbackStore {
     const mergedUser: UserProfile = {
       ...(existing || {}),
       ...user,
+      isAdmin: user.isAdmin !== undefined ? user.isAdmin : existing?.isAdmin,
+      isSuperAdmin: user.isSuperAdmin !== undefined ? user.isSuperAdmin : existing?.isSuperAdmin,
+      role: (user.isAdmin || existing?.isAdmin) ? 'admin' : (user.role || existing?.role || 'customer'),
       coins: user.coins !== undefined ? user.coins : existing?.coins,
       totalEarnedCoins: user.totalEarnedCoins !== undefined ? user.totalEarnedCoins : existing?.totalEarnedCoins,
     };
@@ -4181,7 +4203,7 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
     try {
-      await setDoc(doc(db, 'users', user.uid), cleanForFirestore(user), { merge: true });
+      await setDoc(doc(db, 'users', user.uid), cleanForFirestore(mergedUser), { merge: true });
     } catch (e: any) {
       console.warn('[Firestore] saveUser note (stored locally):', e?.message || e);
     }
@@ -4329,9 +4351,14 @@ class FallbackStore {
     }
   }
 
-  public async setAdminRole(uid: string, isAdmin: boolean) {
-    const existing = this.users.get(uid);
-    if (!existing) return;
+  public async setAdminRole(uid: string, isAdmin: boolean, fallbackUser?: UserProfile): Promise<UserProfile> {
+    let existing = this.users.get(uid) || fallbackUser;
+    if (!existing) {
+      existing = (await this.fetchUserFromFirestore(uid)) || undefined;
+    }
+    if (!existing) {
+      throw new Error(`User with UID ${uid} not found`);
+    }
     const updated: UserProfile = {
       ...existing,
       isAdmin,
@@ -4340,17 +4367,20 @@ class FallbackStore {
       lastActiveMode: isAdmin ? 'admin' : (existing.lastActiveMode === 'admin' ? 'customer' : existing.lastActiveMode),
     };
     this.users.set(uid, updated);
+    this.scheduleLocalStoreSave();
     this.notify();
-    try {
-      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
-    } catch (e: any) {
-      console.warn('[Firestore] setAdminRole note (stored locally):', e?.message || e);
-    }
+    await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    return updated;
   }
 
-  public async setSuperAdminRole(uid: string, isSuperAdmin: boolean) {
-    const existing = this.users.get(uid);
-    if (!existing) return;
+  public async setSuperAdminRole(uid: string, isSuperAdmin: boolean, fallbackUser?: UserProfile): Promise<UserProfile> {
+    let existing = this.users.get(uid) || fallbackUser;
+    if (!existing) {
+      existing = (await this.fetchUserFromFirestore(uid)) || undefined;
+    }
+    if (!existing) {
+      throw new Error(`User with UID ${uid} not found`);
+    }
     const updated: UserProfile = {
       ...existing,
       isAdmin: isSuperAdmin ? true : existing.isAdmin,
@@ -4359,22 +4389,26 @@ class FallbackStore {
       lastActiveMode: isSuperAdmin ? 'admin' : existing.lastActiveMode,
     };
     this.users.set(uid, updated);
+    this.scheduleLocalStoreSave();
     this.notify();
-    try {
-      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
-    } catch (e: any) {
-      console.warn('[Firestore] setSuperAdminRole note (stored locally):', e?.message || e);
-    }
+    await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    return updated;
   }
 
   public async convertUserRole(
     uid: string,
     targetRole: 'customer' | 'helper' | 'admin',
     targetAreaIds?: string[],
-    serveAllAreas?: boolean
-  ) {
-    const existing = this.users.get(uid);
-    if (!existing) return;
+    serveAllAreas?: boolean,
+    fallbackUser?: UserProfile
+  ): Promise<UserProfile> {
+    let existing = this.users.get(uid) || fallbackUser;
+    if (!existing) {
+      existing = (await this.fetchUserFromFirestore(uid)) || undefined;
+    }
+    if (!existing) {
+      throw new Error(`User with UID ${uid} not found`);
+    }
 
     const isTargetAdmin = targetRole === 'admin';
     const isTargetHelper = targetRole === 'helper';
@@ -4396,6 +4430,7 @@ class FallbackStore {
     }
 
     this.users.set(uid, updated);
+    this.scheduleLocalStoreSave();
 
     // Sync allowedDeliveryAreas in pricingSettings
     const areas = this.pricingSettings.allowedDeliveryAreas || [];
@@ -4456,11 +4491,8 @@ class FallbackStore {
     }
 
     this.notify();
-    try {
-      await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
-    } catch (e: any) {
-      console.warn('[Firestore] convertUserRole note (stored locally):', e?.message || e);
-    }
+    await setDoc(doc(db, 'users', uid), cleanForFirestore(updated), { merge: true });
+    return updated;
   }
 
 

@@ -70,8 +70,21 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   // This user's wallet transactions are read when the screen opens (the admin
   // panel no longer loads an arbitrary 500 of everyone's at startup).
   const [, setTxVersion] = useState(0);
+  const [loadingUser, setLoadingUser] = useState(!fallbackStore.users.get(userId));
+
   useEffect(() => {
     let cancelled = false;
+    if (!fallbackStore.users.get(userId)) {
+      setLoadingUser(true);
+      fallbackStore.fetchUserFromFirestore(userId).then(() => {
+        if (!cancelled) {
+          setLoadingUser(false);
+          setTxVersion((v) => v + 1);
+        }
+      }).catch(() => {
+        if (!cancelled) setLoadingUser(false);
+      });
+    }
     fallbackStore.loadWalletTransactionsFor(userId).then(() => {
       if (!cancelled) setTxVersion((v) => v + 1);
     });
@@ -476,23 +489,28 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
       showAlert('অনুমতি নেই', 'শুধুমাত্র Super Admin অন্য ব্যবহারকারীদের অ্যাডমিন বানাতে বা সরাতে পারবেন।', 'error');
       return;
     }
-    const makeAdmin = !user.isAdmin;
+    const makeAdmin = !user?.isAdmin;
     const actionText = makeAdmin ? 'অ্যাডমিন স্ট্যাটাস প্রদান করতে' : 'অ্যাডমিন রোল অপসারণ করতে';
     const confirmed = await showConfirm(
       'অ্যাডমিন রোল পরিবর্তন',
-      `আপনি কি ${user.displayName}-কে ${actionText} চান?`,
+      `আপনি কি ${user?.displayName || 'ব্যবহারকারী'}-কে ${actionText} চান?`,
       makeAdmin ? 'হ্যাঁ, অ্যাডমিন করুন' : 'হ্যাঁ, রোল সরান',
       'বাতিল'
     );
     if (!confirmed) return;
 
-    await fallbackStore.setAdminRole(userId, makeAdmin);
-    showAlert(
-      'রোল আপডেট সম্পন্ন',
-      `${user.displayName} ${makeAdmin ? 'এখন একজন Admin।' : 'এর Admin রোল সরানো হয়েছে।'}`,
-      'success'
-    );
-    if (onUserUpdated) onUserUpdated();
+    try {
+      await fallbackStore.setAdminRole(userId, makeAdmin, user);
+      showAlert(
+        'রোল আপডেট সম্পন্ন',
+        `${user?.displayName || 'ব্যবহারকারী'} ${makeAdmin ? 'এখন একজন Admin।' : 'এর Admin রোল সরানো হয়েছে।'}`,
+        'success'
+      );
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      console.error('Error toggling admin role in modal:', err);
+      showAlert('ত্রুটি', 'অ্যাডমিন রোল পরিবর্তন করা সম্ভব হয়নি। অনুগ্রহ করে ইন্টারনেট চেক করুন।', 'error');
+    }
   };
 
   const handleStartConvertToHelper = () => {
@@ -508,17 +526,22 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     }
     const confirmed = await showConfirm(
       'কাস্টমার অ্যাকাউন্টে রূপান্তর',
-      `আপনি কি নিশ্চিত যে ${user?.displayName}-কে Admin থেকে সাধারণ Customer অ্যাকাউন্টে পরিবর্তন করতে চান? অ্যাডমিন সুবিধাসমূহ ও জোন অ্যাসাইনমেন্ট সরানো হবে।`,
+      `আপনি কি নিশ্চিত যে ${user?.displayName || 'ব্যবহারকারী'}-কে Admin থেকে সাধারণ Customer অ্যাকাউন্টে পরিবর্তন করতে চান? অ্যাডমিন সুবিধাসমূহ ও জোন অ্যাসাইনমেন্ট সরানো হবে।`,
       'হ্যাঁ, Customer করুন',
       'বাতিল'
     );
     if (!confirmed) return;
 
-    await fallbackStore.convertUserRole(userId, 'customer', []);
-    setUserAssignedAreas([]);
-    setUserServeAllAreas(false);
-    showAlert('রূপান্তর সম্পন্ন', `${user?.displayName} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
-    if (onUserUpdated) onUserUpdated();
+    try {
+      await fallbackStore.convertUserRole(userId, 'customer', [], false, user);
+      setUserAssignedAreas([]);
+      setUserServeAllAreas(false);
+      showAlert('রূপান্তর সম্পন্ন', `${user?.displayName || 'ব্যবহারকারী'} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      console.error('Error converting user to customer in modal:', err);
+      showAlert('ত্রুটি', 'কাস্টমার রূপান্তর সম্পন্ন করা যায়নি।', 'error');
+    }
   };
 
   const handleConfirmConvertToHelper = async () => {
@@ -529,13 +552,14 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
         userId,
         'helper',
         convertServeAll ? [] : convertTargetAreas,
-        convertServeAll
+        convertServeAll,
+        user
       );
       setUserAssignedAreas(convertServeAll ? [] : convertTargetAreas);
       setUserServeAllAreas(convertServeAll);
       showAlert(
         'হেলপার অ্যাকাউন্টে রূপান্তর সম্পন্ন',
-        `${user?.displayName} এখন একজন Helper হিসেবে নিবন্ধিত এবং সার্ভিস জোন নির্ধারণ করা হয়েছে।`,
+        `${user?.displayName || 'ব্যবহারকারী'} এখন একজন Helper হিসেবে নিবন্ধিত এবং সার্ভিস জোন নির্ধারণ করা হয়েছে।`,
         'success'
       );
       setConvertingTargetRole(null);
@@ -621,29 +645,52 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
       showAlert('অনুমতি নেই', 'শুধুমাত্র Super Admin অন্য কাউকে Super Admin বানাতে বা সরাতে পারবেন।', 'error');
       return;
     }
-    const isPrimarySuperAdmin = user.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase());
-    if (isPrimarySuperAdmin && user.isSuperAdmin) {
+    const isPrimarySuperAdmin = user?.email && ['ajnasim72@gmail.com'].includes(user.email.trim().toLowerCase());
+    if (isPrimarySuperAdmin && user?.isSuperAdmin) {
       showAlert('সুরক্ষিত অ্যাকাউন্ট', 'মূল Super Admin এর রোল পরিবর্তন করা যাবে না।', 'warning');
       return;
     }
-    const makeSuperAdmin = !user.isSuperAdmin;
+    const makeSuperAdmin = !user?.isSuperAdmin;
     const actionText = makeSuperAdmin ? 'Super Admin রোল প্রদান করতে' : 'Super Admin রোল অপসারণ করে সাধারণ Admin করতে';
     const confirmed = await showConfirm(
       'Super Admin রোল পরিবর্তন',
-      `আপনি কি ${user.displayName}-কে ${actionText} চান?`,
+      `আপনি কি ${user?.displayName || 'ব্যবহারকারী'}-কে ${actionText} চান?`,
       makeSuperAdmin ? 'হ্যাঁ, Super Admin করুন' : 'হ্যাঁ, ডিমোট করুন',
       'বাতিল'
     );
     if (!confirmed) return;
 
-    await fallbackStore.setSuperAdminRole(userId, makeSuperAdmin);
-    showAlert(
-      'রোল আপডেট সম্পন্ন',
-      `${user.displayName} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
-      'success'
-    );
-    if (onUserUpdated) onUserUpdated();
+    try {
+      await fallbackStore.setSuperAdminRole(userId, makeSuperAdmin, user);
+      showAlert(
+        'রোল আপডেট সম্পন্ন',
+        `${user?.displayName || 'ব্যবহারকারী'} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
+        'success'
+      );
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      console.error('Error toggling super admin role in modal:', err);
+      showAlert('ত্রুটি', 'Super Admin রোল পরিবর্তন করা সম্ভব হয়নি।', 'error');
+    }
   };
+
+  if (loadingUser || !user) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="bg-white rounded-3xl p-8 flex flex-col items-center justify-center shadow-2xl space-y-4 max-w-sm w-full">
+          <div className="w-10 h-10 border-4 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-sm font-bold text-slate-600">ব্যবহারকারীর তথ্য লোড হচ্ছে...</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 bg-slate-100 rounded-xl"
+          >
+            বন্ধ করুন
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>

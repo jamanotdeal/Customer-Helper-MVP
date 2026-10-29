@@ -1926,13 +1926,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
     if (!confirmed) return;
 
-    await fallbackStore.setAdminRole(targetUser.uid, makeAdmin);
-    setUsers(Array.from(fallbackStore.users.values()));
-    showAlert(
-      'রোল আপডেট সম্পন্ন',
-      `${targetUser.displayName} ${makeAdmin ? 'এখন একজন Admin।' : 'এর Admin রোল সরানো হয়েছে।'}`,
-      'success'
-    );
+    try {
+      const updatedUser = await fallbackStore.setAdminRole(targetUser.uid, makeAdmin, targetUser);
+      setUsers(Array.from(fallbackStore.users.values()));
+      setServerUsers((prev) => (prev ? prev.map((u) => (u.uid === targetUser.uid ? { ...u, ...updatedUser } : u)) : null));
+      showAlert(
+        'রোল আপডেট সম্পন্ন',
+        `${targetUser.displayName} ${makeAdmin ? 'এখন একজন Admin।' : 'এর Admin রোল সরানো হয়েছে।'}`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Error toggling admin role:', err);
+      showAlert('ত্রুটি', 'অ্যাডমিন রোল পরিবর্তন করতে সমস্যা হয়েছে। অনুগ্রহ করে ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।', 'error');
+    }
   };
 
   const handleToggleSuperAdminRole = async (targetUser: UserProfile, makeSuperAdmin: boolean) => {
@@ -1954,13 +1960,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
     if (!confirmed) return;
 
-    await fallbackStore.setSuperAdminRole(targetUser.uid, makeSuperAdmin);
-    setUsers(Array.from(fallbackStore.users.values()));
-    showAlert(
-      'রোল আপডেট সম্পন্ন',
-      `${targetUser.displayName} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
-      'success'
-    );
+    try {
+      const updatedUser = await fallbackStore.setSuperAdminRole(targetUser.uid, makeSuperAdmin, targetUser);
+      setUsers(Array.from(fallbackStore.users.values()));
+      setServerUsers((prev) => (prev ? prev.map((u) => (u.uid === targetUser.uid ? { ...u, ...updatedUser } : u)) : null));
+      showAlert(
+        'রোল আপডেট সম্পন্ন',
+        `${targetUser.displayName} ${makeSuperAdmin ? 'এখন একজন Super Admin।' : 'এখন একজন সাধারণ Admin হিসেবে সংরক্ষিত।'}`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Error toggling super admin role:', err);
+      showAlert('ত্রুটি', 'Super Admin রোল পরিবর্তন করতে সমস্যা হয়েছে।', 'error');
+    }
   };
 
   const handleDeleteFeedback = async (feedbackId: string) => {
@@ -5644,9 +5656,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 'বাতিল'
                               );
                               if (!confirmed) return;
-                              await fallbackStore.convertUserRole(targetUser.uid, 'customer', []);
-                              setUsers(Array.from(fallbackStore.users.values()));
-                              showAlert('রূপান্তর সম্পন্ন', `${targetUser.displayName} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
+                              try {
+                                const updatedUser = await fallbackStore.convertUserRole(targetUser.uid, 'customer', [], false, targetUser);
+                                setUsers(Array.from(fallbackStore.users.values()));
+                                setServerUsers((prev) => (prev ? prev.map((usr) => (usr.uid === targetUser.uid ? { ...usr, ...updatedUser } : usr)) : null));
+                                showAlert('রূপান্তর সম্পন্ন', `${targetUser.displayName} এখন সাধারণ Customer হিসেবে সংরক্ষিত।`, 'success');
+                              } catch (err: any) {
+                                console.error('Error converting user to customer:', err);
+                                showAlert('ত্রুটি', 'কাস্টমার রূপান্তর ব্যর্থ হয়েছে।', 'error');
+                              }
                             }}
                             onToggleBlock={async (targetUser) => {
                               if (targetUser.isBlocked) {

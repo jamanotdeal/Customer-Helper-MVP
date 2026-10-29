@@ -280,7 +280,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         lastActiveMode: effectiveIsAdmin ? 'admin' : (savedMode || 'customer'),
         createdAt: new Date().toISOString(),
       };
-      fallbackStore.saveUser(profile);
+      // Only cache in memory initially! Do not save to Firestore here because fetchUserFromFirestore
+      // must check if the user already has admin, helper, or store roles in Firestore.
+      fallbackStore.cacheUser(profile);
     } else {
       let needsSave = false;
       // A profile rebuilt from a partial user document has no uid. Without it
@@ -332,6 +334,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isSuperAdmin: true,
           isAdmin: true,
           role: 'admin',
+        };
+        needsSave = true;
+      } else if (profile.isAdmin && profile.role !== 'admin') {
+        profile = {
+          ...profile,
+          role: 'admin',
+          lastActiveMode: profile.lastActiveMode === 'customer' ? 'admin' : profile.lastActiveMode,
         };
         needsSave = true;
       }
@@ -444,6 +453,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fallbackStore.initListenersForRole(nextMode, updatedUser.uid, updatedUser.helperType);
         }
 
+        // Live admin role promotion/revocation handling
+        const isNowAdmin = Boolean(updatedUser.isAdmin || updatedUser.role === 'admin' || isUserAdminEmail(updatedUser.email));
+        const wasAdmin = Boolean(prevUser.isAdmin || prevUser.role === 'admin' || isUserAdminEmail(prevUser.email));
+        if (isNowAdmin && activeMode !== 'admin') {
+          setActiveModeState('admin');
+          saveActiveMode('admin');
+          fallbackStore.initListenersForRole('admin', updatedUser.uid, updatedUser.helperType, updatedUser.storeId);
+          pushNativeState(updatedUser, 'admin').catch(() => {});
+        } else if (wasAdmin && !isNowAdmin && activeMode === 'admin') {
+          const nextMode = updatedUser.role === 'helper' || updatedUser.isHelper ? 'helper' : 'customer';
+          setActiveModeState(nextMode);
+          saveActiveMode(nextMode);
+          fallbackStore.initListenersForRole(nextMode, updatedUser.uid, updatedUser.helperType);
+          pushNativeState(updatedUser, nextMode).catch(() => {});
+        }
+
         // Guard against any snapshot or background update clobbering existing valid profile fields
         const safeUser: UserProfile = {
           ...prevUser,
@@ -483,7 +508,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       fallbackStore.currentUserId = fbUser.uid;
 
-      // 1. Immediately build and apply profile so React state has user instantly
+      // 1. Immediately build and apply profile from local cache/memory so React state has user instantly
       let profile = buildProfile(fbUser, currentSavedMode);
       if (profile.displayName && !fbUser.displayName) {
         updateProfile(fbUser, { displayName: profile.displayName }).catch(() => {});
@@ -499,10 +524,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       applyProfile(profile, currentSavedMode, false);
       setLoading(false);
 
-      // 2. Fetch and synchronize roles/store data in background
+      // 2. Fetch and synchronize roles/store data from Firestore
       try {
-        await fallbackStore.fetchUserFromFirestore(fbUser.uid);
+        const firestoreUser = await fallbackStore.fetchUserFromFirestore(fbUser.uid);
         profile = buildProfile(fbUser, currentSavedMode);
+        // If this user was never saved to Firestore (first-time sign up), persist their initial profile now
+        if (!firestoreUser) {
+          await fallbackStore.saveUser(profile);
+        }
         const syncedProfile = await fallbackStore.syncApprovedRolesForUser(profile);
         if (syncedProfile) profile = syncedProfile;
         // On first-ever store login (no persisted store selected), show picker if multi-store
