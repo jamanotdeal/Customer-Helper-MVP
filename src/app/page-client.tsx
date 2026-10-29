@@ -39,7 +39,7 @@ import { OrderFeedbackModal } from '@/components/OrderFeedbackModal';
 import { FeedbackReplyModal } from '@/components/FeedbackReplyModal';
 import { CoinRewardModal } from '@/components/CoinRewardModal';
 import { getCoinsForService } from '@/lib/pricing';
-import { CustomModalInjector } from '@/components/CustomModalInjector';
+import { CustomModalInjector, triggerCustomModal } from '@/components/CustomModalInjector';
 
 import { HelperCenterPage } from '@/components/HelperCenterPage';
 import { HelperOrderAlerts } from '@/components/HelperOrderAlerts';
@@ -99,6 +99,16 @@ export default function PageClient() {
       setHasPromptedBlockedUser(true);
     }
   }, [user?.isBlocked, hasPromptedBlockedUser, isHelperUser, isStoreUser]);
+
+  useEffect(() => {
+    if (user) {
+      triggerCustomModal('LOGIN');
+    }
+  }, [user?.uid]);
+
+  useEffect(() => {
+    triggerCustomModal('DASHBOARD_OPEN');
+  }, [activeTab]);
 
   // An order change that was refused because the order had moved on (or been
   // deleted) since this device last saw it. The store has already put the

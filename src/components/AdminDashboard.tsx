@@ -11759,8 +11759,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     >
                       <div className="space-y-3">
                         {modal.imageUrl && (
-                          <div className="w-full h-32 rounded-2xl overflow-hidden bg-slate-900">
-                            <img src={modal.imageUrl} alt={modal.title} className="w-full h-full object-cover" />
+                          <div className="w-full h-36 rounded-2xl overflow-hidden bg-slate-900 border border-gray-100 flex items-center justify-center">
+                            <img src={modal.imageUrl} alt={modal.title} className="w-full h-full object-contain" />
                           </div>
                         )}
 
@@ -11778,31 +11778,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </span>
                               )}
                             </h4>
-                            {modal.subtitle && (
-                              <p className="text-xs text-purple-700 font-bold mt-0.5">{modal.subtitle}</p>
-                            )}
+                            <p className="text-[11px] text-gray-400 font-medium">
+                              (Image-Focused Modal — কাস্টমার স্ক্রিনে কোনো টাইটেল দেখানো হবে না)
+                            </p>
                           </div>
                         </div>
 
-                        <p className="text-xs text-gray-600 line-clamp-3 font-medium">
-                          {modal.description}
-                        </p>
+                        {(modal.linkUrl || modal.actionUrl) && (
+                          <div className="text-[11px] font-bold text-indigo-700 bg-indigo-50/70 px-2.5 py-1.5 rounded-xl border border-indigo-100 truncate flex items-center gap-1.5">
+                            <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">লিঙ্ক: {modal.linkUrl || modal.actionUrl}</span>
+                          </div>
+                        )}
 
                         <div className="flex flex-wrap gap-1.5 text-[10px] font-extrabold">
                           <span className="px-2.5 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200">
-                            Target: {
-                              modal.targetAudience === 'WEBSITE_USERS' ? 'Website Users' :
-                                modal.targetAudience === 'MOBILE_APP_USERS' ? 'Mobile App Users' :
-                                  modal.targetAudience
+                            প্ল্যাটফর্ম: {
+                              modal.targetPlatform === 'MOBILE_APP' || modal.targetAudience === 'MOBILE_APP_USERS'
+                                ? '📱 Mobile App'
+                                : modal.targetPlatform === 'WEB' || modal.targetAudience === 'WEBSITE_USERS'
+                                ? '🌐 Web'
+                                : '🌐+📱 Web & App'
                             }
                           </span>
+                          <span className="px-2.5 py-1 rounded-xl bg-blue-50 text-blue-900 border border-blue-200">
+                            অডিয়েন্স: {modal.targetAudience}
+                          </span>
                           <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200">
-                            Trigger: {modal.triggerEvent}
+                            ট্রিগার: {modal.triggerEvent}
                           </span>
                           <span className="px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-900 border border-indigo-200">
-                            Freq: {modal.displayFrequency}
+                            ফ্রিকোয়েন্সি: {modal.displayFrequency}
                           </span>
                         </div>
+
+                        {(modal.startDate || modal.startTime || modal.endDate || modal.endTime) && (
+                          <div className="text-[10px] font-semibold text-gray-500 bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-wrap gap-x-3 gap-y-1">
+                            {(modal.startDate || modal.startTime) && (
+                              <span className="text-emerald-700 font-bold">
+                                🟢 শুরু: {modal.startDate || 'আজ'} {modal.startTime || ''}
+                              </span>
+                            )}
+                            {(modal.endDate || modal.endTime) && (
+                              <span className="text-rose-700 font-bold">
+                                🔴 শেষ: {modal.endDate || 'চলমান'} {modal.endTime || ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center justify-between gap-2 pt-4 mt-4 border-t border-gray-100">

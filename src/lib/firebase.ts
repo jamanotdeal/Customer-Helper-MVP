@@ -39,6 +39,12 @@ import {
   Messaging,
 } from 'firebase/messaging';
 import {
+  getStorage,
+  ref as storageRef,
+  uploadBytes,
+  getDownloadURL,
+} from 'firebase/storage';
+import {
   Order,
   HelperApplication,
   StoreApplication,
@@ -91,6 +97,69 @@ if (typeof window !== 'undefined') {
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 export const db = getFirestore(app);
+export const storage = getStorage(app);
+
+/**
+ * Uploads a custom modal banner image directly to Firebase Storage.
+ * Restricts to image formats and returns permanent HTTPS download URL (not base64).
+ */
+export async function uploadCustomModalImage(file: File): Promise<string> {
+  if (!file || !file.type || !file.type.startsWith('image/')) {
+    throw new Error('শুধুমাত্র ইমেজ ফাইল (JPG, PNG, WEBP ইত্যাদি) আপলোড করা সম্ভব।');
+  }
+
+  let uploadPayload: Blob = file;
+  let ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+  let contentType = file.type || 'image/jpeg';
+
+  // If file is > 900KB, compress to ensure it complies with Firebase Storage 1MB rule
+  if (file.size > 900 * 1024 && typeof document !== 'undefined') {
+    try {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = objectUrl;
+      });
+
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+      const maxDim = 1280;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedBlob = await new Promise<Blob | null>((res) =>
+          canvas.toBlob(res, 'image/jpeg', 0.85)
+        );
+        if (compressedBlob) {
+          uploadPayload = compressedBlob;
+          ext = 'jpg';
+          contentType = 'image/jpeg';
+        }
+      }
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // Continue with original file if canvas compression fails
+    }
+  }
+
+  const fileName = `modal_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext || 'jpg'}`;
+  const fileRef = storageRef(storage, `custom-modals/${fileName}`);
+  const snapshot = await uploadBytes(fileRef, uploadPayload, { contentType });
+  return await getDownloadURL(snapshot.ref);
+}
 
 // ─── Firebase Cloud Messaging ─────────────────────────────────────────────────
 // VAPID public key — generated from Firebase Console → Project Settings → Cloud Messaging → Web Push certificates.
@@ -1019,6 +1088,9 @@ class FallbackStore {
     // doubled the cost on every launch.
     if (typeof window !== 'undefined' && !this._hasSignedInUser()) {
       this.loadShops();
+    }
+    if (typeof window !== 'undefined') {
+      this.loadModalsCached();
     }
     this.startRoutingTimer();
     this.startScheduledNotificationTimer();
@@ -2177,9 +2249,9 @@ class FallbackStore {
   }
 
 
-  // ─── Custom modals: one-time read with 30-minute localStorage cache ────────
-  private _loadModalsCached() {
-    const CACHE_TTL = 30 * 60 * 1000;
+  // ─── Custom modals: read with 10-minute cache (public for all visitors) ────────
+  public loadModalsCached() {
+    const CACHE_TTL = 10 * 60 * 1000;
     if (Date.now() - this._modalsCachedAt < CACHE_TTL && this.customModals.size > 0) return;
     getDocs(collection(db, 'customModals'))
       .then((snapshot) => {
@@ -2188,6 +2260,7 @@ class FallbackStore {
           this.customModals.set(docSnap.id, docSnap.data() as AdminCustomModalConfig);
         });
         this._modalsCachedAt = Date.now();
+        this.scheduleLocalStoreSave();
         this.notify();
       })
       .catch((err) => console.warn('[Firestore] CustomModals getDocs note:', err));
@@ -2736,7 +2809,7 @@ class FallbackStore {
 
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
-      this._loadModalsCached();
+      this.loadModalsCached();
 
       // ── CUSTOMER role ─────────────────────────────────────────────────────────
     } else if (role === 'customer') {
@@ -2882,7 +2955,7 @@ class FallbackStore {
 
       // Shops & modals: one-time reads with 30-min cache (rarely change)
       this._loadShopsCached();
-      this._loadModalsCached();
+      this.loadModalsCached();
 
       // ── HELPER role ───────────────────────────────────────────────────────────
     } else if (role === 'helper') {
@@ -3074,7 +3147,7 @@ class FallbackStore {
 
       // Shops & modals: one-time reads with 30-min cache
       this._loadShopsCached();
-      this._loadModalsCached();
+      this.loadModalsCached();
 
       // Shop orders placed by this helper (realtime)
       unsubs.push(

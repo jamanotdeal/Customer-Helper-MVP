@@ -415,6 +415,8 @@ export interface ModalButtonConfig {
   variant?: 'primary' | 'secondary' | 'danger' | 'outline';
 }
 
+export type ModalTargetPlatform = 'ALL' | 'WEB' | 'MOBILE_APP';
+
 export type ModalTargetAudience =
   | 'ALL'
   | 'CUSTOMERS'
@@ -447,6 +449,13 @@ export type ModalTriggerEvent =
   | 'REQUEST_SUBMIT'
   | 'ORDER_COMPLETE'
   | 'DASHBOARD_OPEN'
+  | 'TIME_DELAY_5S'
+  | 'TIME_DELAY_10S'
+  | 'ADD_TO_CART'
+  | 'CART_OPEN'
+  | 'STORE_VIEW'
+  | 'SCROLL_50'
+  | 'EXIT_INTENT'
   | 'first_visit'
   | 'login'
   | 'request_submit'
@@ -469,8 +478,11 @@ export interface AdminCustomModalConfig {
   subtitle?: string;
   bodyText?: string;
   imageUrl?: string;
-  description: string;
-  buttons: ModalButtonConfig[];
+  linkUrl?: string;
+  actionUrl?: string;
+  description?: string;
+  buttons?: ModalButtonConfig[];
+  targetPlatform?: ModalTargetPlatform;
   targetAudience: ModalTargetAudience;
   triggerEvent: ModalTriggerEvent;
   displayFrequency: ModalDisplayFrequency;
