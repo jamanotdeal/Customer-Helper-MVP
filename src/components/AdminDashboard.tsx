@@ -82,6 +82,9 @@ import {
   Image as ImageIcon,
   Upload,
   ChevronDown,
+  ChevronsUpDown,
+  ChevronUp,
+  Sliders,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -119,6 +122,7 @@ import { BlockedUserModal } from './BlockedUserModal';
 import { AsyncButton } from './ui/AsyncButton';
 import { AdminDateRangeFilter } from './admin/AdminDateRangeFilter';
 import { LifetimeDataNotice } from './admin/LifetimeDataNotice';
+import { SettingsAccordionSection } from './admin/SettingsAccordionSection';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import { AdminDateRange, rangeForPreset, rangeBoundsIso, isInRange, describeRange } from '@/lib/adminDateRange';
 import { DEFAULT_SERVICES, DEFAULT_STORE_TYPES, parseStoreTypes, getStoreTypesForService, calculateHelperCommission } from '@/lib/pricing';
@@ -368,6 +372,174 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [helperCenterNote, setHelperCenterNote] = useState<string>('');
   const [googleAnalyticsId, setGoogleAnalyticsId] = useState<string>('');
   const [microsoftClarityId, setMicrosoftClarityId] = useState<string>('');
+
+  // Settings Tab Accordion State & Helpers
+  const [openSettingsSections, setOpenSettingsSections] = useState<Record<string, boolean>>({ limits: true });
+  const [settingsSearchQuery, setSettingsSearchQuery] = useState<string>('');
+
+  const ALL_SETTINGS_SECTIONS = [
+    'limits',
+    'analytics',
+    'helper_routing',
+    'map_region',
+    'serving_areas',
+    'manual_auth',
+    'pwa_prompt',
+    'in_app_browser',
+    'permission_modals',
+    'blocked_user',
+    'order_timing',
+    'service_options',
+    'request_placeholders',
+    'hero_slider',
+    'search_not_found',
+    'store_types',
+    'store_application_placeholders',
+    'map_picker_guide',
+    'helper_center',
+    'admin_permissions',
+  ];
+
+  const toggleSettingsSection = (sectionId: string) => {
+    setOpenSettingsSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  };
+
+  const expandAllSettingsSections = () => {
+    const allOpen: Record<string, boolean> = {};
+    ALL_SETTINGS_SECTIONS.forEach((id) => {
+      allOpen[id] = true;
+    });
+    setOpenSettingsSections(allOpen);
+  };
+
+  const collapseAllSettingsSections = () => {
+    setOpenSettingsSections({});
+  };
+
+  const SETTINGS_SECTIONS_META: Record<string, { title: string; subtitle: string; keywords: string }> = {
+    limits: {
+      title: 'Max Active Orders per Helper',
+      subtitle: 'A helper cannot accept new requests once they hit this limit',
+      keywords: 'limit active orders helper concurrency সর্বোচ্চ অর্ডার সীমা',
+    },
+    analytics: {
+      title: 'Third-party Analytics Integrations',
+      subtitle: 'GA4 measurement ID and Microsoft Clarity project ID',
+      keywords: 'analytics ga4 google clarity tracking id metrics থার্ড-পার্টি',
+    },
+    helper_routing: {
+      title: 'Commuter vs Dedicated Helper & Edu Email Settings',
+      subtitle: 'Education email domains, helper radius limit, delay, receiver rules',
+      keywords: 'commuter dedicated edu email domains radius delay admin accepted banner routing become helper সাইডবার',
+    },
+    map_region: {
+      title: 'Map & Location Search Region Preference',
+      subtitle: 'Location & Geocoding Search Preference (Bangladesh, Global, Custom)',
+      keywords: 'map location geocoding country bangladesh custom iso search region ম্যাপ স্থান এরিয়া ফিল্টার',
+    },
+    serving_areas: {
+      title: 'Specific Serving Areas & Geofencing',
+      subtitle: 'Specific Serving Areas & Geofencing polygons in Helpers tab',
+      keywords: 'serving areas geofencing polygon boundaries zones helpers সার্ভিস এলাকা বাউন্ডারি',
+    },
+    manual_auth: {
+      title: 'Manual Authentication (Email/Password) Controls',
+      subtitle: 'Enable or disable manual Email and Password login & registration',
+      keywords: 'manual auth email password login signup register ম্যানুয়াল লগইন রেজিস্ট্রেশন',
+    },
+    pwa_prompt: {
+      title: 'PWA App Installation Prompt Controls',
+      subtitle: 'Customize install prompt popup title, button text, and description',
+      keywords: 'pwa install app prompt popup banner description download ইনস্টল পপআপ',
+    },
+    in_app_browser: {
+      title: 'In-App Browser (Facebook / Messenger) Alert Settings',
+      subtitle: 'Popup alert to open in Chrome or Safari when browsing via Facebook/Messenger',
+      keywords: 'in-app browser facebook messenger instagram popup alert chrome safari ইন-অ্যাপ ব্রাউজার',
+    },
+    permission_modals: {
+      title: 'Permission Alert Modal Content Controls',
+      subtitle: 'Custom titles and descriptions for location and notification permission dialogs',
+      keywords: 'permission location notification gps alert modal content title body পারমিশন মোডাল টেক্সট',
+    },
+    blocked_user: {
+      title: 'Blocked User Modal & Notice Settings',
+      subtitle: 'Suspended account notice, subtitle, message, WhatsApp support link & live preview',
+      keywords: 'blocked user banned suspension modal notice whatsapp support contact preview ব্লকড ব্যবহারকারী নোটিশ',
+    },
+    order_timing: {
+      title: 'Order Timing & Operating Hours Controls',
+      subtitle: 'Order accept type, open from, close at times, and closed notice message',
+      keywords: 'order timing operating hours schedule open close time start end message অর্ডার সময়সীমা শিডিউল',
+    },
+    service_options: {
+      title: 'Service Options & Dynamic Description Hints',
+      subtitle: 'Service dropdown options and per-service description placeholder hints',
+      keywords: 'service options dropdown hints placeholder description list সার্ভিস ড্রপডাউন বিবরণ',
+    },
+    request_placeholders: {
+      title: 'Request Input Placeholders & Confirmation Message',
+      subtitle: 'Home page rotating input placeholders and thank you confirmation message',
+      keywords: 'input placeholder rotating home page confirmation thank you message রিকোয়েস্ট কনফার্মেশন',
+    },
+    hero_slider: {
+      title: 'Home Page Hero / Banner Slider Management',
+      subtitle: 'Upload banner images, manage slider items and redirect links',
+      keywords: 'hero banner slider slides images promotion redirect link ব্যানার স্লাইডার',
+    },
+    search_not_found: {
+      title: 'Search Not Found Notice Message',
+      subtitle: 'Fallback notice shown when customer search finds no results',
+      keywords: 'search not found empty message no results notice custom request সার্চ রেজাল্ট',
+    },
+    store_types: {
+      title: 'Store Types & Service Connection Mapping',
+      subtitle: 'Store categories and connection between store types and customer services',
+      keywords: 'store types categories shop connection mapping services chips দোকানের ধরন সার্ভিস সংযোগ',
+    },
+    store_application_placeholders: {
+      title: 'Store Application Form Placeholders',
+      subtitle: 'Custom placeholder values for store registration application fields',
+      keywords: 'store application placeholders form owner manager phone commission স্টোর আবেদন',
+    },
+    map_picker_guide: {
+      title: 'Map Picker Guide Overlay & Geocoding Settings',
+      subtitle: 'Pickup/delivery tutorial overlays, placeholders, and address validation messages',
+      keywords: 'map picker guide overlay pickup delivery address blank warning frequency ম্যাপ গাইড ওভারলে',
+    },
+    helper_center: {
+      title: 'Helper Center Contact Settings',
+      subtitle: 'Office address, support phone numbers, email, map embed and social links',
+      keywords: 'helper center contact phone whatsapp email office address facebook instagram linkedin হেল্প সেন্টার যোগাযোগ',
+    },
+    admin_permissions: {
+      title: 'Normal Admin Permissions Control',
+      subtitle: 'Manage dashboard tab access for regular administrators',
+      keywords: 'admin permissions superadmin access tabs allowed roles পারমিশন সাধারণ অ্যাডমিন',
+    },
+  };
+
+  const matchesSettingsSearch = (sectionId: string) => {
+    if (!settingsSearchQuery.trim()) return true;
+    const q = settingsSearchQuery.toLowerCase().trim();
+    const meta = SETTINGS_SECTIONS_META[sectionId];
+    if (!meta) return true;
+    return (
+      meta.title.toLowerCase().includes(q) ||
+      meta.subtitle.toLowerCase().includes(q) ||
+      meta.keywords.toLowerCase().includes(q)
+    );
+  };
+
+  const isSettingsSectionOpen = (sectionId: string) => {
+    if (settingsSearchQuery.trim()) {
+      return matchesSettingsSearch(sectionId);
+    }
+    return !!openSettingsSections[sectionId];
+  };
 
   // Home Banner Slider & Search Not Found Message Admin States
   const [adminSlides, setAdminSlides] = useState<Array<{
@@ -7335,1458 +7507,1737 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* --- TAB 8: SETTINGS TAB --- */}
       {activeTab === 'SETTINGS' && isTabAllowed('SETTINGS') && (
-        <form onSubmit={handleSavePricing} className="bg-white rounded-3xl border border-gray-100 p-6 shadow-soft space-y-6">
-          <div className="border-b border-gray-100 pb-4">
-            <h3 className="font-extrabold text-lg text-gray-900 flex items-center gap-2">
-              <Settings className="w-5 h-5 text-purple-600" />
-              <span>Admin Platform Configuration & System Settings</span>
-            </h3>
-            <p className="text-xs text-gray-500">Configure helper active order limits, third-party analytics, map region preference, PWA prompts, permissions, and helper center info.</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              Max Active Orders per Helper
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={pricing.helperActiveOrderLimit ?? 5}
-              onChange={(e) =>
-                setPricing({ ...pricing, helperActiveOrderLimit: Number(e.target.value) })
-              }
-              className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-              required
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              A helper cannot accept new requests once they hit this limit. Default is 5.
-            </p>
-          </div>
-
-          {/* Third-party Analytics Integrations */}
-          <div className="p-5 rounded-3xl bg-emerald-50/70 border border-emerald-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-emerald-900 uppercase tracking-wider flex items-center space-x-2">
-              <span>Third-party Analytics Integrations</span>
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form onSubmit={handleSavePricing} className="bg-white rounded-3xl border border-gray-100 p-4 sm:p-6 shadow-soft space-y-5">
+          {/* Header with Search and Quick Actions */}
+          <div className="border-b border-gray-100 pb-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Google Analytics Measurement ID (GA4)
-                </label>
-                <input
-                  type="text"
-                  value={googleAnalyticsId}
-                  onChange={(e) => setGoogleAnalyticsId(e.target.value)}
-                  placeholder="e.g. G-XXXXXXX"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 bg-white"
-                />
-                <p className="text-[11px] text-gray-500 mt-1.5">
-                  Dynamic Google Analytics Measurement ID (GA4). Leave blank to disable.
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Microsoft Clarity Project ID
-                </label>
-                <input
-                  type="text"
-                  value={microsoftClarityId}
-                  onChange={(e) => setMicrosoftClarityId(e.target.value)}
-                  placeholder="e.g. clarityId"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 bg-white"
-                />
-                <p className="text-[11px] text-gray-500 mt-1.5">
-                  Dynamic Microsoft Clarity tracking code ID. Leave blank to disable.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Commuter vs Dedicated Helper & Edu Email Settings */}
-          <div className="p-5 rounded-3xl bg-blue-50/70 border border-blue-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-blue-900 uppercase tracking-wider flex items-center space-x-2">
-              <Bike className="w-5 h-5 text-blue-700" />
-              <span>Commuter vs Dedicated Helper & Edu Email Settings</span>
-            </h4>
-            <p className="text-[11px] text-blue-700">
-              এডুকেশন ইমেইল ভেরিফাইড ব্যাজ ডোমেইন তালিকা এবং হেলপার নোটিফিকেশন টাইমিং ও অর্ডারের সিরিয়াল নির্ধারণ করুন।
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Education Email Domains (Comma separated)
-                </label>
-                <input
-                  type="text"
-                  value={eduEmailDomainsText}
-                  onChange={(e) => setEduEmailDomainsText(e.target.value)}
-                  placeholder="যেমন: @diu.edu.bd, @bracu.ac.bd"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-purple-600"
-                />
-                <p className="text-[10px] text-gray-500 mt-1">
-                  এই ডোমেইনের ইউজারগণ ভেরিফাইড ব্যাজ পাবেন।
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Helper Location Radius Limit (km)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  min={1}
-                  max={1000}
-                  value={helperRadiusKm}
-                  onChange={(e) => setHelperRadiusKm(e.target.value === '' ? '' : e.target.value)}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                />
-                <p className="text-[10px] text-gray-500 mt-1">
-                  অর্ডার পিকআপ/ডেলিভারি থেকে কত কি.মি. (Radius) ভেতরের হেলপারগণ রিকোয়েস্ট ও নোটিফিকেশন পাবেন (ডিফল্ট: 3.5 km)।
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Dedicated Helper Delay (Minutes)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  max={60}
-                  value={dedicatedDelayMins}
-                  onChange={(e) => setDedicatedDelayMins(e.target.value === '' ? '' : e.target.value)}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                />
-                <p className="text-[10px] text-gray-500 mt-1">
-                  অর্ডার পিকআপ না হলে কত মিনিট পর ডেডিকেটেড রাইডার নোটিফিকেশন পাবে (ডিফল্ট: 7 মিনিট)।
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  "Admin Accepted" Banner Delay (Minutes)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  max={60}
-                  value={pricing.adminAcceptedDelayMinutes ?? 5}
-                  onChange={(e) =>
-                    setPricing({ ...pricing, adminAcceptedDelayMinutes: e.target.value === '' ? ('' as any) : Number(e.target.value) })
-                  }
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                />
-                <p className="text-[10px] text-gray-500 mt-1">
-                  অর্ডার কত মিনিট PENDING থাকলে গ্রাহকের কাছে "Admin Accepted" স্ট্যাটাস দেখানো হবে (ডিফল্ট: 5)। 0 দিলে কখনো দেখাবে না।
-                </p>
-              </div>
-
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Order Receiver Routing Rule
-                </label>
-                <select
-                  value={receiverRule}
-                  onChange={(e) => setReceiverRule(e.target.value as any)}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                >
-                  <option value="commuter_first">Commuter First (সময় পার হলে Dedicated পাবে & Commuter থেকে ব্যানিশ)</option>
-                  <option value="dedicated_first">Dedicated First Only</option>
-                  <option value="both_simultaneous">Both Simultaneously (সবাই একসাথে)</option>
-                </select>
-                <p className="text-[10px] text-gray-500 mt-1">
-                  কাদের প্রথমে নোটিফিকেশন যাবে তা নির্বাচন করুন।
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Who Can Receive Requests (হেলপার রিসিভার টাইপ)
-                </label>
-                <select
-                  value={allowedHelperTypes}
-                  onChange={(e) => setAllowedHelperTypes(e.target.value as any)}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                >
-                  <option value="both">Both Commuter & Dedicated Helpers (উভয়ই)</option>
-                  <option value="dedicated_only">Dedicated Helpers Only (শুধুমাত্র ডেডিকেটেড হেলপার)</option>
-                  <option value="commuters_only">Commuter Helpers Only (শুধুমাত্র কমিউটার হেলপার)</option>
-                </select>
-                <p className="text-[10px] text-gray-500 mt-1">
-                  কোন ধরনের হেলপাররা রিকোয়েস্ট দেখতে এবং গ্রহণ করতে পারবেন তা নির্ধারণ করুন।
-                </p>
-              </div>
-            </div>
-
-            {/* Become Helper Visibility Toggle for Customers */}
-            <div className="pt-3 border-t border-blue-200/80">
-              <div className="flex items-start justify-between p-3.5 bg-white/90 rounded-2xl border border-blue-200 shadow-xs">
-                <div className="pr-3">
-                  <label htmlFor="showBecomeHelperToggle" className="text-xs font-bold text-gray-800 cursor-pointer block">
-                    Show "Become Helper" in Sidebar (গ্রাহকদের সাইডবারে "Become Helper" বা হেল্পার হওয়ার অপশন দেখান)
-                  </label>
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    সক্রিয় থাকলে সাধারণ গ্রাহকরা সাইডবার/ড্রয়ার মেনুতে হেল্পার হওয়ার আবেদন অপশন দেখতে পাবেন। বন্ধ থাকলে অপ্রয়োজনীয় আবেদন ও ডাটাবেজ স্টোরেজ রোধে অপশনটি সাধারণ গ্রাহকদের থেকে লুকানো থাকবে। (অ্যাডমিন কাউকে Dedicated বা Helper বানিয়ে দিলে তারা সবসময় Helper Mode দেখতে পাবেন)।
-                  </p>
-                </div>
-                <input
-                  type="checkbox"
-                  id="showBecomeHelperToggle"
-                  checked={showBecomeHelper}
-                  onChange={(e) => setShowBecomeHelper(e.target.checked)}
-                  className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer shrink-0 mt-0.5"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Map & Location Search Region Preference Settings */}
-          <div className="p-5 rounded-3xl bg-emerald-50/80 border border-emerald-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-emerald-900 uppercase tracking-wider flex items-center space-x-2">
-              <MapPin className="w-5 h-5 text-emerald-700" />
-              <span>Map & Location Search Region Preference (ম্যাপ ও স্থান খোঁজার এরিয়া ফিল্টার)</span>
-            </h4>
-            <p className="text-[11px] text-emerald-800 font-medium">
-              ম্যাপের স্থান এবং সার্চ এরিয়া ফিল্টার পছন্দ সেট করুন। ডিফল্টভাবে কেবল বাংলাদেশি স্থান এবং লোকেশন সার্চ ফিল্টার হবে।
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Location & Geocoding Search Preference
-                </label>
-                <select
-                  value={mapLocationPref}
-                  onChange={(e) => setMapLocationPref(e.target.value as any)}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600"
-                >
-                  <option value="BD">🇧🇩 Bangladesh Only (বাংলাদেশ - শুধুমাত্র বাংলাদেশি এলাকা)</option>
-                  <option value="GLOBAL">🌐 Global / Worldwide (গ্লোবাল - বিশ্বব্যাপী সকল স্থান)</option>
-                  <option value="CUSTOM">🏳️ Custom Country Code (অন্যান্য দেশ - নির্দিষ্ট কান্ট্রি কোড)</option>
-                </select>
-                <p className="text-[10px] text-gray-500 mt-1">
-                  বাংলাদেশ ফিল্টার নির্বাচন থাকলে স্থান অনুসন্ধান (Search) শুধুমাত্র বাংলাদেশি ফলাফল রিটার্ন করবে।
-                </p>
-              </div>
-
-              {mapLocationPref === 'CUSTOM' && (
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                    Custom Country Code (2-letter ISO e.g. us, in, uk)
-                  </label>
-                  <input
-                    type="text"
-                    value={customCountryCode}
-                    onChange={(e) => setCustomCountryCode(e.target.value)}
-                    placeholder="e.g., in, us, uk, sa"
-                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600 uppercase"
-                  />
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    নির্দিষ্ট দেশের ২-অক্ষরের ISO কান্ট্রি কোড লিখুন।
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Specific Allowed Serving Areas (Geofencing Polygons) Link to Helpers Tab */}
-          <div className="p-5 rounded-3xl bg-emerald-50/80 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <h4 className="font-extrabold text-sm text-emerald-950 uppercase tracking-wider flex items-center space-x-2">
-                <Globe className="w-5 h-5 text-emerald-700" />
-                <span>Specific Serving Areas & Geofencing (সার্ভিস এলাকা ও হেলপার বাউন্ডারি)</span>
-              </h4>
-              <p className="text-[11px] text-emerald-800 font-medium">
-                নির্দিষ্ট সার্ভিস এলাকা, ম্যাপে আয়তক্ষেত্র/পলিগন সাব-এরিয়া তৈরি এবং প্রতি এলাকার জন্য হেলপার নির্ধারণ এখন <strong>Helpers</strong> ট্যাব থেকে সরাসরি নিয়ন্ত্রণ করা যায়।
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('HELPERS');
-                setHelperSubView('AREAS');
-              }}
-              className="py-2.5 px-4 bg-emerald-800 hover:bg-emerald-900 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all flex items-center space-x-1.5 shrink-0 self-start sm:self-auto cursor-pointer"
-            >
-              <span>Manage in Helpers Tab 👉</span>
-            </button>
-          </div>
-
-          {/* Manual Auth (Email/Password Login & Register) Settings */}
-          <div className="p-5 rounded-3xl bg-amber-50/80 border border-amber-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
-              <User className="w-5 h-5 text-amber-700" />
-              <span>ম্যানুয়াল লগইন ও রেজিস্ট্রেশন নিয়ন্ত্রণ (Manual Auth Controls)</span>
-            </h4>
-            <p className="text-[11px] text-amber-900 font-medium">
-              এখানে ম্যানুয়াল (Email & Password) লগইন ও সাইন-আপ অপশন চালু বা বন্ধ রাখতে পারবেন। বন্ধ রাখলে ব্যবহারকারীর সাইন-ইন মডালে শুধুমাত্র Google Sign-In দৃশ্যমান থাকবে।
-            </p>
-
-            <div className="flex items-center space-x-3 p-3.5 bg-white rounded-2xl border border-amber-200 shadow-sm">
-              <input
-                type="checkbox"
-                id="manualAuthEnabled"
-                checked={manualAuthEnabled}
-                onChange={(e) => setManualAuthEnabled(e.target.checked)}
-                className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300"
-              />
-              <label htmlFor="manualAuthEnabled" className="text-xs font-bold text-gray-900 cursor-pointer select-none">
-                ম্যানুয়াল ইমেইল ও পাসওয়ার্ড দিয়ে লগইন ও রেজিস্ট্রেশন চালু রাখুন (Enable Manual Email/Password Authentication)
-              </label>
-            </div>
-          </div>
-
-          {/* PWA App Installation Prompt Settings */}
-          <div className="p-5 rounded-3xl bg-indigo-50/80 border border-indigo-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-indigo-950 uppercase tracking-wider flex items-center space-x-2">
-              <Download className="w-5 h-5 text-indigo-700" />
-              <span>PWA App Installation Prompt Controls (ইনস্টল পপআপ নিয়ন্ত্রণ)</span>
-            </h4>
-            <p className="text-[11px] text-indigo-900 font-medium">
-              অর্ডার সফলভাবে জমা হওয়ার পর গ্রাহককে ইনস্টল পপআপ দেখানোর সিদ্ধান্ত ও টেক্সট কাস্টমাইজ করুন।
-            </p>
-
-            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-indigo-100">
-              <input
-                type="checkbox"
-                id="pwaInstallPromptEnabled"
-                checked={pwaInstallPromptEnabled}
-                onChange={(e) => setPwaInstallPromptEnabled(e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300"
-              />
-              <label htmlFor="pwaInstallPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
-                অর্ডার সফল হলে গ্রাহককে PWA অ্যাপ ইনস্টল পপআপ (Popup) দেখান (Enable Install Prompt)
-              </label>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  পপআপ টাইটেল (Popup Title)
-                </label>
-                <input
-                  type="text"
-                  value={pwaInstallPromptTitle}
-                  onChange={(e) => setPwaInstallPromptTitle(e.target.value)}
-                  placeholder="Install Jamanot App"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  ইনস্টল বাটন টেক্সট (Button Text)
-                </label>
-                <input
-                  type="text"
-                  value={pwaInstallButtonText}
-                  onChange={(e) => setPwaInstallButtonText(e.target.value)}
-                  placeholder="Install Jamanot"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                পপআপ বিবরণ / সুবিধা (Popup Description)
-              </label>
-              <textarea
-                value={pwaInstallPromptDescription}
-                onChange={(e) => setPwaInstallPromptDescription(e.target.value)}
-                placeholder="আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!"
-                rows={2}
-                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-indigo-600 leading-relaxed font-sans"
-              />
-            </div>
-          </div>
-
-          {/* In-App Browser (Facebook/Messenger/Instagram) Popup & Alert Admin Controls */}
-          <div className="p-5 rounded-3xl bg-amber-50/70 border border-amber-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
-              <Compass className="w-5 h-5 text-amber-600" />
-              <span>In-App Browser (Facebook / Messenger) Popup & Alert Settings (ইন-অ্যাপ ব্রাউজার পপআপ ও সতর্কতা বার্তা)</span>
-            </h4>
-            <p className="text-[11px] text-amber-900 font-medium">
-              ব্যবহারকারী যখন ফেসবুক বা মেসেঞ্জারের ভেতর থেকে ওয়েবসাইট ভিজিট করেন, তখন গুগল লগইন ব্লক হওয়া রোধ ও সেরা সুবিধার জন্য ব্রাউজারে খোলার পপআপ বার্তা নিয়ন্ত্রণ করুন।
-            </p>
-
-            <div className="flex items-center space-x-3 p-3 bg-white rounded-2xl border border-amber-200">
-              <input
-                type="checkbox"
-                id="inAppBrowserPromptEnabled"
-                checked={inAppBrowserPromptEnabled}
-                onChange={(e) => setInAppBrowserPromptEnabled(e.target.checked)}
-                className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300 cursor-pointer"
-              />
-              <label htmlFor="inAppBrowserPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
-                ফেসবুক/মেসেঞ্জারে ওয়েবসাইট দেখলে পপআপ অ্যালার্ট দেখান (Enable In-App Browser Popup Alert)
-              </label>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  পপআপ টাইটেল (Popup Title)
-                </label>
-                <input
-                  type="text"
-                  value={inAppBrowserPromptTitle}
-                  onChange={(e) => setInAppBrowserPromptTitle(e.target.value)}
-                  placeholder="ব্রাউজারে ওপেন করুন"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  সাব-টাইটেল (Subtitle / Sub-text)
-                </label>
-                <input
-                  type="text"
-                  value={inAppBrowserPromptSubtitle}
-                  onChange={(e) => setInAppBrowserPromptSubtitle(e.target.value)}
-                  placeholder="Open in Chrome or Safari"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                সতর্কবার্তা ও বিবরণ (Alert Message & Details)
-              </label>
-              <textarea
-                value={inAppBrowserPromptMessage}
-                onChange={(e) => setInAppBrowserPromptMessage(e.target.value)}
-                placeholder="লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।"
-                rows={3}
-                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
-              />
-            </div>
-          </div>
-
-          {/* Permission Asking Modal Content Admin Controls */}
-          <div className="p-5 rounded-3xl bg-amber-50/80 border border-amber-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-amber-950 uppercase tracking-wider flex items-center space-x-2">
-              <ShieldCheck className="w-5 h-5 text-amber-700" />
-              <span>Permission Alert Modal Content Controls (পারমিশন মোডাল টেক্সট নিয়ন্ত্রণ)</span>
-            </h4>
-            <p className="text-[11px] text-amber-900 font-medium">
-              লোকেশন এবং নোটিফিকেশন পারমিশন চাইবার সময় গ্রাহককে দেখানো কাস্টম টাইটেল এবং বিবরণ এডিট করুন।
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  লোকেশন পারমিশন মোডাল টাইটেল (Location Permission Title)
-                </label>
-                <input
-                  type="text"
-                  value={locPermModalTitle}
-                  onChange={(e) => setLocPermModalTitle(e.target.value)}
-                  placeholder="লোকেশন পারমিশন আবশ্যক (Location Required)"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  নোটিফিকেশন পারমিশন মোডাল টাইটেল (Notification Permission Title)
-                </label>
-                <input
-                  type="text"
-                  value={notifPermModalTitle}
-                  onChange={(e) => setNotifPermModalTitle(e.target.value)}
-                  placeholder="নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  লোকেশন পারমিশন মোডাল বিবরণ (Location Permission Message)
-                </label>
-                <textarea
-                  value={locPermModalBody}
-                  onChange={(e) => setLocPermModalBody(e.target.value)}
-                  placeholder="কম্পিউটার হেলপার মোড চালু করতে জিপিএস পারমিশন আবশ্যক..."
-                  rows={3}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  নোটিফিকেশন পারমিশন মোডাল বিবরণ (Notification Permission Message)
-                </label>
-                <textarea
-                  value={notifPermModalBody}
-                  onChange={(e) => setNotifPermModalBody(e.target.value)}
-                  placeholder="জরুরি আপডেট পেতে ব্রাউজারে নোটিফিকেশন পারমিশন আবশ্যক..."
-                  rows={3}
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Blocked User Notice & Custom Modal Admin Configuration */}
-          <div className="p-5 rounded-3xl bg-rose-50/80 border border-rose-200 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h4 className="font-extrabold text-sm text-rose-950 uppercase tracking-wider flex items-center space-x-2">
-                  <Ban className="w-5 h-5 text-rose-600" />
-                  <span>ব্লকড ব্যবহারকারী নোটিশ ও কাস্টম পপআপ সেটিংস (Blocked User Modal & Notice Settings)</span>
-                </h4>
-                <p className="text-[11px] text-rose-800 font-medium mt-0.5">
-                  যেকোনো গ্রাহক, হেলপার বা স্টোর ব্লক করা হলে তাদের সামনে প্রদর্শিত নোটিশ ও যোগাযোগের বাটন কাস্টমাইজ করুন।
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowBlockedUserModalPreview(true)}
-                className="py-2 px-3.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 shrink-0 self-start sm:self-auto cursor-pointer"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Live Modal Preview</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-800 block mb-1.5">
-                  পপআপ টাইটেল (Modal Title)
-                </label>
-                <input
-                  type="text"
-                  value={blockedUserModalTitle}
-                  onChange={(e) => setBlockedUserModalTitle(e.target.value)}
-                  placeholder="অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-800 block mb-1.5">
-                  সাব-টাইটেল (Subtitle)
-                </label>
-                <input
-                  type="text"
-                  value={blockedUserModalSubtitle}
-                  onChange={(e) => setBlockedUserModalSubtitle(e.target.value)}
-                  placeholder="আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-800 block mb-1.5">
-                বিস্তারিত বার্তা / মেসেজ (Notice Message)
-              </label>
-              <textarea
-                value={blockedUserModalMessage}
-                onChange={(e) => setBlockedUserModalMessage(e.target.value)}
-                rows={3}
-                placeholder="নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে..."
-                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-rose-600 leading-relaxed font-sans"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-800 block mb-1.5">
-                  সাপোর্ট বাটন টেক্সট (Button Label)
-                </label>
-                <input
-                  type="text"
-                  value={blockedUserModalButtonText}
-                  onChange={(e) => setBlockedUserModalButtonText(e.target.value)}
-                  placeholder="সাপোর্টে যোগাযোগ করুন (Contact Support)"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-800 block mb-1.5">
-                  সাপোর্ট লিংক বা হোয়াটসঅ্যাপ নম্বর (Support Link / WhatsApp)
-                </label>
-                <input
-                  type="text"
-                  value={blockedUserModalContactUrl}
-                  onChange={(e) => setBlockedUserModalContactUrl(e.target.value)}
-                  placeholder="https://wa.me/88018XXXXXXXX"
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Order Timing Controls Block */}
-          <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
-            <h4 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider flex items-center space-x-2">
-              <Clock className="w-5 h-5 text-purple-700" />
-              <span>Order Timing & Form Controls</span>
-            </h4>
-            <p className="text-[11px] text-gray-500">
-              গ্রাহকদের অর্ডার করার সময়সীমা নিয়ন্ত্রণ করুন। অর্ডার বন্ধ থাকলে গ্রাহকদের একটি কাস্টম বার্তা দেখানো হবে।
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Order Accept Type
-                </label>
-                <select
-                  value={pricing.orderTimingType || 'always_on'}
-                  onChange={(e) =>
-                    setPricing({
-                      ...pricing,
-                      orderTimingType: e.target.value as any,
-                    })
-                  }
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
-                >
-                  <option value="always_on">Always Open (সরাসরি চালু)</option>
-                  <option value="always_off">Always Closed (সাময়িকভাবে বন্ধ)</option>
-                  <option value="custom_range">Custom Time Range (নির্দিষ্ট সময়সীমা)</option>
-                </select>
-              </div>
-
-              {pricing.orderTimingType === 'custom_range' && (
-                <>
-                  <TimePickerInput
-                    label="Open From (শুরু)"
-                    value={pricing.orderTimingStart || '08:00'}
-                    onChange={(val) => setPricing({ ...pricing, orderTimingStart: val })}
-                  />
-
-                  <TimePickerInput
-                    label="Close At (শেষ)"
-                    value={pricing.orderTimingEnd || '22:00'}
-                    onChange={(val) => setPricing({ ...pricing, orderTimingEnd: val })}
-                  />
-                </>
-              )}
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                অর্ডার বন্ধ থাকাকালীন নোটিশ বার্তা (Closed Message shown to Customer):
-              </label>
-              <input
-                type="text"
-                value={pricing.orderTimingMessage || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।'}
-                onChange={(e) =>
-                  setPricing({ ...pricing, orderTimingMessage: e.target.value })
-                }
-                placeholder="যেমন: আমাদের সার্ভিস এখন বন্ধ আছে। সকাল ৮ টা থেকে রাত ১০ টার মধ্যে অর্ডার করুন।"
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              সার্ভিস ড্রপডাউন অপশন সমূহ (প্রতি লাইনে ১টি):
-            </label>
-            <textarea
-              value={servicesText}
-              onChange={(e) => setServicesText(e.target.value)}
-              placeholder="প্রতিটি সার্ভিস আলাদা লাইনে লিখুন..."
-              rows={6}
-              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              রিকোয়েস্ট ফর্মের সার্ভিস ড্রপডাউনে এই সার্ভিসগুলো দেখাবে।
-            </p>
-          </div>
-
-          {/* Per-service description placeholder hints — single textarea, "Key = Value" per line */}
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              সার্ভিস অনুযায়ী বিবরণ প্লেসহোল্ডার (প্রতি লাইনে: সার্ভিস নাম = প্লেসহোল্ডার টেক্সট):
-            </label>
-            <textarea
-              value={serviceHintsText}
-              onChange={(e) => setServiceHintsText(e.target.value)}
-              placeholder={`উদাহরণ:\nবাজার-সদাই করে দিন = (গ্যাস, শাকসবজি, মাছ-মাংস — যা যা লাগবে লিখুন)\nখাবার এনে দিন = (কোন রেস্তোরাঁ থেকে, কোন খাবার, কত পরিমাণ)`}
-              rows={6}
-              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              প্রতিটি লাইনে <strong>সার্ভিস নাম = প্লেসহোল্ডার টেক্সট</strong> ফরম্যাটে লিখুন। গ্রাহক ওই সার্ভিস সিলেক্ট করলে ডান পাশের টেক্সটটি description textarea-তে দেখাবে।
-            </p>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              হোম পেজ রিকোয়েস্ট ইনপুট প্লেসহোল্ডার সমূহ (প্রতি লাইনে ১টি):
-            </label>
-            <textarea
-              value={placeholdersText}
-              onChange={(e) => setPlaceholdersText(e.target.value)}
-              placeholder="প্রতিটি প্লেসহোল্ডার আলাদা লাইনে লিখুন..."
-              rows={6}
-              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              ব্যবহারকারী রিকোয়েস্ট ইনপুট বক্সে এই প্লেসহোল্ডার লেখাগুলি পরপর পরিবর্তন (rotate) হতে দেখবে।
-            </p>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              অর্ডার সাবমিটের পর কনফার্মেশন বার্তা (Thank You message):
-            </label>
-            <input
-              type="text"
-              value={confirmationMsg}
-              onChange={(e) => setConfirmationMsg(e.target.value)}
-              placeholder="যেমন: আপনার অনুরোধ পেয়েছি! শীঘ্রই একজন হেলপার গ্রহণ করবে।"
-              className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              গ্রাহক অর্ডার সফলভাবে জমা দেওয়ার পর এই বার্তাটি &ldquo;ধন্যবাদ!&rdquo; শিরোনামসহ পপআপে দেখাবে।
-            </p>
-          </div>
-
-          {/* ── Home Page Hero / Banner Slider Management ── */}
-          <div className="border border-purple-200 rounded-2xl p-5 bg-purple-50/20 space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-extrabold text-sm text-purple-950 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-purple-700" />
-                <span>হোম পেজ ব্যানার স্লাইডার (Hero Banner Slides)</span>
-              </h4>
-              <span className="text-xs bg-purple-100 text-purple-800 font-extrabold px-2.5 py-1 rounded-full">
-                {adminSlides.length}টি স্লাইড
-              </span>
-            </div>
-            <p className="text-xs text-gray-500">
-              হোম পেজের শীর্ষ স্লাইডারে ব্যানার ছবি প্রদর্শন করুন। প্রতিটি ব্যানারে ঐচ্ছিক রিডাইরেক্ট লিংক যোগ করতে পারেন (লিংক সেট করলে ক্লিক করলে রিডাইরেক্ট হবে, খালি রাখলে কোনো অ্যাকশন হবে না)।
-            </p>
-
-            {/* List of current slides */}
-            {adminSlides.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                {adminSlides.map((slide, idx) => (
-                  <div
-                    key={slide.id || idx}
-                    className="relative border border-gray-200 rounded-2xl p-3 bg-white flex flex-col justify-between shadow-xs hover:border-purple-300 transition-colors"
-                  >
-                    <div className="space-y-2">
-                      {slide.imageUrl && (
-                        <div className="w-full h-28 rounded-xl overflow-hidden bg-gray-100 border border-gray-100">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={slide.imageUrl}
-                            alt={slide.title || `Slide ${idx + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      )}
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-gray-900">
-                            {slide.title || `ব্যানার #${idx + 1}`}
-                          </span>
-                          <span className="text-[10px] bg-purple-50 text-purple-700 font-semibold px-2 py-0.5 rounded-full">
-                            স্লাইড {idx + 1}
-                          </span>
-                        </div>
-                        {slide.link ? (
-                          <p className="text-[11px] text-purple-700 font-medium truncate flex items-center gap-1 mt-1">
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                            <span>{slide.link}</span>
-                          </p>
-                        ) : (
-                          <p className="text-[11px] text-gray-400 mt-1 italic">
-                            কোনো লিংক সংযুক্ত নেই (ক্লিকে কিছু হবে না)
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="mt-3 pt-2 border-t border-gray-100 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSlide(idx)}
-                        className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>মুছে ফেলুন</span>
-                      </button>
-                    </div>
+                <h3 className="font-extrabold text-lg sm:text-xl text-gray-900 flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-purple-100 flex items-center justify-center text-purple-700 shrink-0">
+                    <Settings className="w-5 h-5" />
                   </div>
-                ))}
-              </div>
-            )}
-
-            {/* Form to add a new slide */}
-            <div className="p-4 bg-white rounded-2xl border border-dashed border-purple-200 space-y-3">
-              <h5 className="text-xs font-extrabold text-purple-900 flex items-center gap-1.5">
-                <Plus className="w-4 h-4 text-purple-600" />
-                <span>নতুন ব্যানার স্লাইড যোগ করুন</span>
-              </h5>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    ব্যানার ইমেজ আপলোড (ফাইল সিলেক্ট করুন):
-                  </label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleSlideImageFileChange(file);
-                    }}
-                    className="w-full text-xs text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-purple-100 file:text-purple-800 hover:file:bg-purple-200 cursor-pointer"
-                  />
-                  {isUploadingSlideImage && (
-                    <p className="text-[11px] text-purple-600 font-medium mt-1">ছবি প্রসেস হচ্ছে...</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    অথবা ছবির সরাসরি URL (ঐচ্ছিক):
-                  </label>
-                  <input
-                    type="url"
-                    value={newSlideImageUrl}
-                    onChange={(e) => setNewSlideImageUrl(e.target.value)}
-                    placeholder="https://example.com/banner.jpg"
-                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
-                  />
-                </div>
+                  <span>Admin Platform Configuration & System Settings</span>
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  সেকশনগুলোতে ক্লিক করে এক্সপ্যান্ড বা কোল্যাপ্স করুন। প্রয়োজনীয় ফিল্ড দ্রুত খুঁজে পেতে সার্চ বক্স ব্যবহার করুন।
+                </p>
               </div>
 
-              {newSlideImageUrl && (
-                <div className="w-full max-w-xs h-24 rounded-xl overflow-hidden bg-gray-100 border border-gray-200">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={newSlideImageUrl}
-                    alt="Preview"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    ব্যানারের শিরোনাম (ঐচ্ছিক):
-                  </label>
-                  <input
-                    type="text"
-                    value={newSlideTitle}
-                    onChange={(e) => setNewSlideTitle(e.target.value)}
-                    placeholder="যেমন: বিশেষ অফার বা ছাড়"
-                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    ক্লিক রিডাইরেক্ট লিংক (ঐচ্ছিক):
-                  </label>
-                  <input
-                    type="text"
-                    value={newSlideLink}
-                    onChange={(e) => setNewSlideLink(e.target.value)}
-                    placeholder="যেমন: https://wa.me/... অথবা খালি রাখুন"
-                    className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
-                  />
-                  <p className="text-[10px] text-gray-500 mt-0.5">
-                    খালি রাখলে গ্রাহক ব্যানারে ক্লিক করলে কোনো রিডাইরেক্ট হবে না।
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-1 flex justify-end">
+              {/* Quick Actions */}
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
                 <button
                   type="button"
-                  onClick={handleAddSlide}
-                  disabled={!newSlideImageUrl.trim() || isUploadingSlideImage}
-                  className="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={expandAllSettingsSections}
+                  className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                  title="সকল সেকশন খুলুন"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>স্লাইড যোগ করুন</span>
+                  <ChevronsUpDown className="w-3.5 h-3.5" />
+                  <span>Expand All</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={collapseAllSettingsSections}
+                  className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                  title="সকল সেকশন বন্ধ করুন"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>Collapse All</span>
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-purple-900 hover:bg-purple-950 text-white rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Save Settings</span>
                 </button>
               </div>
             </div>
-          </div>
 
-          {/* ── Search Not Found Notice Message ── */}
-          <div className="border border-emerald-100 rounded-2xl p-4 bg-emerald-50/20 space-y-2">
-            <label className="text-xs font-bold text-gray-800 block">
-              সার্চ রেজাল্ট না পাওয়া গেলে নোটিশ বার্তা (Search Not Found Message):
-            </label>
-            <textarea
-              value={searchNotFoundMsg}
-              onChange={(e) => setSearchNotFoundMsg(e.target.value)}
-              placeholder="যেমন: দুঃখিত, আপনার খোঁজা পণ্য বা সেবাটি খুঁজে পাওয়া যায়নি। তবে কোনো সমস্যা নেই! কাস্টম রিকোয়েস্ট তৈরি করুন, আমরা ব্যবস্থা করে দেবো।"
-              rows={3}
-              className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 leading-relaxed font-sans"
-            />
-            <p className="text-[11px] text-gray-500">
-              গ্রাহক হোম পেজের সার্চ বক্সে কোনো পণ্য বা সেবা খুঁজে না পেলে এই বার্তাটি দেখাবে এবং নিচে কাস্টম রিকোয়েস্ট বাটন থাকবে। খালি রাখলে ডিফল্ট বার্তা প্রদর্শিত হবে।
-            </p>
-          </div>
-
-          {/* Dynamic Store / Shop Types */}
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1.5">
-              দোকানের ধরন সমূহের তালিকা (Store Types dropdown - প্রতি লাইনে ১টি):
-            </label>
-            <textarea
-              value={storeTypesText}
-              onChange={(e) => setStoreTypesText(e.target.value)}
-              placeholder="Grocery & Supermarket&#10;Pharmacy & Medicine&#10;Restaurant & Fast Food"
-              rows={6}
-              className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-            />
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              হেলপার যখন নতুন দোকান যোগ করবে তখন ড্রপডাউনে এই অপশনগুলো আসবে।
-            </p>
-          </div>
-
-          {/* ── Connect Store Types with Service Types ── */}
-          <div className="border border-purple-200/80 rounded-2xl p-5 bg-gradient-to-br from-purple-50/50 via-white to-indigo-50/30 space-y-4 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-purple-100">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-purple-600/10 flex items-center justify-center text-purple-700 shrink-0 mt-0.5">
-                  <Layers className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-sm text-gray-900 flex items-center gap-2">
-                    সার্ভিসের সাথে দোকানের ধরন সংযোগ (Connect Store Types to Services)
-                  </h4>
-                  <p className="text-[11px] text-gray-600 mt-0.5 leading-relaxed">
-                    গ্রাহক যখন হোম পেজে বা স্টোর গ্রিডে একটি সার্ভিস সিলেক্ট করবেন, তখন কোন কোন ধরনের দোকান (Store Types) প্রদর্শিত হবে তা নির্ধারণ করুন।
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
-                  const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
-                  const newMap: Record<string, string[]> = {};
-                  svcs.forEach((svc) => {
-                    newMap[svc] = getStoreTypesForService(svc);
-                  });
-                  setServiceStoreTypeMap(newMap);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-bold transition-all shrink-0 active:scale-95 cursor-pointer self-start sm:self-auto"
-                title="স্বয়ংক্রিয়ভাবে বুদ্ধিমত্তা অনুযায়ী ডিফল্ট সংযোগ সেট করুন"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                ডিফল্ট সংযোগ রিস্টোর করুন
-              </button>
+            {/* Quick Filter Search Bar */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={settingsSearchQuery}
+                onChange={(e) => setSettingsSearchQuery(e.target.value)}
+                placeholder="সেটিংস খুঁজুন... (যেমন: analytics, radius, banner, delay, pwa, auth, timing, store, helper...)"
+                className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-2 focus:ring-purple-600/10 bg-gray-50/50 focus:bg-white transition-all"
+              />
+              {settingsSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSettingsSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-md text-xs cursor-pointer"
+                  title="সার্চ মুছুন"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
-            {(() => {
-              const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
-              const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
-              const allStoreTypes = parseStoreTypes(storeTypesText);
+            {settingsSearchQuery.trim() && (
+              <div className="flex items-center justify-between text-xs text-gray-600 px-1">
+                <span>
+                  সার্চ ফিল্টারে {ALL_SETTINGS_SECTIONS.filter((id) => matchesSettingsSearch(id)).length}টি সেকশন পাওয়া গেছে
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSearchQuery('')}
+                  className="text-purple-700 hover:underline font-semibold cursor-pointer"
+                >
+                  সবগুলো দেখুন
+                </button>
+              </div>
+            )}
+          </div>
 
-              if (svcs.length === 0) {
-                return (
-                  <p className="text-xs text-gray-400 italic py-2">
-                    কোনো সার্ভিস পাওয়া যায়নি। উপরে সার্ভিস ড্রপডাউন অপশনে সার্ভিস যুক্ত করুন।
-                  </p>
-                );
+          {/* 1. Limits Section */}
+          {matchesSettingsSearch('limits') && (
+            <SettingsAccordionSection
+              id="limits"
+              title="Max Active Orders per Helper (হেলপার সক্রিয় অর্ডারের সীমা)"
+              subtitle="A helper cannot accept new requests once they hit this limit (Default: 5)"
+              icon={Sliders}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('limits')}
+              onToggle={() => toggleSettingsSection('limits')}
+              badge={
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                  {pricing.helperActiveOrderLimit ?? 5} Orders Max
+                </span>
               }
-
-              return (
-                <div className="space-y-3.5">
-                  {svcs.map((svcName) => {
-                    const selectedTypes = serviceStoreTypeMap[svcName] || [];
-                    const isAllSelected = allStoreTypes.length > 0 && selectedTypes.length === allStoreTypes.length;
-
-                    return (
-                      <div
-                        key={svcName}
-                        className="p-4 rounded-xl border border-gray-200/90 bg-white/90 shadow-xs hover:border-purple-300 transition-all space-y-2.5"
-                      >
-                        {/* Service Header Row */}
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-xs text-gray-900">
-                              {svcName}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selectedTypes.length > 0
-                                  ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
-                                }`}
-                            >
-                              {selectedTypes.length > 0
-                                ? `${selectedTypes.length}টি ধরন সংযুক্ত`
-                                : 'ডিফল্ট ম্যাচিং'}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setServiceStoreTypeMap((prev) => ({
-                                  ...prev,
-                                  [svcName]: isAllSelected ? [] : [...allStoreTypes],
-                                }));
-                              }}
-                              className="text-[11px] font-semibold text-purple-700 hover:text-purple-900 px-2 py-0.5 rounded-lg hover:bg-purple-50 transition-colors cursor-pointer"
-                            >
-                              {isAllSelected ? 'সব বাতিল' : 'সব নির্বাচন'}
-                            </button>
-                            {selectedTypes.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setServiceStoreTypeMap((prev) => {
-                                    const next = { ...prev };
-                                    delete next[svcName];
-                                    return next;
-                                  });
-                                }}
-                                className="text-[11px] font-semibold text-gray-500 hover:text-rose-600 px-1.5 py-0.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                              >
-                                রিসেট
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Store Types Badges / Chips */}
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          {allStoreTypes.map((type) => {
-                            const isSelected = selectedTypes.includes(type);
-                            return (
-                              <button
-                                key={type}
-                                type="button"
-                                onClick={() => {
-                                  setServiceStoreTypeMap((prev) => {
-                                    const curr = prev[svcName] || [];
-                                    const exists = curr.includes(type);
-                                    const nextList = exists
-                                      ? curr.filter((t) => t !== type)
-                                      : [...curr, type];
-                                    return {
-                                      ...prev,
-                                      [svcName]: nextList,
-                                    };
-                                  });
-                                }}
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer font-medium active:scale-95 ${isSelected
-                                    ? 'bg-purple-600 text-white shadow-xs font-semibold'
-                                    : 'bg-gray-100 hover:bg-gray-200/80 text-gray-700 border border-gray-200'
-                                  }`}
-                              >
-                                {isSelected ? (
-                                  <Check className="w-3 h-3 text-white shrink-0" />
-                                ) : (
-                                  <Plus className="w-3 h-3 text-gray-400 shrink-0" />
-                                )}
-                                <span>{type}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {selectedTypes.length === 0 && (
-                          <p className="text-[10px] text-amber-700 bg-amber-50/80 px-2.5 py-1 rounded-md border border-amber-200/50 inline-block font-medium">
-                            💡 কোনো ধরন নির্বাচন না থাকলে নামের মিল অনুযায়ী স্বয়ংক্রিয় ডিফল্ট ফিল্টার কার্যকর থাকবে।
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* ── Store Application Form Placeholders ── */}
-          <div className="border border-orange-100 rounded-2xl p-4 bg-orange-50/30 space-y-3">
-            <h4 className="font-extrabold text-sm text-orange-900 flex items-center gap-2">
-              <Store className="w-4 h-4 text-orange-700" />
-              স্টোর আবেদন ফর্মের প্লেসহোল্ডার (Store Application Form Placeholders)
-            </h4>
-            <p className="text-[11px] text-orange-800 font-medium">
-              স্টোর আবেদন ফর্মের প্রতিটি ইনপুটে কাস্টম প্লেসহোল্ডার লিখুন। খালি রাখলে ডিফল্ট প্লেসহোল্ডার ব্যবহার হবে।
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">দোকানের নাম (Store Name):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.storeName}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, storeName: e.target.value })}
-                  placeholder="যেমন: আলম জেনারেল স্টোর"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">পণ্য/সেবার বিবরণ (Description):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.storeDescription}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, storeDescription: e.target.value })}
-                  placeholder="যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান..."
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের নাম (Owner Name):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.ownerName}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerName: e.target.value })}
-                  placeholder="মালিকের পুরো নাম"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের ফোন (Owner Phone):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.ownerPhone}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerPhone: e.target.value })}
-                  placeholder="মালিকের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের নাম (Manager Name):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.managerName}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, managerName: e.target.value })}
-                  placeholder="ম্যানেজারের পুরো নাম"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের ফোন (Manager Phone):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.managerPhone}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, managerPhone: e.target.value })}
-                  placeholder="ম্যানেজারের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">কমিশন শতাংশ (Commission %):</label>
-                <input
-                  type="text"
-                  value={storeFormPh.commissionPercent}
-                  onChange={(e) => setStoreFormPh({ ...storeFormPh, commissionPercent: e.target.value })}
-                  placeholder="যেমন: ৫"
-                  className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* ── Map Picker Guide Overlay Settings ── */}
-          <div className="border border-purple-100 rounded-2xl p-4 bg-purple-50/30 space-y-3">
-            <h4 className="font-extrabold text-sm text-purple-900 flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-purple-700" />
-              ম্যাপ গাইড ওভারলে সেটিংস (Map Guide Overlay)
-            </h4>
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                পিকআপ (যেখান থেকে আনতে হবে) modal-এর গাইড টেক্সট:
-              </label>
-              <textarea
-                value={mapPickerPickupGuideText}
-                onChange={(e) => setMapPickerPickupGuideText(e.target.value)}
-                placeholder="যে দোকান বা স্থান থেকে আনতে হবে..."
-                rows={3}
-                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-              />
-              <p className="text-[11px] text-gray-500 mt-1">
-                "কোথা থেকে আনতে হবে" map modal-এ দেখানো হবে।
-              </p>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                ডেলিভারি স্থান modal-এর গাইড টেক্সট:
-              </label>
-              <textarea
-                value={mapPickerDeliveryGuideText}
-                onChange={(e) => setMapPickerDeliveryGuideText(e.target.value)}
-                placeholder="আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন..."
-                rows={3}
-                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-              />
-              <p className="text-[11px] text-gray-500 mt-1">
-                "ডেলিভারি ঠিকানা" map modal-এ দেখানো হবে।
-              </p>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                সাধারণ গাইড টেক্সট (fallback — উপরের দুটি খালি থাকলে দেখাবে):
-              </label>
-              <textarea
-                value={mapPickerGuideText}
-                onChange={(e) => setMapPickerGuideText(e.target.value)}
-                placeholder="যে location select করতে চান, সেখান পিন টি নিয়ে বসান..."
-                rows={3}
-                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-              />
-              <p className="text-[11px] text-gray-500 mt-1">
-                উপরের দুটি খালি রাখলে এই টেক্সটটি উভয় modal-এ দেখানো হবে।
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+            >
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  OK বাটনের লেবেল:
-                </label>
-                <input
-                  type="text"
-                  value={mapPickerGuideOkText}
-                  onChange={(e) => setMapPickerGuideOkText(e.target.value)}
-                  placeholder="ঠিক আছে"
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  কতবার দেখাবে (প্রতি user):
+                  Max Active Orders per Helper
                 </label>
                 <input
                   type="number"
                   min={1}
-                  max={20}
-                  value={mapPickerGuideShowCount}
-                  onChange={(e) => setMapPickerGuideShowCount(Number(e.target.value))}
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  max={50}
+                  value={pricing.helperActiveOrderLimit ?? 5}
+                  onChange={(e) =>
+                    setPricing({ ...pricing, helperActiveOrderLimit: Number(e.target.value) })
+                  }
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-extrabold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  required
                 />
-                <p className="text-[11px] text-gray-500 mt-1">Default: 5 বার</p>
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  A helper cannot accept new requests once they hit this limit. Default is 5.
+                </p>
               </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-purple-100/60">
+            </SettingsAccordionSection>
+          )}
+
+          {/* 2. Third-party Analytics Integrations */}
+          {matchesSettingsSearch('analytics') && (
+            <SettingsAccordionSection
+              id="analytics"
+              title="Third-party Analytics Integrations (থার্ড-পার্টি অ্যানালিটিক্স)"
+              subtitle="Google Analytics Measurement ID (GA4) and Microsoft Clarity Project ID"
+              icon={BarChart2}
+              colorScheme="emerald"
+              isOpen={isSettingsSectionOpen('analytics')}
+              onToggle={() => toggleSettingsSection('analytics')}
+              badge={
+                googleAnalyticsId || microsoftClarityId ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    Disabled
+                  </span>
+                )
+              }
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Google Analytics Measurement ID (GA4)
+                  </label>
+                  <input
+                    type="text"
+                    value={googleAnalyticsId}
+                    onChange={(e) => setGoogleAnalyticsId(e.target.value)}
+                    placeholder="e.g. G-XXXXXXX"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 bg-white"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1.5">
+                    Dynamic Google Analytics Measurement ID (GA4). Leave blank to disable.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Microsoft Clarity Project ID
+                  </label>
+                  <input
+                    type="text"
+                    value={microsoftClarityId}
+                    onChange={(e) => setMicrosoftClarityId(e.target.value)}
+                    placeholder="e.g. clarityId"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 bg-white"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1.5">
+                    Dynamic Microsoft Clarity tracking code ID. Leave blank to disable.
+                  </p>
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 3. Commuter vs Dedicated Helper & Edu Email Settings */}
+          {matchesSettingsSearch('helper_routing') && (
+            <SettingsAccordionSection
+              id="helper_routing"
+              title="Commuter vs Dedicated Helper & Edu Email Settings (হেলপার রাউটিং সেটিংস)"
+              subtitle="এডুকেশন ইমেইল ডোমেইন, হেলপার লোকেশন রেডিয়াস লিমিট ও নোটিফিকেশন টাইমিং"
+              icon={Bike}
+              colorScheme="blue"
+              isOpen={isSettingsSectionOpen('helper_routing')}
+              onToggle={() => toggleSettingsSection('helper_routing')}
+            >
+              <p className="text-[11px] text-blue-700 mb-2">
+                এডুকেশন ইমেইল ভেরিফাইড ব্যাজ ডোমেইন তালিকা এবং হেলপার নোটিফিকেশন টাইমিং ও অর্ডারের সিরিয়াল নির্ধারণ করুন।
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Education Email Domains (Comma separated)
+                  </label>
+                  <input
+                    type="text"
+                    value={eduEmailDomainsText}
+                    onChange={(e) => setEduEmailDomainsText(e.target.value)}
+                    placeholder="যেমন: @diu.edu.bd, @bracu.ac.bd"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-purple-600"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    এই ডোমেইনের ইউজারগণ ভেরিফাইড ব্যাজ পাবেন।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Helper Location Radius Limit (km)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={1}
+                    max={1000}
+                    value={helperRadiusKm}
+                    onChange={(e) => setHelperRadiusKm(e.target.value === '' ? '' : e.target.value)}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    অর্ডার পিকআপ/ডেলিভারি থেকে কত কি.মি. (Radius) ভেতরের হেলপারগণ রিকোয়েস্ট ও নোটিফিকেশন পাবেন (ডিফল্ট: 3.5 km)।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Dedicated Helper Delay (Minutes)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    max={60}
+                    value={dedicatedDelayMins}
+                    onChange={(e) => setDedicatedDelayMins(e.target.value === '' ? '' : e.target.value)}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    অর্ডার পিকআপ না হলে কত মিনিট পর ডেডিকেটেড রাইডার নোটিফিকেশন পাবে (ডিফল্ট: 7 মিনিট)।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    "Admin Accepted" Banner Delay (Minutes)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    max={60}
+                    value={pricing.adminAcceptedDelayMinutes ?? 5}
+                    onChange={(e) =>
+                      setPricing({ ...pricing, adminAcceptedDelayMinutes: e.target.value === '' ? ('' as any) : Number(e.target.value) })
+                    }
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    অর্ডার কত মিনিট PENDING থাকলে গ্রাহকের কাছে "Admin Accepted" স্ট্যাটাস দেখানো হবে (ডিফল্ট: 5)। 0 দিলে কখনো দেখাবে না।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Order Receiver Routing Rule
+                  </label>
+                  <select
+                    value={receiverRule}
+                    onChange={(e) => setReceiverRule(e.target.value as any)}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  >
+                    <option value="commuter_first">Commuter First (সময় পার হলে Dedicated পাবে & Commuter থেকে ব্যানিশ)</option>
+                    <option value="dedicated_first">Dedicated First Only</option>
+                    <option value="both_simultaneous">Both Simultaneously (সবাই একসাথে)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    কাদের প্রথমে নোটিফিকেশন যাবে তা নির্বাচন করুন।
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Who Can Receive Requests (হেলপার রিসিভার টাইপ)
+                  </label>
+                  <select
+                    value={allowedHelperTypes}
+                    onChange={(e) => setAllowedHelperTypes(e.target.value as any)}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  >
+                    <option value="both">Both Commuter & Dedicated Helpers (উভয়ই)</option>
+                    <option value="dedicated_only">Dedicated Helpers Only (শুধুমাত্র ডেডিকেটেড হেলপার)</option>
+                    <option value="commuters_only">Commuter Helpers Only (শুধুমাত্র কমিউটার হেলপার)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    কোন ধরনের হেলপাররা রিকোয়েস্ট দেখতে এবং গ্রহণ করতে পারবেন তা নির্ধারণ করুন।
+                  </p>
+                </div>
+              </div>
+
+              {/* Become Helper Visibility Toggle for Customers */}
+              <div className="pt-3 border-t border-blue-200/80">
+                <div className="flex items-start justify-between p-3.5 bg-blue-50/50 rounded-2xl border border-blue-200 shadow-xs">
+                  <div className="pr-3">
+                    <label htmlFor="showBecomeHelperToggle" className="text-xs font-bold text-gray-800 cursor-pointer block">
+                      Show "Become Helper" in Sidebar (গ্রাহকদের সাইডবারে "Become Helper" বা হেল্পার হওয়ার অপশন দেখান)
+                    </label>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      সক্রিয় থাকলে সাধারণ গ্রাহকরা সাইডবার/ড্রয়ার মেনুতে হেল্পার হওয়ার আবেদন অপশন দেখতে পাবেন। বন্ধ থাকলে অপ্রয়োজনীয় আবেদন ও ডাটাবেজ স্টোরেজ রোধে অপশনটি সাধারণ গ্রাহকদের থেকে লুকানো থাকবে।
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    id="showBecomeHelperToggle"
+                    checked={showBecomeHelper}
+                    onChange={(e) => setShowBecomeHelper(e.target.checked)}
+                    className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer shrink-0 mt-0.5"
+                  />
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 4. Map & Location Search Region Preference Settings */}
+          {matchesSettingsSearch('map_region') && (
+            <SettingsAccordionSection
+              id="map_region"
+              title="Map & Location Search Region Preference (ম্যাপ ও স্থান খোঁজার এরিয়া ফিল্টার)"
+              subtitle="ম্যাপের স্থান এবং সার্চ এরিয়া ফিল্টার পছন্দ (বাংলাদেশ, গ্লোবাল বা নির্দিষ্ট কান্ট্রি কোড)"
+              icon={MapPin}
+              colorScheme="emerald"
+              isOpen={isSettingsSectionOpen('map_region')}
+              onToggle={() => toggleSettingsSection('map_region')}
+              badge={
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                  {mapLocationPref === 'BD' ? '🇧🇩 Bangladesh' : mapLocationPref === 'GLOBAL' ? '🌐 Global' : `🏳️ ${customCountryCode.toUpperCase()}`}
+                </span>
+              }
+            >
+              <p className="text-[11px] text-emerald-800 font-medium mb-3">
+                ম্যাপের স্থান এবং সার্চ এরিয়া ফিল্টার পছন্দ সেট করুন। ডিফল্টভাবে কেবল বাংলাদেশি স্থান এবং লোকেশন সার্চ ফিল্টার হবে।
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Location & Geocoding Search Preference
+                  </label>
+                  <select
+                    value={mapLocationPref}
+                    onChange={(e) => setMapLocationPref(e.target.value as any)}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600"
+                  >
+                    <option value="BD">🇧🇩 Bangladesh Only (বাংলাদেশ - শুধুমাত্র বাংলাদেশি এলাকা)</option>
+                    <option value="GLOBAL">🌐 Global / Worldwide (গ্লোবাল - বিশ্বব্যাপী সকল স্থান)</option>
+                    <option value="CUSTOM">🏳️ Custom Country Code (অন্যান্য দেশ - নির্দিষ্ট কান্ট্রি কোড)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    বাংলাদেশ ফিল্টার নির্বাচন থাকলে স্থান অনুসন্ধান (Search) শুধুমাত্র বাংলাদেশি ফলাফল রিটার্ন করবে।
+                  </p>
+                </div>
+
+                {mapLocationPref === 'CUSTOM' && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                      Custom Country Code (2-letter ISO e.g. us, in, uk)
+                    </label>
+                    <input
+                      type="text"
+                      value={customCountryCode}
+                      onChange={(e) => setCustomCountryCode(e.target.value)}
+                      placeholder="e.g., in, us, uk, sa"
+                      className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-emerald-600 uppercase"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      নির্দিষ্ট দেশের ২-অক্ষরের ISO কান্ট্রি কোড লিখুন।
+                    </p>
+                  </div>
+                )}
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 5. Specific Serving Areas & Geofencing Link */}
+          {matchesSettingsSearch('serving_areas') && (
+            <SettingsAccordionSection
+              id="serving_areas"
+              title="Specific Serving Areas & Geofencing (সার্ভিস এলাকা ও হেলপার বাউন্ডারি)"
+              subtitle="নির্দিষ্ট সার্ভিস এলাকা, ম্যাপে আয়তক্ষেত্র/পলিগন সাব-এরিয়া তৈরি এবং প্রতি এলাকার হেলপার নির্ধারণ"
+              icon={Globe}
+              colorScheme="emerald"
+              isOpen={isSettingsSectionOpen('serving_areas')}
+              onToggle={() => toggleSettingsSection('serving_areas')}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200">
+                <div className="space-y-1">
+                  <p className="text-xs text-emerald-900 font-bold">
+                    সার্ভিস এলাকা ও হেলপার বাউন্ডারি সরাসরি নিয়ন্ত্রণ করুন
+                  </p>
+                  <p className="text-[11px] text-emerald-800 font-medium">
+                    নির্দিষ্ট সার্ভিস এলাকা, ম্যাপে আয়তক্ষেত্র/পলিগন সাব-এরিয়া তৈরি এবং প্রতি এলাকার জন্য হেলপার নির্ধারণ এখন <strong>Helpers</strong> ট্যাব থেকে সরাসরি নিয়ন্ত্রণ করা যায়।
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('HELPERS');
+                    setHelperSubView('AREAS');
+                  }}
+                  className="py-2.5 px-4 bg-emerald-800 hover:bg-emerald-900 text-white rounded-2xl text-xs font-extrabold shadow-sm transition-all flex items-center space-x-1.5 shrink-0 self-start sm:self-auto cursor-pointer active:scale-95"
+                >
+                  <span>Manage in Helpers Tab 👉</span>
+                </button>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 6. Manual Auth Controls */}
+          {matchesSettingsSearch('manual_auth') && (
+            <SettingsAccordionSection
+              id="manual_auth"
+              title="Manual Authentication Controls (ম্যানুয়াল লগইন ও রেজিস্ট্রেশন নিয়ন্ত্রণ)"
+              subtitle="Email & Password দিয়ে লগইন ও সাইন-আপ অপশন চালু বা বন্ধ রাখা"
+              icon={User}
+              colorScheme="amber"
+              isOpen={isSettingsSectionOpen('manual_auth')}
+              onToggle={() => toggleSettingsSection('manual_auth')}
+              badge={
+                manualAuthEnabled ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    Enabled
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    Disabled
+                  </span>
+                )
+              }
+            >
+              <p className="text-[11px] text-amber-900 font-medium mb-3">
+                এখানে ম্যানুয়াল (Email & Password) লগইন ও সাইন-আপ অপশন চালু বা বন্ধ রাখতে পারবেন। বন্ধ রাখলে ব্যবহারকারীর সাইন-ইন মডালে শুধুমাত্র Google Sign-In দৃশ্যমান থাকবে।
+              </p>
+
+              <div className="flex items-center space-x-3 p-3.5 bg-amber-50/50 rounded-2xl border border-amber-200 shadow-xs">
+                <input
+                  type="checkbox"
+                  id="manualAuthEnabled"
+                  checked={manualAuthEnabled}
+                  onChange={(e) => setManualAuthEnabled(e.target.checked)}
+                  className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300 cursor-pointer"
+                />
+                <label htmlFor="manualAuthEnabled" className="text-xs font-bold text-gray-900 cursor-pointer select-none">
+                  ম্যানুয়াল ইমেইল ও পাসওয়ার্ড দিয়ে লগইন ও রেজিস্ট্রেশন চালু রাখুন (Enable Manual Email/Password Authentication)
+                </label>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 7. PWA App Installation Prompt Settings */}
+          {matchesSettingsSearch('pwa_prompt') && (
+            <SettingsAccordionSection
+              id="pwa_prompt"
+              title="PWA App Installation Prompt Controls (ইনস্টল পপআপ নিয়ন্ত্রণ)"
+              subtitle="অর্ডার সফল হলে গ্রাহককে PWA অ্যাপ ইনস্টল পপআপ দেখানোর সিদ্ধান্ত ও টেক্সট কাস্টমাইজ"
+              icon={Download}
+              colorScheme="indigo"
+              isOpen={isSettingsSectionOpen('pwa_prompt')}
+              onToggle={() => toggleSettingsSection('pwa_prompt')}
+              badge={
+                pwaInstallPromptEnabled ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                    Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    Off
+                  </span>
+                )
+              }
+            >
+              <div className="flex items-center space-x-3 p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                <input
+                  type="checkbox"
+                  id="pwaInstallPromptEnabled"
+                  checked={pwaInstallPromptEnabled}
+                  onChange={(e) => setPwaInstallPromptEnabled(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300 cursor-pointer"
+                />
+                <label htmlFor="pwaInstallPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
+                  অর্ডার সফল হলে গ্রাহককে PWA অ্যাপ ইনস্টল পপআপ (Popup) দেখান (Enable Install Prompt)
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    পপআপ টাইটেল (Popup Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={pwaInstallPromptTitle}
+                    onChange={(e) => setPwaInstallPromptTitle(e.target.value)}
+                    placeholder="Install Jamanot App"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    ইনস্টল বাটন টেক্সট (Button Text)
+                  </label>
+                  <input
+                    type="text"
+                    value={pwaInstallButtonText}
+                    onChange={(e) => setPwaInstallButtonText(e.target.value)}
+                    placeholder="Install Jamanot"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-indigo-600"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  পিকআপ ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Pickup Input Placeholder):
+                  পপআপ বিবরণ / সুবিধা (Popup Description)
+                </label>
+                <textarea
+                  value={pwaInstallPromptDescription}
+                  onChange={(e) => setPwaInstallPromptDescription(e.target.value)}
+                  placeholder="আরও দ্রুত আপডেট, ভালো সার্ভিস এবং লাইভ ট্র্যাকিংয়ের জন্য আপনার ফোনে জামানত অ্যাপ ইনস্টল করুন!"
+                  rows={2}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-indigo-600 leading-relaxed font-sans"
+                />
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 8. In-App Browser Popup & Alert Admin Controls */}
+          {matchesSettingsSearch('in_app_browser') && (
+            <SettingsAccordionSection
+              id="in_app_browser"
+              title="In-App Browser (Facebook / Messenger) Alert Settings (ইন-অ্যাপ ব্রাউজার পপআপ ও সতর্কতা)"
+              subtitle="ফেসবুক বা মেসেঞ্জারের ভেতর সাইট ভিজিট করলে Chrome/Safari-তে খোলার পপআপ বার্তা"
+              icon={Compass}
+              colorScheme="amber"
+              isOpen={isSettingsSectionOpen('in_app_browser')}
+              onToggle={() => toggleSettingsSection('in_app_browser')}
+              badge={
+                inAppBrowserPromptEnabled ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                    Enabled
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    Disabled
+                  </span>
+                )
+              }
+            >
+              <div className="flex items-center space-x-3 p-3 bg-amber-50/50 rounded-2xl border border-amber-200">
+                <input
+                  type="checkbox"
+                  id="inAppBrowserPromptEnabled"
+                  checked={inAppBrowserPromptEnabled}
+                  onChange={(e) => setInAppBrowserPromptEnabled(e.target.checked)}
+                  className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 border-gray-300 cursor-pointer"
+                />
+                <label htmlFor="inAppBrowserPromptEnabled" className="text-xs font-bold text-gray-900 cursor-pointer">
+                  ফেসবুক/মেসেঞ্জারে ওয়েবসাইট দেখলে পপআপ অ্যালার্ট দেখান (Enable In-App Browser Popup Alert)
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    পপআপ টাইটেল (Popup Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={inAppBrowserPromptTitle}
+                    onChange={(e) => setInAppBrowserPromptTitle(e.target.value)}
+                    placeholder="ব্রাউজারে ওপেন করুন"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    সাব-টাইটেল (Subtitle / Sub-text)
+                  </label>
+                  <input
+                    type="text"
+                    value={inAppBrowserPromptSubtitle}
+                    onChange={(e) => setInAppBrowserPromptSubtitle(e.target.value)}
+                    placeholder="Open in Chrome or Safari"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  সতর্কবার্তা ও বিবরণ (Alert Message & Details)
+                </label>
+                <textarea
+                  value={inAppBrowserPromptMessage}
+                  onChange={(e) => setInAppBrowserPromptMessage(e.target.value)}
+                  placeholder="লগইন ও নির্ভুল সেবার জন্য ওয়েবসাইটটি Chrome বা Safari ব্রাউজারে ওপেন করুন।"
+                  rows={3}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+                />
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 9. Permission Asking Modal Content Admin Controls */}
+          {matchesSettingsSearch('permission_modals') && (
+            <SettingsAccordionSection
+              id="permission_modals"
+              title="Permission Alert Modal Content Controls (পারমিশন মোডাল টেক্সট নিয়ন্ত্রণ)"
+              subtitle="লোকেশন এবং নোটিফিকেশন পারমিশন চাইবার সময় গ্রাহককে দেখানো কাস্টম টাইটেল এবং বিবরণ"
+              icon={ShieldCheck}
+              colorScheme="amber"
+              isOpen={isSettingsSectionOpen('permission_modals')}
+              onToggle={() => toggleSettingsSection('permission_modals')}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    লোকেশন পারমিশন মোডাল টাইটেল (Location Permission Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={locPermModalTitle}
+                    onChange={(e) => setLocPermModalTitle(e.target.value)}
+                    placeholder="লোকেশন পারমিশন আবশ্যক (Location Required)"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    নোটিফিকেশন পারমিশন মোডাল টাইটেল (Notification Permission Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={notifPermModalTitle}
+                    onChange={(e) => setNotifPermModalTitle(e.target.value)}
+                    placeholder="নোটিফিকেশন পারমিশন আবশ্যক (Notification Required)"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-amber-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    লোকেশন পারমিশন মোডাল বিবরণ (Location Permission Message)
+                  </label>
+                  <textarea
+                    value={locPermModalBody}
+                    onChange={(e) => setLocPermModalBody(e.target.value)}
+                    placeholder="কম্পিউটার হেলপার মোড চালু করতে জিপিএস পারমিশন আবশ্যক..."
+                    rows={3}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    নোটিফিকেশন পারমিশন মোডাল বিবরণ (Notification Permission Message)
+                  </label>
+                  <textarea
+                    value={notifPermModalBody}
+                    onChange={(e) => setNotifPermModalBody(e.target.value)}
+                    placeholder="জরুরি আপডেট পেতে ব্রাউজারে নোটিফিকেশন পারমিশন আবশ্যক..."
+                    rows={3}
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 leading-relaxed font-sans"
+                  />
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 10. Blocked User Notice & Custom Modal Admin Configuration */}
+          {matchesSettingsSearch('blocked_user') && (
+            <SettingsAccordionSection
+              id="blocked_user"
+              title="Blocked User Modal & Notice Settings (ব্লকড ব্যবহারকারী নোটিশ ও কাস্টম পপআপ)"
+              subtitle="যেকোনো গ্রাহক, হেলপার বা স্টোর ব্লক করা হলে তাদের সামনে প্রদর্শিত নোটিশ ও যোগাযোগ বাটন"
+              icon={Ban}
+              colorScheme="rose"
+              isOpen={isSettingsSectionOpen('blocked_user')}
+              onToggle={() => toggleSettingsSection('blocked_user')}
+              headerExtra={
+                <button
+                  type="button"
+                  onClick={() => setShowBlockedUserModalPreview(true)}
+                  className="py-1.5 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-xs shadow-xs transition-all flex items-center space-x-1.5 shrink-0 cursor-pointer active:scale-95"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Live Preview</span>
+                </button>
+              }
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                    পপআপ টাইটেল (Modal Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={blockedUserModalTitle}
+                    onChange={(e) => setBlockedUserModalTitle(e.target.value)}
+                    placeholder="অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                    সাব-টাইটেল (Subtitle)
+                  </label>
+                  <input
+                    type="text"
+                    value={blockedUserModalSubtitle}
+                    onChange={(e) => setBlockedUserModalSubtitle(e.target.value)}
+                    placeholder="আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                  বিস্তারিত বার্তা / মেসেজ (Notice Message)
+                </label>
+                <textarea
+                  value={blockedUserModalMessage}
+                  onChange={(e) => setBlockedUserModalMessage(e.target.value)}
+                  rows={3}
+                  placeholder="নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে..."
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-rose-600 leading-relaxed font-sans"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                    সাপোর্ট বাটন টেক্সট (Button Label)
+                  </label>
+                  <input
+                    type="text"
+                    value={blockedUserModalButtonText}
+                    onChange={(e) => setBlockedUserModalButtonText(e.target.value)}
+                    placeholder="সাপোর্টে যোগাযোগ করুন (Contact Support)"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-800 block mb-1.5">
+                    সাপোর্ট লিংক বা হোয়াটসঅ্যাপ নম্বর (Support Link / WhatsApp)
+                  </label>
+                  <input
+                    type="text"
+                    value={blockedUserModalContactUrl}
+                    onChange={(e) => setBlockedUserModalContactUrl(e.target.value)}
+                    placeholder="https://wa.me/88018XXXXXXXX"
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-semibold outline-none focus:border-rose-600"
+                  />
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 11. Order Timing Controls Block */}
+          {matchesSettingsSearch('order_timing') && (
+            <SettingsAccordionSection
+              id="order_timing"
+              title="Order Timing & Operating Hours (অর্ডার করার সময়সীমা ও শিডিউল)"
+              subtitle="গ্রাহকদের অর্ডার করার সময়সীমা ও অর্ডার বন্ধ থাকাকালীন নোটিশ বার্তা"
+              icon={Clock}
+              colorScheme="slate"
+              isOpen={isSettingsSectionOpen('order_timing')}
+              onToggle={() => toggleSettingsSection('order_timing')}
+              badge={
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-800">
+                  {pricing.orderTimingType === 'always_off'
+                    ? 'Always Closed'
+                    : pricing.orderTimingType === 'custom_range'
+                    ? `${pricing.orderTimingStart || '08:00'} - ${pricing.orderTimingEnd || '22:00'}`
+                    : 'Always Open'}
+                </span>
+              }
+            >
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Order Accept Type
+                  </label>
+                  <select
+                    value={pricing.orderTimingType || 'always_on'}
+                    onChange={(e) =>
+                      setPricing({
+                        ...pricing,
+                        orderTimingType: e.target.value as any,
+                      })
+                    }
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-extrabold outline-none focus:border-purple-600"
+                  >
+                    <option value="always_on">Always Open (সরাসরি চালু)</option>
+                    <option value="always_off">Always Closed (সাময়িকভাবে বন্ধ)</option>
+                    <option value="custom_range">Custom Time Range (নির্দিষ্ট সময়সীমা)</option>
+                  </select>
+                </div>
+
+                {pricing.orderTimingType === 'custom_range' && (
+                  <>
+                    <TimePickerInput
+                      label="Open From (শুরু)"
+                      value={pricing.orderTimingStart || '08:00'}
+                      onChange={(val) => setPricing({ ...pricing, orderTimingStart: val })}
+                    />
+
+                    <TimePickerInput
+                      label="Close At (শেষ)"
+                      value={pricing.orderTimingEnd || '22:00'}
+                      onChange={(val) => setPricing({ ...pricing, orderTimingEnd: val })}
+                    />
+                  </>
+                )}
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  অর্ডার বন্ধ থাকাকালীন নোটিশ বার্তা (Closed Message shown to Customer):
                 </label>
                 <input
                   type="text"
-                  value={mapPickerPickupPlaceholder}
-                  onChange={(e) => setMapPickerPickupPlaceholder(e.target.value)}
-                  placeholder="যেমন: আরিফ স্টোর, আশুলিয়া বাজার."
+                  value={pricing.orderTimingMessage || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। পরে আবার চেষ্টা করুন।'}
+                  onChange={(e) =>
+                    setPricing({ ...pricing, orderTimingMessage: e.target.value })
+                  }
+                  placeholder="যেমন: আমাদের সার্ভিস এখন বন্ধ আছে। সকাল ৮ টা থেকে রাত ১০ টার মধ্যে অর্ডার করুন।"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 12. Service Options & Hints */}
+          {matchesSettingsSearch('service_options') && (
+            <SettingsAccordionSection
+              id="service_options"
+              title="Service Options & Dynamic Description Hints (সার্ভিস ড্রপডাউন ও প্লেসহোল্ডার)"
+              subtitle="রিকোয়েস্ট ফর্মের সার্ভিস তালিকা এবং প্রতি সার্ভিসের বিবরণ প্লেসহোল্ডার টেক্সট"
+              icon={Layers}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('service_options')}
+              onToggle={() => toggleSettingsSection('service_options')}
+            >
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  সার্ভিস ড্রপডাউন অপশন সমূহ (প্রতি লাইনে ১টি):
+                </label>
+                <textarea
+                  value={servicesText}
+                  onChange={(e) => setServicesText(e.target.value)}
+                  placeholder="প্রতিটি সার্ভিস আলাদা লাইনে লিখুন..."
+                  rows={5}
+                  className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  রিকোয়েস্ট ফর্মের সার্ভিস ড্রপডাউনে এই সার্ভিসগুলো দেখাবে।
+                </p>
+              </div>
+
+              {/* Per-service description placeholder hints — single textarea, "Key = Value" per line */}
+              <div className="pt-2">
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  সার্ভিস অনুযায়ী বিবরণ প্লেসহোল্ডার (প্রতি লাইনে: সার্ভিস নাম = প্লেসহোল্ডার টেক্সট):
+                </label>
+                <textarea
+                  value={serviceHintsText}
+                  onChange={(e) => setServiceHintsText(e.target.value)}
+                  placeholder={`উদাহরণ:\nবাজার-সদাই করে দিন = (গ্যাস, শাকসবজি, মাছ-মাংস — যা যা লাগবে লিখুন)\nখাবার এনে দিন = (কোন রেস্তোরাঁ থেকে, কোন খাবার, কত পরিমাণ)`}
+                  rows={5}
+                  className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  প্রতিটি লাইনে <strong>সার্ভিস নাম = প্লেসহোল্ডার টেক্সট</strong> ফরম্যাটে লিখুন। গ্রাহক ওই সার্ভিস সিলেক্ট করলে ডান পাশের টেক্সটটি description textarea-তে দেখাবে।
+                </p>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 13. Request Input Placeholders & Confirmation Message */}
+          {matchesSettingsSearch('request_placeholders') && (
+            <SettingsAccordionSection
+              id="request_placeholders"
+              title="Home Request Placeholders & Confirmation Message (রিকোয়েস্ট ইনপুট ও বার্তা)"
+              subtitle="হোম পেজ রিকোয়েস্ট ইনপুটের রোটেটিং প্লেসহোল্ডার এবং অর্ডার সাবমিটের পর থ্যাংক ইউ বার্তা"
+              icon={MessageSquare}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('request_placeholders')}
+              onToggle={() => toggleSettingsSection('request_placeholders')}
+            >
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  হোম পেজ রিকোয়েস্ট ইনপুট প্লেসহোল্ডার সমূহ (প্রতি লাইনে ১টি):
+                </label>
+                <textarea
+                  value={placeholdersText}
+                  onChange={(e) => setPlaceholdersText(e.target.value)}
+                  placeholder="প্রতিটি প্লেসহোল্ডার আলাদা লাইনে লিখুন..."
+                  rows={5}
+                  className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  ব্যবহারকারী রিকোয়েস্ট ইনপুট বক্সে এই প্লেসহোল্ডার লেখাগুলি পরপর পরিবর্তন (rotate) হতে দেখবে।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  অর্ডার সাবমিটের পর কনফার্মেশন বার্তা (Thank You message):
+                </label>
+                <input
+                  type="text"
+                  value={confirmationMsg}
+                  onChange={(e) => setConfirmationMsg(e.target.value)}
+                  placeholder="যেমন: আপনার অনুরোধ পেয়েছি! শীঘ্রই একজন হেলপার গ্রহণ করবে।"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-sm font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  গ্রাহক অর্ডার সফলভাবে জমা দেওয়ার পর এই বার্তাটি &ldquo;ধন্যবাদ!&rdquo; শিরোনামসহ পপআপে দেখাবে।
+                </p>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 14. Home Page Hero / Banner Slider Management */}
+          {matchesSettingsSearch('hero_slider') && (
+            <SettingsAccordionSection
+              id="hero_slider"
+              title="Hero Banner Slider Management (হোম পেজ ব্যানার স্লাইডার)"
+              subtitle="হোম পেজের শীর্ষ স্লাইডারে ব্যানার ছবি ও ঐচ্ছিক রিডাইরেক্ট লিংক পরিচালনা করুন"
+              icon={Sparkles}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('hero_slider')}
+              onToggle={() => toggleSettingsSection('hero_slider')}
+              badge={
+                <span className="text-xs bg-purple-100 text-purple-800 font-extrabold px-2.5 py-0.5 rounded-full">
+                  {adminSlides.length}টি স্লাইড
+                </span>
+              }
+            >
+              <p className="text-xs text-gray-500">
+                হোম পেজের শীর্ষ স্লাইডারে ব্যানার ছবি প্রদর্শন করুন। প্রতিটি ব্যানারে ঐচ্ছিক রিডাইরেক্ট লিংক যোগ করতে পারেন (লিংক সেট করলে ক্লিক করলে রিডাইরেক্ট হবে, খালি রাখলে কোনো অ্যাকশন হবে না)।
+              </p>
+
+              {/* List of current slides */}
+              {adminSlides.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                  {adminSlides.map((slide, idx) => (
+                    <div
+                      key={slide.id || idx}
+                      className="relative border border-gray-200 rounded-2xl p-3 bg-white flex flex-col justify-between shadow-xs hover:border-purple-300 transition-colors"
+                    >
+                      <div className="space-y-2">
+                        {slide.imageUrl && (
+                          <div className="w-full h-28 rounded-xl overflow-hidden bg-gray-100 border border-gray-100">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={slide.imageUrl}
+                              alt={slide.title || `Slide ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-gray-900">
+                              {slide.title || `ব্যানার #${idx + 1}`}
+                            </span>
+                            <span className="text-[10px] bg-purple-50 text-purple-700 font-semibold px-2 py-0.5 rounded-full">
+                              স্লাইড {idx + 1}
+                            </span>
+                          </div>
+                          {slide.link ? (
+                            <p className="text-[11px] text-purple-700 font-medium truncate flex items-center gap-1 mt-1">
+                              <ExternalLink className="w-3 h-3 shrink-0" />
+                              <span>{slide.link}</span>
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-gray-400 mt-1 italic">
+                              কোনো লিংক সংযুক্ত নেই (ক্লিকে কিছু হবে না)
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-3 pt-2 border-t border-gray-100 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSlide(idx)}
+                          className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>মুছে ফেলুন</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Form to add a new slide */}
+              <div className="p-4 bg-purple-50/20 rounded-2xl border border-dashed border-purple-200 space-y-3">
+                <h5 className="text-xs font-extrabold text-purple-900 flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-purple-600" />
+                  <span>নতুন ব্যানার স্লাইড যোগ করুন</span>
+                </h5>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      ব্যানার ইমেজ আপলোড (ফাইল সিলেক্ট করুন):
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleSlideImageFileChange(file);
+                      }}
+                      className="w-full text-xs text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-purple-100 file:text-purple-800 hover:file:bg-purple-200 cursor-pointer"
+                    />
+                    {isUploadingSlideImage && (
+                      <p className="text-[11px] text-purple-600 font-medium mt-1">ছবি প্রসেস হচ্ছে...</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      অথবা ছবির সরাসরি URL (ঐচ্ছিক):
+                    </label>
+                    <input
+                      type="url"
+                      value={newSlideImageUrl}
+                      onChange={(e) => setNewSlideImageUrl(e.target.value)}
+                      placeholder="https://example.com/banner.jpg"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                    />
+                  </div>
+                </div>
+
+                {newSlideImageUrl && (
+                  <div className="w-full max-w-xs h-24 rounded-xl overflow-hidden bg-gray-100 border border-gray-200">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={newSlideImageUrl}
+                      alt="Preview"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      ব্যানারের শিরোনাম (ঐচ্ছিক):
+                    </label>
+                    <input
+                      type="text"
+                      value={newSlideTitle}
+                      onChange={(e) => setNewSlideTitle(e.target.value)}
+                      placeholder="যেমন: বিশেষ অফার বা ছাড়"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      ক্লিক রিডাইরেক্ট লিংক (ঐচ্ছিক):
+                    </label>
+                    <input
+                      type="text"
+                      value={newSlideLink}
+                      onChange={(e) => setNewSlideLink(e.target.value)}
+                      placeholder="যেমন: https://wa.me/... অথবা খালি রাখুন"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-0.5">
+                      খালি রাখলে গ্রাহক ব্যানারে ক্লিক করলে কোনো রিডাইরেক্ট হবে না।
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-1 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleAddSlide}
+                    disabled={!newSlideImageUrl.trim() || isUploadingSlideImage}
+                    className="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>স্লাইড যোগ করুন</span>
+                  </button>
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 15. Search Not Found Notice Message */}
+          {matchesSettingsSearch('search_not_found') && (
+            <SettingsAccordionSection
+              id="search_not_found"
+              title="Search Not Found Notice Message (সার্চ রেজাল্ট না পাওয়া গেলে বার্তা)"
+              subtitle="গ্রাহক কোনো পণ্য বা সেবা সার্চে খুঁজে না পেলে কাস্টম রিকোয়েস্ট বাটনের সাথে দেখানো বার্তা"
+              icon={Search}
+              colorScheme="emerald"
+              isOpen={isSettingsSectionOpen('search_not_found')}
+              onToggle={() => toggleSettingsSection('search_not_found')}
+            >
+              <textarea
+                value={searchNotFoundMsg}
+                onChange={(e) => setSearchNotFoundMsg(e.target.value)}
+                placeholder="যেমন: দুঃখিত, আপনার খোঁজা পণ্য বা সেবাটি খুঁজে পাওয়া যায়নি। তবে কোনো সমস্যা নেই! কাস্টম রিকোয়েস্ট তৈরি করুন, আমরা ব্যবস্থা করে দেবো।"
+                rows={3}
+                className="w-full p-3.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 leading-relaxed font-sans"
+              />
+              <p className="text-[11px] text-gray-500">
+                গ্রাহক হোম পেজের সার্চ বক্সে কোনো পণ্য বা সেবা খুঁজে না পেলে এই বার্তাটি দেখাবে এবং নিচে কাস্টম রিকোয়েস্ট বাটন থাকবে। খালি রাখলে ডিফল্ট বার্তা প্রদর্শিত হবে।
+              </p>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 16. Store Types & Service Connection Mapping */}
+          {matchesSettingsSearch('store_types') && (
+            <SettingsAccordionSection
+              id="store_types"
+              title="Store Types & Service Connection Mapping (দোকানের ধরন ও সার্ভিসের সাথে সংযোগ)"
+              subtitle="দোকানের ক্যাটাগরি তালিকা এবং কোন সার্ভিসের সাথে কোন ধরনের দোকান প্রদর্শিত হবে তার ম্যাপিং"
+              icon={Store}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('store_types')}
+              onToggle={() => toggleSettingsSection('store_types')}
+            >
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  দোকানের ধরন সমূহের তালিকা (Store Types dropdown - প্রতি লাইনে ১টি):
+                </label>
+                <textarea
+                  value={storeTypesText}
+                  onChange={(e) => setStoreTypesText(e.target.value)}
+                  placeholder="Grocery & Supermarket&#10;Pharmacy & Medicine&#10;Restaurant & Fast Food"
+                  rows={5}
+                  className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  হেলপার যখন নতুন দোকান যোগ করবে তখন ড্রপডাউনে এই অপশনগুলো আসবে।
+                </p>
+              </div>
+
+              {/* Connect Store Types with Service Types */}
+              <div className="pt-3 border-t border-purple-100">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3">
+                  <div>
+                    <h4 className="font-extrabold text-sm text-gray-900 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-purple-700" />
+                      <span>সার্ভিসের সাথে দোকানের ধরন সংযোগ (Connect Store Types to Services)</span>
+                    </h4>
+                    <p className="text-[11px] text-gray-600 mt-0.5 leading-relaxed">
+                      গ্রাহক যখন হোম পেজে বা স্টোর গ্রিডে একটি সার্ভিস সিলেক্ট করবেন, তখন কোন কোন ধরনের দোকান প্রদর্শিত হবে তা নির্বাচন করুন।
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
+                      const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
+                      const newMap: Record<string, string[]> = {};
+                      svcs.forEach((svc) => {
+                        newMap[svc] = getStoreTypesForService(svc);
+                      });
+                      setServiceStoreTypeMap(newMap);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-bold transition-all shrink-0 active:scale-95 cursor-pointer self-start sm:self-auto"
+                    title="স্বয়ংক্রিয়ভাবে বুদ্ধিমত্তা অনুযায়ী ডিফল্ট সংযোগ সেট করুন"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                    <span>ডিফল্ট সংযোগ রিস্টোর করুন</span>
+                  </button>
+                </div>
+
+                {(() => {
+                  const servicesList = servicesText.split('\n').map((s) => s.trim()).filter(Boolean);
+                  const svcs = servicesList.length > 0 ? servicesList : DEFAULT_SERVICES;
+                  const allStoreTypes = parseStoreTypes(storeTypesText);
+
+                  if (svcs.length === 0) {
+                    return (
+                      <p className="text-xs text-gray-400 italic py-2">
+                        কোনো সার্ভিস পাওয়া যায়নি। উপরে সার্ভিস ড্রপডাউন অপশনে সার্ভিস যুক্ত করুন।
+                      </p>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-3">
+                      {svcs.map((svcName) => {
+                        const selectedTypes = serviceStoreTypeMap[svcName] || [];
+                        const isAllSelected = allStoreTypes.length > 0 && selectedTypes.length === allStoreTypes.length;
+
+                        return (
+                          <div
+                            key={svcName}
+                            className="p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 hover:border-purple-300 transition-all space-y-2.5"
+                          >
+                            {/* Service Header Row */}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-xs text-gray-900">
+                                  {svcName}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    selectedTypes.length > 0
+                                      ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  }`}
+                                >
+                                  {selectedTypes.length > 0
+                                    ? `${selectedTypes.length}টি ধরন সংযুক্ত`
+                                    : 'ডিফল্ট ম্যাচিং'}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setServiceStoreTypeMap((prev) => ({
+                                      ...prev,
+                                      [svcName]: isAllSelected ? [] : [...allStoreTypes],
+                                    }));
+                                  }}
+                                  className="text-[11px] font-semibold text-purple-700 hover:text-purple-900 px-2 py-0.5 rounded-lg hover:bg-purple-100/50 transition-colors cursor-pointer"
+                                >
+                                  {isAllSelected ? 'সব বাতিল' : 'সব নির্বাচন'}
+                                </button>
+                                {selectedTypes.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setServiceStoreTypeMap((prev) => {
+                                        const next = { ...prev };
+                                        delete next[svcName];
+                                        return next;
+                                      });
+                                    }}
+                                    className="text-[11px] font-semibold text-gray-500 hover:text-rose-600 px-1.5 py-0.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                                  >
+                                    রিসেট
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Store Types Badges / Chips */}
+                            <div className="flex flex-wrap gap-1.5 pt-1">
+                              {allStoreTypes.map((type) => {
+                                const isSelected = selectedTypes.includes(type);
+                                return (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => {
+                                      setServiceStoreTypeMap((prev) => {
+                                        const curr = prev[svcName] || [];
+                                        const exists = curr.includes(type);
+                                        const nextList = exists
+                                          ? curr.filter((t) => t !== type)
+                                          : [...curr, type];
+                                        return {
+                                          ...prev,
+                                          [svcName]: nextList,
+                                        };
+                                      });
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer font-medium active:scale-95 ${
+                                      isSelected
+                                        ? 'bg-purple-600 text-white shadow-xs font-semibold'
+                                        : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-200'
+                                    }`}
+                                  >
+                                    {isSelected ? (
+                                      <Check className="w-3 h-3 text-white shrink-0" />
+                                    ) : (
+                                      <Plus className="w-3 h-3 text-gray-400 shrink-0" />
+                                    )}
+                                    <span>{type}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {selectedTypes.length === 0 && (
+                              <p className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200/50 inline-block font-medium">
+                                💡 কোনো ধরন নির্বাচন না থাকলে নামের মিল অনুযায়ী স্বয়ংক্রিয় ডিফল্ট ফিল্টার কার্যকর থাকবে।
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 17. Store Application Form Placeholders */}
+          {matchesSettingsSearch('store_application_placeholders') && (
+            <SettingsAccordionSection
+              id="store_application_placeholders"
+              title="Store Application Form Placeholders (স্টোর আবেদন ফর্মের প্লেসহোল্ডার)"
+              subtitle="স্টোর আবেদন ফর্মের প্রতিটি ইনপুটে কাস্টম প্লেসহোল্ডার (খালি রাখলে ডিফল্ট ব্যবহার হবে)"
+              icon={Store}
+              colorScheme="orange"
+              isOpen={isSettingsSectionOpen('store_application_placeholders')}
+              onToggle={() => toggleSettingsSection('store_application_placeholders')}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">দোকানের নাম (Store Name):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.storeName}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, storeName: e.target.value })}
+                    placeholder="যেমন: আলম জেনারেল স্টোর"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">পণ্য/সেবার বিবরণ (Description):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.storeDescription}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, storeDescription: e.target.value })}
+                    placeholder="যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান..."
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের নাম (Owner Name):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.ownerName}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerName: e.target.value })}
+                    placeholder="মালিকের পুরো নাম"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">মালিকের ফোন (Owner Phone):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.ownerPhone}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, ownerPhone: e.target.value })}
+                    placeholder="মালিকের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের নাম (Manager Name):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.managerName}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, managerName: e.target.value })}
+                    placeholder="ম্যানেজারের পুরো নাম"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">ম্যানেজারের ফোন (Manager Phone):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.managerPhone}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, managerPhone: e.target.value })}
+                    placeholder="ম্যানেজারের হোয়াটসঅ্যাপ নম্বর (01XXXXXXXXX)"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">কমিশন শতাংশ (Commission %):</label>
+                  <input
+                    type="text"
+                    value={storeFormPh.commissionPercent}
+                    onChange={(e) => setStoreFormPh({ ...storeFormPh, commissionPercent: e.target.value })}
+                    placeholder="যেমন: ৫"
+                    className="w-full p-3 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 18. Map Picker Guide Overlay Settings */}
+          {matchesSettingsSearch('map_picker_guide') && (
+            <SettingsAccordionSection
+              id="map_picker_guide"
+              title="Map Picker Guide Overlay & Geocoding Settings (ম্যাপ গাইড ওভারলে ও প্লেসহোল্ডার)"
+              subtitle="পিকআপ ও ডেলিভারি ম্যাপ গাইড টেক্সট, প্রদর্শনের সংখ্যা এবং কাস্টম ইনপুট প্লেসহোল্ডার"
+              icon={MapPin}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('map_picker_guide')}
+              onToggle={() => toggleSettingsSection('map_picker_guide')}
+            >
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  পিকআপ (যেখান থেকে আনতে হবে) modal-এর গাইড টেক্সট:
+                </label>
+                <textarea
+                  value={mapPickerPickupGuideText}
+                  onChange={(e) => setMapPickerPickupGuideText(e.target.value)}
+                  placeholder="যে দোকান বা স্থান থেকে আনতে হবে..."
+                  rows={2}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  "কোথা থেকে আনতে হবে" map modal-এ দেখানো হবে।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  ডেলিভারি স্থান modal-এর গাইড টেক্সট:
+                </label>
+                <textarea
+                  value={mapPickerDeliveryGuideText}
+                  onChange={(e) => setMapPickerDeliveryGuideText(e.target.value)}
+                  placeholder="আপনার বাসা বা ডেলিভারি পাওয়ার স্থানে পিন সরিয়ে নিন..."
+                  rows={2}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  "ডেলিভারি ঠিকানা" map modal-এ দেখানো হবে।
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  সাধারণ গাইড টেক্সট (fallback — উপরের দুটি খালি থাকলে দেখাবে):
+                </label>
+                <textarea
+                  value={mapPickerGuideText}
+                  onChange={(e) => setMapPickerGuideText(e.target.value)}
+                  placeholder="যে location select করতে চান, সেখান পিন টি নিয়ে বসান..."
+                  rows={2}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  উপরের দুটি খালি রাখলে এই টেক্সটটি উভয় modal-এ দেখানো হবে।
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    OK বাটনের লেবেল:
+                  </label>
+                  <input
+                    type="text"
+                    value={mapPickerGuideOkText}
+                    onChange={(e) => setMapPickerGuideOkText(e.target.value)}
+                    placeholder="ঠিক আছে"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    কতবার দেখাবে (প্রতি user):
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={mapPickerGuideShowCount}
+                    onChange={(e) => setMapPickerGuideShowCount(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">Default: 5 বার</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-purple-100/60">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    পিকআপ ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Pickup Input Placeholder):
+                  </label>
+                  <input
+                    type="text"
+                    value={mapPickerPickupPlaceholder}
+                    onChange={(e) => setMapPickerPickupPlaceholder(e.target.value)}
+                    placeholder="যেমন: আরিফ স্টোর, আশুলিয়া বাজার."
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    ডেলিভারি ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Delivery Input Placeholder):
+                  </label>
+                  <input
+                    type="text"
+                    value={mapPickerDeliveryPlaceholder}
+                    onChange={(e) => setMapPickerDeliveryPlaceholder(e.target.value)}
+                    placeholder="যেমন: ৪এ, রহমান ভিলা, মডেল টাউন."
+                    className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  ঠিকানা খালি থাকলে সতর্কবার্তা (Blank Address Floating Error Message):
+                </label>
+                <input
+                  type="text"
+                  value={mapPickerAddressRequiredMessage}
+                  onChange={(e) => setMapPickerAddressRequiredMessage(e.target.value)}
+                  placeholder="যেমন: অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।"
                   className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
                 />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  গ্রাহক ম্যাপে ঠিকানা ম্যানুয়ালি না লিখে কনফার্ম বাটনে ক্লিক করলে লাল বর্ডারসহ এই ফ্লোটিং বার্তাটি দেখাবে।
+                </p>
               </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  ডেলিভারি ইনপুট বাক্সের কাস্টম প্লেসহোল্ডার (Delivery Input Placeholder):
+                  যে service-এর pickup location সংরক্ষণ হবে না (প্রতি লাইনে ১টি service নাম):
+                </label>
+                <textarea
+                  value={noSavePickupServicesText}
+                  onChange={(e) => setNoSavePickupServicesText(e.target.value)}
+                  placeholder="মিক্স কিছু কাজ করে দিন&#10;না, অন্য একটা কাজ করে দিন&#10;আমার একটা জিনিস দিয়ে আসুন"
+                  rows={4}
+                  className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  এই service-গুলো select করলে pickup location পরবর্তীতে আর auto-fill হবে না।
+                </p>
+              </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* 19. Helper Center Settings */}
+          {matchesSettingsSearch('helper_center') && (
+            <SettingsAccordionSection
+              id="helper_center"
+              title="Helper Center Contact Settings (হেল্প সেন্টার ও যোগাযোগের তথ্য)"
+              subtitle="গ্রাহকদের জন্য হেল্প সেন্টার পেজ সচল রাখা, অফিস ঠিকানা, ফোন, ইমেইল ও সোশ্যাল লিংক"
+              icon={Phone}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('helper_center')}
+              onToggle={() => toggleSettingsSection('helper_center')}
+              badge={
+                helperCenterEnabled ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                    Enabled
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                    Disabled
+                  </span>
+                )
+              }
+            >
+              <div className="flex items-center space-x-3 p-3 bg-purple-50/40 rounded-2xl border border-purple-100">
+                <input
+                  type="checkbox"
+                  id="helperCenterEnabled"
+                  checked={helperCenterEnabled}
+                  onChange={(e) => setHelperCenterEnabled(e.target.checked)}
+                  className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
+                />
+                <label htmlFor="helperCenterEnabled" className="text-xs font-bold text-gray-700 cursor-pointer">
+                  Enable Helper Center Page (গ্রাহকদের জন্য পেজটি সচল রাখুন)
+                </label>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Office Address (অফিস ঠিকানা):
+                </label>
+                <textarea
+                  value={helperCenterOfficeAddress}
+                  onChange={(e) => setHelperCenterOfficeAddress(e.target.value)}
+                  placeholder="যেমন: লেভেল ৪, রহমান টাওয়ার, আশুলিয়া বাজার, ঢাকা..."
+                  rows={2}
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Contact Number 1 (মোবাইল ১ - হোয়াটসঅ্যাপ সহ):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterPhone1}
+                    onChange={(e) => setHelperCenterPhone1(e.target.value)}
+                    placeholder="01XXXXXXXXX"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Contact Number 2 (মোবাইল ২):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterPhone2}
+                    onChange={(e) => setHelperCenterPhone2(e.target.value)}
+                    placeholder="01XXXXXXXXX"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Official Email Address (ইমেইল):
+                  </label>
+                  <input
+                    type="email"
+                    value={helperCenterEmail}
+                    onChange={(e) => setHelperCenterEmail(e.target.value)}
+                    placeholder="support@jamanot.com"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Map View URL (ম্যাপ বা লোকেশন লিংক):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterMapEmbedUrl}
+                    onChange={(e) => setHelperCenterMapEmbedUrl(e.target.value)}
+                    placeholder="https://maps.google.com/..."
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Facebook Page Link (ফেসবুক লিংক):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterFacebook}
+                    onChange={(e) => setHelperCenterFacebook(e.target.value)}
+                    placeholder="https://facebook.com/jamanot..."
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    LinkedIn Page Link (লিংকডইন):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterLinkedin}
+                    onChange={(e) => setHelperCenterLinkedin(e.target.value)}
+                    placeholder="https://linkedin.com/company/jamanot..."
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                    Instagram Link (ইনস্টাগ্রাম):
+                  </label>
+                  <input
+                    type="text"
+                    value={helperCenterInstagram}
+                    onChange={(e) => setHelperCenterInstagram(e.target.value)}
+                    placeholder="https://instagram.com/jamanot..."
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">
+                  Help Center Description Note (বিশেষ কোনো নির্দেশনা):
                 </label>
                 <input
                   type="text"
-                  value={mapPickerDeliveryPlaceholder}
-                  onChange={(e) => setMapPickerDeliveryPlaceholder(e.target.value)}
-                  placeholder="যেমন: ৪এ, রহমান ভিলা, মডেল টাউন."
-                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
+                  value={helperCenterNote}
+                  onChange={(e) => setHelperCenterNote(e.target.value)}
+                  placeholder="যেমন: যেকোনো প্রয়োজনে আমাদের অফিসে সরাসরি যোগাযোগ করতে পারেন।"
+                  className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
                 />
               </div>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                ঠিকানা খালি থাকলে সতর্কবার্তা (Blank Address Floating Error Message):
-              </label>
-              <input
-                type="text"
-                value={mapPickerAddressRequiredMessage}
-                onChange={(e) => setMapPickerAddressRequiredMessage(e.target.value)}
-                placeholder="যেমন: অনুগ্রহ করে নিচের বাক্সে বিস্তারিত ঠিকানা ম্যানুয়ালি লিখুন। এটি একটি বাধ্যতামূলক ফিল্ড।"
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-              />
-              <p className="text-[11px] text-gray-500 mt-1">
-                গ্রাহক ম্যাপে ঠিকানা ম্যানুয়ালি না লিখে কনফার্ম বাটনে ক্লিক করলে লাল বর্ডারসহ এই ফ্লোটিং বার্তাটি দেখাবে।
-              </p>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                যে service-এর pickup location সংরক্ষণ হবে না (প্রতি লাইনে ১টি service নাম):
-              </label>
-              <textarea
-                value={noSavePickupServicesText}
-                onChange={(e) => setNoSavePickupServicesText(e.target.value)}
-                placeholder="মিক্স কিছু কাজ করে দিন&#10;না, অন্য একটা কাজ করে দিন&#10;আমার একটা জিনিস দিয়ে আসুন"
-                rows={5}
-                className="w-full p-4 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed font-sans"
-              />
-              <p className="text-[11px] text-gray-500 mt-1">
-                এই service-গুলো select করলে pickup location পরবর্তীতে আর auto-fill হবে না।
-              </p>
-            </div>
-          </div>
+            </SettingsAccordionSection>
+          )}
 
-          {/* ── Helper Center Settings ── */}
-          <div className="border border-purple-105 rounded-2xl p-4 bg-purple-50/20 space-y-4">
-            <h4 className="font-extrabold text-sm text-purple-900 flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-purple-700"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" /></svg>
-              Helper Center Contact Settings (হেল্প সেন্টার ও যোগাযোগের তথ্য)
-            </h4>
-
-            <div className="flex items-center space-x-3">
-              <input
-                type="checkbox"
-                id="helperCenterEnabled"
-                checked={helperCenterEnabled}
-                onChange={(e) => setHelperCenterEnabled(e.target.checked)}
-                className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
-              />
-              <label htmlFor="helperCenterEnabled" className="text-xs font-bold text-gray-700 cursor-pointer">
-                Enable Helper Center Page (গ্রাহকদের জন্য পেজটি সচল রাখুন)
-              </label>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                Office Address (অফিস ঠিকানা):
-              </label>
-              <textarea
-                value={helperCenterOfficeAddress}
-                onChange={(e) => setHelperCenterOfficeAddress(e.target.value)}
-                placeholder="যেমন: লেভেল ৪, রহমান টাওয়ার, আশুলিয়া বাজার, ঢাকা..."
-                rows={2}
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 leading-relaxed"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Contact Number 1 (মোবাইল ১ - হোয়াটসঅ্যাপ সহ):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterPhone1}
-                  onChange={(e) => setHelperCenterPhone1(e.target.value)}
-                  placeholder="01XXXXXXXXX"
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Contact Number 2 (মোবাইল ২):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterPhone2}
-                  onChange={(e) => setHelperCenterPhone2(e.target.value)}
-                  placeholder="01XXXXXXXXX"
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Official Email Address (ইমেইল):
-                </label>
-                <input
-                  type="email"
-                  value={helperCenterEmail}
-                  onChange={(e) => setHelperCenterEmail(e.target.value)}
-                  placeholder="support@jamanot.com"
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Map View URL (ম্যাপ বা লোকেশন লিংক):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterMapEmbedUrl}
-                  onChange={(e) => setHelperCenterMapEmbedUrl(e.target.value)}
-                  placeholder="https://maps.google.com/..."
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Facebook Page Link (ফেসবুক লিংক):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterFacebook}
-                  onChange={(e) => setHelperCenterFacebook(e.target.value)}
-                  placeholder="https://facebook.com/jamanot..."
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  LinkedIn Page Link (লিংকডইন):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterLinkedin}
-                  onChange={(e) => setHelperCenterLinkedin(e.target.value)}
-                  placeholder="https://linkedin.com/company/jamanot..."
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                  Instagram Link (ইনস্টাগ্রাম):
-                </label>
-                <input
-                  type="text"
-                  value={helperCenterInstagram}
-                  onChange={(e) => setHelperCenterInstagram(e.target.value)}
-                  placeholder="https://instagram.com/jamanot..."
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-200 text-xs font-medium outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1.5">
-                Help Center Description Note (বিশেষ কোনো নির্দেশনা):
-              </label>
-              <input
-                type="text"
-                value={helperCenterNote}
-                onChange={(e) => setHelperCenterNote(e.target.value)}
-                placeholder="যেমন: যেকোনো প্রয়োজনে আমাদের অফিসে সরাসরি যোগাযোগ করতে পারেন।"
-                className="w-full p-3.5 rounded-2xl border border-gray-200 text-xs font-semibold outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10"
-              />
-            </div>
-          </div>
-
-          {currentUser?.isSuperAdmin && (
-            <div className="p-5 rounded-3xl bg-purple-50/70 border border-purple-200 space-y-4">
-              <h4 className="font-extrabold text-sm text-purple-900 uppercase tracking-wider flex items-center space-x-2">
-                <ShieldCheck className="w-5 h-5 text-purple-750" />
-                <span>Normal Admin Permissions Control</span>
-              </h4>
-              <p className="text-[11px] text-purple-750">
+          {/* 20. Normal Admin Permissions Control (Super Admin only) */}
+          {currentUser?.isSuperAdmin && matchesSettingsSearch('admin_permissions') && (
+            <SettingsAccordionSection
+              id="admin_permissions"
+              title="Normal Admin Permissions Control (সাধারণ অ্যাডমিন পারমিশন নিয়ন্ত্রণ)"
+              subtitle="সিলেক্ট করুন একজন সাধারণ অ্যাডমিন কোন কোন ট্যাবগুলো অ্যাক্সেস করতে পারবেন"
+              icon={Lock}
+              colorScheme="purple"
+              isOpen={isSettingsSectionOpen('admin_permissions')}
+              onToggle={() => toggleSettingsSection('admin_permissions')}
+            >
+              <p className="text-[11px] text-purple-750 mb-3">
                 সিলেক্ট করুন একজন সাধারণ অ্যাডমিন (Normal Admin) কোন কোন ট্যাবগুলো অ্যাক্সেস করতে পারবেন। সুপার অ্যাডমিন (Super Admin) সবসময় সব ট্যাব অ্যাক্সেস করতে পারবেন।
               </p>
 
@@ -8794,7 +9245,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {tabsList.map((t) => {
                   const isChecked = allowedAdminTabs.includes(t.key);
                   return (
-                    <label key={t.key} className="flex items-center space-x-2.5 p-3 rounded-2xl border border-gray-200 bg-white hover:bg-purple-50/20 cursor-pointer select-none">
+                    <label
+                      key={t.key}
+                      className="flex items-center space-x-2.5 p-3 rounded-2xl border border-gray-200 bg-white hover:bg-purple-50/20 cursor-pointer select-none"
+                    >
                       <input
                         type="checkbox"
                         checked={isChecked}
@@ -8812,16 +9266,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   );
                 })}
               </div>
+            </SettingsAccordionSection>
+          )}
+
+          {/* Fallback when search has no matches */}
+          {ALL_SETTINGS_SECTIONS.filter((id) => matchesSettingsSearch(id)).length === 0 && (
+            <div className="p-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+              <Search className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-sm font-bold text-gray-700">কোনো সেটিংস সেকশন পাওয়া যায়নি</p>
+              <p className="text-xs text-gray-500 mt-1">
+                "{settingsSearchQuery}" এর সাথে মিলে এমন কোনো সেটিংস পাওয়া যায়নি।
+              </p>
+              <button
+                type="button"
+                onClick={() => setSettingsSearchQuery('')}
+                className="mt-3 px-3.5 py-1.5 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                সার্চ রিসেট করুন
+              </button>
             </div>
           )}
 
-          <button
-            type="submit"
-            className="w-full py-4 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center space-x-2"
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            <span>Save System Settings</span>
-          </button>
+          {/* Bottom Form Actions */}
+          <div className="pt-4 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={expandAllSettingsSections}
+                className="text-xs text-purple-700 hover:text-purple-900 font-bold cursor-pointer"
+              >
+                সব সেকশন খুলুন (Expand All)
+              </button>
+              <span className="text-gray-300">•</span>
+              <button
+                type="button"
+                onClick={collapseAllSettingsSections}
+                className="text-xs text-gray-500 hover:text-gray-700 font-bold cursor-pointer"
+              >
+                সব বন্ধ করুন (Collapse All)
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              className="py-3.5 px-8 rounded-2xl bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Save System Settings</span>
+            </button>
+          </div>
         </form>
       )}
 
