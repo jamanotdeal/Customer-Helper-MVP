@@ -12,7 +12,6 @@ import {
   ShoppingBag, Pill, Utensils, Shirt, Package, AlertCircle, Check, ChevronDown
 } from 'lucide-react';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
-import { PlatformClosedScheduleModal } from './PlatformClosedScheduleModal';
 import {
   saveAltPhone,
   saveDefaultDeliveryLocation,
@@ -20,7 +19,6 @@ import {
   addSavedDeliveryAddress,
   getPreviousCustomerContact,
 } from '@/lib/storage';
-import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
 import { ensureOrderCoordinates } from '@/lib/orderLocationGuard';
 
 interface CustomRequestModalProps {
@@ -81,7 +79,6 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
   const [error, setError] = useState('');
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
-  const [showPlatformClosedModal, setShowPlatformClosedModal] = useState(false);
 
   // Sync services from settings
   useEffect(() => {
@@ -120,7 +117,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         try {
           const saved = localStorage.getItem('customer_selected_service');
           if (saved) setSelectedService(saved);
-        } catch {}
+        } catch { }
       }
     }
   }, [initialService]);
@@ -132,7 +129,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       if (svc) {
         localStorage.setItem('customer_selected_service', svc);
       }
-    } catch {}
+    } catch { }
     if (onSelectService) {
       onSelectService(svc);
     }
@@ -185,10 +182,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
     setIsDropdownOpen(true);
   };
 
-  const handleSubmit = async (
-    e?: React.FormEvent,
-    scheduledOptions?: { isScheduled?: boolean; scheduledDate?: Date; scheduledNote?: string }
-  ) => {
+  const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!isUserAuthenticated(user)) {
       openAuthModal();
@@ -211,10 +205,14 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       return;
     }
 
-    // Check platform timing (Order Timing & Form Controls)
+    // Block order creation if platform is closed
     const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
-    if (!serviceTiming.isOpen && !scheduledOptions?.isScheduled) {
-      setShowPlatformClosedModal(true);
+    if (!serviceTiming.isOpen) {
+      await showAlert(
+        'সার্ভিস বন্ধ',
+        serviceTiming.message || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। অনুগ্রহ করে পরে আবার চেষ্টা করুন।',
+        'warning'
+      );
       return;
     }
 
@@ -229,16 +227,14 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       return;
     }
 
-    if (!scheduledOptions?.isScheduled) {
-      const confirmed = await showConfirm(
-        'রিকোয়েস্ট নিশ্চিতকরণ',
-        `আপনি কি "${selectedService}" এর রিকোয়েস্টটি নিশ্চিত করতে চান?`,
-        'হ্যাঁ, রিকোয়েস্ট পাঠান',
-        'বাতিল'
-      );
-      if (!confirmed) {
-        return;
-      }
+    const confirmed = await showConfirm(
+      'রিকোয়েস্ট নিশ্চিতকরণ',
+      `আপনি কি "${selectedService}" এর রিকোয়েস্টটি নিশ্চিত করতে চান?`,
+      'হ্যাঁ, রিকোয়েস্ট পাঠান',
+      'বাতিল'
+    );
+    if (!confirmed) {
+      return;
     }
 
     // Close the modal immediately so customers see the order is being processed
@@ -325,37 +321,6 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
           },
         ],
       };
-      // Check if scheduled via platform closed modal
-      if (scheduledOptions?.isScheduled) {
-        const scheduledOrder: Order = {
-          ...newOrder,
-          status: 'SCHEDULED' as any,
-          isScheduled: true,
-          scheduledAt: scheduledOptions.scheduledDate?.toISOString() || new Date().toISOString(),
-          scheduledNote: scheduledOptions.scheduledNote || serviceTiming.message || undefined,
-        };
-        await fallbackStore.addOrder(scheduledOrder);
-        saveScheduledOrder(scheduledOrder);
-        if (altPhone.trim()) saveAltPhone(altPhone.trim());
-        if (delivLoc.address || delivLoc.lat) {
-          saveDefaultDeliveryLocation(delivLoc);
-          if (user.uid) {
-            fallbackStore.saveCustomerLocation(user.uid, delivLoc, resolvedAreaId).catch(() => {});
-            addSavedDeliveryAddress(user.uid, delivLoc);
-            saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
-          }
-        }
-        updateCustomerPreferences(altPhone.trim() || undefined, delivLoc, undefined);
-        showAlert(
-          'রিকোয়েস্ট শিডিউল হয়েছে!',
-          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-            ` সার্ভিস শুরু হওয়ার সময় (${formatScheduledTime(scheduledOrder.scheduledAt)}) এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে সার্ভার থেকে হেলপারদের কাছে পাঠানো হবে। এমনকি অ্যাপ বন্ধ থাকলেও নির্ধারিত সময়ে কার্যকর হবে।`,
-          'info'
-        );
-        if (onOrderCreated) onOrderCreated(scheduledOrder as Order);
-        return;
-      }
-
       await fallbackStore.addOrder(newOrder);
 
       // Save phone and delivery address to persistence
@@ -365,7 +330,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       if (delivLoc.address || delivLoc.lat) {
         saveDefaultDeliveryLocation(delivLoc);
         if (user.uid) {
-          fallbackStore.saveCustomerLocation(user.uid, delivLoc, resolvedAreaId).catch(() => {});
+          fallbackStore.saveCustomerLocation(user.uid, delivLoc, resolvedAreaId).catch(() => { });
           addSavedDeliveryAddress(user.uid, delivLoc);
           saveCustomerSavedAddressToFirestore(user.uid, delivLoc).catch(() => { });
         }
@@ -657,8 +622,8 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
                   setUseFreeDelivery((prev) => !prev);
                 }}
                 className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${useFreeDelivery
-                    ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
-                    : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
+                  ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
+                  : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
                   }`}
               >
                 <div className="flex items-center gap-2">
@@ -740,21 +705,6 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
           </div>
         </div>
       )}
-      {/* Platform Closed Schedule Modal */}
-      <PlatformClosedScheduleModal
-        isOpen={showPlatformClosedModal}
-        pricingSettings={fallbackStore.pricingSettings}
-        onSchedule={(targetDate, noteText) => {
-          setShowPlatformClosedModal(false);
-          handleSubmit(undefined, {
-            isScheduled: true,
-            scheduledDate: targetDate,
-            scheduledNote: noteText,
-          });
-        }}
-        onCancel={() => setShowPlatformClosedModal(false)}
-      />
-
     </div>,
     document.body
   );

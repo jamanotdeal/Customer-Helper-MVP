@@ -15,8 +15,6 @@ import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { AsyncButton } from './ui/AsyncButton';
 import { requestNativePushPermission } from '@/lib/native';
 import { BlockedUserModal } from './BlockedUserModal';
-import { PlatformClosedScheduleModal } from './PlatformClosedScheduleModal';
-import { saveScheduledOrder, getNextPlatformOpeningTime, formatScheduledTime } from '@/utils/scheduledOrders';
 import { ensureOrderCoordinates } from '@/lib/orderLocationGuard';
 
 interface RequestComposerProps {
@@ -115,8 +113,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
   // Free delivery / Discount via Coins state
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
-  const [showPlatformClosedModal, setShowPlatformClosedModal] = useState(false);
-
   // Service selection state
   const [service, setService] = useState('');
   const [services, setServices] = useState<string[]>(
@@ -400,10 +396,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
     setIsExpanded(true);
   };
 
-  const handleSubmit = async (
-    e?: React.FormEvent,
-    scheduledOptions?: { isScheduled?: boolean; scheduledDate?: Date; scheduledNote?: string }
-  ) => {
+  const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
     if (!isUserAuthenticated(user)) {
@@ -441,10 +434,14 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
 
     setErrors({});
 
-    // Check if platform service is currently open; if closed, ask to schedule or not
+    // Block order creation if platform is closed — no scheduling allowed
     const serviceTiming = isOrderTimingOpen(fallbackStore.pricingSettings);
-    if (!serviceTiming.isOpen && !scheduledOptions?.isScheduled) {
-      setShowPlatformClosedModal(true);
+    if (!serviceTiming.isOpen) {
+      await showAlert(
+        'সার্ভিস বন্ধ',
+        serviceTiming.message || 'অনুরোধ গ্রহণ সাময়িকভাবে বন্ধ আছে। অনুগ্রহ করে পরে আবার চেষ্টা করুন।',
+        'warning'
+      );
       return;
     }
 
@@ -459,17 +456,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       return;
     }
 
-    if (!scheduledOptions?.isScheduled) {
-      const isConfirmed = await showConfirm(
-        'Confirm Your Request',
-        'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
-        'Yes, Submit Request',
-        'Cancel'
-      );
+    const isConfirmed = await showConfirm(
+      'Confirm Your Request',
+      'আপনি কি নিশ্চিতভাবে এই অনুরোধটি সাবমিট করতে চান?',
+      'Yes, Submit Request',
+      'Cancel'
+    );
 
-      if (!isConfirmed) {
-        return;
-      }
+    if (!isConfirmed) {
+      return;
     }
 
     // Collapse the form immediately so customers see the order is being processed
@@ -526,7 +521,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       };
       saveDefaultDeliveryLocation(finalDelivLoc);
       if (user?.uid) {
-        fallbackStore.saveCustomerLocation(user.uid, finalDelivLoc, locResult.areaId).catch(() => {});
+        fallbackStore.saveCustomerLocation(user.uid, finalDelivLoc, locResult.areaId).catch(() => { });
       }
       if (service) {
         saveServiceDeliveryLocation(service, finalDelivLoc, user?.uid);
@@ -536,7 +531,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       if (user?.uid && finalDeliveryAddressText) {
         const updated = addSavedDeliveryAddress(user.uid, finalDelivLoc);
         setSavedAddresses(updated);
-        saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => {});
+        saveCustomerSavedAddressToFirestore(user.uid, finalDelivLoc).catch(() => { });
       }
 
       let pickupLoc: LocationData | undefined = undefined;
@@ -554,7 +549,7 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         if (user?.uid) {
           const updated = addSavedPickupAddress(user.uid, pickupLoc);
           setSavedPickupAddresses(updated);
-          saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => {});
+          saveCustomerPickupAddressToFirestore(user.uid, pickupLoc, service).catch(() => { });
         }
       }
 
@@ -562,10 +557,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
       const rawFinalItems: OrderItem[] = activeItems.length > 0
         ? activeItems
         : [{
-            id: 'item-1',
-            name: description.trim(),
-            qty: '1',
-          }];
+          id: 'item-1',
+          name: description.trim(),
+          qty: '1',
+        }];
 
       const finalItems: OrderItem[] = rawFinalItems.map(it => {
         if (it.storeId) {
@@ -644,10 +639,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         creatorRole: isStoreUser ? 'store' : (user.isHelper ? 'helper' : 'customer'),
         appliedDuePayment: (unpaidDue && unpaidDue.totalAmount > 0)
           ? {
-              amount: unpaidDue.totalAmount,
-              note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
-              sourceOrderIds: unpaidDue.sourceOrderIds,
-            }
+            amount: unpaidDue.totalAmount,
+            note: unpaidDue.notes.join('; ') || 'পূর্বের বকেয়া বাকি',
+            sourceOrderIds: unpaidDue.sourceOrderIds,
+          }
           : undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -661,37 +656,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
           },
         ],
       };
-      // If scheduled via platform closed modal, save to Firestore and queue
-      if (scheduledOptions?.isScheduled) {
-        const scheduledOrder: Order = {
-          ...newOrder,
-          status: 'SCHEDULED' as any,
-          isScheduled: true,
-          scheduledAt: scheduledOptions.scheduledDate?.toISOString() || new Date().toISOString(),
-          scheduledNote: scheduledOptions.scheduledNote || serviceTiming.message || undefined,
-        };
-        await fallbackStore.addOrder(scheduledOrder);
-        saveScheduledOrder(scheduledOrder);
-        setDescription('');
-        setService('');
-        setIsServiceDropdownOpen(false);
-        setPickupNote('');
-        setPickupLat(undefined);
-        setPickupLng(undefined);
-        setPickupAddressId(undefined);
-        setDeliveryAddressId(undefined);
-        setIsExpanded(false);
-        setSubmitting(false);
-        await showAlert(
-          'রিকোয়েস্ট শিডিউল হয়েছে!',
-          (serviceTiming.message || 'এখন সার্ভিস বন্ধ আছে।') +
-            ` সার্ভিস শুরু হওয়ার সময় (${formatScheduledTime(scheduledOrder.scheduledAt)}) এই রিকোয়েস্ট স্বয়ংক্রিয়ভাবে সার্ভার থেকে হেলপারদের কাছে পাঠানো হবে। এমনকি অ্যাপ বন্ধ থাকলেও নির্ধারিত সময়ে কার্যকর হবে।`,
-          'info'
-        );
-        onOrderCreated(scheduledOrder as Order);
-        return;
-      }
-
       // Save to server first (awaited — order must be confirmed on Firestore before proceeding)
       await fallbackStore.addOrder(newOrder);
 
@@ -712,10 +676,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         requestNativePushPermission()
           .then((granted) => {
             if (granted && user?.uid) {
-              initFcmMessaging(user.uid).catch(() => {});
+              initFcmMessaging(user.uid).catch(() => { });
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
 
       // Show admin-configured confirmation message modal
@@ -784,13 +748,12 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsServiceDropdownOpen(true)}
-                    className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm sm:text-base transition-all duration-200 cursor-pointer select-none ${
-                      isServiceDropdownOpen
+                    className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm sm:text-base transition-all duration-200 cursor-pointer select-none ${isServiceDropdownOpen
                         ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl'
                         : errors.service
-                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                        : 'border-gray-200 bg-white hover:border-emerald-300'
-                    }`}
+                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
+                          : 'border-gray-200 bg-white hover:border-emerald-300'
+                      }`}
                     aria-haspopup="dialog"
                     aria-expanded={isServiceDropdownOpen}
                   >
@@ -801,9 +764,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       </span>
                     </div>
                     <ChevronDown
-                      className={`w-4 h-4 transition-transform duration-200 shrink-0 ml-2 ${
-                        isServiceDropdownOpen ? 'rotate-180 text-emerald-600' : 'text-gray-400'
-                      }`}
+                      className={`w-4 h-4 transition-transform duration-200 shrink-0 ml-2 ${isServiceDropdownOpen ? 'rotate-180 text-emerald-600' : 'text-gray-400'
+                        }`}
                     />
                   </button>
 
@@ -906,11 +868,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       if (errors.description) setErrors((prev) => ({ ...prev, description: undefined }));
                     }}
                     placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
-                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400 transition-colors ${
-                      errors.description
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400 transition-colors ${errors.description
                         ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
                         : 'border-emerald-200 bg-emerald-50/40 focus:border-emerald-500'
-                    }`}
+                      }`}
                   />
                   {errors.description && (
                     <p className="text-[11px] font-semibold text-red-500 mt-1 pl-1 flex items-center gap-1 animate-in fade-in duration-150">
@@ -930,10 +891,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       pickupLat && pickupLng
                         ? { lat: pickupLat, lng: pickupLng }
                         : deliveryLat && deliveryLng
-                        ? { lat: deliveryLat, lng: deliveryLng }
-                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
-                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
-                        : undefined
+                          ? { lat: deliveryLat, lng: deliveryLng }
+                          : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                            ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                            : undefined
                     }
                     onChange={(val, loc) => {
                       setPickupNote(val);
@@ -971,10 +932,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       deliveryLat && deliveryLng
                         ? { lat: deliveryLat, lng: deliveryLng }
                         : pickupLat && pickupLng
-                        ? { lat: pickupLat, lng: pickupLng }
-                        : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
-                        ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
-                        : undefined
+                          ? { lat: pickupLat, lng: pickupLng }
+                          : user?.defaultDeliveryLocation?.lat && user?.defaultDeliveryLocation?.lng
+                            ? { lat: user.defaultDeliveryLocation.lat, lng: user.defaultDeliveryLocation.lng }
+                            : undefined
                     }
                     onChange={(val, loc) => {
                       setDeliveryAddress(val);
@@ -1022,11 +983,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                         if (errors.altPhone) setErrors((prev) => ({ ...prev, altPhone: undefined }));
                       }}
                       placeholder="হোয়াটসঅ্যাপ নম্বর *"
-                      className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 transition-colors ${
-                        errors.altPhone
+                      className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 transition-colors ${errors.altPhone
                           ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
                           : 'border-gray-200 bg-white focus:border-emerald-500'
-                      }`}
+                        }`}
                     />
                   </div>
                   {errors.altPhone && (
@@ -1056,17 +1016,16 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                         }
                         setUseFreeDelivery(!useFreeDelivery);
                       }}
-                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
-                        useFreeDelivery
+                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${useFreeDelivery
                           ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-400/20 shadow-xs'
                           : 'bg-gradient-to-r from-amber-50/50 via-yellow-50/30 to-amber-50/50 border-amber-200/70 hover:border-amber-300'
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center space-x-2.5">
                         <input
                           type="checkbox"
                           checked={useFreeDelivery}
-                          onChange={() => {}} // Handled by container click
+                          onChange={() => { }} // Handled by container click
                           className="w-4 h-4 accent-amber-600 rounded cursor-pointer shrink-0 pointer-events-none"
                         />
                         <span className="text-xs sm:text-sm font-bold text-gray-900">
@@ -1300,19 +1259,17 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       handleServiceChange(srv);
                       setIsServiceDropdownOpen(false);
                     }}
-                    className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${
-                      isSelected
+                    className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${isSelected
                         ? 'bg-emerald-50 text-emerald-950 font-extrabold ring-1 ring-emerald-300 shadow-xs'
                         : 'text-gray-700 font-semibold hover:bg-emerald-50/50 hover:text-emerald-900 active:bg-gray-100'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                       <div
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${
-                          isSelected
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${isSelected
                             ? 'bg-emerald-600 ring-4 ring-emerald-100'
                             : 'bg-gray-300 group-hover:bg-emerald-400'
-                        } transition-colors`}
+                          } transition-colors`}
                       />
                       <span className="leading-snug break-words text-left flex-1">{srv}</span>
                     </div>
@@ -1331,21 +1288,6 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
         </div>,
         document.body
       )}
-
-      {/* Platform Closed Schedule Modal */}
-      <PlatformClosedScheduleModal
-        isOpen={showPlatformClosedModal}
-        pricingSettings={fallbackStore.pricingSettings}
-        onSchedule={(targetDate, noteText) => {
-          setShowPlatformClosedModal(false);
-          handleSubmit(undefined, {
-            isScheduled: true,
-            scheduledDate: targetDate,
-            scheduledNote: noteText,
-          });
-        }}
-        onCancel={() => setShowPlatformClosedModal(false)}
-      />
 
       {/* Blocked User Custom Modal */}
       {showBlockedModal && (
