@@ -490,44 +490,31 @@ export function calculateEstimatedFee(
 export function getCustomStoreItemCount(order?: Order | null, shopOrders: ShopOrder[] = []): number {
   if (!order) return 0;
 
-  // 1. Check helper custom cost shop orders (shopId: 'myself')
+  // Only count actual "myself" shop orders created by the helper when they
+  // purchased from a non-listed store. Deduplicate by sellerName + sellerPhone
+  // so multiple items from the same shop count as 1 store charge.
   const myselfSOs = (shopOrders || []).filter(
-    (so) => so.parentOrderId === order.id && so.shopId === 'myself' && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
+    (so) =>
+      so.parentOrderId === order.id &&
+      so.shopId === 'myself' &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
   );
 
-  const myselfItemIds = new Set<string>();
-  let myselfItemCount = 0;
+  if (myselfSOs.length === 0) return 0;
+
+  const uniqueStoreKeys = new Set<string>();
   for (const so of myselfSOs) {
-    if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
-      for (const it of so.itemsWithPrice) {
-        if (it.itemId) myselfItemIds.add(it.itemId);
-        if (it.originalId) myselfItemIds.add(it.originalId);
-        myselfItemCount++;
-      }
-    } else {
-      myselfItemCount++;
-    }
+    const name = (so.sellerName || so.shopName || '').trim().toLowerCase();
+    const phone = (so.sellerPhone || '').trim().replace(/\s/g, '');
+    // If both are empty, use the shop order ID so it still counts as 1 store
+    const key = (name || phone) ? `${name}::${phone}` : so.id;
+    uniqueStoreKeys.add(key);
   }
 
-  // 2. Check items in order that were bought from custom / non-listed store
-  let directCustomCount = 0;
-  if (order.items && order.items.length > 0) {
-    for (const it of order.items) {
-      if (myselfItemIds.has(it.id)) {
-        continue; // Already counted via myself shop order
-      }
-      // If it has buyFrom (bought by helper from custom/external store)
-      if (it.buyFrom && !it.storeId) {
-        directCustomCount++;
-      } else if (it.isCustom && ((typeof it.price === 'number' && it.price > 0) || it.purchased)) {
-        directCustomCount++;
-      }
-    }
-  }
-
-  const count = myselfItemCount + directCustomCount;
-  return count;
+  return uniqueStoreKeys.size;
 }
+
 
 /**
  * Calculates custom store fee for an order based on admin settings.
@@ -542,13 +529,11 @@ export function calculateCustomStoreFee(
     return { count: 0, unitFee: 0, totalFee: 0 };
   }
   const unitFee = Number(settings.customStorePricingAmount ?? 15) || 0;
+  // count = number of unique stores (not items)
   const count = getCustomStoreItemCount(order, shopOrders);
-  const computedFee = count * unitFee;
-  const storedFee = (typeof order?.customStoreFee === 'number' && order.customStoreFee > 0) ? order.customStoreFee : 0;
-  const finalTotal = Math.max(computedFee, storedFee);
-  const finalCount = count > 0 ? count : (finalTotal > 0 ? Math.ceil(finalTotal / (unitFee || 1)) : 0);
+  const totalFee = count * unitFee;
 
-  return { count: finalCount, unitFee, totalFee: finalTotal };
+  return { count, unitFee, totalFee };
 }
 
 

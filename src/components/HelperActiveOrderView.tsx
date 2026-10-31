@@ -2211,6 +2211,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       productCost: val,
       deliveryFee: o.isFreeDelivery ? 0 : finalFee,
       originalDeliveryFee: o.isFreeDelivery ? 0 : finalFee,
+      lastEditedBy: 'helper',
+      lastEditedAt: new Date().toISOString(),
     }));
     setShowCostModal(false);
   };
@@ -2242,6 +2244,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       weightKg: newWeight,
       deliveryFee: o.isFreeDelivery ? 0 : finalFee,
       originalDeliveryFee: o.isFreeDelivery ? 0 : finalFee,
+      lastEditedBy: 'helper',
+      lastEditedAt: new Date().toISOString(),
     }));
   };
 
@@ -2284,6 +2288,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return {
         ...o,
         deliveryFee: val,
+        lastEditedBy: 'helper',
+        lastEditedAt: new Date().toISOString(),
         feeAdjustment: feeReason.trim()
           ? {
             amount: val,
@@ -3382,11 +3388,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             ) : null}
 
-                            {/* Actions under item name: Make Custom & Cancel Item */}
-                            {!isDone && (
+                            {/* Actions + Status in a single row */}
+                            {(!isDone || soStatus || (effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id))) && (
                               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                 {/* Convert Single Item to Custom Button */}
-                                {!isCustomItem && (
+                                {!isDone && !isCustomItem && (
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -3406,69 +3412,54 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 )}
 
                                 {/* Cancel Item Button */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCancelItemConfirmTarget({
-                                      id: it.id,
-                                      name: it.name,
-                                      storeId: it.storeId,
-                                      storeName: sName,
-                                      price: priceDetails?.totalPrice ?? (it.price ? Number(it.price) * getItemQuantityNum(it) : 0),
-                                    });
-                                  }}
-                                  className="inline-flex items-center gap-1 text-[10px] text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md transition-all active:scale-95 cursor-pointer"
-                                  title="এই পণ্যটি অর্ডার থেকে বাতিল করুন"
-                                >
-                                  <X className="w-2.5 h-2.5 text-rose-600" />
-                                  <span>Cancel Item</span>
-                                </button>
-                              </div>
-                            )}
+                                {!isDone && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCancelItemConfirmTarget({
+                                        id: it.id,
+                                        name: it.name,
+                                        storeId: it.storeId,
+                                        storeName: sName,
+                                        price: priceDetails?.totalPrice ?? (it.price ? Number(it.price) * getItemQuantityNum(it) : 0),
+                                      });
+                                    }}
+                                    className="p-1 rounded-md text-rose-600 hover:text-rose-800 hover:bg-rose-100 border border-rose-200 transition-all active:scale-95 cursor-pointer"
+                                    title="এই পণ্যটি অর্ডার থেকে বাতিল করুন"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
 
-                            {/* Saved on this phone but not yet confirmed by the server: the store can't see it yet. */}
-                            {effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id) && (
-                              <div className="mt-1">
-                                <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block border bg-orange-100 text-orange-800 border-orange-250 animate-pulse">
-                                  পাঠানো হচ্ছে…
-                                </span>
-                              </div>
-                            )}
+                                {/* Sending indicator */}
+                                {effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id) && (
+                                  <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block border bg-orange-100 text-orange-800 border-orange-250 animate-pulse">
+                                    পাঠানো হচ্ছে…
+                                  </span>
+                                )}
 
-                            {soStatus && (
-                              <div className="mt-1">
-                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${soStatus === 'PENDING'
-                                    ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                                    : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY'
-                                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                                      : 'bg-rose-100 text-rose-900 border border-rose-200'
-                                  }`}>
-                                  {soStatus === 'PENDING' ? '⏳ Pending' :
-                                    soStatus === 'ACCEPTED' ? '✓ Accepted' :
-                                      soStatus === 'PREPARING' ? '🍳 Preparing' :
-                                        soStatus === 'READY' ? '✅ Ready' :
-                                          soStatus === 'CANCELED' || (soStatus as string) === 'CANCELLED' ? '✕ Cancelled' :
-                                            soStatus}
-                                </span>
+                                {/* Status badge */}
+                                {soStatus && (
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${soStatus === 'PENDING'
+                                      ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                      : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY'
+                                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                        : 'bg-rose-100 text-rose-900 border border-rose-200'
+                                    }`}>
+                                    {soStatus === 'PENDING' ? '⏳ Pending' :
+                                      soStatus === 'ACCEPTED' ? '✓ Accepted' :
+                                        soStatus === 'PREPARING' ? '🍳 Preparing' :
+                                          soStatus === 'READY' ? '✅ Ready' :
+                                            soStatus === 'CANCELED' || (soStatus as string) === 'CANCELLED' ? '✕ Cancelled' :
+                                              soStatus}
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
-                            {isCustomBlock && !isDone && connectedSO && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openViewRequestDetails(connectedSO);
-                                }}
-                                className="p-1 px-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-bold border border-gray-300 transition-all cursor-pointer shrink-0"
-                              >
-                                Details
-                              </button>
-                            )}
-                          </div>
+
                         </div>
                       );
                     };

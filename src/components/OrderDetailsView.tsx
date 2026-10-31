@@ -961,16 +961,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         }`}>
                         {it.name}
                       </span>
-                      {isUnpriced && it.qty && (
-                        <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold">
-                          {it.qty}
-                        </span>
-                      )}
-                      {!isUnpriced && it.qty && (
-                        <span className="text-[10px] bg-gray-200/80 group-hover:bg-emerald-100 group-hover:text-emerald-800 text-gray-700 px-1.5 py-0.5 rounded font-bold transition-colors">
-                          {it.qty}
-                        </span>
-                      )}
+
                       {it.isCustom && (
                         <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-extrabold">
                           Custom Item
@@ -1036,17 +1027,6 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <span>Calculation Summary</span>
             </h3>
             <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2.5 text-xs font-semibold text-gray-700">
-              {unpricedItems.length > 0 && (
-                <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-950 space-y-1">
-                  <div className="flex items-center gap-1.5 font-extrabold text-amber-900">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>{unpricedItems.length} টি পণ্যের মূল্য এখনো অন্তর্ভুক্ত করা হয়নি</span>
-                  </div>
-                  <p className="text-[11px] text-amber-800 leading-snug">
-                    হেলপার দোকান থেকে কেনার সময় এই পণ্যগুলোর ({unpricedItems.map((i: OrderItem) => i.name).slice(0, 3).join(', ')}{unpricedItems.length > 3 ? '...' : ''}) সঠিক মূল্য যোগ করবেন। বর্তমান মোট বিলে এগুলোর দাম এখনো ধরা হয়নি।
-                  </p>
-                </div>
-              )}
 
               <div className="flex items-center justify-between">
                 <div>
@@ -1068,8 +1048,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Approximate Weight (kg)</span>
-                <span className="font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
+                <span className="text-gray-500 font-bold">Approximate Weight ({Math.ceil(order.weightKg || 0)}kg)</span>
+                <span className="font-bold text-gray-900">{estdPricing.weightFee > 0 ? `৳${estdPricing.weightFee}` : `${Math.ceil(order.weightKg || 0)} kg`}</span>
               </div>
 
               {effectiveProcessingFee > 0 && (

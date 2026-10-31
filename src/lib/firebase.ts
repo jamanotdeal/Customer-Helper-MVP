@@ -5717,12 +5717,13 @@ class FallbackStore {
     const isOrderAccepted = updated.status !== 'PENDING' && !!updated.helperId;
 
     // Product cost addition / update notification to customer
-    // Suppressed if updated by customer themselves, or before order is accepted by a helper
+    // Suppressed if updated by customer themselves, by the helper, or before order is accepted by a helper
     if (
       updated.productCost !== undefined &&
       existing.productCost !== updated.productCost &&
       updated.customerId &&
       updated.lastEditedBy !== 'customer' &&
+      updated.lastEditedBy !== 'helper' &&
       isOrderAccepted
     ) {
       this.addNotification({
@@ -5739,12 +5740,12 @@ class FallbackStore {
     }
 
     // Delivery fee update notification to customer & helper
-    // Suppressed if updated by customer themselves, or before order is accepted by a helper
+    // Suppressed if updated by customer themselves, by the helper, or before order is accepted by a helper
     if (
       existing.deliveryFee !== undefined &&
       (existing.deliveryFee !== updated.deliveryFee || existing.originalDeliveryFee !== updated.originalDeliveryFee)
     ) {
-      if (updated.customerId && updated.lastEditedBy !== 'customer' && isOrderAccepted) {
+      if (updated.customerId && updated.lastEditedBy !== 'customer' && updated.lastEditedBy !== 'helper' && isOrderAccepted) {
         this.addNotification({
           id: coalescedNotifId('fee-change', updated.id),
           userId: updated.customerId,

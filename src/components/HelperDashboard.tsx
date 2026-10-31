@@ -629,12 +629,16 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 
   if (selectedOrderId) {
     // First try the live store; fall back to any cached local state (handles
-    // completed orders that may have been evicted from the in-memory map)
+    // completed orders that may have been evicted from the in-memory map,
+    // or PENDING orders just accepted by this helper before the status updates)
     const targetOrder =
       fallbackStore.orders.get(selectedOrderId) ||
       completedOrders.find((o) => o.id === selectedOrderId) ||
       activeOrders.find((o) => o.id === selectedOrderId) ||
-      availableOrders.find((o) => o.id === selectedOrderId);
+      availableOrders.find((o) => o.id === selectedOrderId) ||
+      // Fallback: scan all cached orders — catches the brief window after acceptance
+      // when the order has helperId but status is still PENDING
+      Array.from(fallbackStore.orders.values()).find((o) => o.id === selectedOrderId);
 
     if (targetOrder) {
       if (targetOrder.status === 'CANCELED' || targetOrder.cancellationRequest?.status === 'APPROVED') {
