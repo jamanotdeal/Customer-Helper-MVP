@@ -269,24 +269,59 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
 };
 
 /**
- * Determines whether an order item has already been processed:
- * - Marked as purchased
- * - Cost confirmed (custom item with price > 0 or has buyFrom source)
- * - Assigned or sent to an active shop order (Store order or MySelf order)
+ * Determines whether an order item has already been processed (and should be
+ * locked from customer edits).
+ *
+ * Locking rules:
+ * - Always locked: item.purchased === true
+ * - Locked only once order reaches PURCHASED_EXECUTED or later:
+ *   - Custom item with price already set (cost confirmed by helper)
+ *   - item.buyFrom is set (helper routed item to a specific store/seller)
+ *   - Item appears in an active shop order
+ *
+ * While the order is in PENDING / ACCEPTED / SCHEDULED the customer can still
+ * freely edit items — the helper's planning actions (setting buyFrom, creating
+ * shop orders) do NOT count as "in-process" for the customer lock at this stage.
+ *
+ * @param item          The order item to check.
+ * @param shopOrders    Active shop orders for the parent order.
+ * @param parentOrderId Optional parent order ID used to filter shop orders.
+ * @param orderStatus   Current status of the parent order. Supply this when
+ *                      calling on behalf of a customer so the function can
+ *                      correctly defer locking until PURCHASED_EXECUTED.
  */
-export const isItemInProcess = (item: OrderItem, shopOrders: ShopOrder[] = [], parentOrderId?: string): boolean => {
+export const isItemInProcess = (
+  item: OrderItem,
+  shopOrders: ShopOrder[] = [],
+  parentOrderId?: string,
+  orderStatus?: string,
+): boolean => {
   if (!item) return false;
 
-  // 1. If explicitly marked as purchased/completed
+  // 1. If explicitly marked as purchased/completed — always locked regardless of status
   if (item.purchased) return true;
 
-  // 2. If it's a custom item and price has already been set (> 0)
+  // Statuses where the helper has merely ACCEPTED and may be planning, but
+  // has not yet physically purchased anything. The customer should still be
+  // allowed to edit their items in these phases.
+  const isEarlyPhase =
+    !orderStatus ||
+    orderStatus === 'PENDING' ||
+    orderStatus === 'ACCEPTED' ||
+    orderStatus === 'SCHEDULED';
+
+  // In early phases, only the explicit `purchased` flag (checked above) locks items.
+  if (isEarlyPhase) return false;
+
+  // From PURCHASED_EXECUTED onward, apply the full set of locking rules:
+
+  // 2. Custom item with price already confirmed by helper
   const numericPrice = typeof item.price === 'number' && !isNaN(item.price) && item.price > 0
     ? item.price
     : (typeof item.price === 'string' && !isNaN(parseFloat(item.price)) && parseFloat(item.price) > 0 ? parseFloat(item.price) : 0);
   if (item.isCustom && numericPrice > 0) return true;
 
-  // 3. If item has buyFrom set (meaning helper confirmed store or seller)
+  // 3. Helper has confirmed the source store/seller for this item
   if (item.buyFrom && item.buyFrom.trim().length > 0) return true;
 
   // 4. Check active shop orders

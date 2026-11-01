@@ -159,9 +159,13 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
     return fallbackStore.subscribe(sync);
   }, [order?.id]);
 
-  // Check if item is already in process (sent to store or cost added)
+  // Check if item is already in process (sent to store or cost added).
+  // When the editor is a customer we also pass the order status so that items
+  // are NOT locked while the order is still PENDING/ACCEPTED/SCHEDULED — the
+  // customer should be able to edit until the helper marks PURCHASED_EXECUTED.
   const checkItemInProcess = (it: OrderItem) => {
-    return isItemInProcess(it, shopOrders);
+    const statusForLock = editorRole === 'customer' ? order.status : undefined;
+    return isItemInProcess(it, shopOrders, order.id, statusForLock);
   };
 
   // Calculate items subtotal accurately using calculateOrderProductCost
