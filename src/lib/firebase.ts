@@ -8188,8 +8188,13 @@ class FallbackStore {
    *   the transaction that made the change it reports); only this device's
    *   copy is recorded. Writing it again would be one more round trip for
    *   nothing — the push fires on the create alone.
+   * @param opts.confirmSend chime and buzz on this device to confirm the send.
+   *   Only for an admin pressing Send. Every other notification is a side
+   *   effect of something this device did (delivering an order writes four or
+   *   five), and buzzing for each made the phone that completed an order
+   *   vibrate again and again with nothing new for its user.
    */
-  public async addNotification(notif: AppNotification, opts: { persisted?: boolean } = {}) {
+  public async addNotification(notif: AppNotification, opts: { persisted?: boolean; confirmSend?: boolean } = {}) {
     // The id doubles as the sort key whenever the listener falls back to
     // document-id order, so it has to start with a fixed-width timestamp.
     // Ids like `notif-shop-status-<ms>` sort above every `notif-<ms>` id
@@ -8324,8 +8329,8 @@ class FallbackStore {
     this.scheduleLocalStoreSave();
     this.notify();
 
-    // In-app feedback: sound + vibration on the device that created the notification (for manual admin notifications)
-    if (notif.type !== 'new_order') {
+    // In-app feedback: sound + vibration on the device that sent a manual admin notification
+    if (opts.confirmSend) {
       playNotificationSound();
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (_) { /* ignore */ }
@@ -8470,7 +8475,7 @@ class FallbackStore {
         console.warn('[Firestore] saveScheduledNotification note:', e);
       }
     } else {
-      await this.addNotification(notif);
+      await this.addNotification(notif, { confirmSend: true });
     }
     return notif;
   }
@@ -8519,7 +8524,7 @@ class FallbackStore {
       isAdminPush: true,
       createdByAdmin: true,
     };
-    await this.addNotification(dispatchNotif);
+    await this.addNotification(dispatchNotif, { confirmSend: true });
 
     if (notif.repeatFrequency === 'DAILY' || notif.repeatFrequency === 'WEEKLY') {
       const nextInterval = notif.repeatFrequency === 'DAILY' ? 24 * 3600 * 1000 : 7 * 24 * 3600 * 1000;
