@@ -210,8 +210,10 @@ export default function PageClient() {
       const isAdmin = user.isAdmin || activeMode === 'admin' || activeTab === 'admin_panel';
       const isAssignedHelper = order.helperId === user.uid;
 
-      // Requirement 1: If someone else accepted the order, helper should never be able to see order details
-      if (!isAdmin && !isCustomer && order.helperId && !isAssignedHelper) {
+      // Requirement 1: If someone else accepted the order, helper should never be able to see order details.
+      // Not for a store: every order reaching it has a helper on it (the helper
+      // placed the shop order), and StoreDashboard opens only its own shop orders.
+      if (!isAdmin && !isCustomer && !isStoreUser && order.helperId && !isAssignedHelper) {
         showAlert(
           'অর্ডারটি ইতিমধ্যে গৃহীত হয়েছে',
           'দুঃখিত, এই অর্ডারটি ইতিমধ্যে অন্য একজন হেলপার গ্রহণ করেছেন। আপনি আর এই অর্ডারের বিবরণ দেখতে পারবেন না।',

@@ -229,6 +229,10 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   const [showCustomRequestModal, setShowCustomRequestModal] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedShopOrderId, setSelectedShopOrderId] = useState<string | null>(null);
+  // The shop order a notification tap opened: its page is shown, and its card
+  // scrolled to and outlined.
+  const [focusedShopOrderId, setFocusedShopOrderId] = useState<string | null>(null);
+  const scrolledToFocusRef = useRef<string | null>(null);
 
   const [storeOrders, setStoreOrders] = useState<Order[]>([]);
   const [myRequests, setMyRequests] = useState<Order[]>([]);
@@ -415,18 +419,24 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
             return next;
           });
         } else {
-          // Already accepted / running / completed: open details
+          // Already accepted / running / completed: its card in the list is
+          // the details view. Unfiltered so the card is there to show.
           setLocalActiveTab('ORDERS');
-          if (targetShopOrder.status === 'ACCEPTED') {
-            setStoreStatusFilter('ACCEPTED');
-          }
+          setStoreStatusFilter('ALL');
+          setStoreDateFilter('ALL');
           setSelectedShopOrderId(targetShopOrder.id);
+          scrolledToFocusRef.current = null;
+          setFocusedShopOrderId(targetShopOrder.id);
         }
       } else {
         const ord = fallbackStore.orders.get(initialSelectedOrderId);
         if (ord && ord.customerId === user?.uid) {
           setLocalActiveTab('MY_REQUESTS');
           setSelectedOrderId(ord.id);
+        } else if (storeShopOrders.length === 0 && completedShopOrders.length === 0) {
+          // A cold start from a notification gets here before this shop's
+          // orders have loaded; keep the id and look again when they arrive.
+          return;
         }
       }
 
@@ -434,7 +444,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         onClearInitialOrder();
       }
     }
-  }, [initialSelectedOrderId, onClearInitialOrder, user]);
+  }, [initialSelectedOrderId, onClearInitialOrder, user, storeShopOrders, completedShopOrders]);
 
 
   // Live shop orders. The store-role listeners already hold this shop's newest
@@ -815,6 +825,23 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
     const startIdx = (validStorePage - 1) * storePageSize;
     return filteredShopOrders.slice(startIdx, startIdx + storePageSize);
   }, [filteredShopOrders, validStorePage, storePageSize]);
+
+  // Brings a tapped order's card on screen, once per tap — live updates to
+  // the list afterwards must not pull the store back to it.
+  useEffect(() => {
+    if (!focusedShopOrderId || scrolledToFocusRef.current === focusedShopOrderId) return;
+    const index = filteredShopOrders.findIndex((so) => so.id === focusedShopOrderId);
+    if (index < 0) return;
+    const page = Math.floor(index / storePageSize) + 1;
+    if (page !== validStorePage) {
+      setStoreCurrentPage(page);
+      return;
+    }
+    scrolledToFocusRef.current = focusedShopOrderId;
+    requestAnimationFrame(() => {
+      document.getElementById(`shop-order-${focusedShopOrderId}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }, [focusedShopOrderId, filteredShopOrders, validStorePage, storePageSize]);
 
   // Older shop orders are read from the server a page at a time; shown at
   // the end of the list (its last page) and under an empty result.
@@ -1501,7 +1528,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       return (
                         <div
                           key={so.id}
-                          className={`rounded-2xl border p-3.5 sm:p-4 space-y-3 transition-all ${cardContainerStyle}`}
+                          id={`shop-order-${so.id}`}
+                          className={`rounded-2xl border p-3.5 sm:p-4 space-y-3 transition-all scroll-mt-24 ${cardContainerStyle} ${so.id === focusedShopOrderId ? 'ring-4 ring-emerald-400' : ''}`}
                         >
                           {/* Header: ID | Time | Timer | Status Badge */}
                           <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-2.5">
