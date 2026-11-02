@@ -40,6 +40,16 @@ export const CustomerHome: React.FC<CustomerHomeProps> = ({
   const [customRequestInitialDesc, setCustomRequestInitialDesc] = useState('');
   const { cartItems, cartShop, openCartDrawer, totalCartCount, subtotal, addCustomItem } = useCart();
 
+  // Open order from notification. The initial state above only covers a
+  // mount that already has the id; a tap while home is on screen, or the
+  // cold-start alert drained after it mounted, arrives as a prop change.
+  useEffect(() => {
+    if (initialSelectedOrderId && user) {
+      setSelectedOrderId(initialSelectedOrderId);
+      onClearInitialOrder?.();
+    }
+  }, [initialSelectedOrderId, user, onClearInitialOrder]);
+
   // Out of service timing status with client-mount safety (prevents Next.js hydration mismatch)
   const [isMounted, setIsMounted] = useState(false);
   const [timingStatus, setTimingStatus] = useState(() => isOrderTimingOpen(fallbackStore.pricingSettings));

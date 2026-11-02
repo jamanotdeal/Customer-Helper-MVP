@@ -252,6 +252,10 @@ export default function PageClient() {
         // switch to helper view so HelperDashboard can load/resolve the initial order
         setActiveTab('helper_tasks');
         setActiveMode('helper');
+      } else if (!isStoreUser && activeTab !== 'my_orders') {
+        // Not loaded (deleted, or offline): a customer screen that opens
+        // orders, whose details view says the order was not found.
+        setActiveTab('request');
       }
     }
   };
@@ -731,7 +735,9 @@ export default function PageClient() {
     const checkQueryParam = () => {
       const params = new URLSearchParams(window.location.search);
       const orderId = params.get('orderId');
-      if (orderId) {
+      // Left in the address bar until someone is signed in, so the order still
+      // opens after login (this effect runs again when the user arrives).
+      if (orderId && user) {
         handleSelectOrder(orderId);
         // Clean query parameter from address bar cleanly without a full page reload
         const newUrl = window.location.pathname + window.location.hash;
