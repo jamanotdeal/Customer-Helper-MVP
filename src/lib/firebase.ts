@@ -628,15 +628,16 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
       return;
     }
 
-    // Order traffic goes on the heads-up channel (CH_ORDER: IMPORTANCE_HIGH,
-    // custom sound, vibration pattern, lights). Everything else on CH_GENERAL.
-    const important = notif.type === 'new_order' || !!notif.orderId;
+    // Posted exactly as the duty listener and FCM post the same document
+    // (CH_GENERAL, its own tray slot), whichever of the three sees it first.
+    // Order updates used to go on the new-order channel here, filed in the
+    // order's alert slot, so one completion's notices replaced each other.
     import('./native')
       .then((m) =>
         m.showNativeLocalNotification(notif.title, notif.body || '', {
           orderId: notif.orderId,
           notifId: notif.id,
-          important,
+          important: notif.type === 'new_order',
         })
       )
       .catch((e) => console.warn('[triggerBrowserNotification] native note:', e));
