@@ -592,6 +592,15 @@ export type OrderFetchResult =
 // -------------------------------------------------------------
 let _lastNotifTime = 0;
 
+/**
+ * A notification that goes out together with the one announcing an order's
+ * completion (coins earned, free-delivery coins spent, referral bonus). It is
+ * shown in the tray without sound or vibration, so one completion buzzes the
+ * customer once. Read by NotificationHelper.isQuietType on the Java side; it
+ * travels as `type`, which every path (and the push function) already carries.
+ */
+export const ORDER_FOLLOWUP_TYPE = 'order_followup';
+
 /** True inside the Capacitor native shell. Kept local so this module stays
  *  free of a static import on native.ts (which is loaded dynamically below). */
 function isNativeRuntime(): boolean {
@@ -638,6 +647,7 @@ export function triggerBrowserNotification(notif: { id: string; title: string; b
           orderId: notif.orderId,
           notifId: notif.id,
           important: notif.type === 'new_order',
+          silent: notif.type === ORDER_FOLLOWUP_TYPE,
         })
       )
       .catch((e) => console.warn('[triggerBrowserNotification] native note:', e));
@@ -5990,7 +6000,8 @@ class FallbackStore {
         read: false,
         createdAt: new Date().toISOString(),
         targetRole: 'customer',
-        type: 'status_update',
+        // Goes out with the completion notice — no buzz of its own.
+        type: ORDER_FOLLOWUP_TYPE,
       });
     }
 
@@ -6010,7 +6021,8 @@ class FallbackStore {
         read: false,
         createdAt: new Date().toISOString(),
         targetRole: 'customer',
-        type: 'coins_earned',
+        // Goes out with the completion notice — no buzz of its own.
+        type: ORDER_FOLLOWUP_TYPE,
       });
     }
 
@@ -9867,7 +9879,8 @@ class FallbackStore {
         console.warn('[Firestore] update user referredOrdersRewardedCount note:', e);
       }
 
-      // Send high-priority celebration notification to the newly referred customer
+      // Celebration notification to the newly referred customer. It arrives
+      // with their order's completion notice, so it has no buzz of its own.
       this.addNotification({
         id: `notif-${Date.now()}-ref-customer-bonus-${order.id}`,
         userId: customerId,
@@ -9877,7 +9890,7 @@ class FallbackStore {
         read: false,
         createdAt: now,
         targetRole: 'customer',
-        type: 'coins_earned',
+        type: ORDER_FOLLOWUP_TYPE,
       });
     }
 

@@ -323,7 +323,7 @@ public class DutyForegroundService extends Service {
                 // Shared with FCM and the WebView — see OrderAlertDispatcher.
                 OrderAlertDispatcher.handleNewOrder(this, id, title, body, orderId);
             } else {
-                NotificationHelper.postGeneral(this, id, title, body, orderId);
+                NotificationHelper.postGeneral(this, id, title, body, orderId, NotificationHelper.isQuietType(type));
             }
         }
     }

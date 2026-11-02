@@ -172,7 +172,8 @@ public class JamanotMessagingService extends FirebaseMessagingService {
         // A status update is a tray entry, as on the duty path. It used to be
         // sent to the WebView as an orderAlert while the app was open, which
         // yanked the user onto that order mid-task.
-        NotificationHelper.postGeneral(this, notifId, title, body, orderId);
-        return "tray";
+        boolean silent = NotificationHelper.isQuietType(type);
+        NotificationHelper.postGeneral(this, notifId, title, body, orderId, silent);
+        return silent ? "tray_silent" : "tray";
     }
 }

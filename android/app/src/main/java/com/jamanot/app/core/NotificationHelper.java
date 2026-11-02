@@ -228,10 +228,26 @@ public final class NotificationHelper {
     }
 
     /**
+     * Notification type of the notices that go out together with an order's
+     * completion (ORDER_FOLLOWUP_TYPE in firebase.ts). Shown silently, so one
+     * completion buzzes once however many notices it writes.
+     */
+    public static final String TYPE_ORDER_FOLLOWUP = "order_followup";
+
+    public static boolean isQuietType(String type) {
+        return TYPE_ORDER_FOLLOWUP.equals(type);
+    }
+
+    /**
      * Status update — order progress from a store, admin broadcast, customer
      * update. Heads-up with sound and vibration via CH_GENERAL.
      */
     public static void postGeneral(Context c, String notifId, String title, String body, String orderId) {
+        postGeneral(c, notifId, title, body, orderId, false);
+    }
+
+    /** @param silent in the tray with no sound, vibration or heads-up — see {@link #isQuietType}. */
+    public static void postGeneral(Context c, String notifId, String title, String body, String orderId, boolean silent) {
         Intent open = new Intent(c, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (orderId != null) open.putExtra(EXTRA_ORDER_ID, orderId);
@@ -255,6 +271,7 @@ public final class NotificationHelper {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(new long[]{0})
                 .setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_LIGHTS)
+                .setSilent(silent)
                 .build();
 
         safeNotify(c, ID_ORDER_BASE + requestCode(notifId) % 1000, n);

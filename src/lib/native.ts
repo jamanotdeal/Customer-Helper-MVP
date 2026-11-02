@@ -404,6 +404,8 @@ export async function showNativeLocalNotification(
           notifId: data?.notifId ?? null,
           // true -> CH_ORDER heads-up channel (sound + vibration + lights)
           important: data?.important === true,
+          // true -> in the tray without sound or vibration (ORDER_FOLLOWUP_TYPE)
+          silent: data?.silent === true,
         });
         return;
       } catch (e: any) {

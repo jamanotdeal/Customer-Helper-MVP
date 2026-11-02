@@ -604,7 +604,8 @@ public class JamanotNativePlugin extends Plugin {
         if (Boolean.TRUE.equals(call.getBoolean("important", false))) {
             NotificationHelper.postOrderAlert(getContext(), notifId, title, body, orderId);
         } else {
-            NotificationHelper.postGeneral(getContext(), notifId, title, body, orderId);
+            NotificationHelper.postGeneral(getContext(), notifId, title, body, orderId,
+                    Boolean.TRUE.equals(call.getBoolean("silent", false)));
         }
         call.resolve();
     }
