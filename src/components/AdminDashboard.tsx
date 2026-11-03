@@ -86,6 +86,7 @@ import {
   ChevronsUpDown,
   ChevronUp,
   Sliders,
+  UserX,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { PaginationControl } from './admin/PaginationControl';
@@ -943,6 +944,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [usersStartDate, setUsersStartDate] = useState('');
   const [usersEndDate, setUsersEndDate] = useState('');
   const [audienceFilter, setAudienceFilter] = useState<string>('ALL');
+
+  // Order-based stat cards: date range for "ordered / repeated / unordered" counts
+  const [usersOrderDateRange, setUsersOrderDateRange] = useState<AdminDateRange>(() => rangeForPreset('TODAY'));
+  // Custom draft for order date range
+  const [usersOrderDateDraftStart, setUsersOrderDateDraftStart] = useState('');
+  const [usersOrderDateDraftEnd, setUsersOrderDateDraftEnd] = useState('');
+  // Which stat card is active (filters the user table)
+  const [usersOrderStatusFilter, setUsersOrderStatusFilter] = useState<'ALL' | 'ORDERED' | 'REPEATED' | 'UNORDERED'>('ALL');
 
   const [appsStartDate, setAppsStartDate] = useState('');
   const [appsEndDate, setAppsEndDate] = useState('');
@@ -2599,10 +2608,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // (470 users × 1,300 orders × 4 ≈ 2.8 s per tab switch).
   const processedUsersList = React.useMemo(() => {
     if (activeTab !== 'USERS_LIST') return [];
+
+    // ── Order-date-range bounds for stat cards ──────────────────────────────
+    const { startIso: orderRangeStart, endIso: orderRangeEnd } = rangeBoundsIso(
+      usersOrderDateRange.start,
+      usersOrderDateRange.end
+    );
     const usersList = serverUsers !== null ? serverUsers : users;
     const ordersSource = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
 
+    // Orders that fall within the chosen date window (for stat-card counting)
+    const ordersInWindow = ordersSource.filter((o) => isInRange(o.createdAt, orderRangeStart, orderRangeEnd));
     const orderStatsOf = createUserOrderStats(ordersSource);
+    // Indexed stats using only window orders (for per-user counts in filter)
+    const orderStatsInWindow = createUserOrderStats(ordersInWindow);
 
     let list = usersList.map((u) => {
       const { activeReq, activeDel, customerOrdersCount, helperOrdersCount, lastOrderMs } = orderStatsOf(u);
@@ -2718,6 +2737,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       list = list.filter((item) => item.segments.includes(audienceFilter));
     }
 
+    // ── Order-status filter (stat cards) ────────────────────────────────────
+    if (usersOrderStatusFilter !== 'ALL') {
+      list = list.filter((item) => {
+        const stats = orderStatsInWindow(item.user);
+        if (usersOrderStatusFilter === 'ORDERED') return stats.customerOrdersCount >= 1;
+        if (usersOrderStatusFilter === 'REPEATED') return stats.customerOrdersCount >= 2;
+        if (usersOrderStatusFilter === 'UNORDERED') return stats.customerOrdersCount === 0;
+        return true;
+      });
+    }
+
     // Coins filter
     if (usersCoinsFilter === 'HAS_COINS') {
       list = list.filter((item) => (item.user.coins || 0) > 0);
@@ -2810,6 +2840,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     usersStartDate, usersEndDate, usersAppliedSearchQuery, statusFilter, audienceFilter,
     usersCoinsFilter, usersMinCoins, usersMaxCoins, usersSortColumn, usersSortDirection, usersSortByCoins, sortBy,
     isZoneFiltered, targetZoneIds, allowedDeliveryAreas,
+    usersOrderDateRange, usersOrderStatusFilter,
   ]);
 
   // The two big order lists, filtered and sorted once per change of their
@@ -5429,9 +5460,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* --- TAB 3: UNIFIED USER LISTS TAB --- */}
       {activeTab === 'USERS_LIST' && isTabAllowed('USERS_LIST') && (() => {
         const processed = processedUsersList;
-        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null);
+        const hasUsersFilter = Boolean(usersAppliedSearchQuery.trim() || usersStartDate || usersEndDate || audienceFilter !== 'ALL' || statusFilter !== 'ALL' || usersCoinsFilter !== 'ALL' || usersMinCoins || usersMaxCoins || usersSortByCoins !== 'NONE' || usersSortColumn !== null || usersOrderStatusFilter !== 'ALL');
         const overrideUsersCount = (serverUsers === null && !hasUsersFilter && exactCustomerAccounts !== null) ? exactCustomerAccounts : undefined;
         const { totalPages, paginatedItems, totalItems } = paginateList(processed, undefined, undefined, overrideUsersCount);
+
+        // ── Stat-card counts ─────────────────────────────────────────────────
+        // We compute against the FULL unfiltered user+order list so that the
+        // totals are always absolute (not affected by search/role/coins filters).
+        const allUsersForStats = serverUsers !== null ? serverUsers : users;
+        const ordersForStats = serverOrders !== null ? serverOrders : (allOrders.length > 0 ? allOrders : orders);
+        const { startIso: statStart, endIso: statEnd } = rangeBoundsIso(usersOrderDateRange.start, usersOrderDateRange.end);
+        const ordersInStatWindow = ordersForStats.filter((o) => isInRange(o.createdAt, statStart, statEnd));
+        const statsInWindow = createUserOrderStats(ordersInStatWindow);
+        let statOrdered = 0, statRepeated = 0, statUnordered = 0;
+        allUsersForStats.forEach((u) => {
+          const cnt = statsInWindow(u).customerOrdersCount;
+          if (cnt === 0) statUnordered++;
+          else { statOrdered++; if (cnt >= 2) statRepeated++; }
+        });
+        const totalForStats = allUsersForStats.length;
 
         const handleUserColumnSort = (col: 'NAME' | 'ROLE' | 'COINS' | 'ORDERS' | 'ACTIVITY' | 'SEGMENTS' | 'STATUS' | 'DATE') => {
           if (usersSortColumn === col) {
@@ -5505,6 +5552,166 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-800">
                   {exactCustomerAccounts !== null ? exactCustomerAccounts.toLocaleString() : totalItems} total users recorded
                 </span>
+              </div>
+            </div>
+
+            {/* ── Customer Order Stats Section ─────────────────────────────── */}
+            <div className="p-4 border-b border-gray-100 bg-gradient-to-br from-purple-50/60 to-indigo-50/40">
+              {/* Date Preset Filter Row */}
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <span className="text-[11px] font-extrabold text-gray-500 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                  Order Stats Period:
+                </span>
+                {(['TODAY', 'YESTERDAY', 'THIS_WEEK', 'THIS_MONTH', 'ALL_TIME'] as const).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      if (usersOrderDateRange.preset !== preset) {
+                        setUsersOrderDateRange(rangeForPreset(preset));
+                        setUsersOrderDateDraftStart('');
+                        setUsersOrderDateDraftEnd('');
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold transition-all ${
+                      usersOrderDateRange.preset === preset
+                        ? 'bg-purple-950 text-white shadow-sm'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    {preset === 'TODAY' ? 'Today' : preset === 'YESTERDAY' ? 'Yesterday' : preset === 'THIS_WEEK' ? 'This Week' : preset === 'THIS_MONTH' ? 'This Month' : 'All Time'}
+                  </button>
+                ))}
+                {/* Custom range */}
+                <div className={`flex items-center gap-1.5 border px-2.5 py-1 rounded-xl ${
+                  usersOrderDateRange.preset === 'CUSTOM' ? 'bg-purple-50 border-purple-300' : 'bg-white border-gray-200'
+                }`}>
+                  <input
+                    type="date"
+                    value={usersOrderDateDraftStart || (usersOrderDateRange.preset === 'CUSTOM' ? usersOrderDateRange.start : '')}
+                    max={usersOrderDateDraftEnd || undefined}
+                    onChange={(e) => setUsersOrderDateDraftStart(e.target.value)}
+                    className="bg-transparent text-gray-900 text-[11px] font-bold focus:outline-none cursor-pointer"
+                    aria-label="Order stats from date"
+                  />
+                  <span className="text-gray-400 text-[11px] font-bold">–</span>
+                  <input
+                    type="date"
+                    value={usersOrderDateDraftEnd || (usersOrderDateRange.preset === 'CUSTOM' ? usersOrderDateRange.end : '')}
+                    min={usersOrderDateDraftStart || undefined}
+                    onChange={(e) => setUsersOrderDateDraftEnd(e.target.value)}
+                    className="bg-transparent text-gray-900 text-[11px] font-bold focus:outline-none cursor-pointer"
+                    aria-label="Order stats to date"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const s = usersOrderDateDraftStart;
+                    const e = usersOrderDateDraftEnd;
+                    if (s && e && s <= e) {
+                      setUsersOrderDateRange({ preset: 'CUSTOM', start: s, end: e });
+                    }
+                  }}
+                  disabled={!usersOrderDateDraftStart || !usersOrderDateDraftEnd || usersOrderDateDraftStart > usersOrderDateDraftEnd}
+                  className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 disabled:text-gray-400 text-white text-[11px] font-extrabold transition-all active:scale-95"
+                >
+                  Apply
+                </button>
+                {usersOrderStatusFilter !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => setUsersOrderStatusFilter('ALL')}
+                    className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-extrabold transition-all cursor-pointer border border-red-200"
+                  >
+                    Clear Filter
+                  </button>
+                )}
+              </div>
+
+              {/* Stat Cards Row */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Ordered Customers */}
+                <button
+                  type="button"
+                  onClick={() => setUsersOrderStatusFilter(usersOrderStatusFilter === 'ORDERED' ? 'ALL' : 'ORDERED')}
+                  className={`flex items-center gap-3 p-4 rounded-2xl border-2 text-left transition-all active:scale-95 cursor-pointer ${
+                    usersOrderStatusFilter === 'ORDERED'
+                      ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                      : 'border-emerald-200 bg-white hover:border-emerald-400 hover:shadow-sm'
+                  }`}
+                  title="Click to filter users who ordered at least once in this period"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center shrink-0">
+                    <ShoppingBag className="w-5 h-5 text-emerald-700" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xl font-black text-emerald-900 leading-none">{statOrdered.toLocaleString()}</div>
+                    <div className="text-[11px] font-bold text-emerald-700 mt-0.5">Ordered Customers</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">≥ 1 order in period</div>
+                    {totalForStats > 0 && (
+                      <div className="text-[10px] font-extrabold text-emerald-600 mt-0.5">{((statOrdered / totalForStats) * 100).toFixed(1)}% of total</div>
+                    )}
+                  </div>
+                  {usersOrderStatusFilter === 'ORDERED' && (
+                    <span className="ml-auto shrink-0 text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-bold">Active</span>
+                  )}
+                </button>
+
+                {/* Repeated Customers */}
+                <button
+                  type="button"
+                  onClick={() => setUsersOrderStatusFilter(usersOrderStatusFilter === 'REPEATED' ? 'ALL' : 'REPEATED')}
+                  className={`flex items-center gap-3 p-4 rounded-2xl border-2 text-left transition-all active:scale-95 cursor-pointer ${
+                    usersOrderStatusFilter === 'REPEATED'
+                      ? 'border-purple-500 bg-purple-50 shadow-md'
+                      : 'border-purple-200 bg-white hover:border-purple-400 hover:shadow-sm'
+                  }`}
+                  title="Click to filter users who ordered 2 or more times in this period"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center shrink-0">
+                    <RefreshCw className="w-5 h-5 text-purple-700" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xl font-black text-purple-900 leading-none">{statRepeated.toLocaleString()}</div>
+                    <div className="text-[11px] font-bold text-purple-700 mt-0.5">Repeated Customers</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">≥ 2 orders in period</div>
+                    {statOrdered > 0 && (
+                      <div className="text-[10px] font-extrabold text-purple-600 mt-0.5">{((statRepeated / statOrdered) * 100).toFixed(1)}% of ordered</div>
+                    )}
+                  </div>
+                  {usersOrderStatusFilter === 'REPEATED' && (
+                    <span className="ml-auto shrink-0 text-[10px] bg-purple-600 text-white px-2 py-0.5 rounded-full font-bold">Active</span>
+                  )}
+                </button>
+
+                {/* Unordered Customers */}
+                <button
+                  type="button"
+                  onClick={() => setUsersOrderStatusFilter(usersOrderStatusFilter === 'UNORDERED' ? 'ALL' : 'UNORDERED')}
+                  className={`flex items-center gap-3 p-4 rounded-2xl border-2 text-left transition-all active:scale-95 cursor-pointer ${
+                    usersOrderStatusFilter === 'UNORDERED'
+                      ? 'border-gray-500 bg-gray-50 shadow-md'
+                      : 'border-gray-200 bg-white hover:border-gray-400 hover:shadow-sm'
+                  }`}
+                  title="Click to filter users who did not order in this period"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center shrink-0">
+                    <UserX className="w-5 h-5 text-gray-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xl font-black text-gray-800 leading-none">{statUnordered.toLocaleString()}</div>
+                    <div className="text-[11px] font-bold text-gray-600 mt-0.5">Unordered Customers</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">0 orders in period</div>
+                    {totalForStats > 0 && (
+                      <div className="text-[10px] font-extrabold text-gray-500 mt-0.5">{((statUnordered / totalForStats) * 100).toFixed(1)}% of total</div>
+                    )}
+                  </div>
+                  {usersOrderStatusFilter === 'UNORDERED' && (
+                    <span className="ml-auto shrink-0 text-[10px] bg-gray-600 text-white px-2 py-0.5 rounded-full font-bold">Active</span>
+                  )}
+                </button>
               </div>
             </div>
 
