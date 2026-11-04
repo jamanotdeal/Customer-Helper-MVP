@@ -108,8 +108,8 @@ export const getItemQuantityNum = (item: { qty?: string | number; quantity?: num
 
 /**
  * Resolves the unit price of an order item:
- * 1. From item.price (if set and > 0)
- * 2. From connected active ShopOrders (via itemsWithPrice matching item ID or normalized name)
+ * 1. From connected active ShopOrders (via itemsWithPrice matching item ID or normalized name)
+ * 2. From item.price (if set and > 0, and not unconfirmed custom item)
  */
 export const getItemUnitPrice = (
   it: OrderItem,
@@ -118,21 +118,7 @@ export const getItemUnitPrice = (
 ): number | undefined => {
   if (!it) return undefined;
 
-  // 1. If it's a custom item, direct price is only counted as confirmed product cost
-  // if the helper marked it purchased, confirmed buyFrom source, or attached a shop order
-  const isCustomUnconfirmed = Boolean(it.isCustom && !it.purchased && !it.buyFrom);
-
-  // Direct price on item (if confirmed or standard product catalog item)
-  if (!isCustomUnconfirmed) {
-    const directPrice = typeof it.price === 'number' && !isNaN(it.price) && it.price > 0
-      ? it.price
-      : (typeof it.price === 'string' && !isNaN(parseFloat(it.price)) && parseFloat(it.price) > 0 ? parseFloat(it.price) : undefined);
-    if (directPrice !== undefined && directPrice > 0) {
-      return directPrice;
-    }
-  }
-
-  // 2. From active ShopOrders (strictly scoped to this order)
+  // 1. From active ShopOrders (strictly scoped to this order) - shop price takes priority
   const activeSOs = shopOrders.filter(
     (so) =>
       (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
@@ -159,7 +145,109 @@ export const getItemUnitPrice = (
     }
   }
 
+  // 2. If it's a custom item, direct price is only counted as confirmed product cost
+  // if the helper marked it purchased, confirmed buyFrom source, or attached a shop order
+  const isCustomUnconfirmed = Boolean(it.isCustom && !it.purchased && !it.buyFrom);
+
+  // Direct price on item (if confirmed or standard product catalog item)
+  if (!isCustomUnconfirmed) {
+    const directPrice = typeof it.price === 'number' && !isNaN(it.price) && it.price > 0
+      ? it.price
+      : (typeof it.price === 'string' && !isNaN(parseFloat(it.price)) && parseFloat(it.price) > 0 ? parseFloat(it.price) : undefined);
+    if (directPrice !== undefined && directPrice > 0) {
+      return directPrice;
+    }
+  }
+
   return undefined;
+};
+
+/**
+ * Checks whether an item was included in active ShopOrders.
+ */
+export const isItemInShopOrders = (
+  it: OrderItem,
+  shopOrders: ShopOrder[] = [],
+  parentOrderId?: string
+): boolean => {
+  if (!it) return false;
+  const activeSOs = shopOrders.filter(
+    (so) =>
+      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
+  );
+  if (activeSOs.length === 0) return false;
+
+  const cleanName = (it.name || '').toLowerCase().trim();
+  const itNorm = normalizeItemName(it.name || '');
+
+  return activeSOs.some((so) => {
+    if (!so.itemsWithPrice || so.itemsWithPrice.length === 0) return false;
+    return so.itemsWithPrice.some((ip: any) => {
+      if (it.id && (ip.itemId === it.id || ip.originalId === it.id)) return true;
+      const ipName = (ip.name || '').toLowerCase().trim();
+      const ipNorm = normalizeItemName(ip.name || '');
+      if (ipName && (cleanName === ipName || cleanName.includes(ipName) || ipName.includes(cleanName))) return true;
+      if (ipNorm && (itNorm === ipNorm || (itNorm.length > 1 && ipNorm.length > 1 && (itNorm.includes(ipNorm) || ipNorm.includes(itNorm))))) return true;
+      return false;
+    });
+  });
+};
+
+/**
+ * Determines helper fulfillment status for an order item:
+ * - If explicitly unchecked/marked unpurchased: NOT added
+ * - If in an active shop order: ADDED
+ * - If explicitly marked purchased: ADDED
+ * - If helper placed shop orders for the order, but omitted this item: NOT added
+ * - If order reached late status (PURCHASED_EXECUTED / ON_THE_WAY / ARRIVED / DELIVERED) and item wasn't purchased: NOT added
+ * - Otherwise in planning/initial phase: pending
+ */
+export const isItemAddedByHelper = (
+  it: OrderItem,
+  shopOrders: ShopOrder[] = [],
+  orderStatus?: string,
+  parentOrderId?: string
+): { isAdded: boolean; reason: 'in_shop_order' | 'marked_purchased' | 'not_purchased' | 'excluded_from_shop' | 'pending' } => {
+  if (!it) return { isAdded: false, reason: 'not_purchased' };
+
+  // 1. Explicitly marked not purchased
+  if (it.purchased === false) {
+    return { isAdded: false, reason: 'not_purchased' };
+  }
+
+  // 2. Explicitly marked purchased
+  if (it.purchased === true) {
+    return { isAdded: true, reason: 'marked_purchased' };
+  }
+
+  // 3. Included in active shop order
+  const inSO = isItemInShopOrders(it, shopOrders, parentOrderId);
+  if (inSO) {
+    return { isAdded: true, reason: 'in_shop_order' };
+  }
+
+  const activeSOs = shopOrders.filter(
+    (so) =>
+      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
+      so.status !== 'CANCELED' &&
+      (so.status as string) !== 'CANCELLED'
+  );
+
+  // 4. Helper created active shop orders for other items, but left this item out
+  if (activeSOs.length > 0) {
+    return { isAdded: false, reason: 'excluded_from_shop' };
+  }
+
+  // 5. Order is in processing or later, and item was never confirmed/purchased
+  const isLatePhase = ['PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED'].includes(orderStatus || '');
+  if (isLatePhase) {
+    return { isAdded: false, reason: 'not_purchased' };
+  }
+
+  // 6. Initial / pending phase before helper completes purchasing
+  return { isAdded: true, reason: 'pending' };
 };
 
 /**
@@ -220,7 +308,8 @@ export const getShopItemPriceDisplay = (
 /**
  * Accurately calculates total product cost for an order across all items
  * (multiplying each item's unit price by its current quantity) without double-counting.
- * Strictly guarantees that only ShopOrders belonging to this order (so.parentOrderId === order.id) are counted.
+ * Strictly guarantees that only ShopOrders belonging to this order (so.parentOrderId === order.id) are counted,
+ * and EXCLUDES items that the helper did not add or purchase.
  */
 export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] = []): number => {
   if (!order) return 0;
@@ -241,9 +330,16 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
 
   let itemsSum = 0;
   let hasAtLeastOnePricedItem = false;
+  let hasExcludedItems = false;
 
   // 1. Calculate cost from structured items (unitPrice * quantity)
   for (const it of items) {
+    const status = isItemAddedByHelper(it, activeSOs, order.status, order.id);
+    if (!status.isAdded) {
+      hasExcludedItems = true;
+      continue; // Skip items the helper did not add / purchase
+    }
+
     const unitPrice = getItemUnitPrice(it, activeSOs, order.id);
     if (unitPrice !== undefined && unitPrice > 0) {
       const qty = getItemQuantityNum(it);
@@ -263,6 +359,11 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
 
   if (itemsSum > 0) {
     return Math.round(itemsSum * 100) / 100;
+  }
+
+  // If items were present and some were explicitly excluded by helper, do NOT fall back to old order.productCost
+  if (hasExcludedItems) {
+    return 0;
   }
 
   return Number(order.productCost) || 0;

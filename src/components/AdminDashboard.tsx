@@ -4991,13 +4991,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 🔁 Return
                               </span>
                             )}
-                            {ord.status === 'DELIVERED' && (
+                            {(ord.customerPayment?.transactionId || ord.isPaid) ? (
                               <div className="mt-0.5">
-                                {ord.isPaid ? (
-                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-wide">
-                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Paid
-                                  </span>
-                                ) : ord.isStorePaid && !ord.isHelperPaid ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-wide">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Paid{ord.customerPayment?.method ? ` (${ord.customerPayment.method})` : ''}
+                                </span>
+                              </div>
+                            ) : ord.status === 'DELIVERED' ? (
+                              <div className="mt-0.5">
+                                {ord.isStorePaid && !ord.isHelperPaid ? (
                                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black uppercase tracking-wide">
                                     Store Paid
                                   </span>
@@ -5011,7 +5013,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </span>
                                 )}
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         </td>
                         <td className="py-4 px-5 text-right" onClick={(e) => e.stopPropagation()}>

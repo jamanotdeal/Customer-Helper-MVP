@@ -7,7 +7,8 @@ import { calculateHelperCommission, calculateEstimatedFee, calculateDistanceKm, 
 import { fetchRoadRoute } from '@/lib/routeUtils';
 import { useModal } from '../CustomModal';
 import { useAuth } from '@/context/AuthContext';
-import { formatCreatedAt, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
+import { getItemQuantityNum, getItemUnitPrice, calculateOrderProductCost, isItemAddedByHelper } from '@/lib/itemUtils';
+import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getOrderAcceptanceDurationText } from '@/lib/timeUtils';
 import {
   X,
   User,
@@ -40,6 +41,8 @@ import {
   Maximize2,
   ExternalLink,
   CreditCard,
+  Check,
+  Copy,
 } from 'lucide-react';
 import { AssignHelperModal } from './AssignHelperModal';
 import { AdminStoreOrderDetailsModal } from './AdminStoreOrderDetailsModal';
@@ -103,6 +106,27 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       unsub();
     };
   }, [orderId]);
+
+  const [copiedTxId, setCopiedTxId] = useState(false);
+  const handleCopyTxId = (txId: string) => {
+    if (!txId) return;
+    navigator.clipboard.writeText(txId);
+    setCopiedTxId(true);
+    setTimeout(() => setCopiedTxId(false), 2000);
+  };
+
+  // Auto-sync productCost in fallbackStore if helper excluded items or updated shop orders
+  useEffect(() => {
+    if (!order?.id) return;
+    const sos = fallbackStore.getShopOrdersForOrder(order.id);
+    const calculated = calculateOrderProductCost(order, sos);
+    if (order.productCost !== calculated && calculated >= 0) {
+      fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        productCost: calculated,
+      }));
+    }
+  }, [order?.id, order?.productCost, order?.items]);
 
   // Map state and refs for accurate pickup/delivery route visualization
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
@@ -1110,6 +1134,17 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       🎁 Reward Claimed
                     </span>
                   )}
+                  {(order.customerPayment?.transactionId || order.isPaid) ? (
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-400 text-emerald-950 text-[10px] font-black uppercase flex items-center gap-1 shadow-xs">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-950" />
+                      <span>Customer Paid{order.customerPayment?.method ? ` (${order.customerPayment.method})` : ''}</span>
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-400/25 text-amber-200 border border-amber-400/40 text-[10px] font-extrabold uppercase flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-amber-300" />
+                      <span>Payment Unpaid</span>
+                    </span>
+                  )}
                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white text-[10px] font-bold flex items-center space-x-1">
                     <Clock className="w-3 h-3 text-purple-300" />
                     <span>{order.status === 'DELIVERED' ? `delivered in: ${getDeliveryDurationText(order)}` : order.status === 'CANCELED' ? `cancelled in: ${getDeliveryDurationText(order)}` : `Running: ${getElapsedTime(order)}`}</span>
@@ -1271,12 +1306,92 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {(order.items || []).map((it) => (
-                    <div key={it.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 border border-gray-100 font-medium">
-                      <span className="text-gray-800 font-bold">{it.name}</span>
-                      {it.qty && <span className="text-xs text-gray-500 font-bold">Qty: {it.qty}</span>}
-                    </div>
-                  ))}
+                  {(() => {
+                    const currentShopOrders = fallbackStore.getShopOrdersForOrder(order.id);
+                    return (order.items || []).map((it) => {
+                      const addedStatus = isItemAddedByHelper(it, currentShopOrders, order.status, order.id);
+                      const unitPrice = getItemUnitPrice(it, currentShopOrders, order.id);
+                      const qtyNum = getItemQuantityNum(it);
+                      const linePrice = unitPrice !== undefined ? unitPrice * qtyNum : undefined;
+
+                      return (
+                        <div
+                          key={it.id}
+                          className={`flex items-start justify-between p-2.5 rounded-xl border transition-all ${
+                            !addedStatus.isAdded
+                              ? 'bg-rose-50/70 border-rose-200'
+                              : addedStatus.reason === 'pending'
+                              ? 'bg-gray-50 border-gray-100'
+                              : 'bg-emerald-50/60 border-emerald-200'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`font-bold text-xs ${!addedStatus.isAdded ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
+                                {it.name}
+                              </span>
+                              {it.qty && (
+                                <span className="text-[10px] text-gray-500 font-bold bg-white/80 px-1.5 py-0.5 rounded border border-gray-200">
+                                  Qty: {it.qty}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Fulfillment Status Badge */}
+                            <div>
+                              {!addedStatus.isAdded ? (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full border border-rose-200">
+                                  <X className="w-2.5 h-2.5 text-rose-600" />
+                                  {addedStatus.reason === 'not_purchased' ? 'Not Added / Purchased' : 'Excluded from Store Order'}
+                                </span>
+                              ) : addedStatus.reason === 'pending' ? (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                                  <Clock className="w-2.5 h-2.5 text-gray-400" />
+                                  Pending Helper
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                  {addedStatus.reason === 'in_shop_order' ? 'Added to Store Order' : 'Purchased by Helper'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Price Display */}
+                          <div className="text-right shrink-0 ml-2">
+                            {linePrice !== undefined ? (
+                              !addedStatus.isAdded ? (
+                                <div>
+                                  <span className="font-mono text-xs line-through text-gray-400 font-bold">
+                                    ৳{linePrice}
+                                  </span>
+                                  <span className="block text-[9px] font-black text-rose-600 uppercase">
+                                    ৳0 (Excluded)
+                                  </span>
+                                </div>
+                              ) : (
+                                <div>
+                                  <span className="font-mono text-xs font-black text-emerald-950">
+                                    ৳{linePrice}
+                                  </span>
+                                  {qtyNum > 1 && unitPrice !== undefined && (
+                                    <span className="block text-[9px] text-gray-500 font-medium">
+                                      (৳{unitPrice} × {qtyNum})
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            ) : (
+                              <span className="text-[10px] text-gray-400 font-bold italic">
+                                Price N/A
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </div>
 
@@ -1641,11 +1756,20 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               const distanceKm = rawDistanceKm > 0 ? Math.ceil(rawDistanceKm) : 0;
               const rawWeightKg = order.weightKg ?? 0;
               const weightKg = rawWeightKg > 0 ? Math.ceil(rawWeightKg) : 0;
-              const productCost = order.productCost ?? 0;
-              const isReturn = order.needDeliveryBack ?? false;
               const shopPrices = fallbackStore.getShopOrdersForOrder(order.id);
-              const shopTotal = shopPrices.filter(so => so.status !== 'CANCELED').reduce((sum, so) => sum + (so.price ?? 0), 0);
-              const effectiveProductCost = shopTotal > 0 ? shopTotal : productCost;
+              const activeShopOrders = shopPrices.filter(so => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
+              const shopTotal = activeShopOrders.reduce((sum, so) => sum + (so.price ?? 0), 0);
+              const isReturn = order.needDeliveryBack ?? false;
+              const calculatedProductCost = calculateOrderProductCost(order, shopPrices);
+              const effectiveProductCost = calculatedProductCost;
+              const productCost = calculatedProductCost;
+
+              const excludedItems = (order.items || []).filter((it) => {
+                const st = isItemAddedByHelper(it, shopPrices, order.status, order.id);
+                return !st.isAdded;
+              });
+              const hasExcludedItems = excludedItems.length > 0;
+
               const est = calculateEstimatedFee(
                 { distanceKm, weightKg, isReturnRequested: isReturn, productPrice: effectiveProductCost },
                 pricingSettings
@@ -1659,10 +1783,28 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               const appliedDueVal = order.appliedDuePayment?.amount || 0;
               const totalCollectable = effectiveCustomerDeliveryFee + effectiveProductCost + processingFeeValue + (est.returnFee || 0) + appliedDueVal + customStoreFeeVal;
               const feeRows: { label: string; value: string | number; sub?: string; color?: string; bold?: boolean }[] = [
-                { label: 'Product Cost (পণ্যের দাম)', value: productCost > 0 ? `৳${productCost}` : 'Not set', sub: 'Entered by store/helper', color: 'text-gray-800' },
-                ...(shopTotal > 0 ? [{ label: 'Shop Orders Total', value: `৳${shopTotal}`, sub: 'Sum of store prices', color: 'text-purple-800' }] : []),
+                {
+                  label: 'Product Cost (পণ্যের দাম)',
+                  value: calculatedProductCost > 0 ? `৳${calculatedProductCost}` : '৳0 (Not set)',
+                  sub: shopTotal > 0
+                    ? `From ${activeShopOrders.length} active store request(s)`
+                    : (calculatedProductCost > 0 ? 'From items added by helper' : 'No items added or confirmed'),
+                  color: calculatedProductCost > 0 ? 'text-gray-900 font-black' : 'text-gray-400'
+                },
+                ...(shopTotal > 0 && shopTotal !== calculatedProductCost ? [{
+                  label: 'Shop Orders Total',
+                  value: `৳${shopTotal}`,
+                  sub: 'Sum of store prices',
+                  color: 'text-purple-800'
+                }] : []),
+                ...(hasExcludedItems ? [{
+                  label: `Excluded Items (${excludedItems.length} item${excludedItems.length > 1 ? 's' : ''} not added by helper)`,
+                  value: '৳0 (Excluded)',
+                  sub: `${excludedItems.map(i => i.name).join(', ')} — helper did not add, excluded from customer bill`,
+                  color: 'text-rose-600 font-bold',
+                }] : []),
                 { label: `Distance Fee (${rawDistanceKm} km → ${distanceKm} km × ৳${est.perKmRate}/km)`, value: distanceKm > 0 ? `৳${est.distanceFee}` : 'No GPS data', sub: 'Rounded up to nearest whole km for pricing', color: 'text-blue-700' },
-                { label: `Weight Fee (${rawWeightKg} kg → ${weightKg} kg × ৳${est.perKgRate}/kg)`, value: weightKg > 0 ? `৳${est.weightFee}` : '৳0 (no weight set)', sub: 'Rounded up to nearest whole kg for pricing', color: 'text-teal-700' },
+                { label: `Weight Fee (${rawWeightKg} kg → ${weightKg} kg × ৳${est.perKgRate}/kg)`, value: weightKg > 0 ? `৳${est.weightFee}` : '৳0 (no weight set)', sub: 'Rounded up to nearest whole km for pricing', color: 'text-teal-700' },
                 { label: `Delivery Sub-total (min ৳${est.minFee})`, value: `৳${est.deliverySubtotal}`, sub: 'Distance + weight; min fee applied', color: 'text-slate-700' },
                 ...(isReturn ? [{ label: `Return/Two-Way Fee (+${est.returnPercent}%)`, value: `৳${est.returnFee}`, sub: 'Return delivery surcharge', color: 'text-indigo-700' }] : []),
                 ...(isFreeDeliv ? [{
@@ -1716,7 +1858,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     </div>
                     <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-center">
                       <span className="text-[10px] font-bold text-gray-500 uppercase block">Product Cost</span>
-                      <span className="text-sm font-black text-gray-900">{productCost > 0 ? `৳${productCost}` : '—'}</span>
+                      <span className="text-sm font-black text-gray-900">{calculatedProductCost > 0 ? `৳${calculatedProductCost}` : '—'}</span>
                       <p className="text-[9px] text-gray-400 mt-0.5">Collected from customer</p>
                     </div>
                     <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-center">
@@ -1747,7 +1889,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <div className="text-right">
                         <span className="text-2xl font-black">৳{totalCollectable}</span>
                         <p className="text-[10px] text-emerald-200">
-                          ({effectiveCustomerDeliveryFee} fee{isFreeDeliv ? ' [Reward Claimed]' : ''} + {productCost > 0 ? productCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''}{customStoreFeeVal > 0 ? ` + ${customStoreFeeVal} custom store` : ''})
+                          ({effectiveCustomerDeliveryFee} fee{isFreeDeliv ? ' [Reward Claimed]' : ''} + {calculatedProductCost > 0 ? calculatedProductCost : 0} products{processingFeeValue > 0 ? ` + ${processingFeeValue} processing` : ''}{customStoreFeeVal > 0 ? ` + ${customStoreFeeVal} custom store` : ''})
                         </p>
                       </div>
                     </div>
@@ -1755,6 +1897,115 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       <p className="text-[10px] text-emerald-200 mt-2 italic">
                         ⚠ Order not yet delivered — amount is collectable but not yet confirmed
                       </p>
+                    )}
+                  </div>
+
+                  {/* ── CUSTOMER PAYMENT RECORD (Paid via Pay button on Order Details) ── */}
+                  <div className={`p-4 rounded-2xl border shadow-2xs space-y-3 transition-all ${
+                    (order.customerPayment?.transactionId || order.isPaid)
+                      ? 'bg-gradient-to-br from-emerald-50/90 to-teal-50/60 border-emerald-200'
+                      : 'bg-gray-50/70 border-gray-200'
+                  }`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`p-2 rounded-xl text-white shadow-2xs ${
+                          (order.customerPayment?.transactionId || order.isPaid) ? 'bg-emerald-600' : 'bg-gray-400'
+                        }`}>
+                          <CreditCard className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h5 className="text-xs font-black text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>Customer Payment Record</span>
+                            <span className="text-[10px] font-normal text-gray-500 normal-case">(গ্রাহকের পেমেন্ট তথ্য)</span>
+                          </h5>
+                          <p className="text-[10px] text-gray-500">
+                            Payment submitted via Pay button on Customer Order Details
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        {(order.customerPayment?.transactionId || order.isPaid) ? (
+                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            Paid ৳{order.customerPayment?.amount ?? totalCollectable}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 bg-amber-100 text-amber-900 border border-amber-300">
+                            <Clock className="w-3 h-3 text-amber-700" />
+                            Pending Customer Payment
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {(order.customerPayment?.transactionId || order.isPaid) ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs pt-1">
+                        {/* Payment Method */}
+                        <div className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-0.5">
+                          <span className="text-[10px] font-bold text-gray-400 uppercase block">Payment Method</span>
+                          <span className="text-xs font-black text-gray-900 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                            <span>{order.customerPayment?.method || 'Direct / App Pay'}</span>
+                          </span>
+                        </div>
+
+                        {/* Amount Paid */}
+                        <div className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-0.5">
+                          <span className="text-[10px] font-bold text-gray-400 uppercase block">Amount Paid</span>
+                          <span className="text-xs font-black text-emerald-800 font-mono">
+                            ৳{order.customerPayment?.amount ?? totalCollectable}
+                          </span>
+                        </div>
+
+                        {/* Transaction ID with Copy */}
+                        <div className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-0.5">
+                          <span className="text-[10px] font-bold text-gray-400 uppercase block">Transaction ID (TxID)</span>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-xs font-mono font-bold text-purple-950 truncate" title={order.customerPayment?.transactionId || 'N/A'}>
+                              {order.customerPayment?.transactionId || 'Direct'}
+                            </span>
+                            {order.customerPayment?.transactionId && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyTxId(order.customerPayment!.transactionId)}
+                                className="p-1 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 transition-colors shrink-0"
+                                title="Copy TxID"
+                              >
+                                {copiedTxId ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Paid Time */}
+                        <div className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-0.5">
+                          <span className="text-[10px] font-bold text-gray-400 uppercase block">Paid At</span>
+                          <span className="text-[11px] font-bold text-gray-700">
+                            {order.customerPayment?.paidAt ? formatPlacedDateTime(order.customerPayment.paidAt) : (order.paidAt ? formatPlacedDateTime(order.paidAt) : 'Recently')}
+                          </span>
+                        </div>
+
+                        {/* Account Details if provided */}
+                        {order.customerPayment?.accountDetails && (
+                          <div className="col-span-1 sm:col-span-2 lg:col-span-4 p-2.5 rounded-xl bg-white border border-emerald-100 flex items-center justify-between text-xs flex-wrap gap-2">
+                            <div>
+                              <span className="text-[10px] font-bold text-gray-400 uppercase block">Recipient Account Details:</span>
+                              <span className="font-semibold text-gray-800">{order.customerPayment.accountDetails}</span>
+                            </div>
+                            {order.customerPayment.status && (
+                              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 font-extrabold text-[9px] border border-emerald-200 uppercase">
+                                Status: {order.customerPayment.status}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/60 text-xs text-amber-900 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>কাস্টমার এখনও অর্ডার ডিটেইলস পেজের ‘Pay’ বাটনের মাধ্যমে পেমেন্ট সম্পন্ন করেননি।</span>
+                      </div>
                     )}
                   </div>
 
@@ -1790,7 +2041,31 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      {/* Customer Payment Settlement Tile */}
+                      <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-gray-500 uppercase block">Customer Payment</span>
+                          <span className="text-xs font-black text-gray-900">
+                            {(order.customerPayment?.transactionId || order.isPaid)
+                              ? `Paid (${order.customerPayment?.method || 'Direct'})`
+                              : 'Pending Payment'}
+                          </span>
+                          {(order.customerPayment?.paidAt || order.paidAt) && (
+                            <span className="text-[9px] text-emerald-600 block">
+                              Settled: {new Date(order.customerPayment?.paidAt || order.paidAt!).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
+                          (order.customerPayment?.transactionId || order.isPaid)
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            : 'bg-amber-100 text-amber-800 border border-amber-200'
+                        }`}>
+                          {(order.customerPayment?.transactionId || order.isPaid) ? 'Paid' : 'Unpaid'}
+                        </span>
+                      </div>
+
                       <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
                         <div>
                           <span className="text-[10px] font-bold text-gray-500 uppercase block">Helper Commission</span>
