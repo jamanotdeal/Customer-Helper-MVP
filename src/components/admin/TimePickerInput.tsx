@@ -8,6 +8,7 @@ interface TimePickerInputProps {
   onChange: (newValue: string) => void;
   label?: string;
   placeholder?: string;
+  align?: 'left' | 'right';
 }
 
 // Utility: Convert "HH:mm" (24h) or "hh:mm AM/PM" to { hour12: 1-12, minute: 0-59, ampm: 'AM'|'PM' }
@@ -66,6 +67,7 @@ export const TimePickerInput: React.FC<TimePickerInputProps> = ({
   onChange,
   label,
   placeholder = 'Select Time',
+  align = 'left',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -141,7 +143,7 @@ export const TimePickerInput: React.FC<TimePickerInputProps> = ({
   const current24 = format24HourTime(selectedHour, selectedMinute, selectedAmPm);
 
   return (
-    <div className="w-full relative" ref={containerRef}>
+    <div className={`w-full relative ${isOpen ? 'z-40' : 'z-10'}`} ref={containerRef}>
       {label && (
         <label className="text-xs font-bold text-gray-700 block mb-1.5">{label}</label>
       )}
@@ -171,7 +173,9 @@ export const TimePickerInput: React.FC<TimePickerInputProps> = ({
 
       {/* Dropdown Popover Menu */}
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-full min-w-[300px] bg-white rounded-2xl p-4 shadow-2xl border border-purple-100 z-50 animate-in fade-in slide-in-from-top-2 duration-150 space-y-4">
+        <div className={`absolute top-full mt-2 w-full min-w-[290px] sm:w-[320px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl p-4 shadow-2xl border border-purple-100 z-50 animate-in fade-in slide-in-from-top-2 duration-150 space-y-4 ${
+          align === 'right' ? 'right-0 sm:left-auto' : 'left-0 sm:right-auto'
+        }`}>
           {/* Quick Slot Dropdown Select */}
           <div>
             <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider block mb-1">

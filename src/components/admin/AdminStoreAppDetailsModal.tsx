@@ -28,6 +28,10 @@ import {
   AlertTriangle,
   Upload,
   Image as ImageIcon,
+  CreditCard,
+  Building2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 
@@ -65,6 +69,23 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
   const [locationLat, setLocationLat] = useState<string>(application.location?.lat?.toString() || '');
   const [locationLng, setLocationLng] = useState<string>(application.location?.lng?.toString() || '');
   const [photoUrl, setPhotoUrl] = useState(application.photoUrl || '');
+  const [bkashNumber, setBkashNumber] = useState(application.bkashNumber || '');
+  const [bkashType, setBkashType] = useState<'Personal' | 'Merchant'>(application.bkashType || 'Personal');
+  const [nagadNumber, setNagadNumber] = useState(application.nagadNumber || '');
+  const [nagadType, setNagadType] = useState<'Personal' | 'Merchant'>(application.nagadType || 'Personal');
+  const [bankName, setBankName] = useState(application.bankName || '');
+  const [bankAccountName, setBankAccountName] = useState(application.bankAccountName || '');
+  const [bankAccountNumber, setBankAccountNumber] = useState(application.bankAccountNumber || '');
+  const [bankBranch, setBankBranch] = useState(application.bankBranch || '');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, key: string) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
   const photoFileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -201,6 +222,14 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
           lng: locationLng ? parseFloat(locationLng) : application.location?.lng,
         },
         photoUrl: savedPhotoUrl,
+        bkashNumber: bkashNumber.trim() || undefined,
+        bkashType: bkashNumber.trim() ? bkashType : undefined,
+        nagadNumber: nagadNumber.trim() || undefined,
+        nagadType: nagadNumber.trim() ? nagadType : undefined,
+        bankName: bankName.trim() || undefined,
+        bankAccountName: bankAccountName.trim() || undefined,
+        bankAccountNumber: bankAccountNumber.trim() || undefined,
+        bankBranch: bankBranch.trim() || undefined,
       });
       showAlert('সফল', 'স্টোর আবেদনের তথ্য আপডেট হয়েছে।', 'success');
       onSaved();
@@ -380,6 +409,113 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                   <InfoRow label="Display Name" value={application.userName} />
                   <InfoRow label="Email" value={application.userEmail} />
                   <InfoRow label="User ID" value={application.userId} mono />
+                </div>
+              </div>
+
+              {/* Banking & Disbursement Accounts */}
+              <div className="bg-emerald-50/60 rounded-2xl p-4 border border-emerald-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5" /> Banking & Payout Accounts (পেমেন্ট একাউন্ট)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setMode('EDIT')}
+                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 bg-white px-2 py-0.5 rounded-lg border border-emerald-200/80 shadow-2xs cursor-pointer"
+                  >
+                    <Edit className="w-3 h-3" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {/* bKash */}
+                  <div className="p-2.5 rounded-xl bg-white border border-emerald-100">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-extrabold text-pink-700 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-pink-600"></span>
+                        bKash ({application.bkashType || 'Personal'})
+                      </span>
+                      {application.bkashNumber && (
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(application.bkashNumber!, 'bkash')}
+                          className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer"
+                        >
+                          {copiedKey === 'bkash' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedKey === 'bkash' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      )}
+                    </div>
+                    <span className="font-mono font-black text-sm text-gray-900 block mt-1">
+                      {application.bkashNumber || <span className="text-gray-300 font-sans text-xs">Not added</span>}
+                    </span>
+                  </div>
+
+                  {/* Nagad */}
+                  <div className="p-2.5 rounded-xl bg-white border border-emerald-100">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-extrabold text-orange-700 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-orange-600"></span>
+                        Nagad ({application.nagadType || 'Personal'})
+                      </span>
+                      {application.nagadNumber && (
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(application.nagadNumber!, 'nagad')}
+                          className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer"
+                        >
+                          {copiedKey === 'nagad' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedKey === 'nagad' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      )}
+                    </div>
+                    <span className="font-mono font-black text-sm text-gray-900 block mt-1">
+                      {application.nagadNumber || <span className="text-gray-300 font-sans text-xs">Not added</span>}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Bank Account */}
+                <div className="p-3 rounded-xl bg-white border border-emerald-100 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-extrabold text-blue-900 flex items-center gap-1">
+                      <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                      Bank Account
+                    </span>
+                    {application.bankAccountNumber && (
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(application.bankAccountNumber!, 'bank')}
+                        className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedKey === 'bank' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedKey === 'bank' ? 'Copied' : 'Copy A/C'}</span>
+                      </button>
+                    )}
+                  </div>
+                  {application.bankName || application.bankAccountNumber ? (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase block">Bank Name</span>
+                        <span className="font-bold text-gray-900">{application.bankName || '—'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase block">A/C Name</span>
+                        <span className="font-bold text-gray-900">{application.bankAccountName || '—'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase block">A/C Number</span>
+                        <span className="font-mono font-black text-gray-900">{application.bankAccountNumber || '—'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase block">Branch</span>
+                        <span className="font-bold text-gray-900">{application.bankBranch || '—'}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-gray-300 text-xs font-medium">Bank details not added</span>
+                  )}
                 </div>
               </div>
 
@@ -582,6 +718,103 @@ export const AdminStoreAppDetailsModal: React.FC<AdminStoreAppDetailsModalProps>
                 <textarea value={storeDescription} onChange={(e) => setStoreDescription(e.target.value)} rows={3}
                   className="w-full p-3 rounded-2xl border border-gray-200 text-sm font-semibold outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 resize-none"
                   placeholder="যেমন: চাল, ডাল, তেল, শ্যাম্পু, সাবান, টুথপেস্ট, বিভিন্ন গৃহস্থালী পণ্য..." />
+              </div>
+
+              {/* Banking & Disbursement Accounts */}
+              <div className="p-4 rounded-2xl bg-orange-50/50 border border-orange-200/80 space-y-3 pt-2">
+                <label className="text-xs font-black text-orange-800 block flex items-center gap-1.5">
+                  <CreditCard className="w-4 h-4" />
+                  Banking & Payout Accounts (পেমেন্ট একাউন্ট)
+                </label>
+
+                {/* bKash */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white p-3 rounded-xl border border-gray-200/80">
+                  <div className="sm:col-span-2">
+                    <label className="text-[10px] font-extrabold text-pink-700 block mb-1">bKash Number</label>
+                    <input
+                      type="tel"
+                      value={bkashNumber}
+                      onChange={(e) => setBkashNumber(e.target.value)}
+                      placeholder="01XXXXXXXXX"
+                      maxLength={11}
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold focus:border-pink-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-extrabold text-gray-500 block mb-1">bKash Type</label>
+                    <select
+                      value={bkashType}
+                      onChange={(e) => setBkashType(e.target.value as 'Personal' | 'Merchant')}
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold bg-white focus:border-pink-500 focus:outline-none"
+                    >
+                      <option value="Personal">Personal</option>
+                      <option value="Merchant">Merchant</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Nagad */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white p-3 rounded-xl border border-gray-200/80">
+                  <div className="sm:col-span-2">
+                    <label className="text-[10px] font-extrabold text-orange-700 block mb-1">Nagad Number</label>
+                    <input
+                      type="tel"
+                      value={nagadNumber}
+                      onChange={(e) => setNagadNumber(e.target.value)}
+                      placeholder="01XXXXXXXXX"
+                      maxLength={11}
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold focus:border-orange-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-extrabold text-gray-500 block mb-1">Nagad Type</label>
+                    <select
+                      value={nagadType}
+                      onChange={(e) => setNagadType(e.target.value as 'Personal' | 'Merchant')}
+                      className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold bg-white focus:border-orange-500 focus:outline-none"
+                    >
+                      <option value="Personal">Personal</option>
+                      <option value="Merchant">Merchant</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Bank Account */}
+                <div className="bg-white p-3 rounded-xl border border-gray-200/80 space-y-2">
+                  <label className="text-[10px] font-extrabold text-blue-900 block flex items-center gap-1">
+                    <Building2 className="w-3 h-3 text-blue-600" /> Bank Transfer
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={bankName}
+                      onChange={(e) => setBankName(e.target.value)}
+                      placeholder="Bank Name (যেমন: City Bank)"
+                      className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={bankAccountName}
+                      onChange={(e) => setBankAccountName(e.target.value)}
+                      placeholder="A/C Holder Name"
+                      className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={bankAccountNumber}
+                      onChange={(e) => setBankAccountNumber(e.target.value)}
+                      placeholder="A/C Number"
+                      className="w-full p-2 rounded-xl border border-gray-200 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={bankBranch}
+                      onChange={(e) => setBankBranch(e.target.value)}
+                      placeholder="Branch Name"
+                      className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Location — address + coordinates */}

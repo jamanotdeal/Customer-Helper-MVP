@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { HelperApplication, UserProfile } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { useModal } from '../CustomModal';
-import { X, User, Phone, Mail, Award, CheckCircle, Search } from 'lucide-react';
+import { X, User, Phone, Mail, Award, CheckCircle, Search, CreditCard, Building2 } from 'lucide-react';
 
 interface AdminHelperAppModalProps {
   application?: HelperApplication | null;
@@ -33,6 +33,17 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
   const [hasCycle, setHasCycle] = useState(application?.hasCycle ?? false);
   const [hasBike, setHasBike] = useState(application?.hasBike ?? false);
   const [status, setStatus] = useState<HelperApplication['status']>(application?.status || 'PENDING');
+
+  // Helper Payment Options
+  const [bkashNumber, setBkashNumber] = useState(application?.bkashNumber || '');
+  const [bkashType, setBkashType] = useState<'Personal' | 'Merchant' | 'Agent'>(application?.bkashType || 'Personal');
+  const [nagadNumber, setNagadNumber] = useState(application?.nagadNumber || '');
+  const [nagadType, setNagadType] = useState<'Personal' | 'Merchant'>(application?.nagadType || 'Personal');
+  const [bankName, setBankName] = useState(application?.bankName || '');
+  const [bankAccountName, setBankAccountName] = useState(application?.bankAccountName || '');
+  const [bankAccountNumber, setBankAccountNumber] = useState(application?.bankAccountNumber || '');
+  const [bankBranch, setBankBranch] = useState(application?.bankBranch || '');
+
   const [selectedUserObj, setSelectedUserObj] = useState<UserProfile | null>(null);
   const [isSearchingUser, setIsSearchingUser] = useState<boolean>(false);
   const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
@@ -110,6 +121,14 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
         hasCycle,
         hasBike,
         status,
+        bkashNumber: bkashNumber.trim() || undefined,
+        bkashType: bkashNumber.trim() ? bkashType : undefined,
+        nagadNumber: nagadNumber.trim() || undefined,
+        nagadType: nagadNumber.trim() ? nagadType : undefined,
+        bankName: bankName.trim() || undefined,
+        bankAccountName: bankAccountName.trim() || undefined,
+        bankAccountNumber: bankAccountNumber.trim() || undefined,
+        bankBranch: bankBranch.trim() || undefined,
       });
 
       const existingUser = fallbackStore.users.get(application.userId);
@@ -119,6 +138,14 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
           displayName: legalName.trim(),
           alternativePhone: whatsapp.trim(),
           phoneNumber: whatsapp.trim(),
+          bkashNumber: bkashNumber.trim() || undefined,
+          bkashType: bkashNumber.trim() ? bkashType : undefined,
+          nagadNumber: nagadNumber.trim() || undefined,
+          nagadType: nagadNumber.trim() ? nagadType : undefined,
+          bankName: bankName.trim() || undefined,
+          bankAccountName: bankAccountName.trim() || undefined,
+          bankAccountNumber: bankAccountNumber.trim() || undefined,
+          bankBranch: bankBranch.trim() || undefined,
         });
       }
       showAlert('Success', 'Helper application & profile updated successfully.', 'success');
@@ -147,9 +174,33 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
         applicationType: 'dedicated',
         status,
         createdAt: new Date().toISOString(),
+        bkashNumber: bkashNumber.trim() || undefined,
+        bkashType: bkashNumber.trim() ? bkashType : undefined,
+        nagadNumber: nagadNumber.trim() || undefined,
+        nagadType: nagadNumber.trim() ? nagadType : undefined,
+        bankName: bankName.trim() || undefined,
+        bankAccountName: bankAccountName.trim() || undefined,
+        bankAccountNumber: bankAccountNumber.trim() || undefined,
+        bankBranch: bankBranch.trim() || undefined,
       };
 
       await fallbackStore.addHelperAppAdmin(newApp);
+
+      const userToUpdate = fallbackStore.users.get(userId);
+      if (userToUpdate) {
+        await fallbackStore.saveUser({
+          ...userToUpdate,
+          bkashNumber: bkashNumber.trim() || undefined,
+          bkashType: bkashNumber.trim() ? bkashType : undefined,
+          nagadNumber: nagadNumber.trim() || undefined,
+          nagadType: nagadNumber.trim() ? nagadType : undefined,
+          bankName: bankName.trim() || undefined,
+          bankAccountName: bankAccountName.trim() || undefined,
+          bankAccountNumber: bankAccountNumber.trim() || undefined,
+          bankBranch: bankBranch.trim() || undefined,
+        });
+      }
+
       showAlert('Success', 'Helper application created successfully.', 'success');
     }
 
@@ -390,6 +441,113 @@ export const AdminHelperAppModal: React.FC<AdminHelperAppModalProps> = ({
                 />
                 <span>Has Motorbike</span>
               </label>
+            </div>
+          </div>
+
+          {/* Helper Payment Accounts (bKash / Nagad / Bank) */}
+          <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-3 pt-2">
+            <div className="flex items-center space-x-2">
+              <div className="w-7 h-7 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700 shrink-0">
+                <CreditCard className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-gray-900">
+                  Helper Payment Receiving Accounts (পেমেন্ট একাউন্ট)
+                </h4>
+                <p className="text-[11px] text-gray-500 font-medium">
+                  গ্রাহক যাতে সরাসরি হেলপারকে পেমেন্ট করতে পারে, সেজন্য একাউন্ট সেট করুন
+                </p>
+              </div>
+            </div>
+
+            {/* bKash */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white p-3 rounded-xl border border-gray-200/80">
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-extrabold text-pink-700 block mb-1">bKash Number</label>
+                <input
+                  type="tel"
+                  value={bkashNumber}
+                  onChange={(e) => setBkashNumber(e.target.value)}
+                  placeholder="01XXXXXXXXX"
+                  maxLength={11}
+                  className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold focus:border-pink-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-extrabold text-gray-500 block mb-1">bKash Type</label>
+                <select
+                  value={bkashType}
+                  onChange={(e) => setBkashType(e.target.value as any)}
+                  className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold bg-white focus:border-pink-500 focus:outline-none"
+                >
+                  <option value="Personal">Personal</option>
+                  <option value="Merchant">Merchant</option>
+                  <option value="Agent">Agent</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Nagad */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white p-3 rounded-xl border border-gray-200/80">
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-extrabold text-orange-700 block mb-1">Nagad Number</label>
+                <input
+                  type="tel"
+                  value={nagadNumber}
+                  onChange={(e) => setNagadNumber(e.target.value)}
+                  placeholder="01XXXXXXXXX"
+                  maxLength={11}
+                  className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold focus:border-orange-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-extrabold text-gray-500 block mb-1">Nagad Type</label>
+                <select
+                  value={nagadType}
+                  onChange={(e) => setNagadType(e.target.value as any)}
+                  className="w-full p-2.5 rounded-xl border border-gray-200 text-xs font-bold bg-white focus:border-orange-500 focus:outline-none"
+                >
+                  <option value="Personal">Personal</option>
+                  <option value="Merchant">Merchant</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Bank Account */}
+            <div className="bg-white p-3 rounded-xl border border-gray-200/80 space-y-2">
+              <label className="text-[10px] font-extrabold text-blue-900 block flex items-center gap-1">
+                <Building2 className="w-3 h-3 text-blue-600" /> Bank Transfer Account
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  placeholder="Bank Name (যেমন: Islami Bank, DBBL)"
+                  className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={bankAccountName}
+                  onChange={(e) => setBankAccountName(e.target.value)}
+                  placeholder="A/C Holder Name"
+                  className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={bankAccountNumber}
+                  onChange={(e) => setBankAccountNumber(e.target.value)}
+                  placeholder="A/C Number"
+                  className="w-full p-2 rounded-xl border border-gray-200 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={bankBranch}
+                  onChange={(e) => setBankBranch(e.target.value)}
+                  placeholder="Branch Name"
+                  className="w-full p-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                />
+              </div>
             </div>
           </div>
 

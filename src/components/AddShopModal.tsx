@@ -10,7 +10,7 @@ import { parseStoreTypes } from '@/lib/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { MapPickerModal } from './MapPickerModal';
 import {
-  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle, ChevronDown, User as UserIcon, Upload, Image as ImageIcon, Trash2, Sparkles,
+  X, Store, MapPin, Check, AlertCircle, Navigation, Search, AlertTriangle, ChevronDown, User as UserIcon, Upload, Image as ImageIcon, Trash2, Sparkles, CreditCard, Building2,
 } from 'lucide-react';
 import { usePullToRefreshLock } from '@/hooks/usePullToRefreshLock';
 import { AsyncButton } from './ui/AsyncButton';
@@ -71,6 +71,14 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
     shopToEdit?.location || { address: '', lat: 23.8103, lng: 90.4125 }
   );
   const [photoUrl, setPhotoUrl] = useState(shopToEdit?.photoUrl || '');
+  const [bkashNumber, setBkashNumber] = useState(shopToEdit?.bkashNumber || '');
+  const [bkashType, setBkashType] = useState<'Personal' | 'Merchant'>(shopToEdit?.bkashType || 'Personal');
+  const [nagadNumber, setNagadNumber] = useState(shopToEdit?.nagadNumber || '');
+  const [nagadType, setNagadType] = useState<'Personal' | 'Merchant'>(shopToEdit?.nagadType || 'Personal');
+  const [bankName, setBankName] = useState(shopToEdit?.bankName || '');
+  const [bankAccountName, setBankAccountName] = useState(shopToEdit?.bankAccountName || '');
+  const [bankAccountNumber, setBankAccountNumber] = useState(shopToEdit?.bankAccountNumber || '');
+  const [bankBranch, setBankBranch] = useState(shopToEdit?.bankBranch || '');
   const photoFileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -364,6 +372,14 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
         isOpen: shopToEdit?.isOpen !== undefined ? shopToEdit.isOpen : true,
         openingTime: shopToEdit?.openingTime,
         closingTime: shopToEdit?.closingTime,
+        bkashNumber: bkashNumber.trim() || undefined,
+        bkashType: bkashNumber.trim() ? bkashType : undefined,
+        nagadNumber: nagadNumber.trim() || undefined,
+        nagadType: nagadNumber.trim() ? nagadType : undefined,
+        bankName: bankName.trim() || undefined,
+        bankAccountName: bankAccountName.trim() || undefined,
+        bankAccountNumber: bankAccountNumber.trim() || undefined,
+        bankBranch: bankBranch.trim() || undefined,
       };
 
       await fallbackStore.saveShop(shopData);
@@ -987,6 +1003,137 @@ export const AddShopModal: React.FC<AddShopModalProps> = ({ shopToEdit, onClose,
                   />
                 </div>
               )}
+            </div>
+
+            {/* Banking & Disbursement Accounts */}
+            <div className="p-4 rounded-2xl bg-purple-50/50 border border-purple-200/80 space-y-3.5">
+              <div className="flex items-center space-x-2">
+                <div className="w-7 h-7 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-gray-900">
+                    দোকানের ব্যাংকিং ও পেমেন্ট তথ্য (Disbursement Accounts)
+                  </h4>
+                  <p className="text-[11px] text-gray-500 font-medium">
+                    এডমিন থেকে স্টোর ব্যালেন্স বা বিল পরিশোধের জন্য একাউন্ট নম্বর সেট করুন
+                  </p>
+                </div>
+              </div>
+
+              {/* bKash */}
+              <div className="bg-white p-3 rounded-xl border border-gray-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-pink-700 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-pink-600 inline-block"></span>
+                    বিকাশ (bKash)
+                  </span>
+                  <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setBkashType('Personal')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        bkashType === 'Personal' ? 'bg-pink-600 text-white shadow-2xs' : 'text-gray-600'
+                      }`}
+                    >
+                      Personal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBkashType('Merchant')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        bkashType === 'Merchant' ? 'bg-pink-600 text-white shadow-2xs' : 'text-gray-600'
+                      }`}
+                    >
+                      Merchant
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="tel"
+                  value={bkashNumber}
+                  onChange={(e) => setBkashNumber(e.target.value)}
+                  placeholder="বিকাশ নম্বর (01XXXXXXXXX)"
+                  maxLength={11}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-bold focus:border-pink-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Nagad */}
+              <div className="bg-white p-3 rounded-xl border border-gray-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-orange-700 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-orange-600 inline-block"></span>
+                    নগদ (Nagad)
+                  </span>
+                  <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setNagadType('Personal')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        nagadType === 'Personal' ? 'bg-orange-600 text-white shadow-2xs' : 'text-gray-600'
+                      }`}
+                    >
+                      Personal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNagadType('Merchant')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        nagadType === 'Merchant' ? 'bg-orange-600 text-white shadow-2xs' : 'text-gray-600'
+                      }`}
+                    >
+                      Merchant
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="tel"
+                  value={nagadNumber}
+                  onChange={(e) => setNagadNumber(e.target.value)}
+                  placeholder="নগদ নম্বর (01XXXXXXXXX)"
+                  maxLength={11}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-bold focus:border-orange-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Bank Account */}
+              <div className="bg-white p-3 rounded-xl border border-gray-200/80 space-y-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-blue-900">
+                  <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                  <span>ব্যাংক একাউন্ট (Bank Account)</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={bankName}
+                    onChange={(e) => setBankName(e.target.value)}
+                    placeholder="ব্যাংকের নাম (Bank Name)"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={bankAccountName}
+                    onChange={(e) => setBankAccountName(e.target.value)}
+                    placeholder="হিসাবধারীর নাম (A/C Name)"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={bankAccountNumber}
+                    onChange={(e) => setBankAccountNumber(e.target.value)}
+                    placeholder="হিসাব নম্বর (A/C Number)"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={bankBranch}
+                    onChange={(e) => setBankBranch(e.target.value)}
+                    placeholder="শাখা / ব্রাঞ্চ (Branch Name)"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Submit */}

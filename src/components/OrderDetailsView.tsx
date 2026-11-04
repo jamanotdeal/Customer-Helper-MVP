@@ -11,7 +11,7 @@ import {
   UserCheck, MessageSquare, Package, Truck, Navigation,
   AlertTriangle, Check, ChevronRight, Edit2, X, ChevronDown,
   Star, Sparkles, FileText, ShieldCheck, DollarSign, Trash2, Plus,
-  Store, AlertCircle, UserX,
+  Store, AlertCircle, UserX, Copy, CreditCard, Wallet, ChevronLeft, Landmark,
 } from 'lucide-react';
 import { DEFAULT_SERVICES, getServiceDescriptionHint, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
 import { ServiceIcon } from './ServiceIcon';
@@ -57,6 +57,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   // Item details modal state (customer can click an item to see cost, store name & phone numbers)
   const [selectedItemForModal, setSelectedItemForModal] = useState<OrderItem | null>(null);
+
+  // Pay Now flow state (customer paying helper)
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [payStep, setPayStep] = useState<'SELECT_METHOD' | 'DETAILS_TXID'>('SELECT_METHOD');
+  const [selectedPayMethod, setSelectedPayMethod] = useState<'bKash' | 'Nagad' | 'Bank' | 'Direct'>('bKash');
+  const [payTxId, setPayTxId] = useState('');
+  const [payTxError, setPayTxError] = useState('');
+  const [isSubmittingPay, setIsSubmittingPay] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
 
 
@@ -498,8 +507,141 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
   const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment + effectiveCustomStoreFee;
 
+  const isProcessingOrBeyond = Boolean(
+    order.status === 'PURCHASED_EXECUTED' ||
+    order.status === 'ON_THE_WAY' ||
+    order.status === 'ARRIVED' ||
+    order.status === 'DELIVERED'
+  );
+  const canShowPayNowButton = Boolean(
+    isOwnerCustomer &&
+    !order.customerPayment?.transactionId &&
+    !isCanceled &&
+    isProcessingOrBeyond
+  );
+
+  // Helper payment accounts & methods
+  const helperBkashNumber = helperInfo?.bkashNumber || helperAppEntry?.bkashNumber || '';
+  const helperBkashType = helperInfo?.bkashType || helperAppEntry?.bkashType || 'Personal';
+  const helperNagadNumber = helperInfo?.nagadNumber || helperAppEntry?.nagadNumber || '';
+  const helperNagadType = helperInfo?.nagadType || helperAppEntry?.nagadType || 'Personal';
+  const helperBankName = helperInfo?.bankName || helperAppEntry?.bankName || '';
+  const helperBankAccountName = helperInfo?.bankAccountName || helperAppEntry?.bankAccountName || '';
+  const helperBankAccountNumber = helperInfo?.bankAccountNumber || helperAppEntry?.bankAccountNumber || '';
+  const helperBankBranch = helperInfo?.bankBranch || helperAppEntry?.bankBranch || '';
+  const helperBankRouting = helperInfo?.bankRouting || helperAppEntry?.bankRouting || '';
+
+  const hasHelperBkash = Boolean(helperBkashNumber && helperBkashNumber.trim());
+  const hasHelperNagad = Boolean(helperNagadNumber && helperNagadNumber.trim());
+  const hasHelperBank = Boolean(helperBankAccountNumber && helperBankAccountNumber.trim());
+  const hasAnyHelperPaymentMethod = hasHelperBkash || hasHelperNagad || hasHelperBank;
+
+  const openPayNowModal = () => {
+    if (order?.customerPayment?.transactionId) {
+      setPayTxId(order.customerPayment.transactionId);
+      if (order.customerPayment.method) {
+        setSelectedPayMethod(order.customerPayment.method as any);
+      }
+    } else {
+      setPayTxId('');
+      if (hasHelperBkash) {
+        setSelectedPayMethod('bKash');
+      } else if (hasHelperNagad) {
+        setSelectedPayMethod('Nagad');
+      } else if (hasHelperBank) {
+        setSelectedPayMethod('Bank');
+      } else {
+        setSelectedPayMethod('Direct');
+      }
+    }
+    setPayTxError('');
+    setPayStep('SELECT_METHOD');
+    setShowPayModal(true);
+  };
+
+  const handleCopy = (text: string, key: string) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => {
+        setCopiedKey((curr) => (curr === key ? null : curr));
+      }, 2000);
+    } catch (e) {
+      console.warn('Clipboard copy failed:', e);
+    }
+  };
+
+  const handleConfirmPaymentDone = async () => {
+    if (!order) return;
+    const cleanTxId = payTxId.trim();
+    if (!cleanTxId) {
+      setPayTxError('Please enter the Transaction ID (TxID)');
+      return;
+    }
+
+    setIsSubmittingPay(true);
+    setPayTxError('');
+
+    try {
+      let detailsSummary = '';
+      if (selectedPayMethod === 'bKash') {
+        detailsSummary = `bKash (${helperBkashType}): ${helperBkashNumber}`;
+      } else if (selectedPayMethod === 'Nagad') {
+        detailsSummary = `Nagad (${helperNagadType}): ${helperNagadNumber}`;
+      } else if (selectedPayMethod === 'Bank') {
+        detailsSummary = `${helperBankName} | A/C: ${helperBankAccountNumber} (${helperBankAccountName})`;
+      } else {
+        detailsSummary = `Direct / Contact: ${helperPhone || 'Helper'}`;
+      }
+
+      const nowIso = new Date().toISOString();
+      const paymentData = {
+        method: selectedPayMethod,
+        amount: grandTotalPayable,
+        transactionId: cleanTxId,
+        paidAt: nowIso,
+        accountDetails: detailsSummary,
+        status: 'SUBMITTED' as const,
+      };
+
+      await fallbackStore.updateOrder(order.id, (o) => ({
+        ...o,
+        customerPayment: paymentData,
+        isPaid: true,
+        paidAt: nowIso,
+      }));
+
+      setOrder((prev) => prev ? {
+        ...prev,
+        customerPayment: paymentData,
+        isPaid: true,
+        paidAt: nowIso,
+      } : null);
+
+      if (order.helperId) {
+        fallbackStore.addNotification({
+          id: `notif-${Date.now()}-pay-${order.id}`,
+          userId: order.helperId,
+          title: 'Customer Payment Submitted',
+          body: `Customer submitted payment of ৳${grandTotalPayable} via ${selectedPayMethod} for Order #${order.id}. TxID: ${cleanTxId}`,
+          orderId: order.id,
+          read: false,
+          createdAt: nowIso,
+        });
+      }
+
+      setShowPayModal(false);
+    } catch (err: any) {
+      console.error('Failed to submit customer payment:', err);
+      setPayTxError('Failed to record payment. Please try again.');
+    } finally {
+      setIsSubmittingPay(false);
+    }
+  };
+
   return (
-    <div className="w-full bg-gray-50 min-h-screen pb-24 animate-in fade-in duration-200">
+    <div className={`w-full bg-gray-50 min-h-screen ${canShowPayNowButton ? 'pb-36' : 'pb-24'} animate-in fade-in duration-200`}>
 
       {/* Sticky Top Bar */}
       <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-xs">
@@ -1130,6 +1272,74 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           </div>
         )}
 
+        {/* ── CUSTOMER PAYMENT ACTION / STATUS (FULL WIDTH UNDER CALCULATION SUMMARY) ── */}
+        {order.customerPayment?.transactionId ? (
+          <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-3xl p-4 shadow-soft space-y-2.5 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <span className="w-8 h-8 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-sm shrink-0">
+                  <Check className="w-4 h-4" />
+                </span>
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                    Payment Recorded
+                  </span>
+                  <p className="text-xs font-bold text-gray-900">
+                    {order.customerPayment.method} • ৳{order.customerPayment.amount}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[11px] font-mono font-bold bg-white px-2.5 py-1 rounded-xl border border-emerald-200 text-emerald-950">
+                  TxID: {order.customerPayment.transactionId}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(order.customerPayment!.transactionId, 'order-summary-txid')}
+                  title="Copy TxID"
+                  className="p-1.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 transition-colors"
+                >
+                  {copiedKey === 'order-summary-txid' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-700" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+            {order.customerPayment.accountDetails && (
+              <p className="text-[11px] font-semibold text-emerald-900 bg-emerald-100/60 px-3 py-1.5 rounded-xl">
+                {order.customerPayment.accountDetails}
+              </p>
+            )}
+            <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 text-[11px]">
+              <span className="text-gray-500 font-medium">
+                {order.customerPayment.paidAt ? formatPlacedDateTime(order.customerPayment.paidAt) : ''}
+              </span>
+              {isOwnerCustomer && (
+                <button
+                  type="button"
+                  onClick={openPayNowModal}
+                  className="text-emerald-700 hover:text-emerald-900 font-extrabold text-[11px] underline"
+                >
+                  Edit / Re-enter TxID
+                </button>
+              )}
+            </div>
+          </div>
+        ) : canShowPayNowButton ? (
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={openPayNowModal}
+              className="w-full py-3.5 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-sm shadow-sm active:scale-[0.99] transition-all flex items-center justify-center space-x-2"
+            >
+              <Wallet className="w-4 h-4" />
+              <span>Pay Now • ৳{grandTotalPayable}</span>
+            </button>
+          </div>
+        ) : null}
+
 
         {/* ── ADDRESSES & LOCATION ── */}
         <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-soft space-y-3">
@@ -1391,6 +1601,425 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           onClose={() => setShowFeedbackModal(false)}
           onSubmitted={() => setShowFeedbackModal(false)}
         />
+      )}
+
+      {/* ── FIXED BOTTOM BAR FOR CUSTOMER (SOLID COLOR, ONLY ENGLISH TEXT) ── */}
+      {canShowPayNowButton && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-200 px-4 py-3 shadow-lg animate-in slide-in-from-bottom duration-200">
+          <div className="max-w-2xl mx-auto flex items-center space-x-3">
+            <div className="min-w-0">
+              <span className="text-[10px] uppercase tracking-wider font-extrabold text-gray-500 block leading-tight">
+                Total Payable
+              </span>
+              <span className="text-base font-black text-gray-900 leading-tight font-mono">
+                ৳{grandTotalPayable}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={openPayNowModal}
+              className="flex-1 py-3 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-sm shadow-md active:scale-[0.99] transition-all flex items-center justify-center space-x-2"
+            >
+              <Wallet className="w-4 h-4" />
+              <span>Pay Now</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── CUSTOMER PAY NOW MODAL (MINIMALIST & CLEAN, ONLY ENGLISH) ── */}
+      {showPayModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 flex flex-col max-h-[90vh] overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 shrink-0 bg-gray-50/70">
+              <div className="flex items-center space-x-2">
+                {payStep === 'DETAILS_TXID' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPayStep('SELECT_METHOD');
+                      setPayTxError('');
+                    }}
+                    className="p-1.5 -ml-1.5 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
+                    title="Back"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <div>
+                  <h3 className="font-black text-sm text-gray-900">
+                    {payStep === 'SELECT_METHOD'
+                      ? 'Select Payment Option'
+                      : `${selectedPayMethod} Payment`}
+                  </h3>
+                  <p className="text-[11px] text-gray-500 font-medium">
+                    {payStep === 'SELECT_METHOD'
+                      ? 'Choose how you want to pay'
+                      : 'Send payment & enter Transaction ID'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPayModal(false)}
+                className="p-1.5 rounded-full bg-gray-100 text-gray-500 hover:text-gray-800 hover:bg-gray-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1">
+              {/* STEP 1: SELECT METHOD (Notice: NO amount banner here, customer selects option first) */}
+              {payStep === 'SELECT_METHOD' && (
+                <div className="space-y-2.5">
+                  <span className="text-[11px] font-black text-gray-500 uppercase tracking-wider block">
+                    Available Options ({[hasHelperBkash, hasHelperNagad, hasHelperBank].filter(Boolean).length || 0})
+                  </span>
+
+                  {hasHelperBkash && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPayMethod('bKash');
+                        setPayStep('DETAILS_TXID');
+                      }}
+                      className="w-full p-3 rounded-2xl border border-pink-200 bg-pink-50/40 hover:bg-pink-50 hover:border-pink-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-pink-600 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
+                          bKash
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-extrabold text-sm text-gray-900">bKash</span>
+                            <span className="px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 text-[10px] font-black border border-pink-200">
+                              {helperBkashType || 'Personal'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-mono font-bold text-gray-600 mt-0.5 truncate">
+                            {helperBkashNumber}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-pink-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                    </button>
+                  )}
+
+                  {hasHelperNagad && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPayMethod('Nagad');
+                        setPayStep('DETAILS_TXID');
+                      }}
+                      className="w-full p-3 rounded-2xl border border-orange-200 bg-orange-50/40 hover:bg-orange-50 hover:border-orange-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-orange-600 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
+                          Nagad
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-extrabold text-sm text-gray-900">Nagad</span>
+                            <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-black border border-orange-200">
+                              {helperNagadType || 'Personal'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-mono font-bold text-gray-600 mt-0.5 truncate">
+                            {helperNagadNumber}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                    </button>
+                  )}
+
+                  {hasHelperBank && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPayMethod('Bank');
+                        setPayStep('DETAILS_TXID');
+                      }}
+                      className="w-full p-3 rounded-2xl border border-blue-200 bg-blue-50/40 hover:bg-blue-50 hover:border-blue-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-blue-700 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
+                          <Landmark className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-extrabold text-sm text-gray-900 truncate">
+                              {helperBankName || 'Bank Account'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-black border border-blue-200 shrink-0">
+                              Bank
+                            </span>
+                          </div>
+                          <p className="text-xs font-mono font-bold text-gray-600 mt-0.5 truncate">
+                            {helperBankAccountNumber} {helperBankAccountName ? `(${helperBankAccountName})` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                    </button>
+                  )}
+
+                  {!hasAnyHelperPaymentMethod && (
+                    <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200 space-y-2.5 text-center">
+                      <AlertCircle className="w-6 h-6 text-gray-500 mx-auto" />
+                      <div>
+                        <p className="text-xs font-bold text-gray-900">
+                          No digital payment accounts added by helper yet
+                        </p>
+                        <p className="text-[11px] text-gray-500 font-medium mt-0.5">
+                          You can pay directly or contact the helper via phone.
+                        </p>
+                      </div>
+
+                      {helperPhone && (
+                        <div className="pt-1 flex items-center justify-center space-x-2">
+                          <span className="text-xs font-mono font-bold text-gray-900 bg-white px-3 py-1 rounded-xl border border-gray-200">
+                            {helperPhone}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(helperPhone, 'helper-phone-direct')}
+                            className="p-1.5 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 transition-colors"
+                            title="Copy number"
+                          >
+                            {copiedKey === 'helper-phone-direct' ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPayMethod('Direct');
+                          setPayStep('DETAILS_TXID');
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-sm"
+                      >
+                        Direct Pay & Enter TxID
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* STEP 2: DETAILS & TXID (Shows Total Amount + Compact Payment Info + TxID) */}
+              {payStep === 'DETAILS_TXID' && (
+                <div className="space-y-3">
+                  {/* Total Payment Amount Banner (Compact) */}
+                  <div className="px-3.5 py-2.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                        Total Payable Amount
+                      </span>
+                      <span className="text-lg font-black text-emerald-950 font-mono">
+                        ৳{grandTotalPayable}
+                      </span>
+                    </div>
+                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                  </div>
+
+                  {/* Compact Payment Info Block */}
+                  {selectedPayMethod === 'bKash' && (
+                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+                            bKash ({helperBkashType || 'Personal'})
+                          </span>
+                          <span className="font-mono font-black text-base text-gray-900 tracking-wide">
+                            {helperBkashNumber}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(helperBkashNumber, 'bkash-num')}
+                          className="py-1 px-3 rounded-xl bg-pink-100 hover:bg-pink-200 text-pink-800 font-extrabold text-xs transition-colors flex items-center space-x-1 shrink-0"
+                        >
+                          {copiedKey === 'bkash-num' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedKey === 'bkash-num' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-500 font-medium">
+                        Send Money to this bKash number, then enter the Transaction ID below.
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedPayMethod === 'Nagad' && (
+                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+                            Nagad ({helperNagadType || 'Personal'})
+                          </span>
+                          <span className="font-mono font-black text-base text-gray-900 tracking-wide">
+                            {helperNagadNumber}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(helperNagadNumber, 'nagad-num')}
+                          className="py-1 px-3 rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-700 font-extrabold text-xs transition-colors flex items-center space-x-1 shrink-0"
+                        >
+                          {copiedKey === 'nagad-num' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedKey === 'nagad-num' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-500 font-medium">
+                        Send Money to this Nagad number, then enter the Transaction ID below.
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedPayMethod === 'Bank' && (
+                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-2 text-xs">
+                      <div className="flex items-center justify-between pb-1.5 border-b border-gray-200">
+                        <div className="min-w-0">
+                          <span className="font-extrabold text-gray-900 block truncate">{helperBankName || 'Bank Account'}</span>
+                          {helperBankAccountName && (
+                            <span className="text-[11px] text-gray-600 font-medium block truncate">
+                              A/C Name: {helperBankAccountName}
+                            </span>
+                          )}
+                        </div>
+                        {helperBankBranch && (
+                          <span className="text-[10px] font-bold text-gray-600 bg-white px-2 py-0.5 rounded-lg border border-gray-200 shrink-0">
+                            {helperBankBranch}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <span className="text-[10px] text-gray-500 block font-semibold">Account Number</span>
+                          <span className="font-mono font-black text-sm text-gray-900">{helperBankAccountNumber}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(helperBankAccountNumber, 'bank-ac-num')}
+                          className="py-1 px-2.5 rounded-xl bg-blue-100 hover:bg-blue-200 text-blue-800 font-extrabold text-xs transition-colors flex items-center space-x-1 shrink-0"
+                        >
+                          {copiedKey === 'bank-ac-num' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedKey === 'bank-ac-num' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                      {helperBankRouting && (
+                        <div className="flex items-center justify-between pt-1 border-t border-gray-200 text-[11px]">
+                          <span className="text-gray-600">Routing: <strong className="font-mono text-gray-900">{helperBankRouting}</strong></span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(helperBankRouting, 'bank-routing')}
+                            className="text-[10px] font-bold text-blue-700 hover:underline"
+                          >
+                            {copiedKey === 'bank-routing' ? 'Copied' : 'Copy Routing'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedPayMethod === 'Direct' && (
+                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Helper Contact</span>
+                          <span className="font-mono font-black text-sm text-gray-900">{helperPhone || 'N/A'}</span>
+                        </div>
+                        {helperPhone && (
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(helperPhone, 'direct-phone')}
+                            className="py-1 px-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-xs flex items-center space-x-1 shrink-0 transition-colors"
+                          >
+                            {copiedKey === 'direct-phone' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                            <span>{copiedKey === 'direct-phone' ? 'Copied' : 'Copy'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Compact Transaction ID Input */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-black text-gray-700 uppercase tracking-wider block">
+                      Transaction ID (TxID) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={payTxId}
+                      onChange={(e) => {
+                        setPayTxId(e.target.value);
+                        if (e.target.value.trim()) setPayTxError('');
+                      }}
+                      placeholder="e.g. 9J3K8L2P or TxID"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 font-mono text-xs font-bold text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 uppercase transition-all placeholder:normal-case placeholder:font-normal placeholder:text-gray-400"
+                    />
+                    {payTxError && (
+                      <p className="text-[11px] text-red-600 font-bold bg-red-50 px-2.5 py-1 rounded-lg border border-red-100">
+                        {payTxError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between space-x-2 shrink-0">
+              {payStep === 'DETAILS_TXID' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPayStep('SELECT_METHOD');
+                      setPayTxError('');
+                    }}
+                    className="py-2.5 px-4 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-bold text-xs border border-gray-200 active:scale-95 transition-all"
+                  >
+                    Change Method
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmPaymentDone}
+                    disabled={isSubmittingPay}
+                    className="flex-1 py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs shadow-sm active:scale-95 transition-all flex items-center justify-center space-x-1.5 disabled:opacity-50"
+                  >
+                    {isSubmittingPay ? (
+                      <span>Saving...</span>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Done</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowPayModal(false)}
+                  className="w-full py-2.5 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-bold text-xs border border-gray-200 active:scale-95 transition-all"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+          </div>
+        </div>
       )}
 
       {selectedItemForModal && (

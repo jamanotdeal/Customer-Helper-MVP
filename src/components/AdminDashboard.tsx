@@ -8555,6 +8555,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       label="Close At (শেষ)"
                       value={pricing.orderTimingEnd || '22:00'}
                       onChange={(val) => setPricing({ ...pricing, orderTimingEnd: val })}
+                      align="right"
                     />
                   </>
                 )}

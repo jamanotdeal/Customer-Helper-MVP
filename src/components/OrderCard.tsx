@@ -147,6 +147,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   );
   const fromStore = isOrderFromStore(order);
   const serviceInfo = getServiceIconInfo(order.service);
+  const isCustomerPaid = Boolean(order.customerPayment?.transactionId || order.isPaid);
 
   // One shared clock for every card on screen, paused while the app is hidden,
   // instead of one interval per card ticking behind a dark screen.
@@ -268,8 +269,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           {/* Customer Name & Short Delivery Address */}
           <div className="flex flex-col gap-1 py-1.5 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-bold text-gray-900 truncate flex items-center gap-1.5">
+              <span className="font-bold text-gray-900 truncate flex items-center gap-1.5 flex-wrap">
                 <span>👤 {order.customerName || 'Customer'}</span>
+                {isCustomerPaid && (
+                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
+                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                    <span>Customer Paid</span>
+                  </span>
+                )}
                 {fromStore && (
                   <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
                     STORE
@@ -403,6 +410,12 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
                 {order.customerName || 'Customer'}
               </h3>
+              {isCustomerPaid && (
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
+                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                  <span>Customer Paid</span>
+                </span>
+              )}
               {fromStore && (
                 <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
                   <Store className="w-2.5 h-2.5 text-purple-600" />

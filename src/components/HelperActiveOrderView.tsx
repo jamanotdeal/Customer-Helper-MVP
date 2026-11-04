@@ -4,7 +4,7 @@ import { fallbackStore, ShopOrderError } from '@/lib/firebase';
 import { useAuth, isUserAuthenticated } from '@/context/AuthContext';
 import { calculateHelperCommission, calculateDistanceKm, calculateEstimatedFee, calculateCustomStoreFee } from '@/lib/pricing';
 import { ServiceIcon } from './ServiceIcon';
-import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map as MapIcon, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search, Loader2 } from 'lucide-react';
+import { CheckCircle2, Truck, MapPin, PackageCheck, AlertOctagon, Phone, ArrowLeft, DollarSign, Clock, HelpCircle, FileText, ShoppingBag, FileEdit, AlertTriangle, X, Sparkles, Navigation, RotateCcw, CalendarClock, Map as MapIcon, Check, UserCheck, Package, Percent, Send, Store, User, Trash2, Maximize2, Plus, PlusCircle, Wallet, ChevronDown, Info, ShoppingCart, ExternalLink, Search, Loader2, Copy } from 'lucide-react';
 import { getStatusBadgeInfo } from './OrderCard';
 import { getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass, formatPlacedDateTime, isOrderTimerPaused } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
@@ -74,6 +74,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   // Helper Private Note state
   const [helperNoteInput, setHelperNoteInput] = useState(order.helperNote || '');
   const [noteSavedAlert, setNoteSavedAlert] = useState(false);
+
+  // Customer Payment copy state
+  const [copiedTxId, setCopiedTxId] = useState(false);
+  const handleCopyTxId = (text: string) => {
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedTxId(true);
+      setTimeout(() => setCopiedTxId(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Custom Celebratory Completion Modal state
   const [showCompletionModal, setShowCompletionModal] = useState(false);
@@ -3960,7 +3972,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       </span>
                     </div>
                     {/* Line 2: Customer name */}
-                    <p className="text-[11px] text-gray-650 font-bold mt-0.5">{order.customerName}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      <p className="text-[11px] text-gray-650 font-bold">{order.customerName}</p>
+                      {(order.customerPayment?.transactionId || order.isPaid) && (
+                        <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-black shadow-xs shrink-0">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                          <span>Customer Paid</span>
+                        </span>
+                      )}
+                    </div>
                     {/* Line 3: Customer labels under customer name */}
                     {customerLabels.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -4292,6 +4312,68 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* ── CUSTOMER PAYMENT RECORD (Under calculation summary) ── */}
+              {(order.customerPayment?.transactionId || order.isPaid) && (
+                <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-2xl p-3.5 shadow-soft space-y-2.5 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2.5">
+                      <span className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                        <CheckCircle2 className="w-4 h-4" />
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                            Customer Paid
+                          </span>
+                          {order.customerPayment?.method && (
+                            <span className="px-1.5 py-0.2 rounded-md bg-emerald-200/80 text-emerald-950 font-black text-[9px] uppercase">
+                              {order.customerPayment.method}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-black text-gray-900">
+                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings).totalFee))}
+                        </p>
+                      </div>
+                    </div>
+
+                    {order.customerPayment?.transactionId && (
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-[11px] font-mono font-bold bg-white px-2.5 py-1 rounded-xl border border-emerald-200 text-emerald-950">
+                          TxID: {order.customerPayment.transactionId}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyTxId(order.customerPayment!.transactionId)}
+                          title="Copy Transaction ID"
+                          className="p-1.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 transition-colors"
+                        >
+                          {copiedTxId ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-700" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {order.customerPayment?.accountDetails && (
+                    <div className="text-[11px] font-medium text-emerald-950 bg-white/80 border border-emerald-100 px-3 py-1.5 rounded-xl">
+                      <span className="font-bold text-emerald-900">Paid to Account: </span>
+                      <span className="font-semibold">{order.customerPayment.accountDetails}</span>
+                    </div>
+                  )}
+
+                  {order.customerPayment?.paidAt && (
+                    <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 text-[10px] text-gray-600 font-medium">
+                      <span>Payment Time:</span>
+                      <span className="font-semibold">{formatPlacedDateTime(order.customerPayment.paidAt)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
 
               {/* 8. PRIVATE NOTE SECTION (Customer cannot see this) */}

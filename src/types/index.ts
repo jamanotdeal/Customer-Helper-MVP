@@ -211,6 +211,16 @@ export interface Order {
   isStorePaid?: boolean;
   storePaidAt?: string;
   storeDisbursementId?: string;
+
+  // Customer Payment to Helper / System
+  customerPayment?: {
+    method: 'bKash' | 'Nagad' | 'Bank' | string;
+    amount: number;
+    transactionId: string;
+    paidAt: string;
+    accountDetails?: string;
+    status?: 'SUBMITTED' | 'VERIFIED';
+  };
 }
 
 export interface OrderDuePayment {
@@ -266,6 +276,17 @@ export interface UserProfile {
   serveAllAreas?: boolean;   // If true, helper receives orders from all service areas
   referredBy?: string;       // Referrer UID if customer joined via referral
   referredOrdersRewardedCount?: number; // Count of delivered orders awarded with referral bonus
+
+  // Banking & Mobile Payment Accounts (for helper or store payout)
+  bkashNumber?: string;
+  bkashType?: 'Personal' | 'Merchant' | 'Agent';
+  nagadNumber?: string;
+  nagadType?: 'Personal' | 'Merchant';
+  bankName?: string;
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  bankRouting?: string;
 }
 
 export interface HelperApplication {
@@ -285,6 +306,17 @@ export interface HelperApplication {
   applicationType?: 'dedicated';
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELED';
   createdAt: string;
+
+  // Banking & Mobile Payment Accounts
+  bkashNumber?: string;
+  bkashType?: 'Personal' | 'Merchant' | 'Agent';
+  nagadNumber?: string;
+  nagadType?: 'Personal' | 'Merchant';
+  bankName?: string;
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  bankRouting?: string;
 }
 
 export interface StoreApplication {
@@ -306,6 +338,17 @@ export interface StoreApplication {
   reviewedAt?: string;
   reviewNote?: string;
   photoUrl?: string;          // Store profile photo (base64 or URL)
+
+  // Banking & Mobile Payment Accounts for Disbursement
+  bkashNumber?: string;
+  bkashType?: 'Personal' | 'Merchant';
+  nagadNumber?: string;
+  nagadType?: 'Personal' | 'Merchant';
+  bankName?: string;
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  bankRouting?: string;
 }
 
 export interface Shop {
@@ -344,6 +387,17 @@ export interface Shop {
   isFeatured?: boolean;       // Admin-selected featured store shown at the top
   featuredOrder?: number;     // Optional custom order/priority for featured stores (lower number = higher priority)
   featuredAt?: string;        // Timestamp when marked as featured
+
+  // Banking & Mobile Payment Accounts for Disbursement
+  bkashNumber?: string;
+  bkashType?: 'Personal' | 'Merchant';
+  nagadNumber?: string;
+  nagadType?: 'Personal' | 'Merchant';
+  bankName?: string;
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  bankRouting?: string;
 }
 
 export interface ProductPriceOption {

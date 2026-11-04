@@ -31,6 +31,11 @@ import {
   Receipt,
   FileSpreadsheet,
   BarChart2,
+  Building2,
+  Copy,
+  Check,
+  Edit2,
+  AlertCircle,
 } from 'lucide-react';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
@@ -107,6 +112,76 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   const [paymentMethod, setPaymentMethod] = useState<string>('Bank Transfer');
   const [accountRefNote, setAccountRefNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Store Banking & Account State
+  const [currentShop, setCurrentShop] = useState<Shop>(() => fallbackStore.shops.get(shop.id) || shop);
+  const [showEditBankingModal, setShowEditBankingModal] = useState(false);
+  const [editBkash, setEditBkash] = useState(currentShop.bkashNumber || '');
+  const [editBkashType, setEditBkashType] = useState<'Personal' | 'Merchant'>(currentShop.bkashType || 'Personal');
+  const [editNagad, setEditNagad] = useState(currentShop.nagadNumber || '');
+  const [editNagadType, setEditNagadType] = useState<'Personal' | 'Merchant'>(currentShop.nagadType || 'Personal');
+  const [editBankName, setEditBankName] = useState(currentShop.bankName || '');
+  const [editBankAccountName, setEditBankAccountName] = useState(currentShop.bankAccountName || '');
+  const [editBankAccountNumber, setEditBankAccountNumber] = useState(currentShop.bankAccountNumber || '');
+  const [editBankBranch, setEditBankBranch] = useState(currentShop.bankBranch || '');
+  const [isSavingBanking, setIsSavingBanking] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = fallbackStore.subscribe(() => {
+      const updated = fallbackStore.shops.get(shop.id);
+      if (updated) {
+        setCurrentShop(updated);
+      }
+    });
+    return () => unsub();
+  }, [shop.id]);
+
+  const copyToClipboard = (text: string, key: string) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleOpenEditBanking = () => {
+    setEditBkash(currentShop.bkashNumber || '');
+    setEditBkashType(currentShop.bkashType || 'Personal');
+    setEditNagad(currentShop.nagadNumber || '');
+    setEditNagadType(currentShop.nagadType || 'Personal');
+    setEditBankName(currentShop.bankName || '');
+    setEditBankAccountName(currentShop.bankAccountName || '');
+    setEditBankAccountNumber(currentShop.bankAccountNumber || '');
+    setEditBankBranch(currentShop.bankBranch || '');
+    setShowEditBankingModal(true);
+  };
+
+  const handleSaveBankingDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsSavingBanking(true);
+      const updatedShop: Shop = {
+        ...currentShop,
+        bkashNumber: editBkash.trim() || undefined,
+        bkashType: editBkash.trim() ? editBkashType : undefined,
+        nagadNumber: editNagad.trim() || undefined,
+        nagadType: editNagad.trim() ? editNagadType : undefined,
+        bankName: editBankName.trim() || undefined,
+        bankAccountName: editBankAccountName.trim() || undefined,
+        bankAccountNumber: editBankAccountNumber.trim() || undefined,
+        bankBranch: editBankBranch.trim() || undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      await fallbackStore.saveShop(updatedShop);
+      setCurrentShop(updatedShop);
+      setShowEditBankingModal(false);
+      showAlert('সফল', 'দোকানের ব্যাংকিং ও পেমেন্ট তথ্য সফলভাবে সংরক্ষিত হয়েছে।', 'success');
+    } catch {
+      showAlert('ব্যর্থ', 'তথ্য সংরক্ষণ করা যায়নি।', 'error');
+    } finally {
+      setIsSavingBanking(false);
+    }
+  };
 
   const handlePresetSelect = (preset: DatePreset) => {
     setActivePreset(preset);
@@ -993,6 +1068,185 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
                   </div>
                 </div>
 
+                {/* Store Banking & Payout Accounts Card */}
+                <div className="bg-gradient-to-br from-emerald-50/70 to-teal-50/50 rounded-2xl p-4 border border-emerald-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                        <CreditCard className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-black text-emerald-950 uppercase tracking-wider">
+                          দোকানের ব্যাংকিং ও পেমেন্ট তথ্য (Store Disbursement Accounts)
+                        </h5>
+                        <p className="text-[11px] text-emerald-800/80 font-medium">
+                          পেমেন্ট পাঠানোর আগে দোকানের একাউন্ট যাচাই করুন অথবা ক্লিক করে ফর্মে বসান
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenEditBanking}
+                      className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100/60 text-emerald-800 border border-emerald-300 font-extrabold text-xs flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>{currentShop.bkashNumber || currentShop.nagadNumber || currentShop.bankAccountNumber ? 'এডিট করুন' : 'অ্যাকাউন্ট যুক্ত করুন'}</span>
+                    </button>
+                  </div>
+
+                  {currentShop.bkashNumber || currentShop.nagadNumber || currentShop.bankAccountNumber || currentShop.bankName ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+                      {/* bKash */}
+                      <div className={`p-3 rounded-xl border transition-all ${
+                        currentShop.bkashNumber ? 'bg-white border-pink-200 shadow-2xs' : 'bg-white/50 border-gray-200/60 opacity-60'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold text-pink-700 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-pink-600 inline-block"></span>
+                            bKash ({currentShop.bkashType || 'Personal'})
+                          </span>
+                          {currentShop.bkashNumber && (
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(currentShop.bkashNumber!, 'bkash')}
+                              className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
+                              title="Copy bKash Number"
+                            >
+                              {copiedKey === 'bkash' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedKey === 'bkash' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-1">
+                          <span className="font-mono font-black text-sm text-gray-900 tracking-wide">
+                            {currentShop.bkashNumber || <span className="text-xs font-sans text-gray-400 font-normal">Not added</span>}
+                          </span>
+                          {currentShop.bkashNumber && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPaymentMethod(currentShop.bkashType === 'Merchant' ? 'bKash (Merchant)' : 'bKash (Personal)');
+                                setAccountRefNote(`bKash (${currentShop.bkashType || 'Personal'}): ${currentShop.bkashNumber}`);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-pink-50 hover:bg-pink-100 text-pink-700 font-extrabold text-[10px] border border-pink-200 transition-all cursor-pointer whitespace-nowrap"
+                            >
+                              ফর্মে বসান
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Nagad */}
+                      <div className={`p-3 rounded-xl border transition-all ${
+                        currentShop.nagadNumber ? 'bg-white border-orange-200 shadow-2xs' : 'bg-white/50 border-gray-200/60 opacity-60'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold text-orange-700 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-orange-600 inline-block"></span>
+                            Nagad ({currentShop.nagadType || 'Personal'})
+                          </span>
+                          {currentShop.nagadNumber && (
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(currentShop.nagadNumber!, 'nagad')}
+                              className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
+                              title="Copy Nagad Number"
+                            >
+                              {copiedKey === 'nagad' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedKey === 'nagad' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-1">
+                          <span className="font-mono font-black text-sm text-gray-900 tracking-wide">
+                            {currentShop.nagadNumber || <span className="text-xs font-sans text-gray-400 font-normal">Not added</span>}
+                          </span>
+                          {currentShop.nagadNumber && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPaymentMethod('Nagad');
+                                setAccountRefNote(`Nagad (${currentShop.nagadType || 'Personal'}): ${currentShop.nagadNumber}`);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 font-extrabold text-[10px] border border-orange-200 transition-all cursor-pointer whitespace-nowrap"
+                            >
+                              ফর্মে বসান
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Bank Account */}
+                      <div className={`p-3 rounded-xl border transition-all ${
+                        currentShop.bankAccountNumber ? 'bg-white border-blue-200 shadow-2xs' : 'bg-white/50 border-gray-200/60 opacity-60'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold text-blue-900 flex items-center gap-1">
+                            <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                            Bank Account
+                          </span>
+                          {currentShop.bankAccountNumber && (
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(currentShop.bankAccountNumber!, 'bank')}
+                              className="text-[10px] text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
+                              title="Copy Bank A/C"
+                            >
+                              {copiedKey === 'bank' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedKey === 'bank' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          )}
+                        </div>
+                        {currentShop.bankAccountNumber || currentShop.bankName ? (
+                          <div className="mt-1.5 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-bold text-gray-800 truncate" title={currentShop.bankName}>
+                                {currentShop.bankName || 'Bank'} {currentShop.bankBranch ? `(${currentShop.bankBranch})` : ''}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPaymentMethod('Bank Transfer');
+                                  setAccountRefNote(`${currentShop.bankName || 'Bank'} A/C: ${currentShop.bankAccountNumber} (${currentShop.bankAccountName || currentShop.name})`);
+                                }}
+                                className="px-2 py-0.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-extrabold text-[10px] border border-blue-200 transition-all cursor-pointer whitespace-nowrap shrink-0 ml-1"
+                              >
+                                ফর্মে বসান
+                              </button>
+                            </div>
+                            <div className="font-mono font-black text-xs text-gray-900 truncate">
+                              A/C: {currentShop.bankAccountNumber}
+                            </div>
+                            {currentShop.bankAccountName && (
+                              <div className="text-[10px] text-gray-500 font-medium truncate">
+                                Name: {currentShop.bankAccountName}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-xs font-sans text-gray-400 font-normal">Not added</div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span className="text-xs text-amber-900 font-bold">
+                          এই দোকানের কোনো ব্যাংক, বিকাশ বা নগদ একাউন্ট তথ্য এখনো যুক্ত করা হয়নি।
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleOpenEditBanking}
+                        className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer shrink-0"
+                      >
+                        + একাউন্ট তথ্য যুক্ত করুন
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Disbursement Form */}
                 <form onSubmit={handleDisbursePayment} className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1597,6 +1851,151 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
           </button>
         </div>
       </div>
+
+      {/* Edit Store Banking Details Modal */}
+      {showEditBankingModal && (
+        <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-teal-700 text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-white/20">
+                  <CreditCard className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">দোকানের ব্যাংকিং ও পেমেন্ট একাউন্ট সেট করুন</h3>
+                  <p className="text-xs text-emerald-100 font-medium">{currentShop.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditBankingModal(false)}
+                className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBankingDetails} className="p-5 space-y-4 overflow-y-auto">
+              {/* bKash */}
+              <div className="p-3.5 rounded-2xl bg-pink-50/60 border border-pink-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-pink-700">বিকাশ (bKash)</span>
+                  <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-pink-200 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setEditBkashType('Personal')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${editBkashType === 'Personal' ? 'bg-pink-600 text-white' : 'text-gray-600'}`}
+                    >
+                      Personal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditBkashType('Merchant')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${editBkashType === 'Merchant' ? 'bg-pink-600 text-white' : 'text-gray-600'}`}
+                    >
+                      Merchant
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="tel"
+                  value={editBkash}
+                  onChange={(e) => setEditBkash(e.target.value)}
+                  placeholder="বিকাশ নম্বর (01XXXXXXXXX)"
+                  maxLength={11}
+                  className="w-full px-3 py-2 rounded-xl border border-pink-200 text-xs font-bold focus:border-pink-500 bg-white focus:outline-none"
+                />
+              </div>
+
+              {/* Nagad */}
+              <div className="p-3.5 rounded-2xl bg-orange-50/60 border border-orange-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-orange-700">নগদ (Nagad)</span>
+                  <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-orange-200 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setEditNagadType('Personal')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${editNagadType === 'Personal' ? 'bg-orange-600 text-white' : 'text-gray-600'}`}
+                    >
+                      Personal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditNagadType('Merchant')}
+                      className={`px-2 py-0.5 rounded-md transition-all ${editNagadType === 'Merchant' ? 'bg-orange-600 text-white' : 'text-gray-600'}`}
+                    >
+                      Merchant
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="tel"
+                  value={editNagad}
+                  onChange={(e) => setEditNagad(e.target.value)}
+                  placeholder="নগদ নম্বর (01XXXXXXXXX)"
+                  maxLength={11}
+                  className="w-full px-3 py-2 rounded-xl border border-orange-200 text-xs font-bold focus:border-orange-500 bg-white focus:outline-none"
+                />
+              </div>
+
+              {/* Bank */}
+              <div className="p-3.5 rounded-2xl bg-blue-50/60 border border-blue-100 space-y-2.5">
+                <span className="text-xs font-black text-blue-900 flex items-center gap-1">
+                  <Building2 className="w-3.5 h-3.5 text-blue-600" /> ব্যাংক একাউন্ট (Bank Account)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={editBankName}
+                    onChange={(e) => setEditBankName(e.target.value)}
+                    placeholder="ব্যাংকের নাম (যেমন: City Bank, DBBL)"
+                    className="w-full px-3 py-2 rounded-xl border border-blue-200 text-xs font-semibold focus:border-blue-500 bg-white focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={editBankAccountName}
+                    onChange={(e) => setEditBankAccountName(e.target.value)}
+                    placeholder="হিসাবধারীর নাম (A/C Name)"
+                    className="w-full px-3 py-2 rounded-xl border border-blue-200 text-xs font-semibold focus:border-blue-500 bg-white focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={editBankAccountNumber}
+                    onChange={(e) => setEditBankAccountNumber(e.target.value)}
+                    placeholder="হিসাব নম্বর (A/C Number)"
+                    className="w-full px-3 py-2 rounded-xl border border-blue-200 text-xs font-bold focus:border-blue-500 bg-white focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={editBankBranch}
+                    onChange={(e) => setEditBankBranch(e.target.value)}
+                    placeholder="শাখা / ব্রাঞ্চ (Branch Name)"
+                    className="w-full px-3 py-2 rounded-xl border border-blue-200 text-xs font-semibold focus:border-blue-500 bg-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditBankingModal(false)}
+                  className="flex-1 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingBanking}
+                  className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isSavingBanking ? 'সংরক্ষণ হচ্ছে...' : 'সংরক্ষণ করুন'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -8057,6 +8057,15 @@ class FallbackStore {
         alternativePhone: app.whatsapp || applicant.alternativePhone,
         assignedAreaIds: zones,
         serveAllAreas: serveAllAreas === true,
+        bkashNumber: app.bkashNumber || applicant.bkashNumber,
+        bkashType: app.bkashType || applicant.bkashType,
+        nagadNumber: app.nagadNumber || applicant.nagadNumber,
+        nagadType: app.nagadType || applicant.nagadType,
+        bankName: app.bankName || applicant.bankName,
+        bankAccountName: app.bankAccountName || applicant.bankAccountName,
+        bankAccountNumber: app.bankAccountNumber || applicant.bankAccountNumber,
+        bankBranch: app.bankBranch || applicant.bankBranch,
+        bankRouting: app.bankRouting || applicant.bankRouting,
       };
       this.users.set(app.userId, updatedUser);
       await this.saveUser(updatedUser);
@@ -9980,6 +9989,15 @@ class FallbackStore {
       commissionPercent: existing.commissionPercent,
       status: 'Approved',
       canReceiveOrders: true,
+      bkashNumber: existing.bkashNumber,
+      bkashType: existing.bkashType,
+      nagadNumber: existing.nagadNumber,
+      nagadType: existing.nagadType,
+      bankName: existing.bankName,
+      bankAccountName: existing.bankAccountName,
+      bankAccountNumber: existing.bankAccountNumber,
+      bankBranch: existing.bankBranch,
+      bankRouting: existing.bankRouting,
     };
     this.shops.set(shopId, shop);
 

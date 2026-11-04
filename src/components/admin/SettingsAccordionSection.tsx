@@ -140,7 +140,9 @@ export const SettingsAccordionSection: React.FC<SettingsAccordionSectionProps> =
   return (
     <div
       id={`accordion-${id}`}
-      className={`rounded-2xl border transition-all duration-200 shadow-xs overflow-hidden ${
+      className={`rounded-2xl border transition-all duration-200 shadow-xs ${
+        isOpen ? 'overflow-visible' : 'overflow-hidden'
+      } ${
         styles.border
       } ${isOpen ? `${styles.bgOpen} shadow-sm ring-1 ${styles.border}` : `bg-white ${styles.bgClosedHover}`} ${className}`}
     >
