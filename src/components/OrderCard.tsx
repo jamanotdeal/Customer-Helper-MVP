@@ -326,47 +326,99 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   }
 
   if (customerView) {
+    const isCompleted = order.status === 'DELIVERED' || (order.status as string) === 'COMPLETED';
+    const isCancelled = isCanceledOrder;
+    const isRunning = !isCompleted && !isCancelled;
+
+    // Running = green, Completed = gray, Cancelled = red
+    const cardBorder = isCancelled
+      ? 'border-red-200 hover:border-red-300 shadow-red-100/30'
+      : isCompleted
+      ? 'border-gray-200 hover:border-gray-300 shadow-gray-100/30'
+      : 'border-emerald-300 hover:border-emerald-400 ring-1 ring-emerald-100/80 shadow-emerald-100/30';
+
+    const cardBg = isCancelled
+      ? 'bg-gradient-to-br from-white via-rose-50/20 to-red-50/40'
+      : isCompleted
+      ? 'bg-gradient-to-br from-white via-gray-50/40 to-gray-100/50'
+      : 'bg-gradient-to-br from-white via-white to-emerald-50/40';
+
+    const topBarColor = isCancelled
+      ? 'bg-red-500'
+      : isCompleted
+      ? 'bg-gray-400'
+      : 'bg-emerald-500';
+
+    const iconStyle = isCancelled
+      ? 'p-2 rounded-xl border border-red-200 bg-red-50 text-red-600 shrink-0 flex items-center justify-center shadow-2xs'
+      : isCompleted
+      ? 'p-2 rounded-xl border border-gray-200 bg-gray-100 text-gray-500 shrink-0 flex items-center justify-center shadow-2xs'
+      : `p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`;
+
+    const titleColor = isCancelled
+      ? 'text-red-950'
+      : isCompleted
+      ? 'text-gray-700'
+      : 'text-gray-900';
+
+    const customerBadge = isCancelled
+      ? { label: 'Cancelled', color: 'bg-red-100 text-red-700 border-red-200', icon: XCircle }
+      : isCompleted
+      ? { label: 'Completed', color: 'bg-gray-100 text-gray-700 border-gray-300', icon: CheckCircle2 }
+      : order.status === 'PENDING'
+      ? { label: 'Pending Helper', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 animate-pulse', icon: Clock }
+      : { ...badge, color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+
+    const CustomerBadgeIcon = customerBadge.icon;
+
     return (
       <div
         onClick={onClick}
-        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${accent.border} ${accent.bg}`}
+        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${cardBorder} ${cardBg}`}
       >
-        {/* Status accent bar at top */}
-        <div className={`h-1.5 w-full ${accent.bar}`} />
+        {/* Status accent bar at top: green for running, gray for completed, red for cancelled */}
+        <div className={`h-1.5 w-full ${topBarColor}`} />
 
-        <div className="p-5">
-          <div className="flex items-start justify-between mb-3">
+        <div className="p-4 sm:p-5">
+          <div className="flex items-start justify-between">
             <div className="min-w-0 flex-1 pr-3">
               <div className="flex items-center gap-2.5 mb-1.5">
-                <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
+                <span className={iconStyle}>
                   <ServiceIcon service={order.service} className="w-5 h-5" />
                 </span>
-                <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-2">
-                  {order.service || order.title || 'Service Needed'}
-                </h3>
+                <div className="min-w-0">
+                  <h3 className={`font-extrabold ${titleColor} text-base leading-tight line-clamp-2`}>
+                    {order.service || order.title || 'Service Needed'}
+                  </h3>
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    <span className="font-mono text-[10px] font-bold text-gray-500 bg-gray-100/90 px-1.5 py-0.5 rounded border border-gray-200/80">
+                      #{order.id}
+                    </span>
+                    {order.createdAt ? (
+                      <span className="text-[11px] font-semibold text-gray-400 flex items-center space-x-1">
+                        <Clock className="w-3 h-3 text-gray-400" />
+                        <span>{formatPlacedDateTime(order.createdAt)}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-              <p className="text-[11px] font-semibold text-gray-400 mt-1 flex items-center space-x-1">
-                <Clock className="w-3.5 h-3.5 text-gray-400" />
-                <span>{formatCreatedAt(order.createdAt)}</span>
-              </p>
             </div>
 
-            {(order.status !== 'PENDING' || isCanceledOrder) && (
-              <div className="shrink-0">
-                <span
-                  className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${badge.color}`}
-                >
-                  <BadgeIcon className="w-3 h-3" />
-                  <span>{badge.label}</span>
-                </span>
-              </div>
-            )}
+            {/* Status badge: always clearly visible with appropriate state color */}
+            <div className="shrink-0">
+              <span
+                className={`flex items-center space-x-1 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${customerBadge.color}`}
+              >
+                <CustomerBadgeIcon className="w-3 h-3" />
+                <span>{customerBadge.label}</span>
+              </span>
+            </div>
           </div>
-
 
           {/* Blocked order badge: shown only after 5 minutes of placing the order */}
           {order.isBlockedUserOrder && isBlocked5MinsPassed && order.status === 'PENDING' && (
-            <div className="mb-3.5 flex items-center gap-2 p-2.5 rounded-2xl bg-red-50 border border-red-200 animate-in fade-in duration-300">
+            <div className="mt-3 flex items-center gap-2 p-2.5 rounded-2xl bg-red-50 border border-red-200 animate-in fade-in duration-300">
               <UserX className="w-4 h-4 text-red-600 shrink-0" />
               <span className="text-xs font-extrabold text-red-800 leading-tight flex-1">No available Helper found</span>
               <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-extrabold">
@@ -376,16 +428,19 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             </div>
           )}
 
-          <AsyncButton
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-            className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-extrabold text-sm flex items-center justify-center space-x-2 transition-all shadow-sm"
-          >
-            <span>View Details</span>
-            <ArrowRight className="w-4 h-4 ml-1" />
-          </AsyncButton>
+          {/* View Details button: ONLY shown for active/running orders */}
+          {isRunning && (
+            <AsyncButton
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+              className="w-full mt-3.5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-extrabold text-sm flex items-center justify-center space-x-2 transition-all shadow-sm"
+            >
+              <span>View Details</span>
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </AsyncButton>
+          )}
         </div>
       </div>
     );

@@ -1079,6 +1079,8 @@ class FallbackStore {
   // and the sends currently in flight (see addShopOrder).
   private _shopOrderOutbox: Map<string, ShopOrder> = new Map();
   private _shopOrderSends: Map<string, Promise<void>> = new Map();
+  // Orders that have been deleted or cancelled, preventing stale snapshot resurrection
+  private _deletedOrderIds: Set<string> = new Set();
   // Always-on pricing listener — started immediately so unauthenticated users
   // (e.g. in-app browser visitors) always see the latest admin settings.
   private _unsubPricingListener: (() => void) | null = null;
@@ -1463,18 +1465,32 @@ class FallbackStore {
     try {
       this._dataOwnerUid = localStorage.getItem('jamanot_cache_owner') || null;
 
+      try {
+        const deletedRaw = localStorage.getItem('jamanot_deleted_order_ids');
+        if (deletedRaw) {
+          const parsed = JSON.parse(deletedRaw);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((id: string) => this._deletedOrderIds.add(String(id)));
+          }
+        }
+      } catch (_) {}
+
       const parsedOrders = this.safeParse<[string, Order][]>('jamanot_orders_store');
       if (parsedOrders && Array.isArray(parsedOrders)) {
         // Caches written before the cap could hold an account's whole history.
         this.cacheableOrders(parsedOrders.filter((e) => Array.isArray(e) && e[1])).forEach(([id, order]) => {
-          if (id && order) this.orders.set(id, order);
+          if (id && order && !this._deletedOrderIds.has(id) && !order.isDeleted) {
+            this.orders.set(id, order);
+          }
         });
       }
 
       const parsedBlockedOrders = this.safeParse<[string, Order][]>('jamanot_blocked_user_orders');
       if (parsedBlockedOrders && Array.isArray(parsedBlockedOrders)) {
         parsedBlockedOrders.forEach(([id, order]) => {
-          if (id && order) this.orders.set(id, { ...order, isBlockedUserOrder: true });
+          if (id && order && !this._deletedOrderIds.has(id) && !order.isDeleted) {
+            this.orders.set(id, { ...order, isBlockedUserOrder: true });
+          }
         });
       }
 
@@ -2296,7 +2312,7 @@ class FallbackStore {
       if (it?.storeId) shopIds.add(it.storeId);
     });
     shopIds.forEach((shopId) => {
-      this.loadStoreProductsForShop(shopId).catch(() => {});
+      this.loadStoreProductsForShop(shopId).catch(() => { });
     });
   }
 
@@ -3309,9 +3325,18 @@ class FallbackStore {
           (snapshot) => {
             snapshot.docChanges().forEach((change) => {
               if (change.type === 'removed') {
+                if (this._deletedOrderIds.has(change.doc.id)) {
+                  this.orders.delete(change.doc.id);
+                  return;
+                }
                 this.recheckOrder(change.doc.id);
               } else {
-                const incoming = this.resolveOrderLocations(change.doc.data() as Order);
+                const data = change.doc.data() as any;
+                if (this._deletedOrderIds.has(change.doc.id) || data?.isDeleted === true) {
+                  this.orders.delete(change.doc.id);
+                  return;
+                }
+                const incoming = this.resolveOrderLocations(data as Order);
                 this.noteAcceptSeen(this.orders.get(change.doc.id), incoming, 'admin');
                 this.orders.set(change.doc.id, incoming);
               }
@@ -3547,6 +3572,7 @@ class FallbackStore {
           const o = this.resolveOrderLocations(d.data() as Order);
           if (!o) return;
           const id = o.id || d.id;
+          if (this._deletedOrderIds.has(id) || o.isDeleted) return;
           seen.add(id);
           this.orders.set(id, o);
         });
@@ -3747,13 +3773,24 @@ class FallbackStore {
    * reached the cached copy stays as it is.
    */
   private recheckOrder(orderId: string) {
+    if (this._deletedOrderIds.has(orderId)) {
+      this.orders.delete(orderId);
+      this.notify();
+      return;
+    }
     if (this._recheckingOrders.has(orderId)) return;
     this._recheckingOrders.add(orderId);
     this.whenNetworkReady()
       .then(() => getDoc(doc(db, 'orders', orderId)))
       .then((snap) => {
         if (snap.exists()) {
-          this.orders.set(orderId, this.resolveOrderLocations(snap.data() as Order));
+          const data = snap.data() as any;
+          if (data?.isDeleted === true || this._deletedOrderIds.has(orderId)) {
+            this._deletedOrderIds.add(orderId);
+            this.orders.delete(orderId);
+          } else {
+            this.orders.set(orderId, this.resolveOrderLocations(data as Order));
+          }
         } else {
           this.orders.delete(orderId);
         }
@@ -5192,7 +5229,20 @@ class FallbackStore {
   public async activateScheduledOrder(orderId: string) {
     const existing = this.orders.get(orderId);
     if (!existing) return;
-    if (existing.status !== 'SCHEDULED' && !existing.isScheduled) return;
+    if (existing.status !== 'SCHEDULED' || existing.isDeleted || this._deletedOrderIds.has(orderId)) {
+      if (existing.isScheduled) {
+        this.updateOrder(orderId, (o) => ({ ...o, isScheduled: false }));
+      }
+      return;
+    }
+
+    const hadDeliveredOrCanceled = (existing.statusHistory || []).some(
+      (sh) => sh.status === 'DELIVERED' || sh.status === 'CANCELED' || (sh.status as string) === 'CANCELLED'
+    );
+    if (hadDeliveredOrCanceled) {
+      this.updateOrder(orderId, (o) => ({ ...o, isScheduled: false }));
+      return;
+    }
 
     const now = new Date().toISOString();
     const updated: Order = {
@@ -5257,12 +5307,38 @@ class FallbackStore {
   }
 
   public async deleteOrder(orderId: string) {
+    // 1. Mark as permanently deleted in memory and localStorage
+    this._deletedOrderIds.add(orderId);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const ids = Array.from(this._deletedOrderIds);
+        localStorage.setItem('jamanot_deleted_order_ids', JSON.stringify(ids.slice(-500)));
+      }
+    } catch (_) {}
+
+    // 2. Remove from active cache and invalidate range caches
     this.orders.delete(orderId);
+    this._rangeReads.clear();
     this.scheduleLocalStoreSave();
     this.notify();
+
+    // 3. Mark in Firestore as deleted/cancelled and delete document
     try {
       await this.cancelShopOrdersForOrder(orderId);
+      await updateDoc(doc(db, 'orders', orderId), {
+        isDeleted: true,
+        status: 'CANCELED',
+        isScheduled: false,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
       await deleteDoc(doc(db, 'orders', orderId));
+
+      // Remove related notifications
+      getDocs(query(collection(db, 'notifications'), where('orderId', '==', orderId)))
+        .then((snap) => {
+          snap.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+        })
+        .catch(() => {});
     } catch (e: any) {
       console.warn('[Firestore] deleteOrder note:', e?.message || e);
     }
@@ -9906,7 +9982,7 @@ class FallbackStore {
     if (typeof localStorage !== 'undefined') {
       try {
         localStorage.removeItem('jamanot_pending_referral');
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -10408,11 +10484,24 @@ class FallbackStore {
 
   public resolveOrderLocations(order: Order): Order {
     if (!order) return order;
-    // Self-healing: If an order has a helper assigned (helperId) but status is still PENDING, ensure it reflects ACCEPTED
-    const effectiveStatus = (order.helperId && order.status === 'PENDING') ? 'ACCEPTED' : order.status;
+    // Self-healing 1: If an order has a helper assigned (helperId) but status is still PENDING, ensure it reflects ACCEPTED
+    let effectiveStatus = (order.helperId && order.status === 'PENDING') ? 'ACCEPTED' : order.status;
+
+    // Self-healing 2: If order was mistakenly reverted to PENDING by past scheduled cron despite being completed/canceled
+    if (effectiveStatus === 'PENDING' && Array.isArray(order.statusHistory) && order.statusHistory.length > 1) {
+      const hadDelivered = order.statusHistory.some((sh) => sh.status === 'DELIVERED');
+      const hadCanceled = order.statusHistory.some((sh) => sh.status === 'CANCELED' || (sh.status as string) === 'CANCELLED');
+      if (hadDelivered) {
+        effectiveStatus = 'DELIVERED';
+      } else if (hadCanceled) {
+        effectiveStatus = 'CANCELED';
+      }
+    }
+
     return {
       ...order,
       status: effectiveStatus,
+      isScheduled: (effectiveStatus === 'DELIVERED' || effectiveStatus === 'CANCELED') ? false : order.isScheduled,
       deliveryLocation: order.deliveryLocation ? this.resolveLocation(order.deliveryLocation)! : order.deliveryLocation,
       pickupLocation: order.pickupLocation ? this.resolveLocation(order.pickupLocation) : order.pickupLocation,
     };

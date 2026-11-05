@@ -749,10 +749,10 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                     type="button"
                     onClick={() => setIsServiceDropdownOpen(true)}
                     className={`w-full px-4 py-3.5 rounded-2xl border text-left flex items-center justify-between text-sm sm:text-base transition-all duration-200 cursor-pointer select-none ${isServiceDropdownOpen
-                        ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl'
-                        : errors.service
-                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
-                          : 'border-gray-200 bg-white hover:border-emerald-300'
+                      ? 'border-emerald-500 ring-4 ring-emerald-500/20 bg-white shadow-xl'
+                      : errors.service
+                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100'
+                        : 'border-gray-200 bg-white hover:border-emerald-300'
                       }`}
                     aria-haspopup="dialog"
                     aria-expanded={isServiceDropdownOpen}
@@ -869,8 +869,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                     }}
                     placeholder={getServiceDescriptionHint(service, fallbackStore.pricingSettings)}
                     className={`w-full px-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 resize-none h-28 placeholder-gray-400 transition-colors ${errors.description
-                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
-                        : 'border-emerald-200 bg-emerald-50/40 focus:border-emerald-500'
+                      ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
+                      : 'border-emerald-200 bg-emerald-50/40 focus:border-emerald-500'
                       }`}
                   />
                   {errors.description && (
@@ -984,8 +984,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       }}
                       placeholder="হোয়াটসঅ্যাপ নম্বর *"
                       className={`w-full pl-10 pr-4 py-3 rounded-2xl border outline-none text-sm text-gray-900 placeholder-gray-400 transition-colors ${errors.altPhone
-                          ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
-                          : 'border-gray-200 bg-white focus:border-emerald-500'
+                        ? 'border-red-400 bg-red-50/20 ring-2 ring-red-100 focus:border-red-500'
+                        : 'border-gray-200 bg-white focus:border-emerald-500'
                         }`}
                     />
                   </div>
@@ -1017,8 +1017,8 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                         setUseFreeDelivery(!useFreeDelivery);
                       }}
                       className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${useFreeDelivery
-                          ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-400/20 shadow-xs'
-                          : 'bg-gradient-to-r from-amber-50/50 via-yellow-50/30 to-amber-50/50 border-amber-200/70 hover:border-amber-300'
+                        ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-400/20 shadow-xs'
+                        : 'bg-gradient-to-r from-amber-50/50 via-yellow-50/30 to-amber-50/50 border-amber-200/70 hover:border-amber-300'
                         }`}
                     >
                       <div className="flex items-center space-x-2.5">
@@ -1260,15 +1260,15 @@ export const RequestComposer: React.FC<RequestComposerProps> = ({
                       setIsServiceDropdownOpen(false);
                     }}
                     className={`w-full px-4 py-3.5 rounded-2xl text-left text-sm sm:text-base flex items-center justify-between transition-all cursor-pointer group mb-1.5 gap-3 ${isSelected
-                        ? 'bg-emerald-50 text-emerald-950 font-extrabold ring-1 ring-emerald-300 shadow-xs'
-                        : 'text-gray-700 font-semibold hover:bg-emerald-50/50 hover:text-emerald-900 active:bg-gray-100'
+                      ? 'bg-emerald-50 text-emerald-950 font-extrabold ring-1 ring-emerald-300 shadow-xs'
+                      : 'text-gray-700 font-semibold hover:bg-emerald-50/50 hover:text-emerald-900 active:bg-gray-100'
                       }`}
                   >
                     <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                       <div
                         className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 sm:mt-1 ${isSelected
-                            ? 'bg-emerald-600 ring-4 ring-emerald-100'
-                            : 'bg-gray-300 group-hover:bg-emerald-400'
+                          ? 'bg-emerald-600 ring-4 ring-emerald-100'
+                          : 'bg-gray-300 group-hover:bg-emerald-400'
                           } transition-colors`}
                       />
                       <span className="leading-snug break-words text-left flex-1">{srv}</span>

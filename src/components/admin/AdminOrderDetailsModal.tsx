@@ -50,11 +50,13 @@ import { AdminStoreOrderDetailsModal } from './AdminStoreOrderDetailsModal';
 interface AdminOrderDetailsModalProps {
   orderId: string;
   onClose: () => void;
+  onOrderDeleted?: (orderId: string) => void;
 }
 
 export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
   orderId,
   onClose,
+  onOrderDeleted,
 }) => {
   const { showAlert, showConfirm } = useModal();
   const { user: currentUser } = useAuth();
@@ -175,7 +177,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         if (mapInstanceRef.current) {
           try {
             mapInstanceRef.current.remove();
-          } catch (e) {}
+          } catch (e) { }
           mapInstanceRef.current = null;
         }
 
@@ -325,7 +327,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
           if (isMounted && mapInstanceRef.current) {
             try {
               mapInstanceRef.current.invalidateSize();
-            } catch (e) {}
+            } catch (e) { }
           }
         }, 200);
       } catch (err) {
@@ -341,7 +343,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       if (mapInstanceRef.current) {
         try {
           mapInstanceRef.current.remove();
-        } catch (e) {}
+        } catch (e) { }
         mapInstanceRef.current = null;
       }
     };
@@ -451,11 +453,11 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
       currentOrder?.deliveryBackTime
         ? currentOrder.deliveryBackTime.substring(0, 16)
         : (() => {
-            const d = new Date();
-            d.setDate(d.getDate() + 1);
-            d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-            return d.toISOString().substring(0, 16);
-          })()
+          const d = new Date();
+          d.setDate(d.getDate() + 1);
+          d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+          return d.toISOString().substring(0, 16);
+        })()
     );
     setShowAdminTwoWayModal(true);
   };
@@ -624,7 +626,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     setShowAdminItemsModal(false);
     showAlert('অর্ডার আইটেম আপডেট সম্পন্ন', 'অর্ডারের আইটেম বিস্তারিত সফলভাবে পরিবর্তন করা হয়েছে।', 'success');
   };
-  
+
   const [activeMapPicker, setActiveMapPicker] = useState<'pickup' | 'delivery' | null>(null);
 
   // Admin Set Pickup Address Modal
@@ -682,7 +684,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
         details: loc.details,
       });
       if (sa?.id) effectiveAddressId = sa.id;
-    } catch (_) {}
+    } catch (_) { }
 
     const locWithId: LocationData = {
       ...loc,
@@ -799,6 +801,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       status: 'CANCELED',
+      isScheduled: false,
       cancelledAt: new Date().toISOString(),
       cancellationRequest: o.cancellationRequest
         ? { ...o.cancellationRequest, status: 'APPROVED' }
@@ -941,6 +944,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       status: 'CANCELED',
+      isScheduled: false,
       cancelledAt: new Date().toISOString(),
       lastEditedBy: 'admin' as const,
       lastEditedAt: new Date().toISOString(),
@@ -1114,13 +1118,12 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 <div className="flex items-center space-x-2">
                   <h3 className="font-extrabold text-lg">Order-#{order.id}</h3>
                   <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                      order.status === 'DELIVERED'
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${order.status === 'DELIVERED'
                         ? 'bg-emerald-400 text-emerald-950'
                         : order.status === 'CANCELED'
-                        ? 'bg-red-400 text-red-950'
-                        : 'bg-amber-400 text-amber-950'
-                    }`}
+                          ? 'bg-red-400 text-red-950'
+                          : 'bg-amber-400 text-amber-950'
+                      }`}
                   >
                     {order.status}
                   </span>
@@ -1287,7 +1290,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   <span>Change</span>
                 </button>
               </div>
-              
+
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-gray-500 font-bold block text-[11px]">Requested Items List:</span>
@@ -1317,13 +1320,12 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       return (
                         <div
                           key={it.id}
-                          className={`flex items-start justify-between p-2.5 rounded-xl border transition-all ${
-                            !addedStatus.isAdded
+                          className={`flex items-start justify-between p-2.5 rounded-xl border transition-all ${!addedStatus.isAdded
                               ? 'bg-rose-50/70 border-rose-200'
                               : addedStatus.reason === 'pending'
-                              ? 'bg-gray-50 border-gray-100'
-                              : 'bg-emerald-50/60 border-emerald-200'
-                          }`}
+                                ? 'bg-gray-50 border-gray-100'
+                                : 'bg-emerald-50/60 border-emerald-200'
+                            }`}
                         >
                           <div className="space-y-1">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1608,11 +1610,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               )}
 
               {/* Two-Way / Return Delivery Settings Card */}
-              <div className={`p-4 rounded-2xl border transition-all ${
-                order.needDeliveryBack
+              <div className={`p-4 rounded-2xl border transition-all ${order.needDeliveryBack
                   ? 'bg-indigo-50/90 border-indigo-300 text-indigo-950 shadow-sm'
                   : 'bg-slate-50 border-slate-200 text-slate-800'
-              }`}>
+                }`}>
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center space-x-2.5">
                     <div className={`p-2.5 rounded-xl ${order.needDeliveryBack ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
@@ -1621,9 +1622,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <div>
                       <div className="flex items-center space-x-2">
                         <h4 className="font-extrabold text-xs">Two-Way / Return Service (দ্বিমুখী ডেলিভারি)</h4>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                          order.needDeliveryBack ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
-                        }`}>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${order.needDeliveryBack ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
+                          }`}>
                           {order.needDeliveryBack ? '🔁 Two-Way' : 'One-Way'}
                         </span>
                       </div>
@@ -1645,95 +1645,93 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </div>
                   <button
                     onClick={openTwoWayModal}
-                    className={`py-2 px-3.5 rounded-xl font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 ${
-                      order.needDeliveryBack
+                    className={`py-2 px-3.5 rounded-xl font-extrabold text-xs shadow-sm transition-all flex items-center space-x-1.5 ${order.needDeliveryBack
                         ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
                         : 'bg-purple-900 hover:bg-purple-950 text-white'
-                    }`}
+                      }`}
                   >
                     <Edit2 className="w-3.5 h-3.5" />
                     <span>{order.needDeliveryBack ? 'Edit Two-Way / Option & Times' : 'Make Two-Way Order'}</span>
                   </button>
                 </div>
               </div>
-            {/* 2b. Helper Shop Orders (Store Requests) */}
-            {(() => {
-              const shopOrders = fallbackStore.getShopOrdersForOrder(order.id);
-              if (shopOrders.length === 0) return null;
-              return (
-                <div className="bg-purple-50/60 rounded-2xl border border-purple-200 p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-extrabold text-xs text-purple-950 uppercase tracking-wider flex items-center space-x-1.5">
-                      <ShoppingBag className="w-4 h-4 text-purple-700" />
-                      <span>Helper Store Requests (নিবন্ধিত দোকানে হেলপারের পাঠানো অর্ডার)</span>
-                    </h4>
-                    <span className="px-2.5 py-0.5 rounded-full bg-purple-200 text-purple-900 font-extrabold text-[10px]">
-                      {shopOrders.length} Shop Order{shopOrders.length > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {shopOrders.map((so) => {
-                      const shop = fallbackStore.shops.get(so.shopId);
-                      return (
-                        <div key={so.id} className="bg-white rounded-xl p-3 border border-purple-100 shadow-xs space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <span className="font-black text-gray-900 text-xs">{so.shopName}</span>
-                              {shop?.type && (
-                                <span className="text-[9px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase">
-                                  {shop.type}
-                                </span>
-                              )}
+              {/* 2b. Helper Shop Orders (Store Requests) */}
+              {(() => {
+                const shopOrders = fallbackStore.getShopOrdersForOrder(order.id);
+                if (shopOrders.length === 0) return null;
+                return (
+                  <div className="bg-purple-50/60 rounded-2xl border border-purple-200 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-extrabold text-xs text-purple-950 uppercase tracking-wider flex items-center space-x-1.5">
+                        <ShoppingBag className="w-4 h-4 text-purple-700" />
+                        <span>Helper Store Requests (নিবন্ধিত দোকানে হেলপারের পাঠানো অর্ডার)</span>
+                      </h4>
+                      <span className="px-2.5 py-0.5 rounded-full bg-purple-200 text-purple-900 font-extrabold text-[10px]">
+                        {shopOrders.length} Shop Order{shopOrders.length > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {shopOrders.map((so) => {
+                        const shop = fallbackStore.shops.get(so.shopId);
+                        return (
+                          <div key={so.id} className="bg-white rounded-xl p-3 border border-purple-100 shadow-xs space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-2">
+                                <span className="font-black text-gray-900 text-xs">{so.shopName}</span>
+                                {shop?.type && (
+                                  <span className="text-[9px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase">
+                                    {shop.type}
+                                  </span>
+                                )}
+                              </div>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'DELIVERED'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : so.status === 'ACCEPTED'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : so.status === 'PREPARING'
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : so.status === 'CANCELED' || (so.status as string) === 'CANCELLED'
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                {so.status}
+                              </span>
                             </div>
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
-                              so.status === 'HANDOVER' || so.status === 'READY' || so.status === 'DELIVERED'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : so.status === 'ACCEPTED'
-                                ? 'bg-blue-100 text-blue-800'
-                                : so.status === 'PREPARING'
-                                ? 'bg-purple-100 text-purple-800'
-                                : so.status === 'CANCELED' || (so.status as string) === 'CANCELLED'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {so.status}
-                            </span>
+                            {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
+                              <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 text-xs space-y-1">
+                                {so.itemsWithPrice.map((it, idx) => (
+                                  <div key={idx} className="flex items-center justify-between text-gray-700">
+                                    <span>{it.name}</span>
+                                    <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-700 font-semibold bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                {so.requestText}
+                              </p>
+                            )}
+                            <div className="flex items-center justify-between text-[11px] pt-1 text-gray-600 flex-wrap gap-2 border-t border-purple-50">
+                              <div>
+                                <span>Total Price: <strong className="text-purple-900">{so.price !== undefined ? `৳${so.price}` : 'Not set'}</strong></span>
+                                {shop?.whatsapp && <span className="ml-3">Phone: <strong className="text-gray-900">{shop.whatsapp}</strong></span>}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedShopOrderId(so.id)}
+                                className="px-2.5 py-1 rounded-lg bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] transition-all flex items-center gap-1 shadow-xs"
+                              >
+                                <span>Manage Store Order</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
                           </div>
-                          {so.itemsWithPrice && so.itemsWithPrice.length > 0 ? (
-                            <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 text-xs space-y-1">
-                              {so.itemsWithPrice.map((it, idx) => (
-                                <div key={idx} className="flex items-center justify-between text-gray-700">
-                                  <span>{it.name}</span>
-                                  <span className="font-mono font-bold text-gray-900">৳{it.price ?? 0}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-gray-700 font-semibold bg-gray-50 p-2 rounded-lg border border-gray-100">
-                              {so.requestText}
-                            </p>
-                          )}
-                          <div className="flex items-center justify-between text-[11px] pt-1 text-gray-600 flex-wrap gap-2 border-t border-purple-50">
-                            <div>
-                              <span>Total Price: <strong className="text-purple-900">{so.price !== undefined ? `৳${so.price}` : 'Not set'}</strong></span>
-                              {shop?.whatsapp && <span className="ml-3">Phone: <strong className="text-gray-900">{shop.whatsapp}</strong></span>}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedShopOrderId(so.id)}
-                              className="px-2.5 py-1 rounded-lg bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] transition-all flex items-center gap-1 shadow-xs"
-                            >
-                              <span>Manage Store Order</span>
-                              <ExternalLink className="w-2.5 h-2.5" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
             </div>
 
             {/* 3. Pricing Calculation Summary */}
@@ -1747,8 +1745,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   const R = 6371;
                   const dLat = ((d.lat - p.lat) * Math.PI) / 180;
                   const dLon = ((d.lng - p.lng) * Math.PI) / 180;
-                  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(p.lat*Math.PI/180)*Math.cos(d.lat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
-                  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)) * 10) / 10;
+                  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(p.lat * Math.PI / 180) * Math.cos(d.lat * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 10) / 10;
                 }
                 return 0;
               })();
@@ -1901,16 +1899,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   </div>
 
                   {/* ── CUSTOMER PAYMENT RECORD (Paid via Pay button on Order Details) ── */}
-                  <div className={`p-4 rounded-2xl border shadow-2xs space-y-3 transition-all ${
-                    (order.customerPayment?.transactionId || order.isPaid)
+                  <div className={`p-4 rounded-2xl border shadow-2xs space-y-3 transition-all ${(order.customerPayment?.transactionId || order.isPaid)
                       ? 'bg-gradient-to-br from-emerald-50/90 to-teal-50/60 border-emerald-200'
                       : 'bg-gray-50/70 border-gray-200'
-                  }`}>
+                    }`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2.5">
-                        <div className={`p-2 rounded-xl text-white shadow-2xs ${
-                          (order.customerPayment?.transactionId || order.isPaid) ? 'bg-emerald-600' : 'bg-gray-400'
-                        }`}>
+                        <div className={`p-2 rounded-xl text-white shadow-2xs ${(order.customerPayment?.transactionId || order.isPaid) ? 'bg-emerald-600' : 'bg-gray-400'
+                          }`}>
                           <CreditCard className="w-4 h-4" />
                         </div>
                         <div>
@@ -2057,11 +2053,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
-                          (order.customerPayment?.transactionId || order.isPaid)
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${(order.customerPayment?.transactionId || order.isPaid)
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                             : 'bg-amber-100 text-amber-800 border border-amber-200'
-                        }`}>
+                          }`}>
                           {(order.customerPayment?.transactionId || order.isPaid) ? 'Paid' : 'Unpaid'}
                         </span>
                       </div>
@@ -2078,9 +2073,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
-                          order.isHelperPaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
-                        }`}>
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${order.isHelperPaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}>
                           {order.isHelperPaid ? 'Settled' : 'Due'}
                         </span>
                       </div>
@@ -2098,9 +2092,8 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                               </span>
                             )}
                           </div>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
-                            order.isStorePaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
-                          }`}>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${order.isStorePaid ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                            }`}>
                             {order.isStorePaid ? 'Disbursed' : 'Due'}
                           </span>
                         </div>
@@ -2155,21 +2148,19 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
             )}
 
             {order.feeAdjustment && (
-              <div className={`p-4 rounded-2xl border space-y-2 text-xs ${
-                order.feeAdjustment.status === 'APPROVED'
+              <div className={`p-4 rounded-2xl border space-y-2 text-xs ${order.feeAdjustment.status === 'APPROVED'
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
                   : 'border-amber-200 bg-amber-50 text-amber-950'
-              }`}>
+                }`}>
                 <div className="flex items-center justify-between font-extrabold">
                   <span className="flex items-center space-x-1.5">
                     <AlertTriangle className={`w-4 h-4 ${order.feeAdjustment.status === 'APPROVED' ? 'text-emerald-600' : 'text-amber-600'}`} />
                     <span>Helper Delivery Fee Adjustment</span>
                   </span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                    order.feeAdjustment.status === 'APPROVED'
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${order.feeAdjustment.status === 'APPROVED'
                       ? 'bg-emerald-200 text-emerald-900'
                       : 'bg-amber-200 text-amber-900'
-                  }`}>
+                    }`}>
                     {order.feeAdjustment.status}
                   </span>
                 </div>
@@ -2390,6 +2381,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                       );
                       if (!confirmed) return;
                       await fallbackStore.deleteOrder(order.id);
+                      onOrderDeleted?.(order.id);
                       showAlert('অর্ডার মুছে ফেলা হয়েছে', `Order #${order.id} permanently deleted.`, 'info');
                       onClose();
                     }}
@@ -2574,14 +2566,12 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   role="switch"
                   aria-checked={adminTwoWayEnabled}
                   onClick={() => setAdminTwoWayEnabled(!adminTwoWayEnabled)}
-                  className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${
-                    adminTwoWayEnabled ? 'bg-indigo-600' : 'bg-gray-300'
-                  }`}
+                  className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${adminTwoWayEnabled ? 'bg-indigo-600' : 'bg-gray-300'
+                    }`}
                 >
                   <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-200 ${
-                      adminTwoWayEnabled ? 'translate-x-6' : 'translate-x-1'
-                    }`}
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-200 ${adminTwoWayEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
                   />
                 </button>
               </div>
@@ -2594,11 +2584,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setAdminReturnWhen('now')}
-                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
-                        adminReturnWhen === 'now'
+                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${adminReturnWhen === 'now'
                           ? 'bg-indigo-600 border-indigo-600 text-white font-extrabold shadow-sm'
                           : 'bg-white border-gray-200 text-gray-700 font-bold hover:bg-gray-100'
-                      }`}
+                        }`}
                     >
                       <span className="text-xs flex items-center gap-1">⚡ Return Now</span>
                       <span className={`text-[10px] mt-1 ${adminReturnWhen === 'now' ? 'text-indigo-100' : 'text-gray-400'}`}>
@@ -2609,11 +2598,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setAdminReturnWhen('schedule')}
-                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
-                        adminReturnWhen === 'schedule'
+                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${adminReturnWhen === 'schedule'
                           ? 'bg-indigo-600 border-indigo-600 text-white font-extrabold shadow-sm'
                           : 'bg-white border-gray-200 text-gray-700 font-bold hover:bg-gray-100'
-                      }`}
+                        }`}
                     >
                       <span className="text-xs flex items-center gap-1">⏰ Scheduled Return</span>
                       <span className={`text-[10px] mt-1 ${adminReturnWhen === 'schedule' ? 'text-indigo-100' : 'text-gray-400'}`}>
@@ -2753,11 +2741,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                           key={svc}
                           type="button"
                           onClick={() => setAdminServiceInput(svc)}
-                          className={`p-2.5 rounded-xl text-xs font-bold text-left border transition-all ${
-                            adminServiceInput === svc
+                          className={`p-2.5 rounded-xl text-xs font-bold text-left border transition-all ${adminServiceInput === svc
                               ? 'bg-purple-600 border-purple-600 text-white shadow-sm'
                               : 'bg-white border-gray-200 text-gray-700 hover:bg-purple-50 hover:border-purple-300'
-                          }`}
+                            }`}
                         >
                           {svc}
                         </button>
@@ -2858,11 +2845,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <button
                 type="button"
                 onClick={() => setPickupInputMode('shop')}
-                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                  pickupInputMode === 'shop'
+                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${pickupInputMode === 'shop'
                     ? 'bg-white text-amber-900 shadow-sm'
                     : 'text-gray-500 hover:text-gray-800'
-                }`}
+                  }`}
               >
                 <Store className="w-3.5 h-3.5" />
                 <span>দোকান নির্বাচন (Registered Shop)</span>
@@ -2870,11 +2856,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
               <button
                 type="button"
                 onClick={() => setPickupInputMode('manual')}
-                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                  pickupInputMode === 'manual'
+                className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${pickupInputMode === 'manual'
                     ? 'bg-white text-amber-900 shadow-sm'
                     : 'text-gray-500 hover:text-gray-800'
-                }`}
+                  }`}
               >
                 <Edit2 className="w-3.5 h-3.5" />
                 <span>কাস্টম ঠিকানা (Manual Input)</span>
@@ -2916,11 +2901,10 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                           <div
                             key={s.id}
                             onClick={() => setAdminSelectedShopId(s.id)}
-                            className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start justify-between gap-2 ${
-                              isSelected
+                            className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start justify-between gap-2 ${isSelected
                                 ? 'bg-amber-50 border-amber-500 text-amber-950 shadow-xs'
                                 : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-800'
-                            }`}
+                              }`}
                           >
                             <div className="min-w-0">
                               <p className="text-xs font-black truncate flex items-center gap-1.5">

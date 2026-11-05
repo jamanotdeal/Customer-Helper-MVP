@@ -145,7 +145,7 @@ export default function PageClient() {
       (activeMode === 'customer' || !activeMode);
     if (isCustomerMode) {
       // Fire-and-forget: silently mark as read in background
-      fallbackStore.markNotificationsRead(user.uid).catch(() => {/* ignore */});
+      fallbackStore.markNotificationsRead(user.uid).catch(() => {/* ignore */ });
     }
   }, [user?.uid, activeMode]);
 
@@ -171,30 +171,14 @@ export default function PageClient() {
     }
   }, []);
 
-  // Auto-dispatch locally queued scheduled orders when service time opens
+  // One-time cleanup of legacy local storage scheduled queue on mount
   useEffect(() => {
-    const tryDispatch = async () => {
-      try {
-        const dispatched = await processAndDispatchScheduledOrders();
-        if (dispatched > 0) {
-          showAlert(
-            `${dispatched}টি শিডিউল রিকোয়েস্ট পাঠানো হয়েছে!`,
-            'সার্ভিস সময় শুরু হওয়ায় আপনার আগে করা শিডিউল রিকোয়েস্টগুলো হেলপারদের কাছে পাঠানো হয়েছে।',
-            'success'
-          );
-        }
-      } catch (e) {
-        console.warn('[PageClient] Failed to dispatch scheduled orders:', e);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('scheduled_customer_orders_v1');
       }
-    };
-
-    if (user) {
-      tryDispatch();
-      const interval = setInterval(tryDispatch, 60000);
-      return () => clearInterval(interval);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
+    } catch (_) {}
+  }, []);
 
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
@@ -653,8 +637,8 @@ export default function PageClient() {
       if (!alertsReadyRef.current) return;
       // Delivered live, so the copy Java parked for a cold start is spent —
       // left in place it would re-open this order on a later catch-up.
-      consumePendingOrderAlert().catch(() => {});
-      routeNativeOrderAlertRef.current(alert).catch(() => {});
+      consumePendingOrderAlert().catch(() => { });
+      routeNativeOrderAlertRef.current(alert).catch(() => { });
     });
   }, []);
 
@@ -671,14 +655,14 @@ export default function PageClient() {
     const adopt = () => {
       getActiveNativeOrderAlerts()
         .then((alerts) =>
-          alerts.forEach((a) => routeNativeOrderAlertRef.current(a, { adopt: true }).catch(() => {}))
+          alerts.forEach((a) => routeNativeOrderAlertRef.current(a, { adopt: true }).catch(() => { }))
         )
-        .catch(() => {});
+        .catch(() => { });
     };
 
     consumePendingOrderAlert()
       .then((alert) => (alert ? routeNativeOrderAlertRef.current(alert) : undefined))
-      .catch(() => {})
+      .catch(() => { })
       .finally(adopt);
 
     return subscribeAppVisibility((visible) => {
@@ -700,8 +684,8 @@ export default function PageClient() {
           const role: 'customer' | 'helper' | 'admin' | 'store' =
             user.isAdmin ? 'admin'
               : (user.isStoreApproved || activeMode === 'store') ? 'store'
-              : (user.isHelper && activeMode === 'helper') ? 'helper'
-              : 'customer';
+                : (user.isHelper && activeMode === 'helper') ? 'helper'
+                  : 'customer';
           // Reconnect, don't re-subscribe. Tearing every listener down and
           // starting them again re-read the whole session (server addresses,
           // order lists, notifications — about 1,400 reads for a helper) on

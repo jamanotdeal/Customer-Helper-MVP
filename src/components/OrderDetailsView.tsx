@@ -1019,7 +1019,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
           <div className="space-y-2">
             {(order.items || []).map((it) => {
-              const unitPrice = getItemUnitPrice(it, validShopOrders);
+              const unitPrice = getItemUnitPrice(it, validShopOrders, order.id);
               const isCalculatedInTotal = unitPrice !== undefined && unitPrice > 0;
 
               const itemPhoto = (() => {
@@ -1519,6 +1519,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         isOpen={showEditModal}
         onClose={() => setShowEditModal(false)}
         order={order}
+        editorRole={isAdminUser ? 'admin' : (user?.isHelper ? 'helper' : 'customer')}
         onOrderUpdated={(updated) => {
           setOrder(updated);
         }}

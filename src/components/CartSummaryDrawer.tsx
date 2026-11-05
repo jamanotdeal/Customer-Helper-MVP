@@ -251,7 +251,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
         showAlert(
           'লোকেশন পারমিশন আবশ্যক',
           locResult.errorMessage ||
-            'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+          'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
           'warning'
         );
         return;
@@ -371,9 +371,9 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       if (delivLoc.address || delivLoc.lat) {
         saveDefaultDeliveryLocation(delivLoc);
         if (user!.uid) {
-          fallbackStore.saveCustomerLocation(user!.uid, delivLoc, resolvedAreaId).catch(() => {});
+          fallbackStore.saveCustomerLocation(user!.uid, delivLoc, resolvedAreaId).catch(() => { });
           addSavedDeliveryAddress(user!.uid, delivLoc);
-          saveCustomerSavedAddressToFirestore(user!.uid, delivLoc).catch(() => {});
+          saveCustomerSavedAddressToFirestore(user!.uid, delivLoc).catch(() => { });
         }
       }
       updateCustomerPreferences(customerPhone.trim() || undefined, delivLoc, undefined);
@@ -424,7 +424,7 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
       showAlert(
         'লোকেশন পারমিশন আবশ্যক',
         locResult.errorMessage ||
-          'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
+        'অর্ডার প্লেস করার জন্য আপনার লোকেশন পারমিশন অন করা আবশ্যক। অনুগ্রহ করে ব্রাউজার বা ডিভাইসে লোকেশন Allow করুন।',
         'warning'
       );
       return;
@@ -687,8 +687,8 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                   setShowAddCustomModal(true);
                 }}
                 className={`w-full py-2 px-3 rounded-xl border-2 transition-all cursor-pointer flex items-center justify-center gap-2 text-xs font-black shadow-sm animate-pulse ${highlightCustomItem
-                    ? 'border-amber-500 bg-amber-100 text-amber-950 ring-4 ring-amber-400/70 shadow-lg shadow-amber-300/40 scale-[1.01]'
-                    : 'border-amber-400 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50 hover:bg-amber-100/90 text-amber-950 hover:border-amber-500 ring-2 ring-amber-400/60 shadow-md shadow-amber-200/40 active:scale-[0.98]'
+                  ? 'border-amber-500 bg-amber-100 text-amber-950 ring-4 ring-amber-400/70 shadow-lg shadow-amber-300/40 scale-[1.01]'
+                  : 'border-amber-400 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50 hover:bg-amber-100/90 text-amber-950 hover:border-amber-500 ring-2 ring-amber-400/60 shadow-md shadow-amber-200/40 active:scale-[0.98]'
                   }`}
               >
                 <span className="w-5 h-5 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -835,8 +835,8 @@ export const CartSummaryDrawer: React.FC<CartSummaryDrawerProps> = ({
                           setUseFreeDelivery((prev) => !prev);
                         }}
                         className={`mt-1 p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none ${useFreeDelivery
-                            ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
-                            : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
+                          ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/20'
+                          : 'bg-gradient-to-r from-amber-50/50 to-yellow-50/30 border-amber-200/70 hover:border-amber-300'
                           }`}
                       >
                         <div className="flex items-center gap-2">

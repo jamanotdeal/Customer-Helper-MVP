@@ -118,13 +118,12 @@ export const getItemUnitPrice = (
 ): number | undefined => {
   if (!it) return undefined;
 
-  // 1. From active ShopOrders (strictly scoped to this order) - shop price takes priority
-  const activeSOs = shopOrders.filter(
-    (so) =>
-      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
-      so.status !== 'CANCELED' &&
-      (so.status as string) !== 'CANCELLED'
-  );
+  // 1. From active ShopOrders (strictly scoped to this parent order) - shop price takes priority
+  const activeSOs = shopOrders.filter((so) => {
+    if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+    if (parentOrderId) return so.parentOrderId === parentOrderId;
+    return !so.parentOrderId;
+  });
   const cleanName = (it.name || '').toLowerCase().trim();
   const itNorm = normalizeItemName(it.name || '');
 
@@ -134,8 +133,8 @@ export const getItemUnitPrice = (
         if (it.id && (ip.itemId === it.id || ip.originalId === it.id)) return true;
         const ipName = (ip.name || '').toLowerCase().trim();
         const ipNorm = normalizeItemName(ip.name || '');
-        if (ipName && (cleanName === ipName || cleanName.includes(ipName) || ipName.includes(cleanName))) return true;
-        if (ipNorm && (itNorm === ipNorm || (itNorm.length > 1 && ipNorm.length > 1 && (itNorm.includes(ipNorm) || ipNorm.includes(itNorm))))) return true;
+        if (cleanName && ipName && (cleanName === ipName || cleanName.includes(ipName) || ipName.includes(cleanName))) return true;
+        if (itNorm && ipNorm && (itNorm === ipNorm || (itNorm.length > 1 && ipNorm.length > 1 && (itNorm.includes(ipNorm) || ipNorm.includes(itNorm))))) return true;
         return false;
       });
       if (match) {
@@ -143,18 +142,48 @@ export const getItemUnitPrice = (
         if (!isNaN(p) && p > 0) return p;
       }
     }
+
+    // 1b. Single-item or matching requestText shop order without itemsWithPrice breakdown
+    if ((!so.itemsWithPrice || so.itemsWithPrice.length === 0) && so.price !== undefined) {
+      const soPriceNum = typeof so.price === 'number' ? so.price : parseFloat(String(so.price || '0'));
+      if (!isNaN(soPriceNum) && soPriceNum > 0) {
+        let isDirectMatch = false;
+        if (so.requestText) {
+          const rawLines = so.requestText.split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+          for (const line of rawLines) {
+            const parts = line.split(/,/).map((p) => p.trim()).filter(Boolean);
+            for (const p of parts) {
+              const pClean = p.toLowerCase().trim();
+              const pNorm = normalizeItemName(p);
+              if (pClean && (cleanName === pClean || cleanName.includes(pClean) || pClean.includes(cleanName))) {
+                isDirectMatch = true;
+                break;
+              }
+              if (pNorm && (itNorm === pNorm || (itNorm.length > 1 && pNorm.length > 1 && (itNorm.includes(pNorm) || pNorm.includes(itNorm))))) {
+                isDirectMatch = true;
+                break;
+              }
+            }
+            if (isDirectMatch) break;
+          }
+        }
+        if (!isDirectMatch && it.storeId && so.shopId && it.storeId === so.shopId) {
+          isDirectMatch = true;
+        }
+        if (isDirectMatch) {
+          const qty = getItemQuantityNum(it);
+          return Math.round((soPriceNum / (qty > 0 ? qty : 1)) * 100) / 100;
+        }
+      }
+    }
   }
 
-  // 2. If it's a custom item, direct price is only counted as confirmed product cost
-  // if the helper marked it purchased, confirmed buyFrom source, or attached a shop order
-  const isCustomUnconfirmed = Boolean(it.isCustom && !it.purchased && !it.buyFrom);
-
-  // Direct price on item (if confirmed or standard product catalog item)
-  if (!isCustomUnconfirmed) {
-    const directPrice = typeof it.price === 'number' && !isNaN(it.price) && it.price > 0
-      ? it.price
-      : (typeof it.price === 'string' && !isNaN(parseFloat(it.price)) && parseFloat(it.price) > 0 ? parseFloat(it.price) : undefined);
-    if (directPrice !== undefined && directPrice > 0) {
+  // 2. Direct price on item (from product catalog, or set by helper / admin)
+  const directPrice = typeof it.price === 'number' && !isNaN(it.price) && it.price > 0
+    ? it.price
+    : (typeof it.price === 'string' && !isNaN(parseFloat(it.price)) && parseFloat(it.price) > 0 ? parseFloat(it.price) : undefined);
+  if (directPrice !== undefined && directPrice > 0) {
+    if (it.purchased !== false) {
       return directPrice;
     }
   }
@@ -171,27 +200,47 @@ export const isItemInShopOrders = (
   parentOrderId?: string
 ): boolean => {
   if (!it) return false;
-  const activeSOs = shopOrders.filter(
-    (so) =>
-      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
-      so.status !== 'CANCELED' &&
-      (so.status as string) !== 'CANCELLED'
-  );
+  const activeSOs = shopOrders.filter((so) => {
+    if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+    if (parentOrderId) return so.parentOrderId === parentOrderId;
+    return !so.parentOrderId;
+  });
   if (activeSOs.length === 0) return false;
 
   const cleanName = (it.name || '').toLowerCase().trim();
   const itNorm = normalizeItemName(it.name || '');
 
   return activeSOs.some((so) => {
-    if (!so.itemsWithPrice || so.itemsWithPrice.length === 0) return false;
-    return so.itemsWithPrice.some((ip: any) => {
-      if (it.id && (ip.itemId === it.id || ip.originalId === it.id)) return true;
-      const ipName = (ip.name || '').toLowerCase().trim();
-      const ipNorm = normalizeItemName(ip.name || '');
-      if (ipName && (cleanName === ipName || cleanName.includes(ipName) || ipName.includes(cleanName))) return true;
-      if (ipNorm && (itNorm === ipNorm || (itNorm.length > 1 && ipNorm.length > 1 && (itNorm.includes(ipNorm) || ipNorm.includes(itNorm))))) return true;
-      return false;
-    });
+    if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+      const match = so.itemsWithPrice.some((ip: any) => {
+        if (it.id && (ip.itemId === it.id || ip.originalId === it.id)) return true;
+        const ipName = (ip.name || '').toLowerCase().trim();
+        const ipNorm = normalizeItemName(ip.name || '');
+        if (cleanName && ipName && (cleanName === ipName || cleanName.includes(ipName) || ipName.includes(cleanName))) return true;
+        if (itNorm && ipNorm && (itNorm === ipNorm || (itNorm.length > 1 && ipNorm.length > 1 && (itNorm.includes(ipNorm) || ipNorm.includes(itNorm))))) return true;
+        return false;
+      });
+      if (match) return true;
+    }
+
+    if (it.storeId && so.shopId && it.storeId === so.shopId) {
+      return true;
+    }
+
+    if (so.requestText) {
+      const rawLines = so.requestText.split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+      for (const line of rawLines) {
+        const parts = line.split(/,/).map((p) => p.trim()).filter(Boolean);
+        for (const p of parts) {
+          const pClean = p.toLowerCase().trim();
+          const pNorm = normalizeItemName(p);
+          if (pClean && (cleanName === pClean || cleanName.includes(pClean) || pClean.includes(cleanName))) return true;
+          if (pNorm && (itNorm === pNorm || (itNorm.length > 1 && pNorm.length > 1 && (itNorm.includes(pNorm) || pNorm.includes(itNorm))))) return true;
+        }
+      }
+    }
+
+    return false;
   });
 };
 
@@ -200,7 +249,8 @@ export const isItemInShopOrders = (
  * - If explicitly unchecked/marked unpurchased: NOT added
  * - If in an active shop order: ADDED
  * - If explicitly marked purchased: ADDED
- * - If helper placed shop orders for the order, but omitted this item: NOT added
+ * - If helper confirmed price/source: ADDED
+ * - If helper placed shop orders for the order, but omitted this unpriced item: NOT added
  * - If order reached late status (PURCHASED_EXECUTED / ON_THE_WAY / ARRIVED / DELIVERED) and item wasn't purchased: NOT added
  * - Otherwise in planning/initial phase: pending
  */
@@ -228,25 +278,31 @@ export const isItemAddedByHelper = (
     return { isAdded: true, reason: 'in_shop_order' };
   }
 
-  const activeSOs = shopOrders.filter(
-    (so) =>
-      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
-      so.status !== 'CANCELED' &&
-      (so.status as string) !== 'CANCELLED'
-  );
+  // 4. If the item has a confirmed unit price resolved from shop orders or direct price set by helper/admin,
+  // and helper hasn't marked it unpurchased, consider it added
+  const unitPrice = getItemUnitPrice(it, shopOrders, parentOrderId);
+  if (unitPrice !== undefined && unitPrice > 0 && (it.buyFrom || it.storeId || !it.isCustom || (typeof it.price === 'number' && it.price > 0))) {
+    return { isAdded: true, reason: 'marked_purchased' };
+  }
 
-  // 4. Helper created active shop orders for other items, but left this item out
+  const activeSOs = shopOrders.filter((so) => {
+    if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+    if (parentOrderId) return so.parentOrderId === parentOrderId;
+    return !so.parentOrderId;
+  });
+
+  // 5. Helper created active shop orders for other items, but left this item out (and no price was confirmed for it)
   if (activeSOs.length > 0) {
     return { isAdded: false, reason: 'excluded_from_shop' };
   }
 
-  // 5. Order is in processing or later, and item was never confirmed/purchased
+  // 6. Order is in processing or later, and item was never confirmed/purchased
   const isLatePhase = ['PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED'].includes(orderStatus || '');
   if (isLatePhase) {
     return { isAdded: false, reason: 'not_purchased' };
   }
 
-  // 6. Initial / pending phase before helper completes purchasing
+  // 7. Initial / pending phase before helper completes purchasing
   return { isAdded: true, reason: 'pending' };
 };
 
@@ -313,12 +369,11 @@ export const getShopItemPriceDisplay = (
  */
 export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] = []): number => {
   if (!order) return 0;
-  const activeSOs = shopOrders.filter(
-    (so) =>
-      (!order.id || !so.parentOrderId || so.parentOrderId === order.id) &&
-      so.status !== 'CANCELED' &&
-      (so.status as string) !== 'CANCELLED'
-  );
+  const activeSOs = shopOrders.filter((so) => {
+    if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+    if (order.id) return so.parentOrderId === order.id;
+    return !so.parentOrderId;
+  });
   const items = order.items || [];
 
   // If order has no structured items, cost is simply the sum of active shop orders for this order
@@ -348,17 +403,43 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
     }
   }
 
-  // 2. Only if NO individual item prices could be found anywhere:
-  // Check if active shop orders specify lump-sum prices without item breakdowns
-  if (!hasAtLeastOnePricedItem) {
-    const totalSOs = activeSOs.reduce((sum, so) => sum + (Number(so.price) || 0), 0);
-    if (totalSOs > 0) {
-      return Math.round(totalSOs * 100) / 100;
+  // 2. Also check for active shop orders that are not itemized into itemsWithPrice
+  // and whose requestText didn't match any structured item
+  let unassignedShopOrdersTotal = 0;
+  for (const so of activeSOs) {
+    const soPrice = Number(so.price) || 0;
+    if (soPrice <= 0) continue;
+
+    const hasItemsBreakdown = so.itemsWithPrice && so.itemsWithPrice.length > 0;
+    if (!hasItemsBreakdown) {
+      const anyItemMatched = items.some((it) => {
+        if (it.storeId && so.shopId && it.storeId === so.shopId) return true;
+        const cleanName = (it.name || '').toLowerCase().trim();
+        const itNorm = normalizeItemName(it.name || '');
+        if (so.requestText) {
+          const rawLines = so.requestText.split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+          for (const line of rawLines) {
+            const parts = line.split(/,/).map((p) => p.trim()).filter(Boolean);
+            for (const p of parts) {
+              const pClean = p.toLowerCase().trim();
+              const pNorm = normalizeItemName(p);
+              if (pClean && (cleanName === pClean || cleanName.includes(pClean) || pClean.includes(cleanName))) return true;
+              if (pNorm && (itNorm === pNorm || (itNorm.length > 1 && pNorm.length > 1 && (itNorm.includes(pNorm) || pNorm.includes(itNorm))))) return true;
+            }
+          }
+        }
+        return false;
+      });
+
+      if (!anyItemMatched) {
+        unassignedShopOrdersTotal += soPrice;
+      }
     }
   }
 
-  if (itemsSum > 0) {
-    return Math.round(itemsSum * 100) / 100;
+  const grandTotal = itemsSum + unassignedShopOrdersTotal;
+  if (grandTotal > 0) {
+    return Math.round(grandTotal * 100) / 100;
   }
 
   // If items were present and some were explicitly excluded by helper, do NOT fall back to old order.productCost
@@ -375,21 +456,11 @@ export const calculateOrderProductCost = (order: Order, shopOrders: ShopOrder[] 
  *
  * Locking rules:
  * - Always locked: item.purchased === true
- * - Locked only once order reaches PURCHASED_EXECUTED or later:
- *   - Custom item with price already set (cost confirmed by helper)
- *   - item.buyFrom is set (helper routed item to a specific store/seller)
- *   - Item appears in an active shop order
- *
- * While the order is in PENDING / ACCEPTED / SCHEDULED the customer can still
- * freely edit items — the helper's planning actions (setting buyFrom, creating
- * shop orders) do NOT count as "in-process" for the customer lock at this stage.
- *
- * @param item          The order item to check.
- * @param shopOrders    Active shop orders for the parent order.
- * @param parentOrderId Optional parent order ID used to filter shop orders.
- * @param orderStatus   Current status of the parent order. Supply this when
- *                      calling on behalf of a customer so the function can
- *                      correctly defer locking until PURCHASED_EXECUTED.
+ * - Customer can edit freely throughout early phases (PENDING, ACCEPTED, SCHEDULED
+ *   and any status before PURCHASED_EXECUTED).
+ * - From PURCHASED_EXECUTED onward:
+ *   - Custom items marked purchased
+ *   - Items already fulfilled in active shop orders
  */
 export const isItemInProcess = (
   item: OrderItem,
@@ -402,39 +473,33 @@ export const isItemInProcess = (
   // 1. If explicitly marked as purchased/completed — always locked regardless of status
   if (item.purchased) return true;
 
-  // Statuses where the helper has merely ACCEPTED and may be planning, but
-  // has not yet physically purchased anything. The customer should still be
-  // allowed to edit their items in these phases.
-  const isEarlyPhase =
-    !orderStatus ||
-    orderStatus === 'PENDING' ||
-    orderStatus === 'ACCEPTED' ||
-    orderStatus === 'SCHEDULED';
+  // Statuses before physical purchase execution (PENDING, ACCEPTED, SCHEDULED or any status before PURCHASED_EXECUTED).
+  // The customer should still be allowed to edit items in these early phases.
+  const normStatus = String(orderStatus || '').toUpperCase().trim();
+  const isPostProcessing = ['PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED', 'DELIVERED', 'CANCELED', 'CANCELLED'].includes(normStatus);
+  const isEarlyPhase = !isPostProcessing;
 
   // In early phases, only the explicit `purchased` flag (checked above) locks items.
   if (isEarlyPhase) return false;
 
   // From PURCHASED_EXECUTED onward, apply the full set of locking rules:
 
-  // 2. Custom item with price already confirmed by helper
+  // 2. Custom item with price confirmed and purchased
   const numericPrice = typeof item.price === 'number' && !isNaN(item.price) && item.price > 0
     ? item.price
     : (typeof item.price === 'string' && !isNaN(parseFloat(item.price)) && parseFloat(item.price) > 0 ? parseFloat(item.price) : 0);
-  if (item.isCustom && numericPrice > 0) return true;
+  if (item.isCustom && numericPrice > 0 && item.purchased) return true;
 
-  // 3. Helper has confirmed the source store/seller for this item
-  if (item.buyFrom && item.buyFrom.trim().length > 0) return true;
-
-  // 4. Check active shop orders
-  const activeSOs = shopOrders.filter(
-    (so) =>
-      (!parentOrderId || !so.parentOrderId || so.parentOrderId === parentOrderId) &&
-      so.status !== 'CANCELED' &&
-      (so.status as string) !== 'CANCELLED'
-  );
+  // 3. Check active shop orders strictly belonging to this order
+  const activeSOs = shopOrders.filter((so) => {
+    if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') return false;
+    if (parentOrderId) return so.parentOrderId === parentOrderId;
+    return !so.parentOrderId;
+  });
   if (activeSOs.length === 0) return false;
 
   const targetNorm = normalizeItemName(item.name || '');
+  const cleanTarget = (item.name || '').toLowerCase().trim();
 
   for (const so of activeSOs) {
     // If item is assigned to a store and a shopOrder exists for that store
@@ -447,22 +512,10 @@ export const isItemInProcess = (
       const match = so.itemsWithPrice.some((ip: any) => {
         if (item.id && (ip.itemId === item.id || ip.originalId === item.id)) return true;
         const ipNorm = normalizeItemName(ip.name || '');
-        return ipNorm === targetNorm || (targetNorm.length > 2 && (targetNorm.includes(ipNorm) || ipNorm.includes(targetNorm)));
+        const ipName = (ip.name || '').toLowerCase().trim();
+        return (cleanTarget && ipName && cleanTarget === ipName) || (targetNorm && ipNorm && targetNorm === ipNorm);
       });
       if (match) return true;
-    }
-
-    // If item name matches lines/parts in requestText
-    const rawLines = (so.requestText || '').split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
-    const parts: string[] = [];
-    rawLines.forEach((line) => {
-      line.split(/,/).forEach((p) => {
-        const trimmed = normalizeItemName(p);
-        if (trimmed) parts.push(trimmed);
-      });
-    });
-    if (parts.some((p) => p === targetNorm || (p.length > 2 && (targetNorm.includes(p) || p.includes(targetNorm))))) {
-      return true;
     }
   }
 

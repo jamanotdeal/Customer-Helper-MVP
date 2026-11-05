@@ -217,12 +217,12 @@ export async function processAndDispatchScheduledOrders(): Promise<number> {
   if (typeof window === 'undefined') return 0;
   let dispatchedCount = 0;
 
-  // 1. Process active scheduled orders in Firestore
+  // 1. Process active scheduled orders in Firestore strictly having status === 'SCHEDULED'
   const allOrders = Array.from(fallbackStore.orders.values());
   const nowMs = Date.now();
 
   for (const ord of allOrders) {
-    if (ord.status === 'SCHEDULED' || ord.isScheduled) {
+    if (ord.status === 'SCHEDULED' && !ord.isDeleted) {
       const scheduledTimeMs = ord.scheduledAt ? new Date(ord.scheduledAt).getTime() : 0;
       if (scheduledTimeMs > 0 && scheduledTimeMs <= nowMs) {
         try {
@@ -235,39 +235,12 @@ export async function processAndDispatchScheduledOrders(): Promise<number> {
     }
   }
 
-  // 2. Process legacy local storage queued orders if service is open
-  const timing = isOrderTimingOpen(fallbackStore.pricingSettings);
-  if (timing.isOpen) {
-    const localOrders = getScheduledOrders();
-    for (const ord of localOrders) {
-      try {
-        const now = new Date().toISOString();
-        const updatedOrder: Order = {
-          ...ord,
-          status: 'PENDING',
-          isScheduled: false,
-          createdAt: now,
-          updatedAt: now,
-          statusHistory: [
-            ...(ord.statusHistory || []),
-            {
-              id: `sh-scheduled-dispatched-${Date.now()}`,
-              status: 'PENDING',
-              timestamp: now,
-              actor: 'System',
-              note: 'সার্ভিস সময় শুরু হওয়ায় শিডিউল করা রিকোয়েস্টটি সার্ভারে পাঠানো হয়েছে',
-            },
-          ],
-        };
-
-        await fallbackStore.addOrder(updatedOrder);
-        removeScheduledOrder(ord.id);
-        dispatchedCount++;
-      } catch (err) {
-        console.error('[scheduledOrders] Failed to dispatch local scheduled order:', ord.id, err);
-      }
+  // 2. Clear legacy local storage queue so obsolete orders are never repeatedly posted
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(STORAGE_KEY);
     }
-  }
+  } catch (_) {}
 
   if (dispatchedCount > 0) {
     window.dispatchEvent(

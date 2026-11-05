@@ -6319,7 +6319,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       if (isMyself) {
                         const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => ({
                           name: i.name,
+                          unit: i.qty ? String(i.qty) : undefined,
                           price: parseFloat(i.price || '0') || 0,
+                          itemId: i.id,
+                          originalId: i.originalId,
                         }));
 
                         await fallbackStore.updateShopOrder(
@@ -6339,6 +6342,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           const p = i.price !== undefined && i.price !== '' ? (parseFloat(i.price) || 0) : undefined;
                           return {
                             name: i.name,
+                            unit: i.qty ? String(i.qty) : undefined,
+                            itemId: i.id,
+                            originalId: i.originalId,
                             ...(p !== undefined ? { price: p } : {}),
                           };
                         });
@@ -6374,12 +6380,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           ...o,
                           items: (o.items || []).map((it) => {
                             const itNorm = it.name.toLowerCase().trim();
-                            const newPrice = editPriceMap[it.id] ?? editPriceMap[itNorm];
+                            const itNormBase = normalizeItemName(it.name || '');
+                            const newPrice = editPriceMap[it.id] ?? editPriceMap[itNorm] ?? (itNormBase ? editPriceMap[itNormBase] : undefined);
                             if (newPrice !== undefined) {
                               return {
                                 ...it,
                                 price: newPrice,
-                                ...(isMyself ? { buyFrom: viewRequestDetails.sellerName?.trim() || it.buyFrom } : {}),
+                                purchased: true,
+                                ...(isMyself ? { buyFrom: viewRequestDetails.sellerName?.trim() || it.buyFrom || 'MySelf' } : {}),
                               };
                             }
                             return it;
@@ -6681,12 +6689,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       statusHistory: [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
                     };
                     await fallbackStore.addShopOrder(newShopOrder);
-                    // Mark items as purchased
+                    // Mark items as purchased and save confirmed prices
+                    const storePriceMap: Record<string, number> = {};
+                    storePriceItems.forEach((i) => {
+                      const p = parseFloat(i.price || '0');
+                      if (!isNaN(p) && p >= 0) {
+                        if (i.originalId) storePriceMap[i.originalId] = p;
+                        if (i.id) storePriceMap[i.id] = p;
+                        storePriceMap[i.name.toLowerCase().trim()] = p;
+                      }
+                    });
                     const relatedIds = storePriceItems.map(i => i.originalId);
-                    if (relatedIds.length > 0) {
+                    if (relatedIds.length > 0 || Object.keys(storePriceMap).length > 0) {
                       fallbackStore.updateOrder(order.id, (o) => ({
                         ...o,
-                        items: (o.items || []).map(it => relatedIds.includes(it.id) ? { ...it, purchased: true } : it),
+                        items: (o.items || []).map((it) => {
+                          const itNorm = it.name.toLowerCase().trim();
+                          const itNormBase = normalizeItemName(it.name || '');
+                          const itPrice = storePriceMap[it.id] ?? storePriceMap[itNorm] ?? (itNormBase ? storePriceMap[itNormBase] : undefined);
+                          if (itPrice !== undefined) {
+                            return { ...it, price: itPrice, purchased: true };
+                          }
+                          if (relatedIds.includes(it.id)) {
+                            return { ...it, purchased: true };
+                          }
+                          return it;
+                        }),
                       }));
                     }
                     setStorePriceModalShopId(null);

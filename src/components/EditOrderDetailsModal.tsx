@@ -35,7 +35,7 @@ interface EditOrderDetailsModalProps {
   onClose: () => void;
   order: Order;
   onOrderUpdated?: (updatedOrder: Order) => void;
-  editorRole?: 'customer' | 'helper';
+  editorRole?: 'customer' | 'helper' | 'admin';
 }
 
 export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
@@ -160,12 +160,11 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
   }, [order?.id]);
 
   // Check if item is already in process (sent to store or cost added).
-  // When the editor is a customer we also pass the order status so that items
-  // are NOT locked while the order is still PENDING/ACCEPTED/SCHEDULED — the
-  // customer should be able to edit until the helper marks PURCHASED_EXECUTED.
+  // Customer can freely edit until helper marks PURCHASED_EXECUTED.
+  // Admins always have full editing privileges.
   const checkItemInProcess = (it: OrderItem) => {
-    const statusForLock = editorRole === 'customer' ? order.status : undefined;
-    return isItemInProcess(it, shopOrders, order.id, statusForLock);
+    if (editorRole === 'admin') return false;
+    return isItemInProcess(it, shopOrders, order.id, order.status);
   };
 
   // Calculate items subtotal accurately using calculateOrderProductCost
@@ -554,7 +553,7 @@ export const EditOrderDetailsModal: React.FC<EditOrderDetailsModalProps> = ({
       const updatedProcessingFee = feeEst.processingFee;
 
       const finalItems: OrderItem[] = items.map((it) => {
-        const resolvedUnitPrice = getItemUnitPrice(it, shopOrders);
+        const resolvedUnitPrice = getItemUnitPrice(it, shopOrders, order.id);
         return {
           ...it,
           price: (typeof it.price === 'number' && !isNaN(it.price) && it.price > 0)

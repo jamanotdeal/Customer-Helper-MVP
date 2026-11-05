@@ -76,6 +76,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
   const [pickupLng, setPickupLng] = useState<number | undefined>(undefined);
 
   const [submitting, setSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [error, setError] = useState('');
   const [useFreeDelivery, setUseFreeDelivery] = useState(false);
   const [showInsufficientCoinsModal, setShowInsufficientCoinsModal] = useState(false);
@@ -184,6 +185,8 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isSubmittingRef.current || submitting) return;
+
     if (!isUserAuthenticated(user)) {
       openAuthModal();
       return;
@@ -240,6 +243,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
     // Close the modal immediately so customers see the order is being processed
     // and can't accidentally interact with the form inputs during submission
     onClose();
+    isSubmittingRef.current = true;
     setSubmitting(true);
     setError('');
 
@@ -254,7 +258,6 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
         name,
         qty: '১',
         isCustom: true,
-        buyFrom: pickupNote.trim() || undefined,
       }));
 
       const resolvedLat = locResult.lat ?? deliveryLat;
@@ -346,6 +349,7 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
       console.error('Failed to submit custom request:', err);
       setError('রিকোয়েস্ট জমা দিতে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
     } finally {
+      isSubmittingRef.current = false;
       setSubmitting(false);
     }
   };

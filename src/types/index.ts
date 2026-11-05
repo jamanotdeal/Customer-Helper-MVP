@@ -142,6 +142,8 @@ export interface Order {
 
   /** Set when a blocked customer creates an order: stored locally, never sent to server */
   isBlockedUserOrder?: boolean;
+  /** Set when an order is permanently deleted by admin */
+  isDeleted?: boolean;
 
   updatedByCustomer?: boolean;
   referredBy?: string; // UID of referrer user who referred this customer
