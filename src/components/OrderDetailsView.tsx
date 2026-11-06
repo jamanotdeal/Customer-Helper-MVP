@@ -23,6 +23,59 @@ import { CustomerOrderItemModal } from './CustomerOrderItemModal';
 import { formatItemQuantityUnit, calculateOrderProductCost, getItemUnitPrice } from '@/lib/itemUtils';
 import { formatScheduledTime, removeScheduledOrder } from '@/utils/scheduledOrders';
 
+// ── Payment Brand Logos (Crisp, High-DPI Vectors) ──
+export const BkashLogo: React.FC<{ className?: string }> = ({ className = 'w-10 h-10' }) => (
+  <div className={`relative flex items-center justify-center shrink-0 rounded-2xl overflow-hidden bg-[#E2136E] shadow-sm select-none ${className}`}>
+    <svg viewBox="0 0 100 100" className="w-[72%] h-[72%]" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M54 12L88 48L54 55L54 12Z" fill="#FFFFFF" fillOpacity="0.95" />
+      <path d="M54 12L16 43L54 55L54 12Z" fill="#FFFFFF" fillOpacity="0.80" />
+      <path d="M16 43L8 78L38 66L16 43Z" fill="#FFFFFF" fillOpacity="0.90" />
+      <path d="M38 66L54 90L54 55L38 66Z" fill="#FFFFFF" fillOpacity="0.75" />
+      <path d="M54 55L82 82L88 48L54 55Z" fill="#FFFFFF" fillOpacity="0.88" />
+    </svg>
+  </div>
+);
+
+export const NagadLogo: React.FC<{ className?: string }> = ({ className = 'w-10 h-10' }) => (
+  <div className={`relative flex items-center justify-center shrink-0 rounded-2xl overflow-hidden bg-gradient-to-br from-[#F97316] via-[#EA580C] to-[#DC2626] shadow-sm select-none ${className}`}>
+    <svg viewBox="0 0 100 100" className="w-[72%] h-[72%]" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="nagadFlameGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="50%" stopColor="#FEF08A" />
+          <stop offset="100%" stopColor="#FFFFFF" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M50 12C53 23 46 32 40 39C34 46 30 55 34 64C38 73 47 80 58 80C70 80 80 70 80 57C80 43 70 32 61 25C61 32 57 39 52 43C50 36 52 21 50 12Z"
+        fill="url(#nagadFlameGrad)"
+      />
+      <circle cx="58" cy="57" r="7.5" fill="#DC2626" />
+    </svg>
+  </div>
+);
+
+export const BankLogo: React.FC<{ className?: string }> = ({ className = 'w-10 h-10' }) => (
+  <div className={`relative flex items-center justify-center shrink-0 rounded-2xl overflow-hidden bg-gradient-to-br from-blue-700 via-indigo-700 to-blue-900 shadow-sm text-white select-none ${className}`}>
+    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21h18" />
+      <path d="M3 10h18" />
+      <path d="M5 6l7-3 7 3" />
+      <path d="M4 10v11" />
+      <path d="M20 10v11" />
+      <path d="M8 14v4" />
+      <path d="M12 14v4" />
+      <path d="M16 14v4" />
+    </svg>
+  </div>
+);
+
+export const DirectPayLogo: React.FC<{ className?: string }> = ({ className = 'w-10 h-10' }) => (
+  <div className={`relative flex items-center justify-center shrink-0 rounded-2xl overflow-hidden bg-gradient-to-br from-emerald-600 to-teal-700 shadow-sm text-white select-none ${className}`}>
+    <Wallet className="w-5 h-5" />
+  </div>
+);
+
 interface OrderDetailsViewProps {
   orderId: string;
   onBack: () => void;
@@ -507,17 +560,28 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
   const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment + effectiveCustomStoreFee;
 
-  const isProcessingOrBeyond = Boolean(
+  const isCompletedOrder = Boolean(
+    order.status === 'DELIVERED' ||
+    (order.status as string) === 'COMPLETED'
+  );
+  const isCanceledOrder = Boolean(
+    isCanceled ||
+    (order.status as string) === 'CANCELED' ||
+    (order.status as string) === 'CANCELLED'
+  );
+
+  const isProcessingOrActive = Boolean(
     order.status === 'PURCHASED_EXECUTED' ||
     order.status === 'ON_THE_WAY' ||
-    order.status === 'ARRIVED' ||
-    order.status === 'DELIVERED'
+    order.status === 'ARRIVED'
   );
   const canShowPayNowButton = Boolean(
     isOwnerCustomer &&
     !order.customerPayment?.transactionId &&
-    !isCanceled &&
-    isProcessingOrBeyond
+    !order.isPaid &&
+    !isCanceledOrder &&
+    !isCompletedOrder &&
+    isProcessingOrActive
   );
 
   // Helper payment accounts & methods
@@ -544,17 +608,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       }
     } else {
       setPayTxId('');
-      if (hasHelperBkash) {
-        setSelectedPayMethod('bKash');
-      } else if (hasHelperNagad) {
-        setSelectedPayMethod('Nagad');
-      } else if (hasHelperBank) {
-        setSelectedPayMethod('Bank');
-      } else {
-        setSelectedPayMethod('Direct');
-      }
     }
     setPayTxError('');
+    // Always show available options list first (Step 1)
     setPayStep('SELECT_METHOD');
     setShowPayModal(true);
   };
@@ -1277,9 +1333,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
           <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-3xl p-4 shadow-soft space-y-2.5 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="w-8 h-8 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-sm shrink-0">
-                  <Check className="w-4 h-4" />
-                </span>
+                {order.customerPayment.method === 'bKash' ? (
+                  <BkashLogo className="w-8 h-8 !rounded-xl" />
+                ) : order.customerPayment.method === 'Nagad' ? (
+                  <NagadLogo className="w-8 h-8 !rounded-xl" />
+                ) : order.customerPayment.method === 'Bank' ? (
+                  <BankLogo className="w-8 h-8 !rounded-xl" />
+                ) : (
+                  <span className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-sm shrink-0">
+                    <Check className="w-4 h-4" />
+                  </span>
+                )}
                 <div>
                   <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
                     Payment Recorded
@@ -1316,7 +1380,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               <span className="text-gray-500 font-medium">
                 {order.customerPayment.paidAt ? formatPlacedDateTime(order.customerPayment.paidAt) : ''}
               </span>
-              {isOwnerCustomer && (
+              {isOwnerCustomer && !isCompletedOrder && !isCanceledOrder && (
                 <button
                   type="button"
                   onClick={openPayNowModal}
@@ -1644,7 +1708,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       setPayTxError('');
                     }}
                     className="p-1.5 -ml-1.5 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
-                    title="Back"
+                    title="Back to payment options"
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
@@ -1672,12 +1736,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             </div>
 
             <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1">
-              {/* STEP 1: SELECT METHOD (Notice: NO amount banner here, customer selects option first) */}
+              {/* STEP 1: SELECT METHOD (Shows available payment options with official brand logos) */}
               {payStep === 'SELECT_METHOD' && (
-                <div className="space-y-2.5">
-                  <span className="text-[11px] font-black text-gray-500 uppercase tracking-wider block">
-                    Available Options ({[hasHelperBkash, hasHelperNagad, hasHelperBank].filter(Boolean).length || 0})
-                  </span>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between px-0.5">
+                    <span className="text-[11px] font-black text-gray-500 uppercase tracking-wider block">
+                      Available Options
+                    </span>
+                    <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                      {[hasHelperBkash, hasHelperNagad, hasHelperBank].filter(Boolean).length || (hasAnyHelperPaymentMethod ? 1 : 0)} Available
+                    </span>
+                  </div>
 
                   {hasHelperBkash && (
                     <button
@@ -1686,15 +1755,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         setSelectedPayMethod('bKash');
                         setPayStep('DETAILS_TXID');
                       }}
-                      className="w-full p-3 rounded-2xl border border-pink-200 bg-pink-50/40 hover:bg-pink-50 hover:border-pink-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                      className="w-full p-3.5 rounded-2xl border-2 border-pink-100 hover:border-pink-500 bg-pink-50/30 hover:bg-pink-50/70 transition-all text-left flex items-center justify-between group active:scale-[0.99] shadow-xs"
                     >
-                      <div className="flex items-center space-x-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-pink-600 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
-                          bKash
-                        </div>
+                      <div className="flex items-center space-x-3.5 min-w-0">
+                        <BkashLogo className="w-12 h-12" />
                         <div className="min-w-0">
                           <div className="flex items-center space-x-2">
-                            <span className="font-extrabold text-sm text-gray-900">bKash</span>
+                            <span className="font-black text-base text-gray-900 group-hover:text-pink-700 transition-colors">bKash</span>
                             <span className="px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 text-[10px] font-black border border-pink-200">
                               {helperBkashType || 'Personal'}
                             </span>
@@ -1704,7 +1771,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           </p>
                         </div>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-pink-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-pink-600 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
                     </button>
                   )}
 
@@ -1715,15 +1782,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         setSelectedPayMethod('Nagad');
                         setPayStep('DETAILS_TXID');
                       }}
-                      className="w-full p-3 rounded-2xl border border-orange-200 bg-orange-50/40 hover:bg-orange-50 hover:border-orange-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                      className="w-full p-3.5 rounded-2xl border-2 border-orange-100 hover:border-orange-500 bg-orange-50/30 hover:bg-orange-50/70 transition-all text-left flex items-center justify-between group active:scale-[0.99] shadow-xs"
                     >
-                      <div className="flex items-center space-x-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-orange-600 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
-                          Nagad
-                        </div>
+                      <div className="flex items-center space-x-3.5 min-w-0">
+                        <NagadLogo className="w-12 h-12" />
                         <div className="min-w-0">
                           <div className="flex items-center space-x-2">
-                            <span className="font-extrabold text-sm text-gray-900">Nagad</span>
+                            <span className="font-black text-base text-gray-900 group-hover:text-orange-700 transition-colors">Nagad</span>
                             <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-black border border-orange-200">
                               {helperNagadType || 'Personal'}
                             </span>
@@ -1733,7 +1798,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           </p>
                         </div>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-600 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
                     </button>
                   )}
 
@@ -1744,15 +1809,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         setSelectedPayMethod('Bank');
                         setPayStep('DETAILS_TXID');
                       }}
-                      className="w-full p-3 rounded-2xl border border-blue-200 bg-blue-50/40 hover:bg-blue-50 hover:border-blue-500 transition-all text-left flex items-center justify-between group active:scale-[0.99]"
+                      className="w-full p-3.5 rounded-2xl border-2 border-blue-100 hover:border-blue-500 bg-blue-50/30 hover:bg-blue-50/70 transition-all text-left flex items-center justify-between group active:scale-[0.99] shadow-xs"
                     >
-                      <div className="flex items-center space-x-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-blue-700 text-white font-black text-xs flex items-center justify-center shadow-xs shrink-0">
-                          <Landmark className="w-5 h-5" />
-                        </div>
+                      <div className="flex items-center space-x-3.5 min-w-0">
+                        <BankLogo className="w-12 h-12" />
                         <div className="min-w-0">
                           <div className="flex items-center space-x-2">
-                            <span className="font-extrabold text-sm text-gray-900 truncate">
+                            <span className="font-black text-base text-gray-900 group-hover:text-blue-700 transition-colors truncate">
                               {helperBankName || 'Bank Account'}
                             </span>
                             <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-black border border-blue-200 shrink-0">
@@ -1764,13 +1827,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           </p>
                         </div>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
                     </button>
                   )}
 
                   {!hasAnyHelperPaymentMethod && (
-                    <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200 space-y-2.5 text-center">
-                      <AlertCircle className="w-6 h-6 text-gray-500 mx-auto" />
+                    <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200 space-y-3 text-center">
+                      <AlertCircle className="w-7 h-7 text-gray-500 mx-auto" />
                       <div>
                         <p className="text-xs font-bold text-gray-900">
                           No digital payment accounts added by helper yet
@@ -1782,7 +1845,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
                       {helperPhone && (
                         <div className="pt-1 flex items-center justify-center space-x-2">
-                          <span className="text-xs font-mono font-bold text-gray-900 bg-white px-3 py-1 rounded-xl border border-gray-200">
+                          <span className="text-xs font-mono font-bold text-gray-900 bg-white px-3 py-1.5 rounded-xl border border-gray-200">
                             {helperPhone}
                           </span>
                           <button
@@ -1792,9 +1855,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                             title="Copy number"
                           >
                             {copiedKey === 'helper-phone-direct' ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <Check className="w-4 h-4 text-emerald-600" />
                             ) : (
-                              <Copy className="w-3.5 h-3.5" />
+                              <Copy className="w-4 h-4" />
                             )}
                           </button>
                         </div>
@@ -1806,44 +1869,51 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           setSelectedPayMethod('Direct');
                           setPayStep('DETAILS_TXID');
                         }}
-                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-sm"
+                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-sm flex items-center justify-center space-x-2"
                       >
-                        Direct Pay & Enter TxID
+                        <DirectPayLogo className="w-5 h-5 !rounded-lg" />
+                        <span>Direct Pay & Enter TxID</span>
                       </button>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* STEP 2: DETAILS & TXID (Shows Total Amount + Compact Payment Info + TxID) */}
+              {/* STEP 2: DETAILS & TXID (Shows Total Amount Banner + Specific Payment Info + TxID Input) */}
               {payStep === 'DETAILS_TXID' && (
-                <div className="space-y-3">
-                  {/* Total Payment Amount Banner (Compact) */}
-                  <div className="px-3.5 py-2.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                <div className="space-y-3.5">
+                  {/* Total Payment Amount Banner */}
+                  <div className="p-4 rounded-2xl bg-emerald-600 text-white shadow-sm flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-100 block">
                         Total Payable Amount
                       </span>
-                      <span className="text-lg font-black text-emerald-950 font-mono">
+                      <span className="text-2xl font-black text-white font-mono leading-tight">
                         ৳{grandTotalPayable}
                       </span>
                     </div>
-                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
-                      <Wallet className="w-4 h-4" />
+                    <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center font-bold">
+                      <Wallet className="w-5 h-5 text-white" />
                     </div>
                   </div>
 
-                  {/* Compact Payment Info Block */}
+                  {/* Specific Selected Payment Info Block */}
                   {selectedPayMethod === 'bKash' && (
-                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                    <div className="p-3.5 rounded-2xl bg-pink-50/50 border border-pink-200 space-y-2">
                       <div className="flex items-center justify-between">
-                        <div className="min-w-0">
-                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
-                            bKash ({helperBkashType || 'Personal'})
-                          </span>
-                          <span className="font-mono font-black text-base text-gray-900 tracking-wide">
-                            {helperBkashNumber}
-                          </span>
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <BkashLogo className="w-9 h-9" />
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="text-xs font-black text-gray-900">bKash</span>
+                              <span className="px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 text-[10px] font-black border border-pink-200">
+                                {helperBkashType || 'Personal'}
+                              </span>
+                            </div>
+                            <span className="font-mono font-black text-sm text-gray-900 tracking-wide block truncate">
+                              {helperBkashNumber}
+                            </span>
+                          </div>
                         </div>
                         <button
                           type="button"
@@ -1854,48 +1924,57 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                           <span>{copiedKey === 'bkash-num' ? 'Copied' : 'Copy'}</span>
                         </button>
                       </div>
-                      <p className="text-[10px] text-gray-500 font-medium">
-                        Send Money to this bKash number, then enter the Transaction ID below.
+                      <p className="text-[11px] text-pink-900/80 font-medium bg-white/70 p-2 rounded-xl border border-pink-100">
+                        Send Money of <strong className="font-bold text-pink-900 font-mono">৳{grandTotalPayable}</strong> to this bKash number, then enter the Transaction ID below.
                       </p>
                     </div>
                   )}
 
                   {selectedPayMethod === 'Nagad' && (
-                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                    <div className="p-3.5 rounded-2xl bg-orange-50/50 border border-orange-200 space-y-2">
                       <div className="flex items-center justify-between">
-                        <div className="min-w-0">
-                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
-                            Nagad ({helperNagadType || 'Personal'})
-                          </span>
-                          <span className="font-mono font-black text-base text-gray-900 tracking-wide">
-                            {helperNagadNumber}
-                          </span>
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <NagadLogo className="w-9 h-9" />
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="text-xs font-black text-gray-900">Nagad</span>
+                              <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-black border border-orange-200">
+                                {helperNagadType || 'Personal'}
+                              </span>
+                            </div>
+                            <span className="font-mono font-black text-sm text-gray-900 tracking-wide block truncate">
+                              {helperNagadNumber}
+                            </span>
+                          </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => handleCopy(helperNagadNumber, 'nagad-num')}
-                          className="py-1 px-3 rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-700 font-extrabold text-xs transition-colors flex items-center space-x-1 shrink-0"
+                          className="py-1 px-3 rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-800 font-extrabold text-xs transition-colors flex items-center space-x-1 shrink-0"
                         >
                           {copiedKey === 'nagad-num' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                           <span>{copiedKey === 'nagad-num' ? 'Copied' : 'Copy'}</span>
                         </button>
                       </div>
-                      <p className="text-[10px] text-gray-500 font-medium">
-                        Send Money to this Nagad number, then enter the Transaction ID below.
+                      <p className="text-[11px] text-orange-950/80 font-medium bg-white/70 p-2 rounded-xl border border-orange-100">
+                        Send Money of <strong className="font-bold text-orange-950 font-mono">৳{grandTotalPayable}</strong> to this Nagad number, then enter the Transaction ID below.
                       </p>
                     </div>
                   )}
 
                   {selectedPayMethod === 'Bank' && (
-                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-2 text-xs">
-                      <div className="flex items-center justify-between pb-1.5 border-b border-gray-200">
-                        <div className="min-w-0">
-                          <span className="font-extrabold text-gray-900 block truncate">{helperBankName || 'Bank Account'}</span>
-                          {helperBankAccountName && (
-                            <span className="text-[11px] text-gray-600 font-medium block truncate">
-                              A/C Name: {helperBankAccountName}
-                            </span>
-                          )}
+                    <div className="p-3.5 rounded-2xl bg-blue-50/50 border border-blue-200 space-y-2 text-xs">
+                      <div className="flex items-center justify-between pb-1.5 border-b border-blue-200/60">
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <BankLogo className="w-8 h-8" />
+                          <div className="min-w-0">
+                            <span className="font-extrabold text-gray-900 block truncate">{helperBankName || 'Bank Account'}</span>
+                            {helperBankAccountName && (
+                              <span className="text-[11px] text-gray-600 font-medium block truncate">
+                                A/C Name: {helperBankAccountName}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         {helperBankBranch && (
                           <span className="text-[10px] font-bold text-gray-600 bg-white px-2 py-0.5 rounded-lg border border-gray-200 shrink-0">
@@ -1918,7 +1997,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         </button>
                       </div>
                       {helperBankRouting && (
-                        <div className="flex items-center justify-between pt-1 border-t border-gray-200 text-[11px]">
+                        <div className="flex items-center justify-between pt-1 border-t border-blue-200/60 text-[11px]">
                           <span className="text-gray-600">Routing: <strong className="font-mono text-gray-900">{helperBankRouting}</strong></span>
                           <button
                             type="button"
@@ -1933,11 +2012,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   )}
 
                   {selectedPayMethod === 'Direct' && (
-                    <div className="p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
+                    <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200 space-y-2">
                       <div className="flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Helper Contact</span>
-                          <span className="font-mono font-black text-sm text-gray-900">{helperPhone || 'N/A'}</span>
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <DirectPayLogo className="w-8 h-8" />
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Helper Contact</span>
+                            <span className="font-mono font-black text-sm text-gray-900">{helperPhone || 'N/A'}</span>
+                          </div>
                         </div>
                         {helperPhone && (
                           <button
@@ -1953,8 +2035,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                     </div>
                   )}
 
-                  {/* Compact Transaction ID Input */}
-                  <div className="space-y-1">
+                  {/* Transaction ID Input */}
+                  <div className="space-y-1.5 pt-1">
                     <label className="text-[11px] font-black text-gray-700 uppercase tracking-wider block">
                       Transaction ID (TxID) <span className="text-red-500">*</span>
                     </label>
@@ -1965,12 +2047,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                         setPayTxId(e.target.value);
                         if (e.target.value.trim()) setPayTxError('');
                       }}
-                      placeholder="e.g. 9J3K8L2P or TxID"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 font-mono text-xs font-bold text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 uppercase transition-all placeholder:normal-case placeholder:font-normal placeholder:text-gray-400"
+                      placeholder={selectedPayMethod === 'Bank' ? 'e.g. Bank Ref / TxID' : 'e.g. 9J3K8L2P or TxID'}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 font-mono text-sm font-bold text-gray-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 uppercase transition-all placeholder:normal-case placeholder:font-normal placeholder:text-gray-400 bg-white"
                     />
                     {payTxError && (
-                      <p className="text-[11px] text-red-600 font-bold bg-red-50 px-2.5 py-1 rounded-lg border border-red-100">
-                        {payTxError}
+                      <p className="text-[11px] text-red-600 font-bold bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-100 flex items-center space-x-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{payTxError}</span>
                       </p>
                     )}
                   </div>
@@ -1979,7 +2062,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
             </div>
 
             {/* Modal Footer */}
-            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between space-x-2 shrink-0">
+            <div className="px-5 py-3.5 border-t border-gray-100 bg-gray-50 flex items-center justify-between space-x-2 shrink-0">
               {payStep === 'DETAILS_TXID' ? (
                 <>
                   <button
@@ -1988,9 +2071,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       setPayStep('SELECT_METHOD');
                       setPayTxError('');
                     }}
-                    className="py-2.5 px-4 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-bold text-xs border border-gray-200 active:scale-95 transition-all"
+                    className="py-2.5 px-4 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-bold text-xs border border-gray-200 active:scale-95 transition-all flex items-center space-x-1"
                   >
-                    Change Method
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Change Method</span>
                   </button>
                   <button
                     type="button"

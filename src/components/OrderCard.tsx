@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store, UserX } from 'lucide-react';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store, UserX, ChevronDown, ChevronUp } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
 import { calculateDistanceKm } from '@/lib/pricing';
@@ -21,6 +21,8 @@ interface OrderCardProps {
   customerView?: boolean;
   /** When true, shows concise helper layout with only: what's needed, timer, status, and view details */
   helperActiveView?: boolean;
+  /** When provided, overrides the initial collapsed state */
+  defaultCollapsed?: boolean;
 }
 
 export const getStatusBadgeInfo = (status: OrderStatus) => {
@@ -116,6 +118,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   orderIndex,
   customerView = false,
   helperActiveView = false,
+  defaultCollapsed,
 }) => {
   const order = fallbackStore.resolveOrderLocations(rawOrder);
   const isCanceledOrder =
@@ -139,6 +142,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     (order.status as string) === 'COMPLETED' ||
     isCanceledOrder;
   const urgency = getHelperUrgencyBgClass(order, isDone);
+
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
+    return defaultCollapsed !== undefined ? defaultCollapsed : isDone;
+  });
+
+  useEffect(() => {
+    if (!isDone) {
+      setIsCollapsed(false);
+    }
+  }, [isDone]);
 
   const [elapsed, setElapsed] = useState(() =>
     isDone
@@ -198,6 +211,76 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   };
 
   if (helperActiveView) {
+    if (isDone && isCollapsed) {
+      return (
+        <div
+          className={`rounded-2xl border shadow-2xs hover:shadow-sm transition-all duration-200 overflow-hidden ${
+            isCanceledOrder
+              ? 'bg-rose-50/40 border-rose-200/80 hover:border-rose-300'
+              : 'bg-white border-gray-200 hover:border-gray-300'
+          }`}
+        >
+          {/* Top minimal status bar */}
+          <div className={`h-1 w-full ${isCanceledOrder ? 'bg-red-400' : 'bg-gray-400'}`} />
+
+          <div className="flex items-center justify-between p-3 gap-2">
+            {/* Left section: ID badge + service title + customer */}
+            <div
+              onClick={onClick}
+              className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
+              title="Click to view details"
+            >
+              <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded shrink-0 shadow-xs">
+                #{order.id}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-extrabold text-gray-900 text-xs truncate">
+                    {order.service || order.title || 'Service Needed'}
+                  </span>
+                  {fromStore && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 border border-purple-200 shrink-0">
+                      Store
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-gray-500 font-medium truncate mt-0.5">
+                  <span className="truncate">👤 {order.customerName || 'Customer'}</span>
+                  {order.deliveredAt && (
+                    <span className="shrink-0 text-gray-400">• {formatPlacedDateTime(order.deliveredAt)}</span>
+                  )}
+                  {isCanceledOrder && order.cancelledAt && (
+                    <span className="shrink-0 text-red-500">• {formatPlacedDateTime(order.cancelledAt)}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right section: Status badge + Toggle expand button */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className={`flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${badge.color}`}>
+                <BadgeIcon className="w-2.5 h-2.5" />
+                <span>{badge.label}</span>
+              </span>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsCollapsed(false);
+                }}
+                className="p-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900 transition-colors cursor-pointer"
+                title="Expand order"
+                aria-label="Expand order"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         onClick={onClick}
@@ -253,6 +336,22 @@ export const OrderCard: React.FC<OrderCardProps> = ({
                 <BadgeIcon className="w-2.5 h-2.5" />
                 <span>{badge.label}</span>
               </span>
+
+              {/* Collapse button for finished orders */}
+              {isDone && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsCollapsed(true);
+                  }}
+                  className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900 transition-colors ml-0.5 cursor-pointer"
+                  title="Collapse order"
+                  aria-label="Collapse order"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
 

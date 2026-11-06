@@ -372,7 +372,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   referralRewardCoins: 20,
   referredUserRewardCoins: 10,
   referredUserRewardOrderLimit: 1,
-  referralMessageTemplate: 'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}',
+  referralMessageTemplate: 'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন।',
   // Blocked User Custom Modal Defaults
   blockedUserModalTitle: 'অ্যাকাউন্ট সাময়িকভাবে স্থগিত (Account Suspended)',
   blockedUserModalSubtitle: 'আপনার অ্যাকাউন্টটি সাময়িকভাবে সীমাবদ্ধ করা হয়েছে',

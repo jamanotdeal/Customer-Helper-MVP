@@ -65,7 +65,13 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       setActiveTab('NEW');
     } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
       setActiveTab('ACTIVE');
-    } else if (order.status === 'DELIVERED') {
+    } else if (
+      order.status === 'DELIVERED' ||
+      (order.status as string) === 'COMPLETED' ||
+      order.status === 'CANCELED' ||
+      (order.status as string) === 'CANCELLED' ||
+      order.cancellationRequest?.status === 'APPROVED'
+    ) {
       setActiveTab('COMPLETED');
     }
   };
@@ -332,12 +338,20 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             (o.status as string) !== 'CANCELLED' &&
             o.cancellationRequest?.status !== 'APPROVED'
         );
-        // Completed: delivered orders by current helper, sorted recent to old
+        // Completed: delivered and cancelled orders by current helper, sorted recent to old
         const comp = all
-          .filter((o) => o.helperId === user.uid && (o.status === 'DELIVERED' || (o.status as string) === 'COMPLETED'))
+          .filter(
+            (o) =>
+              o.helperId === user.uid &&
+              (o.status === 'DELIVERED' ||
+                (o.status as string) === 'COMPLETED' ||
+                o.status === 'CANCELED' ||
+                (o.status as string) === 'CANCELLED' ||
+                o.cancellationRequest?.status === 'APPROVED')
+          )
           .sort((a, b) => {
-            const timeA = new Date(a.deliveredAt || a.updatedAt || a.createdAt).getTime();
-            const timeB = new Date(b.deliveredAt || b.updatedAt || b.createdAt).getTime();
+            const timeA = new Date(a.deliveredAt || a.cancelledAt || a.updatedAt || a.createdAt).getTime();
+            const timeB = new Date(b.deliveredAt || b.cancelledAt || b.updatedAt || b.createdAt).getTime();
             return timeB - timeA;
           });
 
@@ -484,7 +498,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     if (!startDate && !endDate) return ordersList;
     return ordersList.filter((ord) => {
       const createdDate = getLocalDateString(ord.createdAt);
-      const deliveredDate = getLocalDateString(ord.deliveredAt || ord.updatedAt);
+      const deliveredDate = getLocalDateString(ord.deliveredAt || ord.cancelledAt || ord.updatedAt);
       const createdInRange =
         (!startDate || (createdDate && createdDate >= startDate)) &&
         (!endDate || (createdDate && createdDate <= endDate));
@@ -1310,7 +1324,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
             <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
               <Layers className="w-10 h-10 text-gray-300 mx-auto mb-2" />
               <h4 className="font-bold text-gray-900 text-sm">
-                {(startDate || endDate) ? 'এই সময়সীমার মধ্যে কোনো সম্পন্ন অর্ডার নেই' : 'কোনো সম্পন্ন অর্ডার নেই'}
+                {(startDate || endDate) ? 'এই সময়সীমার মধ্যে কোনো সম্পন্ন বা বাতিল অর্ডার নেই' : 'কোনো সম্পন্ন বা বাতিল অর্ডার নেই'}
               </h4>
             </div>
           ) : (

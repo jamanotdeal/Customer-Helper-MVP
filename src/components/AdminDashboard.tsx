@@ -670,7 +670,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
   const [referralMessageTemplate, setReferralMessageTemplate] = useState<string>(
     fallbackStore.pricingSettings?.referralMessageTemplate ??
-    'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
+    'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন।'
   );
 
   // Modals state
@@ -1218,7 +1218,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setReferredUserRewardOrderLimit(settings.referredUserRewardOrderLimit ?? 1);
       setReferralMessageTemplate(
         settings.referralMessageTemplate ??
-        'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}'
+        'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন।'
       );
 
       // Home Banner Slides & Search Not Found Message sync
@@ -7430,11 +7430,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 rows={2}
                 value={referralMessageTemplate}
                 onChange={(e) => setReferralMessageTemplate(e.target.value)}
-                placeholder="e.g. আসসালামু আলাইকুম! জামানত দিয়ে সহজে বাজার-সদাই ডেলিভারি নিন। এখনই এই লিঙ্কে অর্ডার করুন: {link}"
+                placeholder="e.g. আসসালামু আলাইকুম! জামানত দিয়ে সহজে বাজার-সদাই ডেলিভারি নিন।"
                 className="w-full px-3 py-2.5 rounded-2xl border border-gray-200 bg-white text-xs font-medium outline-none focus:border-amber-600 focus:ring-3 focus:ring-amber-500/10 resize-none"
               />
               <p className="text-[10px] text-gray-500 mt-1 font-medium">
-                রেফার লিংক ডায়নামিক ভাবে বসাতে <code className="bg-amber-100 text-amber-900 px-1 py-0.5 rounded font-mono text-[9px] font-bold">{'{link}'}</code> কোডটি ব্যবহার করুন।
+                হোয়াটসঅ্যাপে পাঠানো বার্তা। শুধুমাত্র এই বার্তাই গ্রাহকের হোয়াটসঅ্যাপে যাবে (কোনো অতিরিক্ত লিংক বা টেক্সট নিজে থেকে যুক্ত হবে না)।
               </p>
             </div>
           </div>

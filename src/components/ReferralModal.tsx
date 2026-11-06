@@ -69,7 +69,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ isOpen, onClose })
 
   if (!isOpen || typeof document === 'undefined') return null;
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://jamanot.com';
+  const origin =
+    typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost')
+      ? window.location.origin
+      : 'https://jamanot.com';
   const generatedLink = activeReferral
     ? `${origin}/?ref=${encodeURIComponent(user?.uid || '')}&phone=${encodeURIComponent(activeReferral.normalizedPhone)}`
     : '';
@@ -77,13 +80,14 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ isOpen, onClose })
   const formatReferralMessage = (link: string) => {
     const template =
       fallbackStore.pricingSettings?.referralMessageTemplate?.trim() ||
-      'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন। এখনই এই লিঙ্কে গিয়ে অর্ডার করুন: {link}';
+      'আসসালামু আলাইকুম! জামানত (Jamanot) দিয়ে সহজে বাজার-সদাই ও প্রয়োজনীয় ডেলিভারি নিন।';
     if (template.includes('{link}')) {
-      return template.replace(/\{link\}/g, link);
+      return template.replace(/\{link\}/g, link).trim();
     } else if (template.includes('{url}')) {
-      return template.replace(/\{url\}/g, link);
+      return template.replace(/\{url\}/g, link).trim();
     }
-    return `${template} ${link}`;
+    // Return only the admin configured message without appending extra localhost url or link
+    return template;
   };
 
   const shareText = activeReferral ? formatReferralMessage(generatedLink) : '';

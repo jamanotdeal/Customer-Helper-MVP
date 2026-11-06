@@ -13,7 +13,8 @@ import { StoreWallet } from './StoreWallet';
 import { StoreProductManager } from './StoreProductManager';
 import {
   Store, PlusCircle, Package, ShoppingBag,
-  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare, CheckCircle2, Bell, Loader2
+  AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldAlert, Check, X, Edit3, Calendar, Filter, Clock, Phone, AlertTriangle, ArrowUpDown, MessageSquare, CheckCircle2, Bell, Loader2,
+  ChevronDown, ChevronUp
 } from 'lucide-react';
 import { ShopOrder, ShopOrderStatus, ShopOrderItemPrice } from '@/types';
 import { OrderDetailsView } from './OrderDetailsView';
@@ -233,6 +234,29 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
   // scrolled to and outlined.
   const [focusedShopOrderId, setFocusedShopOrderId] = useState<string | null>(null);
   const scrolledToFocusRef = useRef<string | null>(null);
+  const [expandedShopOrderIds, setExpandedShopOrderIds] = useState<Set<string>>(new Set());
+
+  const toggleExpandShopOrder = (id: string) => {
+    setExpandedShopOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (focusedShopOrderId) {
+      setExpandedShopOrderIds((prev) => {
+        const next = new Set(prev);
+        next.add(focusedShopOrderId);
+        return next;
+      });
+    }
+  }, [focusedShopOrderId]);
 
   const [storeOrders, setStoreOrders] = useState<Order[]>([]);
   const [myRequests, setMyRequests] = useState<Order[]>([]);
@@ -1507,9 +1531,90 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
                       const isDisbursed = Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid);
                       const isActive = !isCanceled && !isDelivered;
+                      const isFinished = isCanceled || isDelivered;
                       const { itemsText, helperNote } = extractShopOrderNoteAndItems(so);
                       const parsedItems = parseShopOrderItems(so);
                       const helperPhone = getParentOrderHelperPhone(so.parentOrderId);
+                      const exactTotal = (so.price && so.price > 0)
+                        ? so.price
+                        : parsedItems.reduce((acc, it) => {
+                          const p = parseFloat(String(it.price || '0')) || 0;
+                          const q = getItemQuantityNum({ unit: it.unit, qty: it.unit });
+                          return acc + p * q;
+                        }, 0);
+
+                      // Collapsed by default for finished orders (Delivered, Disbursed, Due, Canceled)
+                      if (isFinished && !expandedShopOrderIds.has(so.id)) {
+                        return (
+                          <div
+                            key={so.id}
+                            id={`shop-order-${so.id}`}
+                            onClick={() => toggleExpandShopOrder(so.id)}
+                            className={`rounded-2xl border px-3.5 py-2.5 transition-all cursor-pointer hover:shadow-xs active:scale-[0.99] scroll-mt-24 ${
+                              isCanceled
+                                ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                                : 'bg-gray-50/70 border-gray-200 hover:border-gray-300'
+                            } ${so.id === focusedShopOrderId ? 'ring-4 ring-emerald-400' : ''}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center space-x-2 flex-wrap text-xs min-w-0 flex-1">
+                                <span className="font-mono text-emerald-900 font-extrabold shrink-0">
+                                  #{so.parentOrderId.slice(-6).toUpperCase()}
+                                </span>
+                                <span className="text-gray-300 font-bold">•</span>
+                                <span className="text-[11px] font-semibold text-gray-500 shrink-0">
+                                  {formatOrderDateTime(so.createdAt)}
+                                </span>
+                                <span className="text-gray-300 font-bold">•</span>
+                                <span className="text-[11px] font-bold text-gray-700 truncate">
+                                  {parsedItems.length > 0 ? `${parsedItems.length} item${parsedItems.length > 1 ? 's' : ''}` : 'Items'} • <span className="font-extrabold text-emerald-700 font-mono">৳{exactTotal}</span>
+                                </span>
+                                {so.helperName && (
+                                  <span className="text-[10px] text-gray-500 font-medium hidden sm:inline-block truncate">
+                                    🛵 {so.helperName}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                {isCanceled ? (
+                                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                                    Canceled
+                                  </span>
+                                ) : isDelivered ? (
+                                  <>
+                                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700 border border-gray-300">
+                                      Delivered
+                                    </span>
+                                    {isDisbursed ? (
+                                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-0.5">
+                                        <CheckCircle className="w-2.5 h-2.5 text-emerald-600" /> Disbursed
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                                        Due
+                                      </span>
+                                    )}
+                                  </>
+                                ) : null}
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExpandShopOrder(so.id);
+                                  }}
+                                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200/60 transition-colors ml-0.5 cursor-pointer"
+                                  title="Expand (বিস্তারিত দেখুন)"
+                                  aria-label="Expand"
+                                >
+                                  <ChevronDown className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
 
                       // Card color coding: Solid color background with clear status borders (not soft)
                       let cardContainerStyle = 'bg-white border-2 border-emerald-500/80 shadow-md';
@@ -1585,6 +1690,20 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                   Pending Action
                                 </span>
                               )}
+                              {isFinished && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExpandShopOrder(so.id);
+                                  }}
+                                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors ml-0.5 cursor-pointer"
+                                  title="Collapse (সংক্ষিপ্ত করুন)"
+                                  aria-label="Collapse"
+                                >
+                                  <ChevronUp className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
                           </div>
 
@@ -1603,19 +1722,39 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                   const priceInfo = getShopItemPriceDisplay(item, so.price);
                                   return (
                                     <div key={idx} className="flex items-start justify-between text-xs py-1.5 border-b border-gray-100/60 last:border-b-0 gap-2">
-                                      <div className="flex-1 min-w-0 pr-1">
-                                        <div className="flex items-center space-x-1.5 min-w-0 flex-wrap">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
-                                          <span className="font-bold text-gray-800 break-words">{item.name}</span>
-                                          {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
-                                        </div>
-                                        {priceInfo.lineTotal <= 0 && (
-                                          <div className="mt-0.5 pl-3">
-                                            <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 font-semibold inline-block">
-                                              মূল্য বাকি
-                                            </span>
-                                          </div>
+                                      <div className="flex items-start space-x-2 min-w-0 flex-1 pr-1">
+                                        {isActive && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setItemToCancel({
+                                              shopOrderId: so.id,
+                                              itemIndex: item.itemIndex ?? idx,
+                                              itemName: item.name,
+                                              itemUnit: item.unit,
+                                              itemPrice: priceInfo.lineTotal > 0 ? priceInfo.lineTotal : item.price,
+                                              parentOrderId: so.parentOrderId,
+                                            })}
+                                            title="পণ্য বাতিল করুন (Cancel Item)"
+                                            className="p-1 rounded-md bg-red-500 hover:bg-red-600 text-white active:scale-90 transition-all cursor-pointer shrink-0 mt-0.5 shadow-2xs"
+                                            aria-label="Cancel Item"
+                                          >
+                                            <X className="w-3 h-3 stroke-[2.5]" />
+                                          </button>
                                         )}
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex items-center space-x-1.5 min-w-0 flex-wrap">
+                                            {!isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />}
+                                            <span className="font-bold text-gray-800 break-words">{item.name}</span>
+                                            {item.unit && <span className="text-[10px] text-gray-500 font-medium">({item.unit})</span>}
+                                          </div>
+                                          {priceInfo.lineTotal <= 0 && (
+                                            <div className="mt-0.5 pl-0.5">
+                                              <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 font-semibold inline-block">
+                                                মূল্য বাকি
+                                              </span>
+                                            </div>
+                                          )}
+                                        </div>
                                       </div>
                                       <div className="flex items-center gap-2 shrink-0">
                                         {priceInfo.lineTotal > 0 && (
@@ -1635,23 +1774,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                               </span>
                                             )}
                                           </div>
-                                        )}
-                                        {isActive && (
-                                          <button
-                                            type="button"
-                                            onClick={() => setItemToCancel({
-                                              shopOrderId: so.id,
-                                              itemIndex: item.itemIndex ?? idx,
-                                              itemName: item.name,
-                                              itemUnit: item.unit,
-                                              itemPrice: priceInfo.lineTotal > 0 ? priceInfo.lineTotal : item.price,
-                                              parentOrderId: so.parentOrderId,
-                                            })}
-                                            title="পণ্য বাতিল করুন (Cancel Item)"
-                                            className="p-1 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 active:scale-90 transition-all cursor-pointer"
-                                          >
-                                            <X className="w-3.5 h-3.5 stroke-[2.5]" />
-                                          </button>
                                         )}
                                       </div>
                                     </div>
@@ -1745,28 +1867,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                             </div>
                           ) : ['ACCEPTED', 'PREPARING', 'READY', 'HANDOVER'].includes(so.status) && !isCanceled && !isDelivered ? (
                             <div className="p-3 bg-gray-50/90 rounded-2xl border border-gray-200/80 space-y-2.5">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-700">
-                                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-gray-500">স্ট্যাটাস:</span>
-                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                    so.status === 'READY'
-                                      ? 'bg-teal-100 text-teal-800 border border-teal-200'
-                                      : so.status === 'HANDOVER'
-                                      ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
-                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                  }`}>
-                                    {so.status === 'READY' ? 'Ready' : so.status === 'HANDOVER' ? 'HandedOver' : 'Accepted'}
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleCancelOrderClick(so.id)}
-                                  className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline transition-colors cursor-pointer"
-                                >
-                                  Cancel Order
-                                </button>
-                              </div>
-
                               {/* Status Switcher Buttons: Accepted, Ready, HandedOver */}
                               <div className="grid grid-cols-3 gap-1.5">
                                 <button
@@ -1806,6 +1906,18 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                 >
                                   <Check className={`w-3.5 h-3.5 shrink-0 ${so.status === 'HANDOVER' ? 'text-white' : 'text-indigo-600'}`} />
                                   <span className="truncate">HandedOver</span>
+                                </button>
+                              </div>
+
+                              {/* Cancel Order Button placed right after status action buttons */}
+                              <div className="pt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelOrderClick(so.id)}
+                                  className="w-full py-1.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-all active:scale-98 flex items-center justify-center space-x-1.5 cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  <span>Cancel Order</span>
                                 </button>
                               </div>
                             </div>
