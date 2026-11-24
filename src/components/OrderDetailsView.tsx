@@ -248,8 +248,9 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   const validShopOrders = shopOrders.filter(so => (!orderId || so.parentOrderId === orderId) && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
   const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
-  const customStorePricing = calculateCustomStoreFee(order, validShopOrders, fallbackStore.pricingSettings);
-  const effectiveCustomStoreFee = customStorePricing.totalFee;
+  const customStorePricing = calculateCustomStoreFee(order, validShopOrders, fallbackStore.pricingSettings, fallbackStore.shops);
+  const effectiveCustomStoreFee = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order?.customStoreFee || 0);
+  const effectiveCustomStoreCount = customStorePricing.count > 0 ? customStorePricing.count : (effectiveCustomStoreFee > 0 ? Math.max(1, Math.round(effectiveCustomStoreFee / (customStorePricing.unitFee || 15))) : 0);
   const unpricedItems = useMemo(() => {
     if (!order?.items) return [];
     return order.items.filter((it) => {
@@ -554,9 +555,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const isDelivered = order.status === 'DELIVERED';
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
 
-  const effectiveDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
+  const feeMaxLimit = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
+  const calculatedDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
   const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
   const effectiveReturnFee = (estdPricing && estdPricing.returnFee > 0) ? estdPricing.returnFee : 0;
+  const totalDeliveryFeeForLimit = order.isFreeDelivery ? 0 : (calculatedDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveCustomStoreFee);
+  const isDeliveryFeePendingConfirmation = !order.isFreeDelivery && feeMaxLimit > 0 && totalDeliveryFeeForLimit > feeMaxLimit && !order.exceededFeeConfirmed;
+  const effectiveDeliveryFee = isDeliveryFeePendingConfirmation ? 0 : calculatedDeliveryFee;
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
   const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment + effectiveCustomStoreFee;
 
@@ -772,7 +777,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   className="bg-white/10 rounded-2xl px-3 py-2 text-center cursor-pointer hover:bg-white/20 transition-all"
                 >
                   <p className="text-[10px] text-white/60 font-semibold">Delivery</p>
-                  <p className="text-sm font-black">৳{order.deliveryFee}</p>
+                  <p className="text-sm font-black">{isDeliveryFeePendingConfirmation ? 'N/A' : `৳${order.deliveryFee}`}</p>
                 </div>
               ) : null}
               {grandTotalPayable > 0 && (
@@ -1267,17 +1272,34 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                 </div>
               )}
 
-              {effectiveCustomStoreFee > 0 && (
-                <div className="flex items-center justify-between text-indigo-900 font-bold">
-                  <span className="flex items-center space-x-1">
-                    <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>
-                      Custom Store Fee ({customStorePricing.count} {customStorePricing.count > 1 ? 'items' : 'item'} × ৳{customStorePricing.unitFee})
-                    </span>
-                  </span>
-                  <span className="font-extrabold text-sm text-indigo-700 font-mono">+৳{effectiveCustomStoreFee}</span>
-                </div>
-              )}
+              {(() => {
+                if (effectiveCustomStoreFee <= 0) return null;
+                const unitFee = customStorePricing.unitFee || 15;
+                const unlistedNames = (validShopOrders || [])
+                  .filter((so) => so.shopId === 'myself' && !so.isListedStore && !so.matchedShopId)
+                  .map((so) => (so.sellerName || so.shopName || '').trim())
+                  .filter(Boolean);
+                const uniqueNames = Array.from(new Set(unlistedNames));
+
+                return (
+                  <div className="space-y-0.5">
+                    <div className="flex items-center justify-between text-indigo-900 font-bold">
+                      <span className="flex items-center space-x-1.5">
+                        <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span>
+                          {effectiveCustomStoreCount} {effectiveCustomStoreCount > 1 ? 'unlisted stores' : 'unlisted store'} × ৳{unitFee}
+                        </span>
+                      </span>
+                      <span className="font-extrabold text-sm text-indigo-700 font-mono">+৳{effectiveCustomStoreFee}</span>
+                    </div>
+                    {uniqueNames.length > 0 && (
+                      <div className="text-[10px] text-indigo-600/90 font-medium pl-5 truncate">
+                        {uniqueNames.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Previous Order Due Payment Line Item */}
               {order.appliedDuePayment && order.appliedDuePayment.amount > 0 && (
@@ -1307,7 +1329,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   )}
                 </div>
                 <span className="text-base font-black text-emerald-850">
-                  ৳{effectiveDeliveryFee}
+                  {isDeliveryFeePendingConfirmation ? 'N/A' : `৳${effectiveDeliveryFee}`}
                 </span>
               </div>
 

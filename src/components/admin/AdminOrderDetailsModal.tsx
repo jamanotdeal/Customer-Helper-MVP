@@ -1773,8 +1773,9 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 pricingSettings
               );
               const processingFeeValue = est.processingFee || (order.processingFee || 0);
-              const customStorePricing = calculateCustomStoreFee(order, shopPrices, pricingSettings);
-              const customStoreFeeVal = customStorePricing.totalFee;
+              const customStorePricing = calculateCustomStoreFee(order, shopPrices, pricingSettings, fallbackStore.shops);
+              const customStoreFeeVal = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order.customStoreFee || 0);
+              const customStoreCount = customStorePricing.count > 0 ? customStorePricing.count : (customStoreFeeVal > 0 ? Math.ceil(customStoreFeeVal / (customStorePricing.unitFee || 15)) : 0);
               const platformRevenueTotal = platformRevenue + processingFeeValue;
               const isFreeDeliv = !!order.isFreeDelivery;
               const effectiveCustomerDeliveryFee = isFreeDeliv ? 0 : order.deliveryFee;
@@ -1812,7 +1813,7 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                   color: 'text-amber-700 font-extrabold',
                 }] : []),
                 ...(est.processingFee > 0 ? [{ label: `Processing Fee (${pricingSettings.feeCalculatorProcessingFeeType === 'percent' ? pricingSettings.feeCalculatorProcessingFee + '%' : '৳' + pricingSettings.feeCalculatorProcessingFee})`, value: `৳${est.processingFee}`, sub: 'Applied when product cost is set', color: 'text-orange-700' }] : []),
-                ...(customStoreFeeVal > 0 ? [{ label: `Custom Store Fee (${customStorePricing.count} items × ৳${customStorePricing.unitFee})`, value: `+৳${customStoreFeeVal}`, sub: 'Applied for items purchased from non-listed/custom stores', color: 'text-indigo-700 font-extrabold' }] : []),
+                ...(customStoreFeeVal > 0 ? [{ label: `${customStoreCount} ${customStoreCount > 1 ? 'unlisted stores' : 'unlisted store'} × ৳${customStorePricing.unitFee}`, value: `+৳${customStoreFeeVal}`, sub: 'Applied for purchases from non-listed/custom stores', color: 'text-indigo-700 font-extrabold' }] : []),
                 ...(appliedDueVal > 0 ? [{ label: `Previous Order Due (পূর্বের বাকি)`, value: `+৳${appliedDueVal}`, sub: order.appliedDuePayment?.note || 'Carried over from previous completed order', color: 'text-red-600 font-extrabold' }] : []),
               ];
 

@@ -9,7 +9,7 @@ import { isAppVisible, subscribeAppVisibility } from '@/lib/appVisibility';
 import { isNativeApp } from '@/lib/native';
 import { useOlderOrders } from '@/hooks/useOlderOrders';
 import { acceptOrderAsHelper, isOrderAvailableToHelper } from '@/lib/helperOrders';
-import { hasHelperAnyZoneAssignment, isAreaAssignedToHelper } from '@/lib/geofenceUtils';
+import { hasHelperAnyZoneAssignment } from '@/lib/geofenceUtils';
 import { HelperRequestCard } from './HelperRequestCard';
 import { HelperActiveOrderView } from './HelperActiveOrderView';
 import { OrderCard } from './OrderCard';
@@ -859,33 +859,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           );
         }
 
-        const assignedAreaNames = user?.serveAllAreas
-          ? 'সকল এলাকা (Global Coverage)'
-          : configuredAreas
-              .filter((a) => user && isAreaAssignedToHelper(a, user))
-              .map((a) => a.name)
-              .join(', ') || 'নির্ধারিত জোন';
-
-        return (
-          <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl px-4 py-2.5 flex items-center justify-between text-xs text-emerald-950 font-bold shadow-xs">
-            <div className="flex items-center space-x-2 min-w-0">
-              <div className="p-1.5 rounded-xl bg-emerald-600 text-white shrink-0">
-                <MapPin className="w-3.5 h-3.5" />
-              </div>
-              <div className="truncate">
-                <span className="text-[10px] text-emerald-700 font-black uppercase block tracking-wider">
-                  নির্ধারিত সার্ভিস এলাকা:
-                </span>
-                <span className="text-xs font-extrabold text-emerald-950 truncate block">
-                  {assignedAreaNames}
-                </span>
-              </div>
-            </div>
-            <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-emerald-200/80 text-emerald-900 shrink-0 ml-2">
-              Zone Active
-            </span>
-          </div>
-        );
+        return null;
       })()}
 
       {/* Pre-Tab Alert Banner: Running + Unviewed Active Orders */}

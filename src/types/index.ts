@@ -121,6 +121,7 @@ export interface Order {
   status: OrderStatus;
   deliveryFee: number;
   originalDeliveryFee: number;
+  exceededFeeConfirmed?: boolean;
   feeAdjustment?: FeeAdjustment;
   productCost?: number;
   processingFee?: number;
@@ -772,6 +773,8 @@ export interface ShopOrder {
   price?: number;            // Set by store
   sellerName?: string;       // Custom cost seller / vendor name
   sellerPhone?: string;      // Custom cost seller / vendor phone number
+  isListedStore?: boolean;   // Whether the store is listed on our platform/server (no extra custom store fee)
+  matchedShopId?: string;    // ID of the matched listed shop from server if selected or matched
   note?: string;             // Store's note to helper
   viewedByStore?: boolean;   // Set to true when store clicks "দেখতেছি" or views the order
   createdAt: string;

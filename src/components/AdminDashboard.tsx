@@ -654,7 +654,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Custom Store Pricing Admin States
   const [customStorePricingEnabled, setCustomStorePricingEnabled] = useState<boolean>(
-    fallbackStore.pricingSettings?.customStorePricingEnabled === true
+    fallbackStore.pricingSettings?.customStorePricingEnabled !== false
   );
   const [customStorePricingAmount, setCustomStorePricingAmount] = useState<number | string>(
     fallbackStore.pricingSettings?.customStorePricingAmount ?? 15
@@ -1211,7 +1211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setFeeCalculatorCompanyDetails(settings.feeCalculatorCompanyDetails || '');
 
       // Custom Store pricing sync
-      setCustomStorePricingEnabled(settings.customStorePricingEnabled === true);
+      setCustomStorePricingEnabled(settings.customStorePricingEnabled !== false);
       setCustomStorePricingAmount(settings.customStorePricingAmount ?? 15);
       setReferralRewardCoins(settings.referralRewardCoins ?? 20);
       setReferredUserRewardCoins(settings.referredUserRewardCoins ?? 10);
@@ -7324,7 +7324,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="pt-3 border-t border-indigo-100 grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-200">
                 <div>
                   <label className="text-xs font-bold text-gray-750 block mb-1">
-                    Charge per Custom Item (প্রতি কাস্টম পণ্যের চার্জ ৳):
+                    Custom Store Fee per Unlisted Store (প্রতি আনলিস্টেড স্টোর ফি ৳):
                   </label>
                   <input
                     type="number"
@@ -7336,7 +7336,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="w-full p-3 rounded-2xl border border-gray-200 text-xs font-extrabold outline-none focus:border-indigo-600 bg-white"
                   />
                   <p className="text-[10px] text-gray-500 mt-1 font-medium">
-                    হেলপার কাস্টম খরচ যুক্ত করলে কাস্টমার ও হেলপার উভয়ের ক্যালকুলেশন সামারিতে পণ্য প্রতি এই ফি প্রদর্শিত হবে।
+                    সার্ভারে তালিকাভুক্ত নয় এমন দোকান থেকে হেলপার কেনাকাটা করলে প্রতি দোকানে এই ফি প্রযোজ্য হবে (তালিকাভুক্ত স্টোরে ৳০ ফি)।
                   </p>
                 </div>
               </div>

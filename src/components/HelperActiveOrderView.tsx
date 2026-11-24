@@ -307,6 +307,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   // Shop order placement state
   const [placeOrderShop, setPlaceOrderShop] = useState<Shop | null>(null);
+  const [showPlaceOrderMoreDetails, setShowPlaceOrderMoreDetails] = useState(false);
   const [viewRequestDetails, setViewRequestDetails] = useState<ShopOrder | null>(null);
   const [orderText, setOrderText] = useState('');
   const [orderTextError, setOrderTextError] = useState('');
@@ -323,9 +324,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [showCustomCostModal, setShowCustomCostModal] = useState(false);
   const [customSellerName, setCustomSellerName] = useState('');
   const [customSellerPhone, setCustomSellerPhone] = useState('');
+  const [selectedListedShop, setSelectedListedShop] = useState<Shop | null>(null);
+  const [showStoreSuggestions, setShowStoreSuggestions] = useState(false);
+  const storeSuggestionRef = useRef<HTMLDivElement>(null);
+  const autoFilledPhoneRef = useRef<string>('');
   const [isSubmittingCustomCost, setIsSubmittingCustomCost] = useState(false);
   const [checkedNoteItems, setCheckedNoteItems] = useState<Record<number, boolean>>({});
   const [checkedSubItems, setCheckedSubItems] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (storeSuggestionRef.current && !storeSuggestionRef.current.contains(e.target as Node)) {
+        setShowStoreSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, []);
 
   // Store price confirm modal state (for store-connected items — no retailer selection needed)
   const [storePriceModalShopId, setStorePriceModalShopId] = useState<string | null>(null);
@@ -337,6 +356,72 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   // Order Now sending state per store group (storeId → loading bool)
   const [orderNowLoading, setOrderNowLoading] = useState<Record<string, boolean>>({});
+
+  const allShops = useMemo(
+    () => Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked),
+    [fallbackStore.shops]
+  );
+
+  // Best matched top 3 stores on our server when helper is typing custom cost store name
+  const topMatchedStores = useMemo(() => {
+    const rawQuery = customSellerName.trim().toLowerCase();
+    if (!rawQuery) return [];
+
+    // If an existing listed shop is already selected and names match, hide suggestion dropdown
+    if (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === rawQuery) {
+      return [];
+    }
+
+    const cleanDigits = rawQuery.replace(/\D/g, '');
+
+    const scored = allShops
+      .map((shop) => {
+        const name = (shop.name || '').trim().toLowerCase();
+        const type = (shop.type || shop.category || '').trim().toLowerCase();
+        const address = (shop.location?.address || '').trim().toLowerCase();
+        const whatsapp = (shop.whatsapp || '').replace(/\D/g, '');
+        const managerWhatsapp = (shop.managerWhatsapp || '').replace(/\D/g, '');
+
+        let score = 0;
+        if (name === rawQuery) {
+          score = 1000;
+        } else if (name.startsWith(rawQuery)) {
+          score = 500 - (name.length - rawQuery.length);
+        } else {
+          const words = name.split(/\s+/);
+          if (words.some((w) => w.startsWith(rawQuery))) {
+            score = 300 - (name.length - rawQuery.length);
+          } else if (name.includes(rawQuery)) {
+            score = 150 - (name.length - rawQuery.length);
+          } else if (cleanDigits.length >= 3 && (whatsapp.includes(cleanDigits) || managerWhatsapp.includes(cleanDigits))) {
+            score = 100;
+          } else if (type.includes(rawQuery)) {
+            score = 50;
+          } else if (address.includes(rawQuery)) {
+            score = 30;
+          }
+        }
+
+        return { shop, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, 3).map((item) => item.shop);
+  }, [customSellerName, allShops, selectedListedShop]);
+
+  const handleSelectStoreSuggestion = (shop: Shop) => {
+    setCustomSellerName(shop.name);
+    const phone = shop.whatsapp || shop.managerWhatsapp || '';
+    if (phone) {
+      setCustomSellerPhone(phone);
+      autoFilledPhoneRef.current = phone;
+    } else {
+      autoFilledPhoneRef.current = '';
+    }
+    setSelectedListedShop(shop);
+    setShowStoreSuggestions(false);
+  };
 
   interface SelectedItemEntry {
     id: string;
@@ -421,20 +506,69 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         'helper'
       );
 
-      // Uncheck purchased state of items in order.items for this shop so helper can re-order or buy elsewhere
-      if (targetSO?.shopId) {
-        fallbackStore.updateOrder(order.id, (o) => ({
-          ...o,
-          items: (o.items || []).map((it) => {
-            if (it.storeId === targetSO.shopId) {
-              return { ...it, purchased: false };
+      // Bring cancelled store order items back to normal/unassigned items so helper can re-order or buy elsewhere
+      if (targetSO) {
+        const soItemIds = new Set<string>();
+        const soItemNames = new Set<string>();
+        (targetSO.itemsWithPrice || []).forEach((ip: any) => {
+          if (ip.itemId) soItemIds.add(String(ip.itemId));
+          if (ip.originalId) soItemIds.add(String(ip.originalId));
+          const norm = normalizeItemName(ip.name || '');
+          if (norm) soItemNames.add(norm);
+        });
+        (targetSO.requestText || '')
+          .split(/\r?\n/)
+          .filter((l) => !l.startsWith('নোট:'))
+          .forEach((line) => {
+            line.split(/,/).forEach((p) => {
+              const norm = normalizeItemName(p);
+              if (norm) soItemNames.add(norm);
+            });
+          });
+
+        const updatedShopOrders = shopOrders.map((so) =>
+          so.id === shopOrderId ? { ...so, status: 'CANCELED' as const } : so
+        );
+
+        fallbackStore.updateOrder(order.id, (o) => {
+          const updatedItems = (o.items || []).map((it) => {
+            const matchesStore = targetSO.shopId && it.storeId === targetSO.shopId;
+            const matchesId = soItemIds.has(it.id);
+            const matchesName = soItemNames.has(normalizeItemName(it.name || ''));
+            if (matchesStore || matchesId || matchesName) {
+              return {
+                ...it,
+                purchased: false,
+                isCustom: true,
+                storeId: undefined,
+                storeName: undefined,
+              };
             }
             return it;
-          }),
-        }));
+          });
+
+          const stillHasShopItems = targetSO.shopId
+            ? updatedItems.some((it) => it.storeId === targetSO.shopId && !it.isCustom)
+            : false;
+          const updatedSelectedShopIds = targetSO.shopId && !stillHasShopItems
+            ? (o.selectedShopIds || []).filter((id) => id !== targetSO.shopId)
+            : o.selectedShopIds;
+
+          const newProductCost = calculateOrderProductCost(
+            { ...o, items: updatedItems, selectedShopIds: updatedSelectedShopIds },
+            updatedShopOrders
+          );
+
+          return {
+            ...o,
+            items: updatedItems,
+            selectedShopIds: updatedSelectedShopIds,
+            productCost: newProductCost,
+          };
+        });
       }
 
-      showAlert('অর্ডার বাতিল', 'দোকানের অর্ডার বাতিল করা হয়েছে।', 'info');
+      showAlert('অর্ডার বাতিল', 'দোকানের অর্ডার বাতিল করা হয়েছে এবং পণ্যগুলো সাধারণ আইটেমে ফিরে এসেছে।', 'info');
     } catch (err: any) {
       showAlert('ত্রুটি', 'অর্ডার বাতিল করা যায়নি: ' + (err?.message || err), 'error');
     } finally {
@@ -858,8 +992,23 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const existingSO = shopOrders.find(
       (so) => so.shopId === 'myself' && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
     );
-    setCustomSellerName(existingSO?.sellerName || '');
-    setCustomSellerPhone(existingSO?.sellerPhone || '');
+    if (existingSO) {
+      customCostDraftIdRef.current = existingSO.id;
+    } else {
+      customCostDraftIdRef.current = null;
+    }
+    const prevSellerName = existingSO?.sellerName || '';
+    const prevSellerPhone = existingSO?.sellerPhone || '';
+    setCustomSellerName(prevSellerName);
+    setCustomSellerPhone(prevSellerPhone);
+    const matchedPrevShop = existingSO?.matchedShopId
+      ? allShops.find((s) => s.id === existingSO.matchedShopId && s.name && s.name.trim().toLowerCase() === prevSellerName.trim().toLowerCase())
+      : allShops.find((s) =>
+          prevSellerName && s.name && s.name.trim().toLowerCase() === prevSellerName.trim().toLowerCase()
+        );
+    setSelectedListedShop(matchedPrevShop || null);
+    autoFilledPhoneRef.current = matchedPrevShop ? (matchedPrevShop.whatsapp || matchedPrevShop.managerWhatsapp || '') : '';
+    setShowStoreSuggestions(false);
     setShowCustomCostModal(true);
   };
 
@@ -1146,6 +1295,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setCustomCostItems(getInitialSelectedItemList());
     setCustomSellerName('');
     setCustomSellerPhone('');
+    setSelectedListedShop(null);
+    autoFilledPhoneRef.current = '';
+    setShowStoreSuggestions(false);
     setShowCustomCostModal(true);
   };
 
@@ -1209,6 +1361,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     setShowAddCustomShopItem(false);
     setStoreInstructionNote('');
     setOrderTextError('');
+    setShowPlaceOrderMoreDetails(false);
     shopOrderDraftIdRef.current = `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     setPlaceOrderShop(shop);
   };
@@ -1469,7 +1622,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const selectedShops = Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked && selectedShopIds.includes(s.id));
 
   // Filter and sort nearby shops (excluding blocked shops)
-  const allShops = Array.from(fallbackStore.shops.values()).filter((s) => !s.isBlocked);
   const maxDistance = fallbackStore.pricingSettings.helperRadiusKm ?? 3.5;
 
   const nearbyShops = allShops.filter((shop) => {
@@ -1630,8 +1782,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         .map((i) => `${i.name}${getItemQtyDisplay(i)}`)
         .join(', ');
 
-      const initialStatus: ShopOrderStatus = 'PENDING';
-      const statusNote = 'Helper sent request to store';
+      const isStoreNonAccepting = placeOrderShop.canReceiveOrders === false;
+      const initialStatus: ShopOrderStatus = isStoreNonAccepting ? 'ACCEPTED' : 'PENDING';
+      const statusNote = isStoreNonAccepting ? 'Helper added cost (store cannot accept requests in app)' : 'Helper sent request to store';
 
       const newShopOrder: ShopOrder = {
         id: shopOrderDraftIdRef.current || `so-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1643,8 +1796,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         requestText: itemsListText,
         helperNote: storeInstructionNote.trim() || undefined,
         status: initialStatus,
-        viewedByStore: false,
+        viewedByStore: isStoreNonAccepting ? true : false,
         price: calculatedTotal,
+        isPaid: isStoreNonAccepting ? true : undefined,
+        paidAt: isStoreNonAccepting ? new Date().toISOString() : undefined,
+        isListedStore: true,
+        matchedShopId: placeOrderShop.id,
         itemsWithPrice: checkedItems.map((i) => ({
           name: i.name,
           unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
@@ -1662,14 +1819,30 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       // Ensure all selected items are assigned to this store group
       const relatedItemIds = checkedItems.filter(i => !i.isNote).map(i => i.originalId);
       if (relatedItemIds.length > 0) {
-        fallbackStore.updateOrder(order.id, (o) => ({
-          ...o,
-          items: (o.items || []).map(it =>
-            relatedItemIds.includes(it.id)
-              ? { ...it, storeId: placeOrderShop.id, storeName: placeOrderShop.name, isCustom: false }
-              : it
-          ),
-        }));
+        fallbackStore.updateOrder(order.id, (o) => {
+          const existingSelected = o.selectedShopIds || [];
+          const updatedSelected = existingSelected.includes(placeOrderShop.id)
+            ? existingSelected
+            : [...existingSelected, placeOrderShop.id];
+
+          return {
+            ...o,
+            selectedShopIds: updatedSelected,
+            items: (o.items || []).map(it => {
+              if (!relatedItemIds.includes(it.id)) return it;
+              const chk = checkedItems.find(c => c.originalId === it.id);
+              const p = chk?.price ? parseFloat(chk.price) : undefined;
+              return {
+                ...it,
+                storeId: placeOrderShop.id,
+                storeName: placeOrderShop.name,
+                isCustom: false,
+                purchased: isStoreNonAccepting ? true : it.purchased,
+                price: p !== undefined && !isNaN(p) ? p : it.price,
+              };
+            }),
+          };
+        });
       }
 
       shopOrderDraftIdRef.current = null;
@@ -1678,7 +1851,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       setSelectedCustomItemIds([]);
       setStoreInstructionNote('');
       setOrderTextError('');
-      reportShopOrderResult(result);
+      if (isStoreNonAccepting) {
+        showAlert(
+          'খরচ যুক্ত হয়েছে',
+          `"${placeOrderShop.name}" দোকানের খরচ ৳${calculatedTotal} সফলভাবে যুক্ত হয়েছে। দোকান এটি পরিশোধিত (Paid) হিসেবে দেখতে পাবে।`,
+          'success'
+        );
+      } else {
+        reportShopOrderResult(result);
+      }
     } catch (err) {
       // Used to fall through silently: no message, and the helper assumed the
       // request had gone. The modal stays open so Send can be pressed again.
@@ -2004,8 +2185,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         (it) => (it.id === originalId || it.id === subId) && !it.isCustom && it.storeId && !order.isStoreClosedAtOrder
       );
       if (storeItem && storeItem.storeId) {
+        const storeShop = fallbackStore.shops.get(storeItem.storeId);
+        const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
         const storeOrders = shopOrders.filter(
-          (so) => so.shopId === storeItem.storeId && so.shopId !== 'myself' && so.parentOrderId === order.id
+          (so) => (so.shopId === storeItem.storeId || so.matchedShopId === storeItem.storeId) && so.parentOrderId === order.id
         );
         const activeOrLatestSO =
           storeOrders.find((so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED') ||
@@ -2014,6 +2197,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           )[0];
 
         if (!activeOrLatestSO) {
+          if (isStoreNonAccepting && storeShop) {
+            openPlaceShopOrder(storeShop);
+            return;
+          }
           showAlert(
             'দোকানে অর্ডার পাঠানো আবশ্যক',
             `এই পণ্যটি নির্দিষ্ট দোকানের। প্রথমে উপরে "Order Now" বাটনে ক্লিক করে দোকানে রিকোয়েস্ট পাঠান। দোকান একসেপ্ট বা রিজেক্ট করলে আপনি চেক করে এগিয়ে যেতে পারবেন।`,
@@ -2022,12 +2209,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           return;
         }
         if (activeOrLatestSO.status === 'PENDING') {
-          showAlert(
-            'দোকানের রেসপন্সের অপেক্ষা',
-            `দোকানে রিকোয়েস্ট পাঠানো হয়েছে এবং বর্তমানে পেন্ডিং রয়েছে। দোকান অর্ডারটি একসেপ্ট বা রিজেক্ট করার পর আপনি চেক করে কাজ করতে পারবেন।`,
-            'info'
-          );
-          return;
+          if (isStoreNonAccepting) {
+            fallbackStore.updateShopOrder(activeOrLatestSO.id, (prev) => ({
+              ...prev,
+              status: 'ACCEPTED',
+              isPaid: true,
+              paidAt: prev.paidAt || new Date().toISOString(),
+            }));
+          } else {
+            showAlert(
+              'দোকানের রেসপন্সের অপেক্ষা',
+              `দোকানে রিকোয়েস্ট পাঠানো হয়েছে এবং বর্তমানে পেন্ডিং রয়েছে। দোকান অর্ডারটি একসেপ্ট বা রিজেক্ট করার পর আপনি চেক করে কাজ করতে পারবেন।`,
+              'info'
+            );
+            return;
+          }
         }
       }
     }
@@ -2055,8 +2251,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const pendingStores: string[] = [];
 
     uniqueStoreIds.forEach((sid) => {
+      const storeShop = fallbackStore.shops.get(sid);
+      const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
       const storeOrders = shopOrders.filter(
-        (so) => so.shopId === sid && so.shopId !== 'myself' && so.parentOrderId === order.id
+        (so) => (so.shopId === sid || so.matchedShopId === sid) && so.parentOrderId === order.id
       );
       const activeOrLatestSO =
         storeOrders.find((so) => so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED') ||
@@ -2064,13 +2262,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           (a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
         )[0];
 
-      const shopObj = fallbackStore.shops.get(sid);
-      const sName = shopObj?.name || storeItemGroups.find((it) => it.storeId === sid)?.storeName || sid;
+      const sName = storeShop?.name || storeItemGroups.find((it) => it.storeId === sid)?.storeName || sid;
 
       if (!activeOrLatestSO) {
-        unrequestedStores.push(sName);
+        if (isStoreNonAccepting) {
+          unrequestedStores.push(`${sName} (খরচ যুক্ত করুন)`);
+        } else {
+          unrequestedStores.push(sName);
+        }
       } else if (activeOrLatestSO.status === 'PENDING') {
-        pendingStores.push(sName);
+        if (isStoreNonAccepting) {
+          fallbackStore.updateShopOrder(activeOrLatestSO.id, (prev) => ({
+            ...prev,
+            status: 'ACCEPTED',
+            isPaid: true,
+            paidAt: prev.paidAt || new Date().toISOString(),
+          }));
+        } else {
+          pendingStores.push(sName);
+        }
       }
     });
 
@@ -2300,6 +2510,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       return {
         ...o,
         deliveryFee: val,
+        exceededFeeConfirmed: true,
         lastEditedBy: 'helper',
         lastEditedAt: new Date().toISOString(),
         feeAdjustment: feeReason.trim()
@@ -2910,7 +3121,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   )}
                 </div>
                 <div className="space-y-2 text-xs">
-                  {renderStoresAddressList()}
                   {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
                     <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 shadow-xs space-y-2">
                       <div className="flex items-start gap-2">
@@ -2965,7 +3175,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             title="Google Maps Direction"
                           >
                             <Navigation className="w-3 h-3" />
-                            <span>Direction</span>
                           </button>
                           <button
                             type="button"
@@ -2974,7 +3183,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             title="Edit pickup address"
                           >
                             <FileEdit className="w-3 h-3 text-gray-700" />
-                            <span>Edit</span>
                           </button>
                         </div>
                       </div>
@@ -2998,7 +3206,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       title="Google Maps Direction"
                     >
                       <Navigation className="w-3 h-3" />
-                      <span>Direction</span>
                     </button>
                   </div>
                 </div>
@@ -3218,8 +3425,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               if (groupSOAccepted) {
                                 if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
                               } else {
-                                // No active/accepted store order — show the mandatory modal
                                 const sid = it.storeId || groupSO?.shopId || '';
+                                const storeShop = sid ? fallbackStore.shops.get(sid) : undefined;
+                                if (storeShop && storeShop.canReceiveOrders === false) {
+                                  openPlaceShopOrder(storeShop);
+                                  return;
+                                }
+                                // No active/accepted store order — show the mandatory modal
                                 const storeName = groupSO?.shopName || it.storeName || sid;
                                 const storeAddress = fallbackStore.shops.get(sid)?.location?.address;
                                 const storeItems = (order.items || []).filter(i => i.storeId === sid);
@@ -3380,6 +3592,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 <div className="flex items-center gap-1 text-[11px] text-amber-800 font-bold mt-0.5 flex-wrap">
                                   <Store className="w-3 h-3 text-amber-600 shrink-0" />
                                   <span>দোকান: {connectedSO?.sellerName || customPlace || 'Custom Seller'}</span>
+                                  {connectedSO?.isListedStore && (
+                                    <span className="text-[9px] bg-emerald-100 text-emerald-800 font-black px-1.5 py-0.2 rounded-md">
+                                      Listed Store (৳০ Fee)
+                                    </span>
+                                  )}
                                 </div>
                               ) : it.buyFrom ? (
                                 <div className="flex items-center gap-1 text-[10px] text-gray-500 mt-0.5 flex-wrap">
@@ -3423,27 +3640,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                   </button>
                                 )}
 
-                                {/* Cancel Item Button */}
-                                {!isDone && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setCancelItemConfirmTarget({
-                                        id: it.id,
-                                        name: it.name,
-                                        storeId: it.storeId,
-                                        storeName: sName,
-                                        price: priceDetails?.totalPrice ?? (it.price ? Number(it.price) * getItemQuantityNum(it) : 0),
-                                      });
-                                    }}
-                                    className="p-1 rounded-md text-rose-600 hover:text-rose-800 hover:bg-rose-100 border border-rose-200 transition-all active:scale-95 cursor-pointer"
-                                    title="এই পণ্যটি অর্ডার থেকে বাতিল করুন"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                )}
-
                                 {/* Sending indicator */}
                                 {effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id) && (
                                   <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block border bg-orange-100 text-orange-800 border-orange-250 animate-pulse">
@@ -3455,7 +3651,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 {soStatus && (
                                   <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${soStatus === 'PENDING'
                                       ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                                      : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY'
+                                      : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY' || soStatus === 'DELIVERED' || soStatus === 'HANDOVER'
                                         ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                                         : 'bg-rose-100 text-rose-900 border border-rose-200'
                                     }`}>
@@ -3467,6 +3663,24 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                               soStatus}
                                   </span>
                                 )}
+                                {!isDone && isCustomItem && connectedSO && connectedSO.shopId !== 'myself' && connectedSO.status !== 'CANCELED' && (connectedSO.status as string) !== 'CANCELLED' && (
+                                  <button
+                                    type="button"
+                                    disabled={cancellingShopOrderId === connectedSO.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCancelShopOrderConfirmTarget({
+                                        shopOrderId: connectedSO.id,
+                                        storeName: sName || connectedSO.shopName || 'Store',
+                                      });
+                                    }}
+                                    title="দোকানের অর্ডার বাতিল করুন (Cancel Store Order)"
+                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[9px] font-extrabold transition-all active:scale-95 cursor-pointer"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                    <span>Cancel</span>
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -3477,15 +3691,26 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     };
 
                     if (Object.keys(byStore).length === 0 && customItems.length === 0) {
-                      return parsedItems.map(parsed => {
+                      const sortedParsed = [...parsedItems].sort((a, b) => {
+                        const aOrdered = getItemConnectedOrder(a.name, a.id) !== null ? 1 : 0;
+                        const bOrdered = getItemConnectedOrder(b.name, b.id) !== null ? 1 : 0;
+                        return aOrdered - bOrdered;
+                      });
+                      return sortedParsed.map(parsed => {
                         const fakeItem = { id: parsed.id, name: parsed.name, qty: parsed.qty, quantity: parsed.quantity, isCustom: false, storeId: undefined, purchased: parsed.purchased } as any;
                         return renderItem(fakeItem, parsed.id);
                       });
                     }
 
-                    return (
-                      <>
-                        {Object.entries(byStore).map(([sid, items]) => {
+                    const storeEntries = Object.entries(byStore);
+                    const isStoreEntryOrdered = (sid: string) => {
+                      const g = getGroupShopOrder(sid);
+                      return Boolean(g && g.status !== 'CANCELED' && (g.status as string) !== 'CANCELLED');
+                    };
+                    const unorderedStoreEntries = storeEntries.filter(([sid]) => !isStoreEntryOrdered(sid));
+                    const orderedStoreEntries = storeEntries.filter(([sid]) => isStoreEntryOrdered(sid));
+
+                    const renderStoreBlock = ([sid, items]: [string, typeof allItems]) => {
                           const shop = fallbackStore.shops.get(sid);
                           const groupSO = getGroupShopOrder(sid);
                           const storeName = shop?.name || groupSO?.shopName || items.find(i => i.storeName)?.storeName || sid;
@@ -3524,32 +3749,49 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                                   {/* Right side: Order Now button or status action */}
                                   <div className="flex items-center gap-1.5 shrink-0">
-                                    {/* 2. Order Now button: when not yet sent or cancelled */}
-                                    {!isDone && (!groupSO || isCancelledGroup) && (
-                                      <button
-                                        type="button"
-                                        disabled={isLoading}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
-                                          const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
-                                          setOrderNowConfirmTarget({
-                                            sid,
-                                            storeName,
-                                            storeAddress,
-                                            items,
-                                            totalOrdered,
-                                            itemsText,
-                                          });
-                                        }}
-                                        className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white rounded-lg text-[10px] font-extrabold transition-all active:scale-95 shadow-xs cursor-pointer"
-                                      >
-                                        {isLoading ? <span className="animate-pulse">...</span> : <><ShoppingCart className="w-3 h-3" /><span>Order Now</span></>}
-                                      </button>
-                                    )}
+                                    {/* 2. Order Now / Add Cost button: when not yet sent or cancelled */}
+                                    {!isDone && (!groupSO || isCancelledGroup) && (() => {
+                                      const storeShop = fallbackStore.shops.get(sid);
+                                      const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
+                                      return (
+                                        <button
+                                          type="button"
+                                          disabled={isLoading}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (isStoreNonAccepting && storeShop) {
+                                              openPlaceShopOrder(storeShop);
+                                              return;
+                                            }
+                                            const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
+                                            const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
+                                            setOrderNowConfirmTarget({
+                                              sid,
+                                              storeName,
+                                              storeAddress,
+                                              items,
+                                              totalOrdered,
+                                              itemsText,
+                                            });
+                                          }}
+                                          className={`flex items-center gap-1 px-2.5 py-1.5 disabled:opacity-60 text-white rounded-lg text-[10px] font-extrabold transition-all active:scale-95 shadow-xs cursor-pointer ${
+                                            isStoreNonAccepting ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-500 hover:bg-emerald-600'
+                                          }`}
+                                        >
+                                          {isLoading ? (
+                                            <span className="animate-pulse">...</span>
+                                          ) : (
+                                            <>
+                                              {isStoreNonAccepting ? <DollarSign className="w-3 h-3" /> : <ShoppingCart className="w-3 h-3" />}
+                                              <span>{isStoreNonAccepting ? 'Add Cost (খরচ যুক্ত করুন)' : 'Order Now'}</span>
+                                            </>
+                                          )}
+                                        </button>
+                                      );
+                                    })()}
 
-                                    {/* Active Store Order Status & Cancel Button until delivered */}
-                                    {!isDone && groupSO && !isCancelledGroup && groupStatus !== 'DELIVERED' && (
+                                    {/* Active Store Order Status & Cancel Button (allowed even if already ordered/delivered while order is active) */}
+                                    {!isDone && groupSO && !isCancelledGroup && (
                                       <div className="flex items-center gap-1">
                                         {groupStatus === 'PENDING' ? (
                                           <span className="flex items-center gap-1 px-2 py-1 bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold">
@@ -3560,6 +3802,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                           <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
                                             <Check className="w-3 h-3" />
                                             <span>{groupStatus === 'PREPARING' ? 'Preparing' : 'Accepted'}</span>
+                                          </span>
+                                        ) : groupStatus === 'DELIVERED' ? (
+                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                            <Check className="w-3 h-3" />
+                                            <span>Delivered</span>
                                           </span>
                                         ) : (
                                           <span className="flex items-center gap-1 px-2.5 py-1 bg-teal-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
@@ -3584,13 +3831,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                           <X className="w-3.5 h-3.5" />
                                         </button>
                                       </div>
-                                    )}
-
-                                    {/* Delivered status (no cancel button once delivered) */}
-                                    {!isDone && groupSO && groupStatus === 'DELIVERED' && (
-                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
-                                        <Check className="w-3 h-3" /><span>Delivered</span>
-                                      </span>
                                     )}
                                   </div>
                                 </div>
@@ -3649,10 +3889,16 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             </div>
                           );
-                        })}
+                    };
 
-                        {/* Custom Items Block */}
-                        {customItems.length > 0 && (() => {
+                    const unconfirmedCustomItems = customItems.filter(it => {
+                      const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
+                      return parsed ? !getItemConnectedOrder(parsed.name, parsed.id) : true;
+                    });
+                    const hasUnorderedCustomItems = customItems.length > 0 && unconfirmedCustomItems.length > 0;
+
+                    const renderCustomBlock = () => {
+                          if (customItems.length === 0) return null;
                           const customItemsWithSO = customItems.map(it => {
                             const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
                             return parsed ? getItemConnectedOrder(parsed.name, parsed.id) : null;
@@ -3663,9 +3909,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           const customBlockStatus = hasPending ? 'PENDING' : allAccepted ? 'ACCEPTED' : hasCancelled ? 'CANCELLED' : null;
                           const customStyle = getBlockStyle(customBlockStatus);
 
-                          const unconfirmedCustomItems = customItems.filter(it => {
-                            const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
-                            return parsed ? !getItemConnectedOrder(parsed.name, parsed.id) : true;
+                          const sortedCustomItems = [...customItems].sort((a, b) => {
+                            const pA = parsedItems.find(p => p.originalId === a.id || p.id === a.id);
+                            const pB = parsedItems.find(p => p.originalId === b.id || p.id === b.id);
+                            const aOrdered = (pA ? getItemConnectedOrder(pA.name, pA.id) : getItemConnectedOrder(a.name, a.id)) !== null ? 1 : 0;
+                            const bOrdered = (pB ? getItemConnectedOrder(pB.name, pB.id) : getItemConnectedOrder(b.name, b.id)) !== null ? 1 : 0;
+                            return aOrdered - bOrdered;
                           });
 
                           const allSelected = unconfirmedCustomItems.length > 0 && unconfirmedCustomItems.every(it => selectedCustomItemIds.includes(it.id));
@@ -3709,7 +3958,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
 
                               <div className={`divide-y px-2 py-1 ${customStyle.bodyBg}`}>
-                                {customItems.map(it => renderItem(it, it.id, undefined, true, false))}
+                                {sortedCustomItems.map(it => renderItem(it, it.id, undefined, true, false))}
                               </div>
 
                               {/* 3. Underneath Selected Custom Items: 2 Action Buttons */}
@@ -3735,7 +3984,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               )}
                             </div>
                           );
-                        })()}
+                    };
+
+                    return (
+                      <>
+                        {/* Unordered items / blocks at the top */}
+                        {hasUnorderedCustomItems && renderCustomBlock()}
+                        {unorderedStoreEntries.map(renderStoreBlock)}
+
+                        {/* Ordered store / custom blocks below */}
+                        {orderedStoreEntries.map(renderStoreBlock)}
+                        {!hasUnorderedCustomItems && renderCustomBlock()}
                       </>
                     );
                   })()}
@@ -3761,22 +4020,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             <div className="flex items-center space-x-2">
                               <input type="checkbox" checked={isChecked} onChange={() => { }} className="w-3.5 h-3.5 accent-amber-700 rounded cursor-pointer" />
                               <span className={`flex-1 ${isChecked ? 'line-through text-amber-900' : ''}`}>{itemStr}</span>
-                              {!isDone && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCancelItemConfirmTarget({
-                                      id: `note-item-${idx}`,
-                                      name: itemStr,
-                                    });
-                                  }}
-                                  title="পণ্যটি বাতিল করুন"
-                                  className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-100 rounded-md transition-colors shrink-0 cursor-pointer"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              )}
                             </div>
                             {connectedShopOrder && (
                               <div className="mt-1.5 pt-1.5 border-t border-amber-300/60 flex items-center justify-between text-[10px] font-bold">
@@ -3878,8 +4121,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
               {/* Two-Way Delivery Toggle */}
               {!isDone && (
-                <div className="bg-indigo-50/30 py-2 px-3 rounded-2xl space-y-1.5 animate-in fade-in duration-200">
-                  <div className="flex items-center gap-2">
+                <div className={`py-2.5 px-3.5 rounded-2xl border-2 transition-all space-y-1.5 animate-in fade-in duration-200 ${order.needDeliveryBack ? 'bg-indigo-100/90 border-indigo-400 shadow-sm' : 'bg-indigo-50/90 border-indigo-300/80 shadow-xs hover:border-indigo-400'}`}>
+                  <div className="flex items-center gap-2.5">
                     {/* Toggle Switch on Left */}
                     <button
                       type="button"
@@ -3925,7 +4168,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       />
                     </button>
                     <div className="flex-1 min-w-0">
-                      <span className="text-xs font-bold text-indigo-800 uppercase tracking-wider block">Two-Way Delivery</span>
+                      <span className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <RotateCcw className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span>Two-Way Delivery</span>
+                      </span>
                       {order.needDeliveryBack && (
                         <span className="text-[11px] text-gray-700 font-semibold block mt-0.5">
                           Return mode: {order.deliveryBackTime
@@ -4033,7 +4279,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   )}
                 </div>
                 <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
-                  {renderStoresAddressList()}
                   {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
                     <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
                       <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
@@ -4082,7 +4327,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             title="Direction to pickup location"
                           >
                             <Navigation className="w-3 h-3" />
-                            <span>Direction</span>
                           </button>
                           {!isDone && (
                             <button
@@ -4091,7 +4335,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               title="Edit pickup address"
                             >
                               <FileEdit className="w-3 h-3 text-gray-700" />
-                              <span>Edit</span>
                             </button>
                           )}
                         </div>
@@ -4117,7 +4360,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         title="Direction to delivery"
                       >
                         <Navigation className="w-3 h-3" />
-                        <span>Direction</span>
                       </button>
                       {!isDone && (
                         <button
@@ -4126,22 +4368,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           title="Edit delivery address"
                         >
                           <FileEdit className="w-3 h-3 text-emerald-700" />
-                          <span>Edit</span>
                         </button>
                       )}
                     </div>
                   </div>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={handleOpenGoogleMapsDirection}
-                      className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
-                      title="Google Map Direction"
-                    >
-                      <Navigation className="w-3.5 h-3.5" />
-                      <span>Direction</span>
-                    </button>
-                  </div>
+
                 </div>
               </div>
 
@@ -4227,21 +4458,37 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </div>
                   )}
 
-                  {/* Custom Store Fee (shown if helper bought from outside stores) */}
+                  {/* Unlisted Store Fee (shown if helper bought from unlisted stores) */}
                   {(() => {
-                    const customStorePricing = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings);
-                    if (customStorePricing.totalFee <= 0) return null;
+                    const customStorePricing = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops);
+                    const effectiveFee = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order.customStoreFee || 0);
+                    const effectiveCount = customStorePricing.count > 0 ? customStorePricing.count : (effectiveFee > 0 ? Math.ceil(effectiveFee / (customStorePricing.unitFee || 15)) : 0);
+                    if (effectiveFee <= 0) return null;
+                    const unitFee = customStorePricing.unitFee || 15;
+                    const unlistedNames = (shopOrders || [])
+                      .filter((so) => so.parentOrderId === order.id && so.shopId === 'myself' && !so.isListedStore && !so.matchedShopId && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED')
+                      .map((so) => (so.sellerName || so.shopName || '').trim())
+                      .filter(Boolean);
+                    const uniqueNames = Array.from(new Set(unlistedNames));
+
                     return (
-                      <div className="flex items-center justify-between text-indigo-900 font-bold">
-                        <span className="flex items-center space-x-1">
-                          <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                          <span>
-                            Custom Store Fee ({customStorePricing.count} {customStorePricing.count > 1 ? 'items' : 'item'} × ৳{customStorePricing.unitFee})
+                      <div className="space-y-0.5">
+                        <div className="flex items-center justify-between text-indigo-900 font-bold">
+                          <span className="flex items-center space-x-1">
+                            <Store className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>
+                              {effectiveCount} {effectiveCount > 1 ? 'unlisted stores' : 'unlisted store'} × ৳{unitFee}
+                            </span>
                           </span>
-                        </span>
-                        <span className="text-xs sm:text-sm font-extrabold text-indigo-700 font-mono">
-                          +৳{customStorePricing.totalFee}
-                        </span>
+                          <span className="text-xs sm:text-sm font-extrabold text-indigo-700 font-mono">
+                            +৳{effectiveFee}
+                          </span>
+                        </div>
+                        {uniqueNames.length > 0 && (
+                          <div className="text-[10px] text-indigo-600/90 font-medium pl-4.5 truncate">
+                            {uniqueNames.join(', ')}
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -4264,52 +4511,109 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </div>
                   )}
 
-                  <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
-                    <div className="flex items-center space-x-1.5">
-                      <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
-                      {order.isFreeDelivery && (
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                          🎁 Free Delivery (Reward Claimed)
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-1.5">
-                      <span className="text-xs sm:text-sm font-bold text-emerald-850 font-mono">
-                        ৳{order.isFreeDelivery ? 0 : Math.max(order.deliveryFee, estdPricing.minFee)}
-                      </span>
-                      {!isDone && !order.isFreeDelivery && (
-                        <button
-                          onClick={() => {
-                            setFeeInput(String(order.deliveryFee));
-                            setCustomerAgreed(false);
-                            setShowFeeModal(true);
-                          }}
-                          className="p-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
-                          title="Override Fee"
-                        >
-                          <FileEdit className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  {(() => {
+                    const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
+                    const calcFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                    const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
+                    const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
+                    const dueAmt = order.appliedDuePayment?.amount || 0;
+                    const custStoreFee = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0;
+                    const totalDeliveryFee = order.isFreeDelivery ? 0 : (calcFee + procFee + retFee + custStoreFee);
+                    const isPendingConfirm = !order.isFreeDelivery && maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
+                    const effDelivery = isPendingConfirm ? 0 : calcFee;
+                    const totalToCollect = activeProductCost + effDelivery + procFee + retFee + dueAmt + custStoreFee;
 
-                  <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
-                    <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
-                    <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
-                      ৳{activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings).totalFee)}
-                    </span>
-                  </div>
+                    return (
+                      <>
+                        <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-bold text-gray-800 text-sm">Delivery Fee</span>
+                            {order.isFreeDelivery && (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                🎁 Free Delivery (Reward Claimed)
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-xs sm:text-sm font-bold text-emerald-850 font-mono">
+                              {order.isFreeDelivery ? '৳0' : isPendingConfirm ? 'N/A' : `৳${calcFee}`}
+                            </span>
+                            {!isDone && !order.isFreeDelivery && (
+                              <button
+                                onClick={() => {
+                                  setFeeInput(String(order.deliveryFee));
+                                  setCustomerAgreed(false);
+                                  setShowFeeModal(true);
+                                }}
+                                className="p-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
+                                title="Override Fee"
+                              >
+                                <FileEdit className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
 
+                        <div className="border-t border-gray-200 pt-2.5 flex items-center justify-between bg-emerald-50/50 -mx-3.5 px-3.5 py-2 mt-1 rounded-b-2xl">
+                          <span className="font-bold text-gray-900 text-sm">Total to Collect</span>
+                          <span className="text-sm sm:text-base font-extrabold text-emerald-850 font-mono">
+                            ৳{totalToCollect}
+                          </span>
+                        </div>
 
-
-                  {order.deliveryFee > (fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70) && (
-                    <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-850 font-bold leading-relaxed animate-in fade-in duration-200">
-                      ⚠️ {fallbackStore.pricingSettings.feeCalculatorMaxLimitMessage || `Delivery fee exceeds ৳${fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70}.`}
-                      <div className="mt-1 text-[11px] font-black text-amber-900">
-                        👉 Call customer to agree on a fair delivery fee.
-                      </div>
-                    </div>
-                  )}
+                        {!isDone && isPendingConfirm && (
+                          <div className="mt-2 p-3 rounded-2xl bg-amber-50 border-2 border-amber-300 space-y-2.5 animate-in fade-in duration-200 shadow-xs">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                              <p className="text-xs font-extrabold text-amber-950 leading-relaxed">
+                                কাস্টমার কি ডেলিভারি ফি দিতে রাজি হয়েছে? মোট ডেলিভারি ফি দেখাচ্ছে <span className="font-mono text-amber-900 underline">৳{totalDeliveryFee} টাকা</span>
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  fallbackStore.updateOrder(order.id, (o) => ({
+                                    ...o,
+                                    deliveryFee: calcFee,
+                                    exceededFeeConfirmed: true,
+                                    lastEditedBy: 'helper',
+                                    lastEditedAt: new Date().toISOString(),
+                                    statusHistory: [
+                                      ...(o.statusHistory || []),
+                                      {
+                                        id: `sh-${Date.now()}`,
+                                        status: o.status,
+                                        timestamp: new Date().toISOString(),
+                                        actor: `Helper (${o.helperName || 'Helper'})`,
+                                        note: `Customer agreed to calculated delivery fee ৳${totalDeliveryFee}`,
+                                      },
+                                    ],
+                                  }));
+                                }}
+                                className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Yes</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeeInput(String(calcFee));
+                                  setCustomerAgreed(false);
+                                  setShowFeeModal(true);
+                                }}
+                                className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-sm transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                              >
+                                <FileEdit className="w-3.5 h-3.5" />
+                                <span>Need Adjust</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -4333,7 +4637,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           )}
                         </div>
                         <p className="text-xs font-black text-gray-900">
-                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings).totalFee))}
+                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0))}
                         </p>
                       </div>
                     </div>
@@ -4740,13 +5044,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               )}
 
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer <span className="text-red-500">*</span></label>
+                <label className="text-xs font-bold text-gray-700 block mb-1">Reason / Note for Customer (Optional)</label>
                 <textarea
                   value={feeReason}
                   onChange={(e) => setFeeReason(e.target.value)}
                   placeholder="যেমন: মালামাল ভারী অথবা পিকআপ স্পট অতিরিক্ত দূরে..."
                   className="w-full p-3 rounded-2xl border border-gray-200 text-xs h-20 outline-none focus:border-amber-500"
-                  required
                 />
               </div>
 
@@ -4941,7 +5244,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <div className="flex items-center justify-between text-xs mt-1.5">
                   <span className="text-gray-500 font-bold uppercase tracking-wide">Delivery Fee</span>
                   <span className="font-extrabold text-emerald-700">
-                    {order.isFreeDelivery ? '৳0 (Reward Claimed)' : `৳${Math.max(order.deliveryFee || 0, estdPricing.minFee)}`}
+                    {(() => {
+                      if (order.isFreeDelivery) return '৳0 (Reward Claimed)';
+                      const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
+                      const calcFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                      const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
+                      const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
+                      const custStoreFee = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0;
+                      const totalDeliveryFee = calcFee + procFee + retFee + custStoreFee;
+                      const isPending = maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
+                      return isPending ? 'N/A' : `৳${calcFee}`;
+                    })()}
                   </span>
                 </div>
               )}
@@ -5021,11 +5334,31 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               ? 'পিকআপ ঠিকানা পরিবর্তন'
               : 'ডেলিভারি ঠিকানা পরিবর্তন'
           }
-          initialLocation={
-            (activeMapPicker || editMapPickerType) === 'pickup'
-              ? (editMapPickerType ? (editPickupLat && editPickupLng ? { address: editPickup, lat: editPickupLat, lng: editPickupLng, addressId: editPickupAddressId } : order.pickupLocation) : order.pickupLocation)
-              : (editMapPickerType ? (editDeliveryLat && editDeliveryLng ? { address: editAddress, lat: editDeliveryLat, lng: editDeliveryLng, addressId: editDeliveryAddressId } : order.deliveryLocation) : order.deliveryLocation)
-          }
+          initialLocation={(() => {
+            const isPickup = (activeMapPicker || editMapPickerType) === 'pickup';
+            if (editMapPickerType) {
+              return isPickup
+                ? (editPickupLat && editPickupLng ? { address: editPickup, lat: editPickupLat, lng: editPickupLng, addressId: editPickupAddressId } : order.pickupLocation)
+                : (editDeliveryLat && editDeliveryLng ? { address: editAddress, lat: editDeliveryLat, lng: editDeliveryLng, addressId: editDeliveryAddressId } : order.deliveryLocation);
+            }
+            // activeMapPicker: load with existing address first; fall back to zone name or helper location
+            if (isPickup) {
+              const existing = order.pickupLocation;
+              const hasValid = existing && existing.address && existing.address !== 'Local Helper Area';
+              if (hasValid) return existing;
+              // fallback: zone area name or helper GPS
+              if (order.areaName) return { address: order.areaName };
+              if (helperLocation?.lat && helperLocation?.lng) return helperLocation;
+              return existing;
+            } else {
+              const existing = order.deliveryLocation;
+              const hasValid = existing && existing.address && existing.address !== 'Local Helper Area';
+              if (hasValid) return existing;
+              if (order.areaName) return { address: order.areaName };
+              if (helperLocation?.lat && helperLocation?.lng) return helperLocation;
+              return existing;
+            }
+          })()}
           modalType={(activeMapPicker || editMapPickerType)!}
           onSelectLocation={(loc) => {
             if (editMapPickerType === 'pickup') {
@@ -5293,6 +5626,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   if (!target) return;
                   setOrderNowLoading((prev) => ({ ...prev, [target.sid]: true }));
                   try {
+                    const storeShop = fallbackStore.shops.get(target.sid);
+                    const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
+                    const initialStatus: ShopOrderStatus = isStoreNonAccepting ? 'ACCEPTED' : 'PENDING';
+
                     const newSO: ShopOrder = {
                       id: `so-${target.sid}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
                       parentOrderId: order.id,
@@ -5302,9 +5639,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       helperName: order.helperName || 'Helper',
                       requestText: target.itemsText,
                       sellerName: target.storeName,
-                      status: 'PENDING',
-                      viewedByStore: false,
+                      status: initialStatus,
+                      viewedByStore: isStoreNonAccepting ? true : false,
                       price: target.totalOrdered,
+                      isPaid: isStoreNonAccepting ? true : undefined,
+                      paidAt: isStoreNonAccepting ? new Date().toISOString() : undefined,
+                      isListedStore: true,
+                      matchedShopId: target.sid,
                       itemsWithPrice: target.items.map((i) => ({
                         name: i.name,
                         unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
@@ -5314,10 +5655,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       })),
                       createdAt: new Date().toISOString(),
                       updatedAt: new Date().toISOString(),
-                      statusHistory: [{ status: 'PENDING', timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
+                      statusHistory: [{ status: initialStatus, timestamp: new Date().toISOString(), actor: order.helperName || 'Helper' }],
                     };
                     await fallbackStore.addShopOrder(newSO);
-                    showAlert('অর্ডার পাঠানো হয়েছে', `"${target.storeName}" দোকানে সফলভাবে অর্ডার পাঠানো হয়েছে। দোকান একসেপ্ট করলে আপনাকে জানানো হবে।`, 'success');
+                    if (isStoreNonAccepting) {
+                      showAlert('খরচ যুক্ত হয়েছে', `"${target.storeName}" দোকানের খরচ সফলভাবে যুক্ত হয়েছে।`, 'success');
+                    } else {
+                      showAlert('অর্ডার পাঠানো হয়েছে', `"${target.storeName}" দোকানে সফলভাবে অর্ডার পাঠানো হয়েছে। দোকান একসেপ্ট করলে আপনাকে জানানো হবে।`, 'success');
+                    }
                   } finally {
                     setOrderNowLoading((prev) => ({ ...prev, [target.sid]: false }));
                   }
@@ -5453,7 +5798,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
               <div className="text-[11px] font-semibold text-rose-900/90 leading-relaxed pt-1.5 border-t border-rose-200/60">
-                আপনি কি নিশ্চিতভাবে এই দোকানে পাঠানো অর্ডারটি বাতিল করতে চান? বাতিল করার পর আপনি আবার নতুন করে অর্ডার পাঠাতে বা পণ্যগুলোকে কাস্টমে রূপান্তর করতে পারবেন।
+                আপনি কি নিশ্চিতভাবে এই দোকানে পাঠানো অর্ডারটি বাতিল করতে চান? বাতিল করার পর পণ্যগুলো আবার সাধারণ আইটেমে ফিরে আসবে এবং আপনি নতুন করে অর্ডার বা কাস্টম খরচ যুক্ত করতে পারবেন।
               </div>
             </div>
 
@@ -5731,16 +6076,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 relative border border-purple-100 max-h-[90vh] overflow-y-auto">
               <div className="absolute top-4 right-4 flex items-center gap-1.5 z-10">
-                <a
-                  href={gMapUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-sm transition-all active:scale-95 border border-emerald-400/40 cursor-pointer"
-                  title="Google Maps Direction"
-                >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Map</span>
-                </a>
                 <button
                   type="button"
                   onClick={() => setPlaceOrderShop(null)}
@@ -5750,7 +6085,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="flex items-center space-x-3 pr-24">
+              <div className="flex items-center space-x-3 pr-10">
                 <div className="p-2.5 rounded-2xl bg-purple-100 text-purple-700">
                   <Store className="w-6 h-6" />
                 </div>
@@ -5758,73 +6093,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <h3 className="font-black text-base text-gray-900 leading-tight">{placeOrderShop.name}</h3>
                   <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">{placeOrderShop.type}</span>
                 </div>
-              </div>
-
-              <div className="bg-purple-50/70 p-3 rounded-2xl border border-purple-100 space-y-1">
-                <span className="text-[10px] font-black text-purple-900 uppercase tracking-wider block">
-                  দোকানে কী কী পণ্য/সেবা পাওয়া যায়?
-                </span>
-                <p className="text-xs text-purple-950 leading-relaxed font-semibold">
-                  {placeOrderShop.description || 'পণ্য/সেবার কোনো অতিরিক্ত বিবরণ যুক্ত করা হয়নি।'}
-                </p>
-              </div>
-
-              <div className="space-y-3 bg-gray-50 p-3 rounded-2xl border border-gray-100 text-xs">
-                {/* Owner Row */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-150 pb-2 last:border-b-0 last:pb-0">
-                  <div>
-                    <span className="font-bold text-gray-500 block text-[10px] uppercase">Owner / Contact</span>
-                    <span className="font-black text-gray-900">{placeOrderShop.contactPerson}</span>
-                    <span className="text-gray-600 block font-bold font-mono text-[11px]">{placeOrderShop.whatsapp}</span>
-                  </div>
-                  <div className="flex space-x-2 shrink-0">
-                    <a
-                      href={`tel:${placeOrderShop.whatsapp}`}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                    >
-                      <Phone className="w-3 h-3" />
-                      <span>Call</span>
-                    </a>
-                    <a
-                      href={`https://wa.me/880${placeOrderShop.whatsapp.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                    >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                      <span>WhatsApp</span>
-                    </a>
-                  </div>
-                </div>
-
-                {/* Manager Row */}
-                {placeOrderShop.managerName && placeOrderShop.managerWhatsapp && (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-gray-150 pt-2">
-                    <div>
-                      <span className="font-bold text-gray-500 block text-[10px] uppercase">Manager</span>
-                      <span className="font-black text-gray-900">{placeOrderShop.managerName}</span>
-                      <span className="text-gray-600 block font-bold font-mono text-[11px]">{placeOrderShop.managerWhatsapp}</span>
-                    </div>
-                    <div className="flex space-x-2 shrink-0">
-                      <a
-                        href={`tel:${placeOrderShop.managerWhatsapp}`}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                      >
-                        <Phone className="w-3 h-3" />
-                        <span>Call</span>
-                      </a>
-                      <a
-                        href={`https://wa.me/880${placeOrderShop.managerWhatsapp.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                      >
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                        <span>WhatsApp</span>
-                      </a>
-                    </div>
-                  </div>
-                )}
               </div>
 
               <form onSubmit={handlePlaceShopOrder} className="space-y-3">
@@ -5958,16 +6226,109 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
 
 
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">
-                    দোকানের জন্য বিশেষ নোট / নির্দেশনা (ঐচ্ছিক)
-                  </label>
-                  <textarea
-                    value={storeInstructionNote}
-                    onChange={(e) => setStoreInstructionNote(e.target.value)}
-                    placeholder="যেমন: ১ কেজি ওজনের দুটি প্যাকেট দিন..."
-                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl focus:border-purple-500 outline-none text-gray-800 resize-none h-14"
-                  />
+                {/* More Details Accordion */}
+                <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowPlaceOrderMoreDetails((v) => !v)}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors text-xs font-black text-gray-700"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Info className="w-3.5 h-3.5 text-purple-600" />
+                      More Details
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-200 ${showPlaceOrderMoreDetails ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showPlaceOrderMoreDetails && (
+                    <div className="px-3.5 pb-3.5 pt-2 space-y-3 border-t border-gray-200">
+                      {/* Map row */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-black text-gray-500 uppercase block">Destination</span>
+                          <span className="text-xs font-bold text-gray-800 break-words">{placeOrderShop.location?.address || placeOrderShop.name}</span>
+                        </div>
+                        <a
+                          href={gMapUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-sm transition-all active:scale-95 border border-emerald-400/40 cursor-pointer shrink-0"
+                          title="Google Maps Direction"
+                        >
+                          <Navigation className="w-3.5 h-3.5" />
+                          <span>Map</span>
+                        </a>
+                      </div>
+                      {/* Store Contacts */}
+                      <div className="space-y-2 bg-gray-50 p-2.5 rounded-xl border border-gray-100 text-xs">
+                        {/* Owner Row */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-200 pb-2 last:border-b-0 last:pb-0">
+                          <div>
+                            <span className="font-bold text-gray-500 block text-[10px] uppercase">Owner / Contact</span>
+                            <span className="font-black text-gray-900">{placeOrderShop.contactPerson}</span>
+                            <span className="text-gray-600 block font-bold font-mono text-[11px]">{placeOrderShop.whatsapp}</span>
+                          </div>
+                          <div className="flex space-x-2 shrink-0">
+                            <a
+                              href={`tel:${placeOrderShop.whatsapp}`}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                            >
+                              <Phone className="w-3 h-3" />
+                              <span>Call</span>
+                            </a>
+                            <a
+                              href={`https://wa.me/880${placeOrderShop.whatsapp.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                            >
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                              <span>WhatsApp</span>
+                            </a>
+                          </div>
+                        </div>
+                        {/* Manager Row */}
+                        {placeOrderShop.managerName && placeOrderShop.managerWhatsapp && (
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-gray-200 pt-2">
+                            <div>
+                              <span className="font-bold text-gray-500 block text-[10px] uppercase">Manager</span>
+                              <span className="font-black text-gray-900">{placeOrderShop.managerName}</span>
+                              <span className="text-gray-600 block font-bold font-mono text-[11px]">{placeOrderShop.managerWhatsapp}</span>
+                            </div>
+                            <div className="flex space-x-2 shrink-0">
+                              <a
+                                href={`tel:${placeOrderShop.managerWhatsapp}`}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                              >
+                                <Phone className="w-3 h-3" />
+                                <span>Call</span>
+                              </a>
+                              <a
+                                href={`https://wa.me/880${placeOrderShop.managerWhatsapp.replace(/^0/, '').replace(/[^0-9]/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-[11px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                              >
+                                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                                <span>WhatsApp</span>
+                              </a>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {/* Special Notes */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                          দোকানের জন্য বিশেষ নোট / নির্দেশনা (ঐচ্ছিক)
+                        </label>
+                        <textarea
+                          value={storeInstructionNote}
+                          onChange={(e) => setStoreInstructionNote(e.target.value)}
+                          placeholder="যেমন: ১ কেজি ওজনের দুটি প্যাকেট দিন..."
+                          className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl focus:border-purple-500 outline-none text-gray-800 resize-none h-14"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {orderTextError && (
@@ -6035,8 +6396,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   </h3>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
-                      {isMyself ? 'Direct Purchase' : (shop?.type || 'Store')}
+                      {isMyself ? (viewRequestDetails.isListedStore ? 'Listed Store' : 'Direct Purchase') : (shop?.type || 'Store')}
                     </span>
+                    {isMyself && viewRequestDetails.isListedStore && (
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-250">
+                        ✓ Listed Store (৳০ Fee)
+                      </span>
+                    )}
                     {!isMyself && viewRequestDetails.status && (
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${viewRequestDetails.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border-amber-250' :
                         viewRequestDetails.status === 'ACCEPTED' ? 'bg-blue-100 text-blue-800 border-blue-250' :
@@ -6256,13 +6622,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               .filter((p) => p && !p.startsWith('নোট:'))
                           );
 
-                        // Uncheck in order items
+                        // Uncheck in order items & restore to normal/custom items
                         fallbackStore.updateOrder(order.id, (o) => ({
                           ...o,
                           items: (o.items || []).map((it) => {
                             const itName = it.name.toLowerCase().trim();
                             const isMatched = itemNames.some((rn) => itName.includes(rn) || rn.includes(itName));
-                            return isMatched ? { ...it, purchased: false } : it;
+                            return isMatched
+                              ? { ...it, purchased: false, isCustom: true, storeId: undefined, storeName: undefined }
+                              : it;
                           }),
                         }));
 
@@ -6665,6 +7033,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   }
                   setIsSubmittingStorePrice(true);
                   try {
+                    const storeShop = storePriceModalShopId ? fallbackStore.shops.get(storePriceModalShopId) : undefined;
+                    const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
                     const itemsText = storePriceItems.map(i => i.name).join(', ');
                     const newShopOrder: ShopOrder = {
                       id: `so-store-${storePriceModalShopId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -6676,6 +7046,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       requestText: itemsText,
                       sellerName: shopName,
                       status: 'ACCEPTED',
+                      viewedByStore: true,
+                      isPaid: isStoreNonAccepting ? true : undefined,
+                      paidAt: isStoreNonAccepting ? new Date().toISOString() : undefined,
+                      isListedStore: true,
+                      matchedShopId: storePriceModalShopId,
                       price: totalStoreCost,
                       itemsWithPrice: storePriceItems.map(i => ({
                         name: i.name,
@@ -6795,18 +7170,30 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   if (!customCostDraftIdRef.current) {
                     customCostDraftIdRef.current = `so-myself-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
                   }
+
+                  const trimmedName = customSellerName.trim().toLowerCase();
+                  // A store is listed ONLY if the store NAME matches an active listed store on our server!
+                  const effectiveShop = (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === trimmedName)
+                    ? selectedListedShop
+                    : (allShops.find((s) => s.name && s.name.trim().toLowerCase() === trimmedName) || null);
+                  const isListed = Boolean(effectiveShop);
+
                   const newShopOrder: ShopOrder = {
                     id: customCostDraftIdRef.current,
                     parentOrderId: order.id,
-                    shopId: 'myself',
-                    shopName: 'MySelf',
+                    shopId: effectiveShop ? effectiveShop.id : 'myself',
+                    shopName: effectiveShop ? effectiveShop.name : 'MySelf',
                     helperId: order.helperId || '',
                     helperName: order.helperName || 'Helper',
                     requestText: itemsListText,
                     sellerName: customSellerName.trim(),
                     sellerPhone: customSellerPhone.trim(),
+                    isListedStore: isListed,
+                    matchedShopId: effectiveShop ? effectiveShop.id : undefined,
                     status: 'ACCEPTED',
                     price: totalCustomCost,
+                    isPaid: true,
+                    paidAt: new Date().toISOString(),
                     itemsWithPrice: checkedItems.map((i) => ({
                       name: i.name,
                       unit: formatItemQuantityUnit(getItemQuantityNum(i), i.unit, i.qty),
@@ -6820,6 +7207,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   };
                   const result = await fallbackStore.addShopOrder(newShopOrder);
 
+                  // Always build the updated shop orders list (with new shop order) for fee recalculation
+                  const allUpdatedSOs = [
+                    ...shopOrders.filter((s) => s.id !== newShopOrder.id),
+                    newShopOrder,
+                  ];
+
                   // Ensure all checked items have their unit price and purchased status updated on customer & helper sides
                   const itemPriceMap: Record<string, number> = {};
                   checkedItems.filter((i) => !i.isNote).forEach((i) => {
@@ -6831,14 +7224,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     }
                   });
 
-                  if (Object.keys(itemPriceMap).length > 0) {
-                    fallbackStore.updateOrder(order.id, (o) => {
+                  // Always update the order: set customStoreFee correctly, and update item prices if available
+                  fallbackStore.updateOrder(order.id, (o) => {
+                    const updatedCustomPricing = calculateCustomStoreFee(o, allUpdatedSOs, fallbackStore.pricingSettings, fallbackStore.shops);
+
+                    const existingSelected = o.selectedShopIds || [];
+                    const updatedSelected = (effectiveShop && !existingSelected.includes(effectiveShop.id))
+                      ? [...existingSelected, effectiveShop.id]
+                      : existingSelected;
+
+                    if (Object.keys(itemPriceMap).length > 0) {
                       const updatedItems = (o.items || []).map((it) => {
                         const itNorm = it.name.toLowerCase().trim();
                         const newPrice = itemPriceMap[it.id] ?? itemPriceMap[itNorm];
                         if (newPrice !== undefined) {
                           return {
                             ...it,
+                            storeId: effectiveShop ? effectiveShop.id : it.storeId,
+                            storeName: effectiveShop ? effectiveShop.name : it.storeName,
+                            isCustom: !effectiveShop,
                             price: newPrice,
                             purchased: true,
                             buyFrom: customSellerName.trim() || it.buyFrom,
@@ -6855,26 +7259,35 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         return acc + (p * qty);
                       }, 0);
 
-                      const isCustomPricingOn = fallbackStore.pricingSettings.customStorePricingEnabled;
-                      const customUnit = Number(fallbackStore.pricingSettings.customStorePricingAmount ?? 15) || 0;
-                      const newMyselfCount = checkedItems.length;
-                      const addedCustomFee = isCustomPricingOn ? newMyselfCount * customUnit : 0;
-
                       return {
                         ...o,
+                        selectedShopIds: updatedSelected,
                         items: updatedItems,
                         productCost: totalCost > 0 ? totalCost : o.productCost,
-                        customStoreFee: addedCustomFee > 0 ? Math.max(o.customStoreFee || 0, addedCustomFee) : o.customStoreFee,
+                        customStoreFee: updatedCustomPricing.totalFee,
                         updatedAt: new Date().toISOString(),
                       };
-                    });
-                  }
+                    }
 
+                    // No item prices yet — just persist the correct customStoreFee and selectedShopIds
+                    return {
+                      ...o,
+                      selectedShopIds: updatedSelected,
+                      customStoreFee: updatedCustomPricing.totalFee,
+                      updatedAt: new Date().toISOString(),
+                    };
+                  });
+
+                  // Immediately sync React state so the summary re-renders without waiting for the subscription
+                  setShopOrders(allUpdatedSOs);
                   customCostDraftIdRef.current = null;
                   setShowCustomCostModal(false);
                   setCustomCostItems([]);
                   setCustomSellerName('');
                   setCustomSellerPhone('');
+                  setSelectedListedShop(null);
+                  autoFilledPhoneRef.current = '';
+                  setShowStoreSuggestions(false);
                   reportShopOrderResult(result);
                 } catch (err) {
                   showAlert('খরচ যুক্ত করা যায়নি', shopOrderErrorText(err), 'error');
@@ -6884,19 +7297,53 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               }}
               className="space-y-3"
             >
-              {fallbackStore.pricingSettings.customStorePricingEnabled && (
+              {selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase() ? (
+                <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
+                      <Check className="w-4 h-4 stroke-[3]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-black text-emerald-900 flex items-center gap-1.5 truncate">
+                        <span className="truncate">{selectedListedShop.name}</span>
+                        <span className="text-[10px] bg-emerald-200 text-emerald-900 font-extrabold px-1.5 py-0.5 rounded-full shrink-0">
+                          Listed Store
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-emerald-700 font-medium leading-tight mt-0.5">
+                        সার্ভারে তালিকাভুক্ত স্টোর — কোনো অতিরিক্ত কাস্টম স্টোর চার্জ যুক্ত হবে না (৳০ Fee)।
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedListedShop(null);
+                      setCustomSellerName('');
+                      if (autoFilledPhoneRef.current && customSellerPhone === autoFilledPhoneRef.current) {
+                        setCustomSellerPhone('');
+                        autoFilledPhoneRef.current = '';
+                      }
+                      setShowStoreSuggestions(true);
+                    }}
+                    className="text-[11px] text-emerald-800 hover:text-emerald-950 font-bold bg-emerald-100/90 hover:bg-emerald-200 px-2 py-1 rounded-lg shrink-0 ml-2 transition-colors"
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
                 <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950">
                   <div className="font-bold flex items-center justify-between text-indigo-900 mb-1">
                     <span className="flex items-center gap-1.5">
                       <Store className="w-3.5 h-3.5 text-indigo-600" />
-                      Custom Store Pricing Active
+                      Custom Store Fee
                     </span>
                     <span className="font-extrabold text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
-                      +৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}/পণ্য
+                      +৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}/স্টোর
                     </span>
                   </div>
                   <p className="text-[11px] text-gray-600 leading-relaxed">
-                    লিস্টেড স্টোর ছাড়া অন্য দোকান থেকে কেনা পণ্যের জন্য কাস্টমার ও হেলপার সামারিতে প্রতি পণ্যে <strong>৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}</strong> কাস্টম স্টোর চার্জ যুক্ত হবে।
+                    সার্ভারে তালিকাভুক্ত নয় এমন দোকান থেকে কেনার জন্য প্রতি স্টোরে <strong>৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}</strong> কাস্টম স্টোর চার্জ যুক্ত হবে। প্ল্যাটফর্মে ইতিমধ্যে থাকা তালিকাভুক্ত স্টোর নির্বাচন করলে কোনো চার্জ যুক্ত হবে না (৳০ Fee)।
                   </p>
                 </div>
               )}
@@ -6966,23 +7413,130 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
 
-              {/* Total Cost Display */}
-              <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
-                <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
-                <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
+              {/* Total Cost Display + Live Store Fee Indicator */}
+              <div className="space-y-1.5">
+                <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
+                  <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
+                  <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
+                </div>
+                <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition-colors ${
+                  (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                  allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
+                    ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950 font-bold'
+                    : 'bg-indigo-50/90 border-indigo-200 text-indigo-950 font-bold'
+                }`}>
+                  <span className="flex items-center gap-1.5 text-[11px]">
+                    <Store className="w-3.5 h-3.5 shrink-0" />
+                    {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                    allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
+                      ? 'Store Fee (Listed Store):'
+                      : 'Custom Store Fee (Unlisted Store):'}
+                  </span>
+                  <span className="font-mono font-black text-[11px]">
+                    {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                    allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
+                      ? '৳0 (No Fee)'
+                      : `+৳${fallbackStore.pricingSettings.customStorePricingAmount ?? 15}`}
+                  </span>
+                </div>
               </div>
 
-              <div>
+              <div ref={storeSuggestionRef} className="relative">
                 <label className="text-xs font-bold text-gray-700 block mb-1">Seller / Shop Name *</label>
-                <input
-                  type="text"
-                  value={customSellerName}
-                  onChange={(e) => setCustomSellerName(e.target.value)}
-                  placeholder="e.g. Bhai Bhai Store or Karim"
-                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={customSellerName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCustomSellerName(val);
+                      setShowStoreSuggestions(true);
+                      const match = allShops.find(
+                        (s) => s.name && s.name.trim().toLowerCase() === val.trim().toLowerCase()
+                      );
+                      if (match) {
+                        setSelectedListedShop(match);
+                      } else {
+                        setSelectedListedShop(null);
+                        // If phone was auto-filled from previously selected listed store, clear it
+                        if (autoFilledPhoneRef.current && customSellerPhone === autoFilledPhoneRef.current) {
+                          setCustomSellerPhone('');
+                          autoFilledPhoneRef.current = '';
+                        }
+                      }
+                    }}
+                    onFocus={() => {
+                      if (customSellerName.trim().length > 0) {
+                        setShowStoreSuggestions(true);
+                      }
+                    }}
+                    placeholder="e.g. Bhai Bhai Store or Karim"
+                    className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${
+                      selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
+                        ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
+                        : 'border-gray-200 bg-white focus:border-purple-500'
+                    }`}
+                    required
+                  />
+                  {selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase() && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                      <Check className="w-3 h-3 stroke-[3]" />
+                      Listed
+                    </span>
+                  )}
+                </div>
+
+                {/* Top 3 Matched Stores Dropdown */}
+                {showStoreSuggestions && topMatchedStores.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white rounded-2xl shadow-2xl border border-purple-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-3 py-1.5 bg-purple-50/90 border-b border-purple-100 flex items-center justify-between text-[11px] font-bold text-purple-900">
+                      <span className="flex items-center gap-1">
+                        <Store className="w-3.5 h-3.5 text-purple-600" />
+                        Top Matched Stores (তালিকাভুক্ত স্টোর)
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded-md">
+                        ৳০ ফি
+                      </span>
+                    </div>
+                    {topMatchedStores.map((shop) => {
+                      const phone = shop.whatsapp || shop.managerWhatsapp || '';
+                      return (
+                        <button
+                          key={shop.id}
+                          type="button"
+                          onClick={() => handleSelectStoreSuggestion(shop)}
+                          className="w-full text-left p-2.5 hover:bg-purple-50/70 active:bg-purple-100 transition-colors flex items-center justify-between gap-2 group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                              <Store className="w-3.5 h-3.5" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="font-bold text-xs text-gray-900 group-hover:text-purple-900 truncate">
+                                {shop.name}
+                              </div>
+                              <div className="text-[10px] text-gray-500 truncate">
+                                {shop.type || shop.category || 'Retailer'}{shop.location?.address ? ` • ${shop.location.address}` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            {phone && (
+                              <div className="text-[10px] font-mono font-bold text-gray-600">
+                                {phone}
+                              </div>
+                            )}
+                            <span className="inline-block text-[9px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                              Select (৳০ ফি)
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-700 block mb-1">Seller Phone Number *</label>
                 <input
@@ -6990,7 +7544,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   value={customSellerPhone}
                   onChange={(e) => setCustomSellerPhone(e.target.value)}
                   placeholder="01XXXXXXXXX"
-                  className="w-full p-3 rounded-2xl border border-gray-200 font-bold text-sm outline-none focus:border-purple-500 bg-white"
+                  className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${
+                    selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
+                      ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
+                      : 'border-gray-200 bg-white focus:border-purple-500'
+                  }`}
                   required
                 />
               </div>

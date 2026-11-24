@@ -254,15 +254,15 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
         )}
 
         {/* Row 4: Custom Store Item Counter (Shown only if admin enabled custom store pricing) */}
-        {pricingSettings.customStorePricingEnabled && (
+        {pricingSettings.customStorePricingEnabled !== false && (
           <div className="space-y-1.5 p-3 rounded-xl bg-indigo-50/50 border border-indigo-100">
             <div className="flex items-center justify-between text-xs font-bold text-gray-800">
               <span className="flex items-center space-x-1.5">
                 <Store className="w-3.5 h-3.5 text-indigo-600" />
-                <span>কাস্টম স্টোর পণ্য (Custom Store Items)</span>
+                <span>কাস্টম স্টোর (Custom Unlisted Stores)</span>
               </span>
               <span className="text-[10px] text-indigo-700 font-extrabold bg-indigo-100/80 px-2 py-0.5 rounded-full">
-                +৳{pricingSettings.customStorePricingAmount ?? 15}/আইটেম
+                +৳{pricingSettings.customStorePricingAmount ?? 15}/স্টোর
               </span>
             </div>
             <div className="flex items-center space-x-2 pt-0.5">
@@ -367,12 +367,12 @@ export const FeeDetailsPage: React.FC<FeeDetailsPageProps> = ({ onBack }) => {
             'কোম্পানির পক্ষ থেকে সব সময় দূরত্ব ও কাজের পরিমাণের ভিত্তিতে যৌক্তিক ডেলিভারি ফি নির্ধারিত হয়।'}
         </p>
 
-        {pricingSettings.customStorePricingEnabled && (
+        {pricingSettings.customStorePricingEnabled !== false && (
           <div className="flex items-start space-x-2 bg-indigo-50/70 p-3 rounded-xl border border-indigo-100 text-xs text-indigo-950 font-medium leading-relaxed">
             <Store className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
             <div>
               <strong className="block font-bold text-indigo-900 mb-0.5">কাস্টম স্টোর কেনাকাটা চার্জ:</strong>
-              গ্রাহকের অর্ডার করা পণ্যসমূহ যদি তালিকাভুক্ত স্টোর থেকে পাওয়া না যায় এবং হেলপারকে আলাদা কোনো কাস্টম দোকান থেকে কিনতে হয়, তবে প্রতি কাস্টম পণ্যে ৳{pricingSettings.customStorePricingAmount ?? 15} টাকা অতিরিক্ত চার্জ যুক্ত হবে।
+              গ্রাহকের অর্ডার করা পণ্যসমূহ যদি তালিকাভুক্ত স্টোর থেকে পাওয়া না যায় এবং হেলপারকে আলাদা কোনো তালিকাভুক্ত নয় এমন দোকান থেকে কিনতে হয়, তবে প্রতি স্টোরে ৳{pricingSettings.customStorePricingAmount ?? 15} টাকা কাস্টম স্টোর চার্জ যুক্ত হবে। প্ল্যাটফর্মে ইতিমধ্যে থাকা তালিকাভুক্ত স্টোর থেকে কিনলে কোনো অতিরিক্ত চার্জ নেই (৳০ ফি)।
             </div>
           </div>
         )}

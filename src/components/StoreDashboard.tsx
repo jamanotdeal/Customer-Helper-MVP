@@ -372,8 +372,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
 
   // The alerts on screen: waiting for this store and not muted.
   const alertShopOrderIds = useMemo(
-    () => (isStoreBlocked ? [] : Array.from(unviewedShopOrderIds).filter((id) => !mutedShopOrderIds.has(id))),
-    [unviewedShopOrderIds, mutedShopOrderIds, isStoreBlocked]
+    () => (isStoreBlocked || currentShop?.canReceiveOrders === false ? [] : Array.from(unviewedShopOrderIds).filter((id) => !mutedShopOrderIds.has(id))),
+    [unviewedShopOrderIds, mutedShopOrderIds, isStoreBlocked, currentShop]
   );
 
   const muteShopOrders = (ids: Iterable<string>) => {
@@ -494,7 +494,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
           const so = d.data() as ShopOrder;
           list.push(so);
           fallbackStore.shopOrders.set(so.id, so);
-          if (so.status === 'PENDING' && !so.viewedByStore) {
+          if (so.status === 'PENDING' && !so.viewedByStore && currentShop?.canReceiveOrders !== false) {
             unviewedSet.add(so.id);
           }
         });
@@ -631,11 +631,13 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
       if (!ordersChanged(versionOf(fallbackStore.orders), versionOf(fallbackStore.shopOrders))) return;
       const all = Array.from(fallbackStore.orders.values());
 
-      // Store Orders: orders that involve this shop (via selectedShopIds)
+      // Store Orders: orders that involve this shop (via selectedShopIds or items)
       const shopOrders = storeId
         ? all.filter(
           (o) =>
-            o.selectedShopIds?.includes(storeId) &&
+            (o.selectedShopIds?.includes(storeId) ||
+             o.shopId === storeId ||
+             o.items?.some((it) => it.storeId === storeId)) &&
             !['CANCELED'].includes(o.status)
         ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         : [];
@@ -661,7 +663,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
         // are removed immediately without waiting for the Firestore onSnapshot round-trip.
         const unviewed = new Set<string>();
         localSOs.forEach((so) => {
-          if (so.status === 'PENDING' && !so.viewedByStore) {
+          if (so.status === 'PENDING' && !so.viewedByStore && currentShop?.canReceiveOrders !== false) {
             unviewed.add(so.id);
           }
         });
@@ -1529,7 +1531,8 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                       const parentOrder = fallbackStore.orders.get(so.parentOrderId) || completedParentOrders[so.parentOrderId];
                       const isCanceled = so.status === 'CANCELED' || parentStatus === 'CANCELED';
                       const isDelivered = parentStatus === 'DELIVERED' || so.status === 'DELIVERED';
-                      const isDisbursed = Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid);
+                      const isStoreNonAccepting = currentShop?.canReceiveOrders === false;
+                      const isDisbursed = Boolean(so.isPaid || isStoreNonAccepting || parentOrder?.isStorePaid || parentOrder?.isPaid);
                       const isActive = !isCanceled && !isDelivered;
                       const isFinished = isCanceled || isDelivered;
                       const { itemsText, helperNote } = extractShopOrderNoteAndItems(so);
@@ -1622,7 +1625,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                         cardContainerStyle = 'bg-white border border-gray-200 shadow-xs opacity-90';
                       } else if (isCanceled) {
                         cardContainerStyle = 'bg-white border border-rose-300 shadow-xs';
-                      } else if (so.status === 'PENDING') {
+                      } else if (so.status === 'PENDING' && !isStoreNonAccepting) {
                         cardContainerStyle = 'bg-white border-2 border-amber-400 shadow-md ring-2 ring-amber-100';
                       } else if (so.status === 'READY') {
                         cardContainerStyle = 'bg-white border-2 border-teal-500/80 shadow-md';
@@ -1646,7 +1649,7 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                               <span className="text-[11px] font-semibold text-gray-500">
                                 {formatOrderDateTime(so.createdAt)}
                               </span>
-                              {isActive && (
+                              {isActive && !isStoreNonAccepting && (
                                 <>
                                   <span className="text-gray-300 font-bold">•</span>
                                   <OrderTimer createdAt={so.createdAt} className="text-rose-600 text-[11px] font-black" hideIcon />
@@ -1674,8 +1677,9 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                   )}
                                 </>
                               ) : so.status === 'ACCEPTED' ? (
-                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                  Confirmed
+                                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-1">
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                  {isStoreNonAccepting ? 'Added Cost (Paid)' : 'Confirmed'}
                                 </span>
                               ) : so.status === 'READY' ? (
                                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 border border-teal-300">
@@ -1723,24 +1727,6 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                                   return (
                                     <div key={idx} className="flex items-start justify-between text-xs py-1.5 border-b border-gray-100/60 last:border-b-0 gap-2">
                                       <div className="flex items-start space-x-2 min-w-0 flex-1 pr-1">
-                                        {isActive && (
-                                          <button
-                                            type="button"
-                                            onClick={() => setItemToCancel({
-                                              shopOrderId: so.id,
-                                              itemIndex: item.itemIndex ?? idx,
-                                              itemName: item.name,
-                                              itemUnit: item.unit,
-                                              itemPrice: priceInfo.lineTotal > 0 ? priceInfo.lineTotal : item.price,
-                                              parentOrderId: so.parentOrderId,
-                                            })}
-                                            title="পণ্য বাতিল করুন (Cancel Item)"
-                                            className="p-1 rounded-md bg-red-500 hover:bg-red-600 text-white active:scale-90 transition-all cursor-pointer shrink-0 mt-0.5 shadow-2xs"
-                                            aria-label="Cancel Item"
-                                          >
-                                            <X className="w-3 h-3 stroke-[2.5]" />
-                                          </button>
-                                        )}
                                         <div className="min-w-0 flex-1">
                                           <div className="flex items-center space-x-1.5 min-w-0 flex-wrap">
                                             {!isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />}
@@ -1848,7 +1834,17 @@ export const StoreDashboard: React.FC<StoreDashboardProps> = ({
                           </div>
 
                           {/* Action Buttons */}
-                          {so.status === 'PENDING' && !isCanceled && !isDelivered ? (
+                          {isStoreNonAccepting ? (
+                            /* Non-accepting store: cost was recorded by helper, store has no action */
+                            !isCanceled && !isDelivered ? (
+                              <div className="py-2 px-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center gap-2">
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <p className="text-[11px] font-bold text-emerald-800">
+                                  হেলপার কর্তৃক নিয়ন্ত্রিত — কোনো অ্যাকশন প্রয়োজন নেই
+                                </p>
+                              </div>
+                            ) : null
+                          ) : so.status === 'PENDING' && !isCanceled && !isDelivered ? (
                             <div className="flex space-x-2 pt-1">
                               <button
                                 onClick={() => handleConfirmStoreOrder(so.id)}

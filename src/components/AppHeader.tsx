@@ -12,6 +12,7 @@ import { AuthModal } from './AuthModal';
 import { RewardStoreModal, SingleCoinIcon } from './RewardStoreModal';
 import { ReferralModal } from './ReferralModal';
 import { fallbackStore } from '@/lib/firebase';
+import { hasHelperAnyZoneAssignment, isAreaAssignedToHelper } from '@/lib/geofenceUtils';
 
 import { useModal } from './CustomModal';
 
@@ -444,26 +445,28 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                     </div>
                   ) : (
                     <>
-                      {/* Customer Mode option */}
-                      <button
-                        onClick={() => {
-                          setActiveMode('customer');
-                          setShowProfileMenu(false);
-                        }}
-                        className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${activeMode === 'customer'
-                          ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
-                          : 'border-gray-100 text-gray-700 hover:bg-gray-50'
-                          }`}
-                      >
-                        <div className="flex items-center space-x-2.5">
-                          <ShoppingBag className="w-5 h-5 text-emerald-600" />
-                          <div>
-                            <div className="text-sm font-semibold">Customer Mode</div>
-                            <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
+                      {/* Customer Mode option (hidden for helpers) */}
+                      {!user.isHelper && activeMode !== 'helper' && (
+                        <button
+                          onClick={() => {
+                            setActiveMode('customer');
+                            setShowProfileMenu(false);
+                          }}
+                          className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${activeMode === 'customer'
+                            ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 font-bold shadow-sm'
+                            : 'border-gray-100 text-gray-700 hover:bg-gray-50'
+                            }`}
+                        >
+                          <div className="flex items-center space-x-2.5">
+                            <ShoppingBag className="w-5 h-5 text-emerald-600" />
+                            <div>
+                              <div className="text-sm font-semibold">Customer Mode</div>
+                              <div className="text-[11px] text-gray-500 font-normal">Request errands & deliveries</div>
+                            </div>
                           </div>
-                        </div>
-                        {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                      </button>
+                          {activeMode === 'customer' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                        </button>
+                      )}
 
                       {/* Store Application Option — for non-helpers and non-stores */}
                       {!isHelperUser && user.helperType !== 'dedicated' && (
@@ -583,6 +586,61 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenNotifications, onNav
                   )}
                 </div>
               </div>
+
+              {/* Helper Assigned Service Zone Block inside Sidebar */}
+              {!isAdminView && !isStoreUser && user?.isHelper && activeMode === 'helper' && (() => {
+                const configuredAreas = fallbackStore.pricingSettings.allowedDeliveryAreas || [];
+                if (configuredAreas.length === 0) return null;
+
+                const hasZoneAssignment = hasHelperAnyZoneAssignment(user, configuredAreas);
+                if (!hasZoneAssignment) {
+                  return (
+                    <div className="mt-4 pt-3 border-t border-gray-100">
+                      <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3 flex items-start space-x-2.5">
+                        <MapPin className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-black text-amber-800 uppercase block tracking-wider">
+                            নির্ধারিত সার্ভিস এলাকা:
+                          </span>
+                          <span className="text-xs font-extrabold text-amber-950 block">
+                            কোনো জোন নির্ধারিত হয়নি
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const assignedAreaNames = user?.serveAllAreas
+                  ? 'সকল এলাকা (Global Coverage)'
+                  : configuredAreas
+                      .filter((a) => isAreaAssignedToHelper(a, user))
+                      .map((a) => a.name)
+                      .join(', ') || 'নির্ধারিত জোন';
+
+                return (
+                  <div className="mt-4 pt-3 border-t border-gray-100">
+                    <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl px-3.5 py-2.5 flex items-center justify-between text-xs text-emerald-950 font-bold shadow-xs">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <div className="p-1.5 rounded-xl bg-emerald-600 text-white shrink-0">
+                          <MapPin className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[10px] text-emerald-700 font-black uppercase block tracking-wider">
+                            নির্ধারিত সার্ভিস এলাকা:
+                          </span>
+                          <span className="text-xs font-extrabold text-emerald-950 break-words block">
+                            {assignedAreaNames}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-200/80 text-emerald-900 shrink-0 ml-2">
+                        Active
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Helper Center Sidebar Option - General, placed below select mode options (for customer/helper only) */}
               {!isAdminView && !isStoreUser && fallbackStore.pricingSettings.helperCenterEnabled !== false && (

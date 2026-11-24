@@ -121,8 +121,15 @@ export const CustomerOrderItemModal: React.FC<CustomerOrderItemModalProps> = ({
   // Determine target shop ID to fetch or look up
   const targetShopId = useMemo<string | null>(() => {
     if (!item) return null;
-    if (connectedShopOrder && connectedShopOrder.shopId && connectedShopOrder.shopId !== 'myself') {
-      return connectedShopOrder.shopId;
+    if (connectedShopOrder) {
+      if (connectedShopOrder.shopId && connectedShopOrder.shopId !== 'myself') {
+        return connectedShopOrder.shopId;
+      }
+      if (connectedShopOrder.matchedShopId) {
+        return connectedShopOrder.matchedShopId;
+      }
+      // If connectedShopOrder is 'myself' without matchedShopId, it's an unlisted custom store
+      return null;
     }
     if (item.storeId && item.storeId !== 'myself') {
       return item.storeId;
@@ -253,13 +260,18 @@ export const CustomerOrderItemModal: React.FC<CustomerOrderItemModalProps> = ({
 
     if (connectedShopOrder) {
       if (connectedShopOrder.shopId === 'myself') {
-        isMyself = true;
-        storeName = connectedShopOrder.sellerName || item.storeName || item.buyFrom || 'সরাসরি ক্রয় / নিজস্ব কেনাকাটা';
-        if (connectedShopOrder.sellerPhone) {
+        const isListed = !!(connectedShopOrder.isListedStore || connectedShopOrder.matchedShopId || activeShop);
+        isMyself = !isListed;
+        storeName = activeShop?.name || connectedShopOrder.sellerName || item.storeName || item.buyFrom || 'সরাসরি ক্রয় / নিজস্ব কেনাকাটা';
+        if (activeShop) {
+          storeType = activeShop.type || activeShop.category;
+          storeAddress = activeShop.location?.address || activeShop.location?.details;
+        }
+        if (connectedShopOrder.sellerPhone || activeShop?.whatsapp) {
           phones.push({
-            label: 'বিক্রেতা / দোকান',
-            number: connectedShopOrder.sellerPhone,
-            personName: connectedShopOrder.sellerName,
+            label: isListed ? 'তালিকাভুক্ত দোকান (Listed Store)' : 'বিক্রেতা / দোকান',
+            number: connectedShopOrder.sellerPhone || activeShop?.whatsapp || '',
+            personName: connectedShopOrder.sellerName || activeShop?.contactPerson,
           });
         }
       } else {

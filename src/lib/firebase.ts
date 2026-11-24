@@ -6212,6 +6212,18 @@ class FallbackStore {
    * safe: it is the same request, never a second one.
    */
   public async addShopOrder(shopOrder: ShopOrder): Promise<'sent' | 'queued'> {
+    const shop = this.shops.get(shopOrder.shopId) || Array.from(this.shops.values()).find(s => s.id === shopOrder.shopId || s.ownerUserId === shopOrder.shopId);
+    const isStoreNonAccepting = shop?.canReceiveOrders === false;
+    if (isStoreNonAccepting) {
+      shopOrder.status = 'ACCEPTED';
+      shopOrder.isPaid = true;
+      if (!shopOrder.paidAt) shopOrder.paidAt = new Date().toISOString();
+      shopOrder.viewedByStore = true;
+      if (!shopOrder.statusHistory || shopOrder.statusHistory.length === 0) {
+        shopOrder.statusHistory = [{ status: 'ACCEPTED', timestamp: new Date().toISOString(), actor: shopOrder.helperName || 'Helper', note: 'Helper ordered and bought items directly' }];
+      }
+    }
+
     if (shopOrder.shopId !== 'myself') await this._checkShopAcceptsOrders(shopOrder.shopId);
 
     const isRetry = this._shopOrderOutbox.has(shopOrder.id);
@@ -6309,6 +6321,13 @@ class FallbackStore {
    */
   private async _alertStoreOfShopOrder(shopOrder: ShopOrder) {
     try {
+      const shop = this.shops.get(shopOrder.shopId) || Array.from(this.shops.values()).find(s => s.id === shopOrder.shopId || s.ownerUserId === shopOrder.shopId);
+      // If store cannot accept orders, or order is already accepted/paid by helper (bought at counter),
+      // do not send any accept/reject notification to the store.
+      if (shop?.canReceiveOrders === false || shopOrder.status === 'ACCEPTED' || shopOrder.isPaid) {
+        return;
+      }
+
       const ownerUserId = await this.resolveShopOwnerId(shopOrder.shopId);
       if (ownerUserId) {
         await this.addNotification({
@@ -6874,8 +6893,14 @@ class FallbackStore {
   }
 
   public getShopOrdersForStore(shopId: string): ShopOrder[] {
+    const shop = this.shops.get(shopId);
+    const ownerUserId = shop?.ownerUserId;
     return Array.from(this.shopOrders.values())
-      .filter((so) => so.shopId === shopId)
+      .filter((so) =>
+        so.shopId === shopId ||
+        (ownerUserId && so.shopId === ownerUserId) ||
+        (so.matchedShopId && (so.matchedShopId === shopId || (ownerUserId && so.matchedShopId === ownerUserId)))
+      )
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -7017,12 +7042,20 @@ class FallbackStore {
 
     const effectiveShopId = shop?.id || targetShopId;
 
+    const isStoreNonAccepting = shop?.canReceiveOrders === false;
+
     const storeShopOrders = Array.from(allShopOrdersMap.values()).filter((so) => {
       const matchesShop =
         so.shopId === effectiveShopId ||
         so.shopId === targetShopId ||
         so.shopId === storeUserId ||
-        so.shopId === `store-${storeUserId}`;
+        so.shopId === `store-${storeUserId}` ||
+        (so.matchedShopId && (
+          so.matchedShopId === effectiveShopId ||
+          so.matchedShopId === targetShopId ||
+          so.matchedShopId === storeUserId ||
+          so.matchedShopId === `store-${storeUserId}`
+        ));
       return matchesShop;
     });
 
@@ -7093,7 +7126,7 @@ class FallbackStore {
 
         const comm = Math.round(price * (commissionRate / 100));
         const net = Math.max(0, price - comm);
-        const isDisbursed = Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid);
+        const isDisbursed = Boolean(so.isPaid || isStoreNonAccepting || parentOrder?.isStorePaid || parentOrder?.isPaid);
         if (isDisbursed) {
           disbursedGrossSales += price;
           disbursedCommission += comm;
@@ -7155,7 +7188,7 @@ class FallbackStore {
 
           const comm = Math.round(price * (commissionRate / 100));
           const net = Math.max(0, price - comm);
-          const isDisbursed = Boolean(mo.isStorePaid || mo.isPaid);
+          const isDisbursed = Boolean(mo.isStorePaid || mo.isPaid || isStoreNonAccepting);
           if (isDisbursed) {
             disbursedGrossSales += price;
             disbursedCommission += comm;

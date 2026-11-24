@@ -379,7 +379,7 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   blockedUserModalMessage: 'নিরাপত্তা বা নীতিমালা ভঙ্গের কারণে আপনার অ্যাকাউন্টটি সাময়িকভাবে স্থগিত করা হয়েছে। এই মুহূর্তে নতুন সার্ভিস রিকোয়েস্ট তৈরি বা নতুন অর্ডার গ্রহণ করা যাবে না। বিস্তারিত তথ্য বা সহায়তার জন্য অনুগ্রহ করে অ্যাডমিন বা সাপোর্টে যোগাযোগ করুন।',
   blockedUserModalButtonText: 'সাপোর্টে যোগাযোগ করুন (Contact Support)',
   blockedUserModalContactUrl: 'https://wa.me/8801800000000',
-  customStorePricingEnabled: false,
+  customStorePricingEnabled: true,
   customStorePricingAmount: 15,
 };
 
@@ -451,8 +451,8 @@ export function calculateEstimatedFee(
   // Custom Store fee calculation
   let customStoreFee = 0;
   const customStoreItemCount = Math.max(0, Number(params.customStoreItemCount) || 0);
-  const customStoreUnitFee = Number(settings.customStorePricingAmount ?? 15) || 0;
-  if (settings.customStorePricingEnabled && customStoreItemCount > 0) {
+  const customStoreUnitFee = Number(settings?.customStorePricingAmount ?? 15) || 15;
+  if (customStoreItemCount > 0) {
     customStoreFee = customStoreItemCount * customStoreUnitFee;
   }
 
@@ -485,9 +485,14 @@ export function calculateEstimatedFee(
  * Counts how many custom store items are in an order.
  * This includes:
  * - Items included in helper's custom cost (ShopOrder with shopId === 'myself')
- * - Items marked isCustom that have price or buyFrom or were purchased from outside stores
+ * Stores already listed on our platform/server are exempt from per-store fees.
+ * Per-store fee will only work for stores that are not available in our server.
  */
-export function getCustomStoreItemCount(order?: Order | null, shopOrders: ShopOrder[] = []): number {
+export function getCustomStoreItemCount(
+  order?: Order | null,
+  shopOrders: ShopOrder[] = [],
+  shops?: Map<string, Shop> | Shop[]
+): number {
   if (!order) return 0;
 
   // Only count actual "myself" shop orders created by the helper when they
@@ -503,11 +508,54 @@ export function getCustomStoreItemCount(order?: Order | null, shopOrders: ShopOr
 
   if (myselfSOs.length === 0) return 0;
 
+  const shopsList: Shop[] = shops
+    ? (Array.isArray(shops) ? shops : Array.from(shops.values()))
+    : [];
+
   const uniqueStoreKeys = new Set<string>();
   for (const so of myselfSOs) {
     const name = (so.sellerName || so.shopName || '').trim().toLowerCase();
-    const phone = (so.sellerPhone || '').trim().replace(/\s/g, '');
-    // If both are empty, use the shop order ID so it still counts as 1 store
+    const phone = (so.sellerPhone || '').trim().replace(/\D/g, '');
+
+    // Check if this store is truly available on our server
+    let isListedOnServer = false;
+
+    if (shopsList.length > 0) {
+      // 1. If matchedShopId is present, verify that the shop exists on the server
+      // and that the seller name has not been changed to an unlisted store name
+      if (so.matchedShopId) {
+        const matched = shopsList.find((s) => s && !s.isBlocked && s.id === so.matchedShopId);
+        if (matched) {
+          const sName = (matched.name || '').trim().toLowerCase();
+          // Verified only if sellerName matches the listed store's name or is generic
+          if (!name || name === sName || name === 'myself') {
+            isListedOnServer = true;
+          }
+        }
+      }
+
+      // 2. If not matched by id, check if the seller name exactly matches any active shop on the server
+      if (!isListedOnServer && name && name !== 'myself') {
+        const nameMatch = shopsList.find(
+          (s) => s && !s.isBlocked && (s.name || '').trim().toLowerCase() === name
+        );
+        if (nameMatch) {
+          isListedOnServer = true;
+        }
+      }
+    } else {
+      // When shopsList is not provided (offline fallback), only trust if explicitly marked isListedStore WITH a valid matchedShopId
+      if (so.isListedStore === true && so.matchedShopId) {
+        isListedOnServer = true;
+      }
+    }
+
+    if (isListedOnServer) {
+      continue; // Listed store on server -> ৳0 custom store fee
+    }
+
+    // Unlisted store (not available on our server) -> add per-store fee!
+    // Deduplicate by name and phone so multiple items from the same unlisted shop count as 1 store
     const key = (name || phone) ? `${name}::${phone}` : so.id;
     uniqueStoreKeys.add(key);
   }
@@ -518,22 +566,33 @@ export function getCustomStoreItemCount(order?: Order | null, shopOrders: ShopOr
 
 /**
  * Calculates custom store fee for an order based on admin settings.
- * If setting is enabled and there are custom cost items, returns count, unitFee, and totalFee.
+ * Unlisted stores (not available on our server) always incur the per-store fee (default ৳15/store).
+ * Listed stores available on server incur ৳0 extra store fee.
  */
 export function calculateCustomStoreFee(
   order?: Order | null,
   shopOrders: ShopOrder[] = [],
-  settings: PricingSettings = DEFAULT_PRICING_SETTINGS
+  settings: PricingSettings = DEFAULT_PRICING_SETTINGS,
+  shops?: Map<string, Shop> | Shop[]
 ): { count: number; unitFee: number; totalFee: number } {
-  if (!order || !settings?.customStorePricingEnabled) {
+  if (!order) {
     return { count: 0, unitFee: 0, totalFee: 0 };
   }
-  const unitFee = Number(settings.customStorePricingAmount ?? 15) || 0;
-  // count = number of unique stores (not items)
-  const count = getCustomStoreItemCount(order, shopOrders);
-  const totalFee = count * unitFee;
+  const unitFee = Number(settings?.customStorePricingAmount ?? 15) || 15;
+  // count = number of unique unlisted stores
+  const count = getCustomStoreItemCount(order, shopOrders, shops);
+  if (count > 0) {
+    return { count, unitFee, totalFee: count * unitFee };
+  }
 
-  return { count, unitFee, totalFee };
+  // Fallback: If shopOrders are not loaded or empty, but order already has customStoreFee saved:
+  if (order.customStoreFee && order.customStoreFee > 0) {
+    const savedFee = Number(order.customStoreFee);
+    const fallbackCount = Math.max(1, Math.round(savedFee / unitFee));
+    return { count: fallbackCount, unitFee, totalFee: savedFee };
+  }
+
+  return { count: 0, unitFee, totalFee: 0 };
 }
 
 

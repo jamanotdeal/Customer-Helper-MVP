@@ -304,7 +304,17 @@ export const StoreWallet: React.FC = () => {
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         
         const shopOrders = Array.from(fallbackStore.shopOrders.values()).filter((so) => {
-          const matches = so.shopId === effectiveShopId || so.shopId === storeId || so.shopId === `store-${user.uid}`;
+          const matches =
+            so.shopId === effectiveShopId ||
+            so.shopId === storeId ||
+            so.shopId === `store-${user.uid}` ||
+            (shopDoc?.ownerUserId && so.shopId === shopDoc.ownerUserId) ||
+            (so.matchedShopId && (
+              so.matchedShopId === effectiveShopId ||
+              so.matchedShopId === storeId ||
+              so.matchedShopId === `store-${user.uid}` ||
+              (shopDoc?.ownerUserId && so.matchedShopId === shopDoc.ownerUserId)
+            ));
           return matches;
         });
 
@@ -339,6 +349,7 @@ export const StoreWallet: React.FC = () => {
     const effectiveShopId = shopDoc?.id || storeId || (user?.uid ? `store-${user.uid}` : '');
     const ownerUserId = shopDoc?.ownerUserId || user?.uid || '';
     const storeName = shopDoc?.name || '';
+    const isStoreNonAccepting = shopDoc?.canReceiveOrders === false;
 
     combinedShopOrdersList.forEach((so) => {
       seenParentIds.add(so.parentOrderId);
@@ -397,7 +408,7 @@ export const StoreWallet: React.FC = () => {
         helperPhone: parentOrder?.helperPhone,
         customerName: parentOrder?.customerName,
         note: so.note || so.helperNote,
-        isPaid: Boolean(so.isPaid || parentOrder?.isStorePaid || parentOrder?.isPaid),
+        isPaid: Boolean(so.isPaid || isStoreNonAccepting || parentOrder?.isStorePaid || parentOrder?.isPaid),
       });
     });
 
@@ -462,7 +473,7 @@ export const StoreWallet: React.FC = () => {
           helperPhone: mo.helperPhone,
           customerName: mo.customerName,
           note: mo.additionalNote,
-          isPaid: Boolean(mo.isStorePaid || mo.isPaid),
+          isPaid: Boolean(mo.isStorePaid || mo.isPaid || isStoreNonAccepting),
         });
       }
     });

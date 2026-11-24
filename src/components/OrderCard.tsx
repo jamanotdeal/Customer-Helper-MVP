@@ -684,13 +684,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
                 ? 'bg-amber-100 text-amber-900 border border-amber-300'
                 : 'text-emerald-700 bg-emerald-50'
             }`}>
-              {order.isFreeDelivery
-                ? '🎁 Free Delivery (৳0)'
-                : order.feeAdjustment?.status === 'APPROVED'
-                ? `৳${order.feeAdjustment.amount} fee`
-                : order.deliveryFee > 0
-                ? `৳${order.deliveryFee} fee`
-                : 'Fee Pending'}
+              {(() => {
+                if (order.isFreeDelivery) return '🎁 Free Delivery (৳0)';
+                const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
+                const totalCardFee = (order.deliveryFee || 0) + (order.processingFee || 0) + (order.customStoreFee || 0);
+                if (maxLim > 0 && Math.max(order.deliveryFee || 0, totalCardFee) > maxLim && !order.exceededFeeConfirmed) return 'Fee: N/A';
+                if (order.feeAdjustment?.status === 'APPROVED') return `৳${order.feeAdjustment.amount} fee`;
+                return order.deliveryFee > 0 ? `৳${order.deliveryFee} fee` : 'Fee Pending';
+              })()}
             </span>
           </div>
         </div>
