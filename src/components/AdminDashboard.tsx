@@ -5,6 +5,7 @@ import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingS
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
 import { uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
+import { matchesQuery, matchesAnyField } from '@/lib/searchUtils';
 import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
 import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
@@ -2277,13 +2278,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const q = ordersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (o) =>
-          o.id.toLowerCase().includes(q) ||
-          (o.title || '').toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          (o.customerPhone && o.customerPhone.includes(q)) ||
-          (o.helperName && o.helperName.toLowerCase().includes(q)) ||
-          (o.deliveryLocation?.address && o.deliveryLocation.address.toLowerCase().includes(q)) ||
-          (o.items || []).some((it) => it.name && it.name.toLowerCase().includes(q))
+          matchesAnyField(
+            [o.id, o.title, o.customerName, o.customerPhone, o.helperName, o.deliveryLocation?.address],
+            q
+          ) ||
+          (Array.isArray(o.items) && o.items.some((it) => matchesQuery(it?.name, q)))
       );
     }
 
@@ -2349,15 +2348,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const q = storeOrdersAppliedSearchQuery.toLowerCase().trim();
       list = list.filter(
         (so) =>
-          so.id.toLowerCase().includes(q) ||
-          (so.parentOrderId || '').toLowerCase().includes(q) ||
-          (so.shopName || '').toLowerCase().includes(q) ||
-          (so.helperName || '').toLowerCase().includes(q) ||
-          (so.requestText || '').toLowerCase().includes(q) ||
-          (so.sellerName || '').toLowerCase().includes(q) ||
-          (so.sellerPhone && so.sellerPhone.includes(q)) ||
-          (so.note && so.note.toLowerCase().includes(q)) ||
-          (so.itemsWithPrice || []).some((it) => it.name && it.name.toLowerCase().includes(q))
+          matchesAnyField(
+            [so.id, so.parentOrderId, so.shopName, so.helperName, so.requestText, so.sellerName, so.sellerPhone, so.note],
+            q
+          ) ||
+          (Array.isArray(so.itemsWithPrice) && so.itemsWithPrice.some((it) => matchesQuery(it?.name, q)))
       );
     }
 
@@ -2578,14 +2573,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // Search
     if (helpersAppliedSearchQuery.trim()) {
       const q = helpersAppliedSearchQuery.toLowerCase().trim();
-      list = list.filter(
-        (h) =>
-          h.name.toLowerCase().includes(q) ||
-          h.phone.includes(q) ||
-          (h.nid && h.nid.includes(q)) ||
-          h.id.toLowerCase().includes(q) ||
-          (h.email && h.email.toLowerCase().includes(q))
-      );
+      list = list.filter((h) => matchesAnyField([h.name, h.phone, h.nid, h.id, h.email], q));
     }
 
     // Sorting
@@ -2711,12 +2699,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     if (usersAppliedSearchQuery.trim()) {
       const q = usersAppliedSearchQuery.toLowerCase().trim();
-      list = list.filter(
-        (item) =>
-          (item.user.displayName && item.user.displayName.toLowerCase().includes(q)) ||
-          (item.user.uid && item.user.uid.toLowerCase().includes(q)) ||
-          (item.user.email && item.user.email.toLowerCase().includes(q)) ||
-          (item.user.alternativePhone && item.user.alternativePhone.includes(q))
+      list = list.filter((item) =>
+        matchesAnyField(
+          [item.user.displayName, item.user.uid, item.user.email, item.user.alternativePhone],
+          q
+        )
       );
     }
 
@@ -7016,12 +7003,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
         if (withdrawalsAppliedSearchQuery.trim()) {
           const q = withdrawalsAppliedSearchQuery.toLowerCase().trim();
-          filtered = filtered.filter(
-            (w) =>
-              w.helperName.toLowerCase().includes(q) ||
-              w.paymentMethod?.toLowerCase().includes(q) ||
-              w.accountNumber?.includes(q) ||
-              w.id.toLowerCase().includes(q)
+          filtered = filtered.filter((w) =>
+            matchesAnyField([w.helperName, w.paymentMethod, w.accountNumber, w.id], q)
           );
         }
         filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -10354,11 +10337,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           // Search filter
                           if (adminItemsSearchQuery.trim()) {
                             const q = adminItemsSearchQuery.toLowerCase();
-                            const matchesName = p.name.toLowerCase().includes(q);
-                            const matchesCategory = p.category?.toLowerCase().includes(q);
-                            const matchesUnit = p.unit?.toLowerCase().includes(q);
-                            const matchesStore = (p.storeName || '').toLowerCase().includes(q);
-                            return matchesName || matchesCategory || matchesUnit || matchesStore;
+                            return matchesAnyField([p.name, p.category, p.unit, p.storeName], q);
                           }
                           return true;
                         });
@@ -11591,13 +11570,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
         if (feedbackAppliedSearchQuery.trim()) {
           const q = feedbackAppliedSearchQuery.toLowerCase().trim();
-          filteredFeedbacks = filteredFeedbacks.filter(
-            (f) =>
-              f.orderId.toLowerCase().includes(q) ||
-              (f.customerName && f.customerName.toLowerCase().includes(q)) ||
-              (f.helperName && f.helperName.toLowerCase().includes(q)) ||
-              (f.improvementComment && f.improvementComment.toLowerCase().includes(q)) ||
-              (f.adminReply && f.adminReply.toLowerCase().includes(q))
+          filteredFeedbacks = filteredFeedbacks.filter((f) =>
+            matchesAnyField([f.orderId, f.customerName, f.helperName, f.improvementComment, f.adminReply], q)
           );
         }
 
@@ -11952,12 +11926,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               let filteredModals = [...customModalsSource];
               if (customModalsAppliedSearchQuery.trim()) {
                 const q = customModalsAppliedSearchQuery.toLowerCase().trim();
-                filteredModals = filteredModals.filter(
-                  (m) =>
-                    m.title.toLowerCase().includes(q) ||
-                    (m.subtitle && m.subtitle.toLowerCase().includes(q)) ||
-                    (m.description && m.description.toLowerCase().includes(q)) ||
-                    m.id.toLowerCase().includes(q)
+                filteredModals = filteredModals.filter((m) =>
+                  matchesAnyField([m.title, m.subtitle, m.description, m.id], q)
                 );
               }
 

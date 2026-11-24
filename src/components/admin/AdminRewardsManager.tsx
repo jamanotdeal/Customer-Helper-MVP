@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { RewardPrize, RewardClaim, PricingSettings } from '@/types';
 import { useModal } from '../CustomModal';
 import {
@@ -240,12 +241,7 @@ export const AdminRewardsManager: React.FC = () => {
     if (claimsFilter !== 'ALL' && c.status !== claimsFilter) return false;
     if (claimsSearch.trim()) {
       const q = claimsSearch.toLowerCase().trim();
-      return (
-        c.userName.toLowerCase().includes(q) ||
-        (c.userPhone && c.userPhone.includes(q)) ||
-        (c.userEmail && c.userEmail.toLowerCase().includes(q)) ||
-        c.prizeTitle.toLowerCase().includes(q)
-      );
+      return matchesAnyField([c.userName, c.userPhone, c.userEmail, c.prizeTitle], q);
     }
     return true;
   });

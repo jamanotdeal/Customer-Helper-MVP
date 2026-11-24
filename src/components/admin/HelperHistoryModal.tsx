@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Order, WithdrawalRequest, OrderFeedback } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
 import {
@@ -769,10 +770,7 @@ export const HelperHistoryModal: React.FC<HelperHistoryModalProps> = ({
       }
       if (orderSearchQuery.trim()) {
         const q = orderSearchQuery.toLowerCase();
-        const idMatch = ord.id.toLowerCase().includes(q);
-        const titleMatch = (ord.title || '').toLowerCase().includes(q);
-        const custMatch = (ord.customerName || '').toLowerCase().includes(q) || (ord.customerPhone || '').includes(q);
-        if (!idMatch && !titleMatch && !custMatch) return false;
+        if (!matchesAnyField([ord.id, ord.title, ord.customerName, ord.customerPhone], q)) return false;
       }
       return true;
     });

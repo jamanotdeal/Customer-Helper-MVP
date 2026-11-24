@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Order, HelperApplication, UserProfile, AllowedAreaPolygon } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField, matchesQuery } from '@/lib/searchUtils';
 import { countJobsByHelper } from '@/lib/adminMetrics';
 import { getAreasForOrder } from '@/lib/geofenceUtils';
 import { useModal } from '../CustomModal';
@@ -284,10 +285,8 @@ export const AssignHelperModal: React.FC<AssignHelperModalProps> = ({
     if (q) {
       list = list.filter(
         (h) =>
-          h.name.toLowerCase().includes(q) ||
-          h.phone.toLowerCase().includes(q) ||
-          h.nid.toLowerCase().includes(q) ||
-          h.zoneNames.some((z) => z.toLowerCase().includes(q))
+          matchesAnyField([h.name, h.phone, h.nid], q) ||
+          (Array.isArray(h.zoneNames) && h.zoneNames.some((z) => matchesQuery(z, q)))
       );
     }
 

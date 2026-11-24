@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ProductCategoryConfig, PricingSettings } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesQuery } from '@/lib/searchUtils';
 import { getProductCategories, parseStoreTypes, DEFAULT_PRODUCT_CATEGORIES } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
 import {
@@ -139,8 +140,8 @@ export const AdminCategoriesManager: React.FC<AdminCategoriesManagerProps> = ({
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesName = c.name.toLowerCase().includes(q);
-        const matchesType = c.storeTypes.some((t) => t.toLowerCase().includes(q));
+        const matchesName = matchesQuery(c.name, q);
+        const matchesType = Array.isArray(c.storeTypes) && c.storeTypes.some((t) => matchesQuery(t, q));
         return matchesName || matchesType;
       }
       return true;

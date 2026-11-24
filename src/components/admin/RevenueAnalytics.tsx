@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Order, PricingSettings, Shop, UserProfile, OrderFeedback, ShopOrder, HelperApplication, Wallet } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { PaginationControl } from './PaginationControl';
 import { OutstandingCommissionsModal } from './OutstandingCommissionsModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
@@ -1049,12 +1050,8 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
   const filteredStoreCommissionData = useMemo(() => {
     if (!storeSearchQuery.trim()) return analyticsData.storeCommissionData;
     const query = storeSearchQuery.toLowerCase().trim();
-    return analyticsData.storeCommissionData.filter(
-      (s) =>
-        s.storeName.toLowerCase().includes(query) ||
-        s.ownerName.toLowerCase().includes(query) ||
-        s.contactPhone.toLowerCase().includes(query) ||
-        s.category.toLowerCase().includes(query)
+    return analyticsData.storeCommissionData.filter((s) =>
+      matchesAnyField([s.storeName, s.ownerName, s.contactPhone, s.category], query)
     );
   }, [analyticsData.storeCommissionData, storeSearchQuery]);
 

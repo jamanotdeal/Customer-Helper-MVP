@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Shop, Order, ShopOrder, WithdrawalRequest, Wallet, WalletTransaction } from '@/types';
 import { fallbackStore, db, cleanForFirestore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { getItemQuantityNum } from '@/lib/itemUtils';
 import { doc, setDoc, collection, query, where, limit } from 'firebase/firestore';
 import { getDocs } from '@/lib/firestoreMetered';
@@ -610,9 +611,7 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
     let list = Array.from(helperMap.values());
     if (helperSearch.trim()) {
       const q = helperSearch.toLowerCase().trim();
-      list = list.filter(
-        (h) => h.helperName.toLowerCase().includes(q) || h.helperPhone.includes(q) || h.helperId.toLowerCase().includes(q)
-      );
+      list = list.filter((h) => matchesAnyField([h.helperName, h.helperPhone, h.helperId], q));
     }
 
     return list.sort((a, b) => b.totalProductValue - a.totalProductValue);
@@ -630,11 +629,18 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
       }
       if (orderSearch.trim()) {
         const q = orderSearch.toLowerCase().trim();
-        const matchesId = o.parentOrderId.toLowerCase().includes(q) || o.orderNumber.toLowerCase().includes(q);
-        const matchesHelper = o.helperName.toLowerCase().includes(q) || o.helperPhone.includes(q);
-        const matchesCustomer = o.customerName.toLowerCase().includes(q) || o.customerPhone.includes(q);
-        const matchesItems = o.itemsText.toLowerCase().includes(q);
-        return matchesId || matchesHelper || matchesCustomer || matchesItems;
+        return matchesAnyField(
+          [
+            o.parentOrderId,
+            o.orderNumber,
+            o.helperName,
+            o.helperPhone,
+            o.customerName,
+            o.customerPhone,
+            o.itemsText,
+          ],
+          q
+        );
       }
       return true;
     });

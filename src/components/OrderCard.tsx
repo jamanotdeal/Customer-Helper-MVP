@@ -8,6 +8,7 @@ import { AsyncButton } from './ui/AsyncButton';
 import { fallbackStore } from '@/lib/firebase';
 import { isOrderFromStore } from '@/utils/orderUtils';
 import { ServiceIcon, getServiceIconInfo } from './ServiceIcon';
+import { formatItemQuantityUnit } from '@/lib/itemUtils';
 
 interface OrderCardProps {
   order: Order;
@@ -360,9 +361,26 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
               <ServiceIcon service={order.service} className="w-5 h-5" />
             </span>
-            <h3 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
-              {order.service || order.title || 'Service Needed'}
-            </h3>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-extrabold text-gray-900 text-sm leading-snug line-clamp-2">
+                {order.service || order.title || 'Service Needed'}
+              </h3>
+              {order.items && order.items.length > 0 && (
+                <p className="text-xs font-medium text-gray-600 truncate mt-0.5">
+                  {order.items
+                    .map((item) => {
+                      const name = item.selectedOptionName
+                        ? `${item.name} (${item.selectedOptionName})`
+                        : item.name;
+                      const qtyText = item.quantity
+                        ? formatItemQuantityUnit(item.quantity, item.unit, item.qty)
+                        : item.qty?.trim();
+                      return qtyText ? `${name} (${qtyText})` : name;
+                    })
+                    .join(', ')}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Customer Name & Short Delivery Address */}

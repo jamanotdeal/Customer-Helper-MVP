@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { Wallet, UserProfile, HelperApplication } from '@/types';
 import { X, Search, Bike, DollarSign, TrendingUp, User, CheckCircle2 } from 'lucide-react';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
@@ -62,12 +63,7 @@ export const OutstandingCommissionsModal: React.FC<OutstandingCommissionsModalPr
   const filteredWallets = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     if (!query) return wallets;
-    return wallets.filter(
-      (w) =>
-        w.name.toLowerCase().includes(query) ||
-        w.phone.includes(query) ||
-        w.wallet.userId.toLowerCase().includes(query)
-    );
+    return wallets.filter((w) => matchesAnyField([w.name, w.phone, w.wallet?.userId], query));
   }, [wallets, searchQuery]);
 
   return (

@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { fallbackStore } from '@/lib/firebase';
+import { matchesAnyField } from '@/lib/searchUtils';
 import { Shop, Order, ShopOrder, PricingSettings, HelperApplication, Wallet } from '@/types';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
@@ -554,11 +555,7 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
     // Search query
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase().trim();
-    return (
-      h.name.toLowerCase().includes(q) ||
-      (h.phone && h.phone.includes(q)) ||
-      h.helperId.toLowerCase().includes(q)
-    );
+    return matchesAnyField([h.name, h.phone, h.helperId], q);
   });
 
   // Search and status filtered stores
@@ -570,11 +567,7 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
     // Search query
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase().trim();
-    return (
-      s.storeName.toLowerCase().includes(q) ||
-      (s.ownerName && s.ownerName.toLowerCase().includes(q)) ||
-      (s.phone && s.phone.includes(q))
-    );
+    return matchesAnyField([s.storeName, s.ownerName, s.phone], q);
   });
 
   const dueHelpersCount = calculations.helpersList.filter((h) => h.remainingPaybackAmount > 0).length;
