@@ -3,9 +3,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Order, HelperApplication, StoreApplication, WithdrawalRequest, PricingSettings, UserProfile, Shop, OrderFeedback, AdminCustomModalConfig, FeeSuggestion, AllowedAreaPolygon, AppNotification, RewardClaim } from '@/types';
 import { fallbackStore, db, versionOf } from '@/lib/firebase';
-import { uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
-import { createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
-import { matchesQuery, matchesAnyField } from '@/lib/searchUtils';
+import { computeShopMetrics, createUserOrderStats, sortByDate } from '@/lib/adminMetrics';
+import type { ShopMetrics } from '@/lib/adminMetrics';
 import { collection, query, where, orderBy, limit, sum } from 'firebase/firestore';
 import { getDocs, getCountFromServer, getAggregateFromServer } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
@@ -125,10 +124,9 @@ import { BlockedUserModal } from './BlockedUserModal';
 import { AsyncButton } from './ui/AsyncButton';
 import { AdminDateRangeFilter } from './admin/AdminDateRangeFilter';
 import { LifetimeDataNotice } from './admin/LifetimeDataNotice';
-import { SettingsAccordionSection } from './admin/SettingsAccordionSection';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import { AdminDateRange, rangeForPreset, rangeBoundsIso, isInRange, describeRange } from '@/lib/adminDateRange';
-import { DEFAULT_SERVICES, DEFAULT_STORE_TYPES, parseStoreTypes, getStoreTypesForService, calculateHelperCommission } from '@/lib/pricing';
+import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
 import {
   exportUsersToCSV,
   exportUsersToPDF,
@@ -1277,12 +1275,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const force = rangeForceRef.current;
     rangeForceRef.current = false;
     setRangeStatus('loading');
-    const readOrders = () => {
-      if (dateRange.preset === 'ALL_TIME') {
-        return fallbackStore.ensureAdminLifetimeData(force);
-      }
-      return fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
-    };
+    const readOrders = () => fallbackStore.loadAdminOrdersInRange(rangeStartIso, rangeEndIso, force);
     // Store Orders reads its own list first and the orders (for the work-hours
     // card) after it. Read side by side, the far larger orders read held up
     // the store orders on the same connection: 30 days took 5–7 s on a phone.
@@ -1298,7 +1291,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => { cancelled = true; };
     // receivingShopIds only matters while Store Orders is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload, dateRange.preset]);
+  }, [currentUser?.uid, rangeStartIso, rangeEndIso, needsShopOrderRange, needsShopOrderRange ? receivingShopIds : '', rangeReload]);
 
   const reloadRange = (force: boolean) => {
     rangeForceRef.current = force;
@@ -1713,7 +1706,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Work hours of the orders placed on the selected days (see dateRange).
   const totalHoursOfWork = React.useMemo(() => {
-    const delivered = scopedAllOrders.filter(o => o.status === 'DELIVERED' && isInRange(o.createdAt, rangeStartIso, rangeEndIso));
+    const delivered = allOrders.filter(o => o.status === 'DELIVERED' && isInRange(o.createdAt, rangeStartIso, rangeEndIso));
     let totalMs = 0;
     delivered.forEach(o => {
       if (o.deliveredAt && (o.acceptedAt || o.createdAt)) {
@@ -1725,7 +1718,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
     const hours = totalMs / (1000 * 60 * 60);
     return hours > 0 ? (hours >= 10 ? Math.round(hours).toString() : hours.toFixed(1)) : '0';
-  }, [scopedAllOrders, rangeStartIso, rangeEndIso]);
+  }, [allOrders, rangeStartIso, rangeEndIso]);
 
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
 
@@ -2258,20 +2251,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getProcessedOrders = (rawOrders: Order[]) => {
     let list = [...rawOrders];
 
-    // Zone scoping filter
-    if (isZoneFiltered && targetZoneIds) {
-      list = list.filter((o) => isOrderInAnyZone(o, targetZoneIds, allowedDeliveryAreas, { users, shops }));
-    }
-
-    // Date range — the days read from the server for this list.
-    // When a search query is applied, matched orders outside the date range are kept.
-    const hasSearch = Boolean(ordersAppliedSearchQuery.trim());
+    // Date range — the days read from the server for this list. An exact
+    // order id typed into search is shown whatever its date (it is fetched on
+    // its own, see the effect on ordersAppliedSearchQuery).
     const exactIdSearch = ordersAppliedSearchQuery.trim().replace(/^#/, '');
-    if (!hasSearch) {
-      list = list.filter((o) => isInRange(o.createdAt, rangeStartIso, rangeEndIso));
-    } else {
-      list = list.filter((o) => o.id === exactIdSearch || isInRange(o.createdAt, rangeStartIso, rangeEndIso) || true);
-    }
+    list = list.filter((o) => o.id === exactIdSearch || isInRange(o.createdAt, rangeStartIso, rangeEndIso));
 
     // Search query filter
     if (ordersAppliedSearchQuery.trim()) {
@@ -2326,22 +2310,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getProcessedStoreOrders = (rawShopOrders: ShopOrder[]) => {
     let list = [...rawShopOrders];
 
-    // Date range — when search is applied, we don't restrict to today
-    const hasStoreSearch = Boolean(storeOrdersAppliedSearchQuery.trim());
-    if (!hasStoreSearch) {
-      list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
-    }
-
-    // Zone scoping filter
-    if (isZoneFiltered && targetZoneIds) {
-      list = list.filter((so) => {
-        const parentOrder = fallbackStore.orders.get(so.parentOrderId) || allOrders.find((o) => o.id === so.parentOrderId);
-        if (parentOrder) {
-          return isOrderInAnyZone(parentOrder, targetZoneIds, allowedDeliveryAreas, { users, shops });
-        }
-        return false;
-      });
-    }
+    // Date range — the days read from the server for this list.
+    list = list.filter((so) => isInRange(so.createdAt, rangeStartIso, rangeEndIso));
 
     // Search query filter
     if (storeOrdersAppliedSearchQuery.trim()) {
@@ -2838,7 +2808,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     () => (activeTab === 'ORDERS' ? getProcessedOrders(serverOrders !== null ? serverOrders : allOrders) : []),
     // getProcessedOrders reads exactly the filters listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy, isZoneFiltered, targetZoneIds, allowedDeliveryAreas, users, shops]
+    [activeTab, serverOrders, allOrders, rangeStartIso, rangeEndIso, ordersAppliedSearchQuery, statusFilter, ordersHelperFilter, sortBy]
   );
   // Which order is each customer's first — for the "first order" badge.
   const firstOrderIds = React.useMemo(
@@ -2983,48 +2953,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // summed over every order, so these views read the full history — on
   // demand, once per session — instead of every admin session doing it.
   const lifetimeData = useAdminLifetimeData(
-    (activeTab === 'HELPERS' && dateRange.preset === 'ALL_TIME') || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
+    // Shops: its per-shop sales and payouts are summed from shop orders, their
+    // parent orders and withdrawals (computeShopMetrics).
+    activeTab === 'HELPERS' || activeTab === 'USERS_LIST' || activeTab === 'SHOPS' || showHighDurationModal
   );
-
-  // If no zone is assigned to a normal admin, he cannot see anything
-  if (!isSuperAdmin && adminAssignedAreaIds.length === 0) {
-    return (
-      <div className="max-w-xl mx-auto my-16 p-8 sm:p-10 bg-white rounded-3xl border border-red-200 shadow-2xl text-center space-y-6 animate-in fade-in zoom-in-95 duration-200">
-        <div className="w-20 h-20 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center mx-auto shadow-inner border border-red-200">
-          <MapPin className="w-10 h-10 animate-bounce text-red-500" />
-        </div>
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-800 text-xs font-black uppercase tracking-wider border border-red-200">
-            <span>🔒 সার্ভিস জোন নির্ধারিত নেই</span>
-          </div>
-          <h2 className="text-2xl font-black text-gray-900 tracking-tight">
-            অ্যাক্সেস সীমাবদ্ধ (No Zone Assigned)
-          </h2>
-          <p className="text-sm text-gray-600 max-w-md mx-auto leading-relaxed">
-            আপনার অ্যাকাউন্টে কোনো সার্ভিস জোন বরাদ্দ করা হয়নি। অ্যাডমিন হিসেবে কোনো ডাটা (অর্ডার, হেলপার, অ্যাপ্লিকেশন ইত্যাদি) অ্যাক্সেস করতে হলে আপনাকে নির্দিষ্ট জোনে অ্যাসাইন থাকতে হবে।
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium text-left space-y-1.5">
-          <p className="font-extrabold flex items-center gap-1.5 text-amber-950">
-            <span>ℹ️ পরবর্তী করণীয়:</span>
-          </p>
-          <p>
-            অনুগ্রহ করে সুপার অ্যাডমিনের সাথে যোগাযোগ করুন। সুপার অ্যাডমিন আপনাকে নির্দিষ্ট কর্মএলাকা/জোনে অ্যাসাইন করার সাথে সাথেই আপনি শুধু সেই জোনের তথ্য দেখতে ও পরিচালনা করতে পারবেন।
-          </p>
-        </div>
-
-        <div className="pt-2">
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-2.5 rounded-2xl bg-gray-900 hover:bg-gray-800 text-white text-xs font-black transition-all shadow-md active:scale-95 cursor-pointer"
-          >
-            পেজ রিফ্রেশ করুন
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   if (isNormalAdmin && allowedAdminTabs.length === 0) {
     return (
@@ -3590,8 +3522,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
       </DraggableTabsContainer>
 
-      {/* Date range — the very top of the order lists and helper performance. Only these days are read. */}
-      {(activeTab === 'ORDERS' || activeTab === 'STORE_ORDERS' || activeTab === 'HELPERS') && isTabAllowed(activeTab) && (
+      {/* Date range — the very top of the order lists. Only these days are read. */}
+      {(activeTab === 'ORDERS' || activeTab === 'STORE_ORDERS') && isTabAllowed(activeTab) && (
         <AdminDateRangeFilter
           value={dateRange}
           onChange={setDateRange}
@@ -3601,9 +3533,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           summary={
             activeTab === 'ORDERS'
               ? `${processedOrdersForTab.length} order${processedOrdersForTab.length === 1 ? '' : 's'}`
-              : activeTab === 'STORE_ORDERS'
-                ? `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
-                : `${processedHelpers.length} helper${processedHelpers.length === 1 ? '' : 's'}`
+              : `${processedStoreOrdersForTab.length} store order${processedStoreOrdersForTab.length === 1 ? '' : 's'}`
           }
         />
       )}

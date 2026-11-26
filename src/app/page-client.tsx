@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { AppSplash, whenSplashArtReady } from '@/components/AppSplash';
+import { AppSplash } from '@/components/AppSplash';
 import { BottomNav } from '@/components/BottomNav';
 import { CustomerHome } from '@/components/CustomerHome';
 import { HelperDashboard } from '@/components/HelperDashboard';
@@ -59,23 +59,10 @@ import { processAndDispatchScheduledOrders } from '@/utils/scheduledOrders';
 import { StorePickerModal } from '@/components/StorePickerModal';
 
 export default function PageClient() {
-  const { user, loading, activeMode, setActiveMode, openAuthModal, showStorePicker, setShowStorePicker } = useAuth();
-  const { showAlert, showConfirm, showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'request' | 'my_orders' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'store_products'>('request');
-  const [customerHomeResetTrigger, setCustomerHomeResetTrigger] = useState(0);
-  const [orderDetailsOpenCount, setOrderDetailsOpenCount] = useState(0);
-  const isOrderDetailsOpen = orderDetailsOpenCount > 0;
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const customEvent = e as CustomEvent<{ delta?: number }>;
-      const delta = customEvent.detail?.delta || 0;
-      setOrderDetailsOpenCount((c) => Math.max(0, c + delta));
-    };
-    window.addEventListener('order-details-visibility', handler);
-    return () => window.removeEventListener('order-details-visibility', handler);
-  }, []);
-  const [showGlobalCustomRequestModal, setShowGlobalCustomRequestModal] = useState(false);
+  const { user, loading, activeMode, setActiveMode } = useAuth();
+  const hasBootedRef = useRef(false);
+  const { showAlert, showPermissionModal } = useModal();
+  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);

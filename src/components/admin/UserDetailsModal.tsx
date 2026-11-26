@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { UserProfile, Order, UserRole, Referral } from '@/types';
+import { UserProfile, Order, UserRole } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
@@ -41,18 +41,6 @@ import { DraggableTabsContainer } from './DraggableTabsContainer';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
-type PresetType = 'ALL_TIME' | 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'LAST_30' | 'THIS_MONTH' | 'CUSTOM';
-
-const presetLabels: Record<PresetType, string> = {
-  ALL_TIME: 'All Time',
-  TODAY: 'Today',
-  YESTERDAY: 'Yesterday',
-  LAST_7: 'Last 7 Days',
-  LAST_30: 'Last 30 Days',
-  THIS_MONTH: 'This Month',
-  CUSTOM: 'Custom',
-};
-
 interface UserDetailsModalProps {
   userId: string;
   onClose: () => void;
@@ -70,25 +58,9 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   // This user's wallet transactions are read when the screen opens (the admin
   // panel no longer loads an arbitrary 500 of everyone's at startup).
   const [, setTxVersion] = useState(0);
-  const [loadingUser, setLoadingUser] = useState(!fallbackStore.users.get(userId));
-
   useEffect(() => {
     let cancelled = false;
-    if (!fallbackStore.users.get(userId)) {
-      setLoadingUser(true);
-      fallbackStore.fetchUserFromFirestore(userId).then(() => {
-        if (!cancelled) {
-          setLoadingUser(false);
-          setTxVersion((v) => v + 1);
-        }
-      }).catch(() => {
-        if (!cancelled) setLoadingUser(false);
-      });
-    }
     fallbackStore.loadWalletTransactionsFor(userId).then(() => {
-      if (!cancelled) setTxVersion((v) => v + 1);
-    });
-    fallbackStore.fetchOrdersForUser(userId, 'both').then(() => {
       if (!cancelled) setTxVersion((v) => v + 1);
     });
     return () => {

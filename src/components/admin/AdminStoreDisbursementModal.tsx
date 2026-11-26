@@ -268,11 +268,10 @@ export const AdminStoreDisbursementModal: React.FC<AdminStoreDisbursementModalPr
   }, [shop.id, storeUserId]);
 
   // Retrieve all orders and shop orders
-  // Re-read once the full history has arrived (see useAdminLifetimeData) and
-  // whenever the store changes (storeTick).
-  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), [lifetimeData.ready, storeTick]);
-  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), [lifetimeData.ready, storeTick]);
-  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), [lifetimeData.ready, storeTick]);
+  // Re-read once the full history has arrived (see useAdminLifetimeData).
+  const allOrders = useMemo(() => Array.from(fallbackStore.orders.values()), [lifetimeData.ready]);
+  const allShopOrders = useMemo(() => Array.from(fallbackStore.shopOrders.values()), [lifetimeData.ready]);
+  const allWithdrawals = useMemo(() => Array.from(fallbackStore.withdrawals.values()), [lifetimeData.ready]);
 
   // Filter Shop Orders matching this shop
   const shopOrdersForThisStore = useMemo(() => {

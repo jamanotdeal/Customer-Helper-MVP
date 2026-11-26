@@ -1044,7 +1044,7 @@ export const RevenueAnalytics: React.FC<RevenueAnalyticsProps> = ({
     // lifetimeData.ready: the withdrawals and shop orders read here may land
     // after the orders do.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready, storeSyncTick]);
+  }, [orders, pricing, shops, startDate, endDate, lifetimeData.ready]);
 
   // Filtered store commission data by search
   const filteredStoreCommissionData = useMemo(() => {

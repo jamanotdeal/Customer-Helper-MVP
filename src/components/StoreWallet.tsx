@@ -5,8 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Wallet, WithdrawalRequest, Order, ShopOrder } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
 import { collection, query, where, orderBy, limit, startAfter, doc } from 'firebase/firestore';
-import { getDocs, getDoc, onSnapshot } from '@/lib/firestoreMetered';
-import { getItemQuantityNum } from '@/lib/itemUtils';
+import { getDocs, getDoc } from '@/lib/firestoreMetered';
 import { useModal } from './CustomModal';
 import {
   Wallet as WalletIcon,

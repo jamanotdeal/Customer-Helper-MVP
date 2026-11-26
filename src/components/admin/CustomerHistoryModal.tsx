@@ -9,18 +9,6 @@ import { PaginationControl } from './PaginationControl';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 
-type PresetType = 'ALL_TIME' | 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'LAST_30' | 'THIS_MONTH' | 'CUSTOM';
-
-const presetLabels: Record<PresetType, string> = {
-  ALL_TIME: 'All Time',
-  TODAY: 'Today',
-  YESTERDAY: 'Yesterday',
-  LAST_7: 'Last 7 Days',
-  LAST_30: 'Last 30 Days',
-  THIS_MONTH: 'This Month',
-  CUSTOM: 'Custom',
-};
-
 interface CustomerHistoryModalProps {
   customerId: string;
   customerName: string;

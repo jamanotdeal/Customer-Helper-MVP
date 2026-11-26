@@ -30,7 +30,6 @@ import { AdminBlockModal } from './AdminBlockModal';
 import { AdminStoreDisbursementModal } from './AdminStoreDisbursementModal';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
-import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 
 interface AdminShopDetailsModalProps {
   shop: Shop;
@@ -268,8 +267,8 @@ export const AdminShopDetailsModal: React.FC<AdminShopDetailsModalProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
-      <div className={`w-full ${activeTab === 'items' ? 'max-w-3xl' : 'max-w-lg'} bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh] transition-all`}>
+    <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]">
         <LifetimeDataNotice className="m-3 mb-0 shrink-0" loading={lifetimeData.loading} error={lifetimeData.error} onRetry={lifetimeData.retry} />
 
         {/* Header */}
