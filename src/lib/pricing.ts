@@ -449,10 +449,11 @@ export function calculateEstimatedFee(
   }
 
   // Custom Store fee calculation
+  const customStoreEnabled = settings?.customStorePricingEnabled !== false;
   let customStoreFee = 0;
-  const customStoreItemCount = Math.max(0, Number(params.customStoreItemCount) || 0);
-  const customStoreUnitFee = Number(settings?.customStorePricingAmount ?? 15) || 15;
-  if (customStoreItemCount > 0) {
+  const customStoreItemCount = customStoreEnabled ? Math.max(0, Number(params.customStoreItemCount) || 0) : 0;
+  const customStoreUnitFee = customStoreEnabled ? (Number(settings?.customStorePricingAmount ?? 15) || 15) : 0;
+  if (customStoreEnabled && customStoreItemCount > 0) {
     customStoreFee = customStoreItemCount * customStoreUnitFee;
   }
 
@@ -575,7 +576,7 @@ export function calculateCustomStoreFee(
   settings: PricingSettings = DEFAULT_PRICING_SETTINGS,
   shops?: Map<string, Shop> | Shop[]
 ): { count: number; unitFee: number; totalFee: number } {
-  if (!order) {
+  if (!order || settings?.customStorePricingEnabled === false) {
     return { count: 0, unitFee: 0, totalFee: 0 };
   }
   const unitFee = Number(settings?.customStorePricingAmount ?? 15) || 15;

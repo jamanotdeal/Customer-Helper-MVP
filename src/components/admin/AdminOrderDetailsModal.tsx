@@ -1773,9 +1773,14 @@ export const AdminOrderDetailsModal: React.FC<AdminOrderDetailsModalProps> = ({
                 pricingSettings
               );
               const processingFeeValue = est.processingFee || (order.processingFee || 0);
+              const customStoreEnabled = pricingSettings?.customStorePricingEnabled !== false;
               const customStorePricing = calculateCustomStoreFee(order, shopPrices, pricingSettings, fallbackStore.shops);
-              const customStoreFeeVal = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order.customStoreFee || 0);
-              const customStoreCount = customStorePricing.count > 0 ? customStorePricing.count : (customStoreFeeVal > 0 ? Math.ceil(customStoreFeeVal / (customStorePricing.unitFee || 15)) : 0);
+              const customStoreFeeVal = customStoreEnabled
+                ? (customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order.customStoreFee || 0))
+                : 0;
+              const customStoreCount = customStoreEnabled
+                ? (customStorePricing.count > 0 ? customStorePricing.count : (customStoreFeeVal > 0 ? Math.ceil(customStoreFeeVal / (customStorePricing.unitFee || 15)) : 0))
+                : 0;
               const platformRevenueTotal = platformRevenue + processingFeeValue;
               const isFreeDeliv = !!order.isFreeDelivery;
               const effectiveCustomerDeliveryFee = isFreeDeliv ? 0 : order.deliveryFee;

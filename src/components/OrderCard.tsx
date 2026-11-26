@@ -705,7 +705,8 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               {(() => {
                 if (order.isFreeDelivery) return '🎁 Free Delivery (৳0)';
                 const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
-                const totalCardFee = (order.deliveryFee || 0) + (order.processingFee || 0) + (order.customStoreFee || 0);
+                const customStoreFeeVal = fallbackStore.pricingSettings.customStorePricingEnabled === false ? 0 : (order.customStoreFee || 0);
+                const totalCardFee = (order.deliveryFee || 0) + (order.processingFee || 0) + customStoreFeeVal;
                 if (maxLim > 0 && Math.max(order.deliveryFee || 0, totalCardFee) > maxLim && !order.exceededFeeConfirmed) return 'Fee: N/A';
                 if (order.feeAdjustment?.status === 'APPROVED') return `৳${order.feeAdjustment.amount} fee`;
                 return order.deliveryFee > 0 ? `৳${order.deliveryFee} fee` : 'Fee Pending';

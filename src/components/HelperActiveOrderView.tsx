@@ -4458,8 +4458,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </div>
                   )}
 
-                  {/* Unlisted Store Fee (shown if helper bought from unlisted stores) */}
+                  {/* Unlisted Store Fee (shown if helper bought from unlisted stores and custom store pricing is enabled) */}
                   {(() => {
+                    if (fallbackStore.pricingSettings.customStorePricingEnabled === false) return null;
                     const customStorePricing = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops);
                     const effectiveFee = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order.customStoreFee || 0);
                     const effectiveCount = customStorePricing.count > 0 ? customStorePricing.count : (effectiveFee > 0 ? Math.ceil(effectiveFee / (customStorePricing.unitFee || 15)) : 0);
@@ -4517,7 +4518,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
                     const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
                     const dueAmt = order.appliedDuePayment?.amount || 0;
-                    const custStoreFee = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0;
+                    const custStoreFee = fallbackStore.pricingSettings.customStorePricingEnabled === false
+                      ? 0
+                      : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0);
                     const totalDeliveryFee = order.isFreeDelivery ? 0 : (calcFee + procFee + retFee + custStoreFee);
                     const isPendingConfirm = !order.isFreeDelivery && maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
                     const effDelivery = isPendingConfirm ? 0 : calcFee;
@@ -4637,7 +4640,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           )}
                         </div>
                         <p className="text-xs font-black text-gray-900">
-                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0))}
+                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (fallbackStore.pricingSettings.customStorePricingEnabled === false ? 0 : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0)))}
                         </p>
                       </div>
                     </div>
@@ -5250,7 +5253,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       const calcFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
                       const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
                       const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
-                      const custStoreFee = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0;
+                      const custStoreFee = fallbackStore.pricingSettings.customStorePricingEnabled === false
+                      ? 0
+                      : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0);
                       const totalDeliveryFee = calcFee + procFee + retFee + custStoreFee;
                       const isPending = maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
                       return isPending ? 'N/A' : `৳${calcFee}`;
@@ -7331,7 +7336,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     Change
                   </button>
                 </div>
-              ) : (
+              ) : fallbackStore.pricingSettings.customStorePricingEnabled !== false ? (
                 <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950">
                   <div className="font-bold flex items-center justify-between text-indigo-900 mb-1">
                     <span className="flex items-center gap-1.5">
@@ -7346,7 +7351,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     সার্ভারে তালিকাভুক্ত নয় এমন দোকান থেকে কেনার জন্য প্রতি স্টোরে <strong>৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}</strong> কাস্টম স্টোর চার্জ যুক্ত হবে। প্ল্যাটফর্মে ইতিমধ্যে থাকা তালিকাভুক্ত স্টোর নির্বাচন করলে কোনো চার্জ যুক্ত হবে না (৳০ Fee)।
                   </p>
                 </div>
-              )}
+              ) : null}
 
               {/* Items with Per-Item Price Input */}
               <div className="space-y-1.5">
@@ -7419,26 +7424,28 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
                   <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
                 </div>
-                <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition-colors ${
-                  (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
-                  allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                    ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950 font-bold'
-                    : 'bg-indigo-50/90 border-indigo-200 text-indigo-950 font-bold'
-                }`}>
-                  <span className="flex items-center gap-1.5 text-[11px]">
-                    <Store className="w-3.5 h-3.5 shrink-0" />
-                    {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                {fallbackStore.pricingSettings.customStorePricingEnabled !== false && (
+                  <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition-colors ${
+                    (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
                     allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                      ? 'Store Fee (Listed Store):'
-                      : 'Custom Store Fee (Unlisted Store):'}
-                  </span>
-                  <span className="font-mono font-black text-[11px]">
-                    {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
-                    allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                      ? '৳0 (No Fee)'
-                      : `+৳${fallbackStore.pricingSettings.customStorePricingAmount ?? 15}`}
-                  </span>
-                </div>
+                      ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950 font-bold'
+                      : 'bg-indigo-50/90 border-indigo-200 text-indigo-950 font-bold'
+                  }`}>
+                    <span className="flex items-center gap-1.5 text-[11px]">
+                      <Store className="w-3.5 h-3.5 shrink-0" />
+                      {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                      allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
+                        ? 'Store Fee (Listed Store):'
+                        : 'Custom Store Fee (Unlisted Store):'}
+                    </span>
+                    <span className="font-mono font-black text-[11px]">
+                      {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
+                      allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
+                        ? '৳0 (No Fee)'
+                        : `+৳${fallbackStore.pricingSettings.customStorePricingAmount ?? 15}`}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div ref={storeSuggestionRef} className="relative">

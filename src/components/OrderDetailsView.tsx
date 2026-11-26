@@ -248,9 +248,14 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
   const validShopOrders = shopOrders.filter(so => (!orderId || so.parentOrderId === orderId) && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
   const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
+  const customStoreEnabled = fallbackStore.pricingSettings?.customStorePricingEnabled !== false;
   const customStorePricing = calculateCustomStoreFee(order, validShopOrders, fallbackStore.pricingSettings, fallbackStore.shops);
-  const effectiveCustomStoreFee = customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order?.customStoreFee || 0);
-  const effectiveCustomStoreCount = customStorePricing.count > 0 ? customStorePricing.count : (effectiveCustomStoreFee > 0 ? Math.max(1, Math.round(effectiveCustomStoreFee / (customStorePricing.unitFee || 15))) : 0);
+  const effectiveCustomStoreFee = customStoreEnabled
+    ? (customStorePricing.totalFee > 0 ? customStorePricing.totalFee : (order?.customStoreFee || 0))
+    : 0;
+  const effectiveCustomStoreCount = customStoreEnabled
+    ? (customStorePricing.count > 0 ? customStorePricing.count : (effectiveCustomStoreFee > 0 ? Math.max(1, Math.round(effectiveCustomStoreFee / (customStorePricing.unitFee || 15))) : 0))
+    : 0;
   const unpricedItems = useMemo(() => {
     if (!order?.items) return [];
     return order.items.filter((it) => {
