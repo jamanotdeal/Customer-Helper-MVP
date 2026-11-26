@@ -12,6 +12,7 @@ import {
   ShoppingBag, Pill, Utensils, Shirt, Package, AlertCircle, Check, ChevronDown
 } from 'lucide-react';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
+import { StorePickupInput } from './StorePickupInput';
 import {
   saveAltPhone,
   saveDefaultDeliveryLocation,
@@ -563,16 +564,20 @@ export const CustomRequestModal: React.FC<CustomRequestModalProps> = ({
             <label className="block text-[11px] font-bold text-gray-700 mb-1">
               কোথা থেকে নিতে হবে? (Option)
             </label>
-            <div className="relative">
-              <MapPin className="w-4 h-4 text-emerald-600 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={pickupNote}
-                onChange={(e) => setPickupNote(e.target.value)}
-                placeholder="যেমন: Dottopara, Khagan বা নির্দিষ্ট যেকোনো দোকান"
-                className="w-full pl-9 pr-3.5 py-2.5 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
-              />
-            </div>
+            <StorePickupInput
+              value={pickupNote}
+              onChange={(val, selectedShop) => {
+                setPickupNote(val);
+                if (selectedShop?.location?.lat && selectedShop?.location?.lng) {
+                  setPickupLat(selectedShop.location.lat);
+                  setPickupLng(selectedShop.location.lng);
+                } else {
+                  setPickupLat(undefined);
+                  setPickupLng(undefined);
+                }
+              }}
+              placeholder="যেমন: Dottopara, Khagan বা নির্দিষ্ট যেকোনো দোকান"
+            />
           </div>
 
           {/* Delivery Location */}

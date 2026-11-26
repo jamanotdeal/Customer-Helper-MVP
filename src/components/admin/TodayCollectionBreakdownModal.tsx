@@ -269,7 +269,9 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
     const helperMap = new Map<string, TodayHelperPaybackItem>();
 
     deliveredOrders.forEach((o) => {
-      const fee = Math.max(o.deliveryFee || 0, minFee);
+      const fee = o.isFreeDelivery
+        ? Math.max(o.originalDeliveryFee || 0, minFee)
+        : Math.max(o.deliveryFee || 0, minFee);
       const helperPayout = calculateHelperCommission(fee, activePricing);
       const platformShare = fee - helperPayout;
 
@@ -416,13 +418,14 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
       }
 
       // Customer cash collected & Payback
-      totalCollected += (fee + orderStoreReturnable + orderStoreCommission);
+      const orderProcessingFee = o.processingFee || 0;
+      totalCollected += (fee + orderStoreReturnable + orderStoreCommission + orderProcessingFee);
 
       // Aggregate Helper
       const helperId = o.helperId;
       if (helperId) {
-        const orderTotalCollected = fee + orderProductCost;
-        const orderPayback = platformShare + orderStoreReturnable + orderStoreCommission;
+        const orderTotalCollected = fee + orderProductCost + orderProcessingFee;
+        const orderPayback = platformShare + orderStoreReturnable + orderStoreCommission + orderProcessingFee;
         const isOrderPaid = Boolean(o.isHelperPaid || o.isPaid);
 
         let helperItem = helperMap.get(helperId);
@@ -560,9 +563,14 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
 
   // Search and status filtered stores
   const filteredStores = calculations.storesList.filter((s) => {
-    // Status filter
-    if (storeFilter === 'DUE' && s.unpaidAmount <= 0) return false;
-    if (storeFilter === 'PAID' && (s.disbursedAmount <= 0 || s.unpaidAmount > 0)) return false;
+    // Status filter: for non-partner stores (canReceiveOrders=false), show if they have commission
+    if (s.canReceiveOrders) {
+      if (storeFilter === 'DUE' && s.unpaidAmount <= 0) return false;
+      if (storeFilter === 'PAID' && (s.disbursedAmount <= 0 || s.unpaidAmount > 0)) return false;
+    } else {
+      // Non-partner stores: show under DUE if they have commission (not yet settled in payback)
+      if (storeFilter === 'PAID') return false;
+    }
 
     // Search query
     if (!searchQuery.trim()) return true;
@@ -573,8 +581,8 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
   const dueHelpersCount = calculations.helpersList.filter((h) => h.remainingPaybackAmount > 0).length;
   const paidHelpersCount = calculations.helpersList.filter((h) => h.paidBackAmount > 0 && h.remainingPaybackAmount === 0).length;
 
-  const dueStoresCount = calculations.storesList.filter((s) => s.unpaidAmount > 0).length;
-  const paidStoresCount = calculations.storesList.filter((s) => s.disbursedAmount > 0 && s.unpaidAmount === 0).length;
+  const dueStoresCount = calculations.storesList.filter((s) => s.canReceiveOrders ? s.unpaidAmount > 0 : s.commissionEarned > 0).length;
+  const paidStoresCount = calculations.storesList.filter((s) => s.canReceiveOrders && s.disbursedAmount > 0 && s.unpaidAmount === 0).length;
 
   const handleCopyPhone = (phone: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1078,13 +1086,18 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                   ) : (
                     filteredStores.map((s) => {
                       const isExpanded = expandedStoreId === s.storeId;
-                      const isFullyDisbursed = s.totalCost > 0 && s.unpaidAmount === 0;
-                      const isPartial = s.disbursedAmount > 0 && s.unpaidAmount > 0;
+                      const isNonPartner = !s.canReceiveOrders;
+                      const isFullyDisbursed = !isNonPartner && s.totalCost > 0 && s.unpaidAmount === 0;
+                      const isPartial = !isNonPartner && s.disbursedAmount > 0 && s.unpaidAmount > 0;
 
                       return (
                         <div
                           key={s.storeId}
-                          className="rounded-xl bg-slate-800/60 border border-slate-800 hover:border-slate-700 transition-all overflow-hidden"
+                          className={`rounded-xl border hover:border-slate-700 transition-all overflow-hidden ${
+                              isNonPartner
+                                ? 'bg-orange-950/30 border-orange-800/40'
+                                : 'bg-slate-800/60 border-slate-800'
+                            }`}
                         >
                           {/* Main Minimal Row */}
                           <div
@@ -1093,7 +1106,11 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                           >
                             {/* Store Info */}
                             <div className="flex items-center space-x-3">
-                              <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center shrink-0">
+                              <div className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${
+                                  isNonPartner
+                                    ? 'bg-orange-500/20 text-orange-300 border-orange-500/30'
+                                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                }`}>
                                 <Store className="w-4 h-4" />
                               </div>
                               <div>
@@ -1102,9 +1119,14 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                                   <span className="text-[10px] text-slate-400 bg-slate-700/60 px-1.5 py-0.5 rounded font-bold">
                                     {s.orderCount} টি অর্ডার
                                   </span>
+                                  {isNonPartner && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                                      নন-পার্টনার কমিশন: ৳{s.commissionEarned}
+                                    </span>
+                                  )}
 
-                                  {/* Store Paid Status Badges */}
-                                  {isFullyDisbursed ? (
+                                  {/* Store Paid Status Badges (partner stores only) */}
+                                  {!isNonPartner && (isFullyDisbursed ? (
                                     <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                                       <CheckCircle className="w-3 h-3" />
                                       পরিশোধিত (৳{s.disbursedAmount})
@@ -1117,7 +1139,7 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                                     <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
                                       বকেয়া পাওনা
                                     </span>
-                                  )}
+                                  ))}
                                 </div>
                                 <div className="flex items-center space-x-2 text-[11px] text-slate-400 mt-0.5">
                                   {s.ownerName && <span>মালিক: {s.ownerName}</span>}
@@ -1150,6 +1172,16 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
 
                             {/* Owed Amount & Disburse Button */}
                             <div className="flex items-center justify-between sm:justify-end gap-3 pl-12 sm:pl-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-700/50">
+                              {isNonPartner ? (
+                                // Non-partner: show commission collected (stays with company via helper payback)
+                                <div className="text-left sm:text-right">
+                                  <span className="text-[9px] font-bold uppercase tracking-wider text-orange-400 block">কমিশন (হেলপার পেব্যাকে অন্তর্ভুক্ত)</span>
+                                  <div className="text-sm sm:text-base font-black text-orange-300">
+                                    ৳{s.commissionEarned.toLocaleString()}
+                                  </div>
+                                </div>
+                              ) : (
+                              <>
                               {/* Clickable Owed Amount */}
                               <div
                                 onClick={(e) => handleDisburseClick(s, e)}
@@ -1190,6 +1222,8 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                               >
                                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                               </button>
+                              </>
+                              )}
                             </div>
                           </div>
 
@@ -1198,7 +1232,10 @@ export const TodayCollectionBreakdownModal: React.FC<TodayCollectionBreakdownMod
                             <div className="px-3.5 pb-3 pt-1 bg-slate-950/40 border-t border-slate-800 text-[11px] space-y-1.5">
                               <div className="text-slate-400 font-bold py-1 flex justify-between">
                                 <span>সংশ্লিষ্ট অর্ডারসমূহ: (মোট মালামাল: ৳{s.totalCost.toLocaleString()})</span>
-                                <span>পেইড: ৳{s.disbursedAmount} • বাকি: ৳{s.unpaidAmount}</span>
+                                {isNonPartner
+                                  ? <span>কমিশন: ৳{s.commissionEarned.toLocaleString()}</span>
+                                  : <span>পেইড: ৳{s.disbursedAmount} • বাকি: ৳{s.unpaidAmount}</span>
+                                }
                               </div>
                               {s.orders.map((ord, idx) => (
                                 <div

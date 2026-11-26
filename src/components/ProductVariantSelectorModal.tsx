@@ -12,6 +12,7 @@ import {
   Tag,
   Package,
   Layers,
+  ShoppingCart,
 } from 'lucide-react';
 import { hapticFeedback } from '@/lib/native';
 
@@ -350,6 +351,34 @@ export const ProductVariantSelectorModal: React.FC<ProductVariantSelectorModalPr
               );
             })}
           </div>
+        </div>
+
+        {/* Footer Actions: Add Other Items & Order Now */}
+        <div className="p-3.5 sm:p-4 border-t border-gray-100 bg-gray-50/80 flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              hapticFeedback('selection');
+              onClose();
+            }}
+            className="flex-1 py-2.5 px-4 rounded-2xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-800 font-extrabold text-xs sm:text-sm transition-all active:scale-95 cursor-pointer"
+          >
+            Add Other Items
+          </button>
+          {totalVariantCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                hapticFeedback('selection');
+                onClose();
+                cart.openCartDrawer();
+              }}
+              className="flex-1 py-2.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs sm:text-sm shadow-md shadow-emerald-600/25 flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              <span>Order Now</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -83,6 +83,13 @@ interface OrderDetailsViewProps {
 
 export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onBack }) => {
   const { user } = useAuth();
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('order-details-visibility', { detail: { delta: 1 } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent('order-details-visibility', { detail: { delta: -1 } }));
+    };
+  }, []);
   const [order, setOrder] = useState<Order | null>(() => {
     const cached = fallbackStore.orders.get(orderId);
     return cached ? fallbackStore.resolveOrderLocations({ ...cached }) : null;
@@ -189,7 +196,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const itemShopIds = (order?.items || []).map((it) => it.storeId || '').join(',');
   useEffect(() => {
     fallbackStore.loadProductsForItems(order?.items);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemShopIds]);
 
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
@@ -242,9 +249,10 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
     };
   }, [orderId, order?.helperId, order?.helperName]);
 
-  const distanceKm = (order?.pickupLocation?.lat && order?.pickupLocation?.lng && order?.deliveryLocation?.lat && order?.deliveryLocation?.lng)
+  const rawDistanceKm = (order?.pickupLocation?.lat && order?.pickupLocation?.lng && order?.deliveryLocation?.lat && order?.deliveryLocation?.lng)
     ? parseFloat(calculateDistanceKm(order.pickupLocation.lat, order.pickupLocation.lng, order.deliveryLocation.lat, order.deliveryLocation.lng).toFixed(2))
     : 0;
+  const distanceKm = Math.max(1, rawDistanceKm);
 
   const validShopOrders = shopOrders.filter(so => (!orderId || so.parentOrderId === orderId) && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
   const effectiveProductCost = order ? calculateOrderProductCost(order, validShopOrders) : 0;
@@ -265,10 +273,11 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   }, [order?.items, validShopOrders, orderId]);
 
   const estdPricing = order ? calculateEstimatedFee({
-    distanceKm: Math.ceil(distanceKm),
-    weightKg: Math.ceil(order.weightKg || 0),
+    distanceKm: Math.max(1, Math.ceil(distanceKm)),
+    weightKg: Math.max(1, Math.ceil(order.weightKg || 1)),
     isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
     productPrice: effectiveProductCost,
+    customStoreItemCount: effectiveCustomStoreCount,
   }, fallbackStore.pricingSettings) : null;
 
   // Auto-sync productCost in the database if item prices or quantities updated
@@ -561,14 +570,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   const isArrivedOrDelivered = order.status === 'ARRIVED' || order.status === 'DELIVERED';
 
   const feeMaxLimit = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
-  const calculatedDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing?.minFee || 0);
+  const computedDeliverySubtotal = estdPricing
+    ? Math.max(estdPricing.distanceFee + estdPricing.weightFee + effectiveCustomStoreFee, estdPricing.minFee)
+    : 0;
+  const calculatedDeliveryFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, computedDeliverySubtotal);
   const effectiveProcessingFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing) ? estdPricing.processingFee : (order?.processingFee || 0);
   const effectiveReturnFee = (estdPricing && estdPricing.returnFee > 0) ? estdPricing.returnFee : 0;
-  const totalDeliveryFeeForLimit = order.isFreeDelivery ? 0 : (calculatedDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveCustomStoreFee);
+  const totalDeliveryFeeForLimit = order.isFreeDelivery ? 0 : (calculatedDeliveryFee + effectiveProcessingFee + effectiveReturnFee);
   const isDeliveryFeePendingConfirmation = !order.isFreeDelivery && feeMaxLimit > 0 && totalDeliveryFeeForLimit > feeMaxLimit && !order.exceededFeeConfirmed;
   const effectiveDeliveryFee = isDeliveryFeePendingConfirmation ? 0 : calculatedDeliveryFee;
   const effectiveDuePayment = order.appliedDuePayment?.amount || 0;
-  const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment + effectiveCustomStoreFee;
+  const grandTotalPayable = effectiveProductCost + effectiveDeliveryFee + effectiveProcessingFee + effectiveReturnFee + effectiveDuePayment;
 
   const isCompletedOrder = Boolean(
     order.status === 'DELIVERED' ||
@@ -707,29 +719,31 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
   };
 
   return (
-    <div className={`w-full bg-gray-50 min-h-screen ${canShowPayNowButton ? 'pb-36' : 'pb-24'} animate-in fade-in duration-200`}>
+    <div className={`w-full bg-gray-50 min-h-screen pt-16 ${canShowPayNowButton ? 'pb-36' : 'pb-10'} animate-in fade-in duration-200`}>
 
-      {/* Sticky Top Bar */}
-      <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-xs">
-        <button
-          onClick={onBack}
-          className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          <span className="text-xs font-bold">Back</span>
-        </button>
-        <span className="font-extrabold text-sm text-gray-800">Order-#{order.id}</span>
-        {canEdit ? (
+      {/* Fixed Top Bar */}
+      <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 pt-safe shadow-xs">
+        <div className="max-w-[480px] mx-auto px-4 py-3 flex items-center justify-between">
           <button
-            onClick={openEditModal}
-            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1.5 shadow-sm transition-all active:scale-95"
+            onClick={onBack}
+            className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
           >
-            <Edit2 className="w-3.5 h-3.5" />
-            <span>Edit Order</span>
+            <ArrowLeft className="w-5 h-5" />
+            <span className="text-xs font-bold">Back</span>
           </button>
-        ) : (
-          <div className="w-12" />
-        )}
+          <span className="font-extrabold text-sm text-gray-800">Order-#{order.id}</span>
+          {canEdit ? (
+            <button
+              onClick={openEditModal}
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center space-x-1.5 shadow-sm transition-all active:scale-95"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+              <span>Edit Order</span>
+            </button>
+          ) : (
+            <div className="w-12" />
+          )}
+        </div>
       </div>
 
       <div className="w-full mx-auto px-4 pt-5 space-y-4">
@@ -893,17 +907,17 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       {/* Connector line behind status icons */}
                       {!isLast && (
                         <div className={`absolute top-[13px] left-[50%] w-full h-[2px] transition-all ${state === 'COMPLETED'
-                            ? 'bg-emerald-500'
-                            : 'bg-gray-200'
+                          ? 'bg-emerald-500'
+                          : 'bg-gray-200'
                           }`} />
                       )}
 
                       {/* Step circle */}
                       <div className={`w-7 h-7 rounded-full flex items-center justify-center relative z-10 ring-2 ring-white transition-all ${state === 'COMPLETED'
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : state === 'CURRENT'
-                            ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 shadow-md'
-                            : 'bg-gray-100 text-gray-400 border border-gray-200'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : state === 'CURRENT'
+                          ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 shadow-md'
+                          : 'bg-gray-100 text-gray-400 border border-gray-200'
                         }`}>
                         {state === 'COMPLETED'
                           ? <Check className="w-3.5 h-3.5" />
@@ -1033,10 +1047,35 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
 
             {showEditHistory && (
               <div className="p-3 pt-0 border-t border-amber-200/60 space-y-2 animate-in slide-in-from-top-2 duration-150">
-                {[...order.editHistory].reverse().map((item, hIdx) => (
+                {[...order.editHistory].reverse().map((item, hIdx) => {
+                  const getHistoryEditorLabel = (entry: OrderEditHistoryItem) => {
+                    const by = (entry.editedBy || '').toLowerCase();
+                    const name = (entry.editedByName || '').toLowerCase();
+                    if (by === 'admin' || name.includes('admin')) {
+                      return 'Admin';
+                    }
+                    if (
+                      by === 'helper' ||
+                      (order.helperId && by === order.helperId.toLowerCase()) ||
+                      name.includes('helper')
+                    ) {
+                      return 'Helper';
+                    }
+                    if (
+                      by === 'customer' ||
+                      (order.customerId && by === order.customerId.toLowerCase()) ||
+                      (user?.uid && by === user.uid.toLowerCase()) ||
+                      name === 'you'
+                    ) {
+                      return 'Me';
+                    }
+                    return 'Me';
+                  };
+                  const editorLabel = getHistoryEditorLabel(item);
+                  return (
                   <div key={hIdx} className="bg-amber-100/60 rounded-xl p-2.5 text-xs space-y-1.5 border border-amber-200/70">
                     <div className="flex items-center justify-between border-b border-amber-200/60 pb-1 text-[10px] text-amber-800 font-bold">
-                      <span>আপডেট #{order.editHistory!.length - hIdx}</span>
+                      <span>আপডেট #{order.editHistory!.length - hIdx} ({editorLabel})</span>
                       {item.timestamp && <span>{formatPlacedDateTime(item.timestamp)}</span>}
                     </div>
                     {item.changes.map((c, idx) => (
@@ -1055,7 +1094,8 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                       </div>
                     ))}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1137,15 +1177,15 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
                   key={it.id}
                   onClick={() => setSelectedItemForModal({ ...it, photoUrl: itemPhoto || it.photoUrl })}
                   className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all active:scale-[0.99] group shadow-2xs gap-3 border ${isUnpriced
-                      ? 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200 hover:border-rose-300 ring-1 ring-rose-200/60'
-                      : 'bg-gray-50 hover:bg-emerald-50/50 hover:border-emerald-200/80 border-gray-100'
+                    ? 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200 hover:border-rose-300 ring-1 ring-rose-200/60'
+                    : 'bg-gray-50 hover:bg-emerald-50/50 hover:border-emerald-200/80 border-gray-100'
                     }`}
                   title="আইটেমের দাম ও দোকানের তথ্য দেখতে ক্লিক করুন"
                 >
                   {/* Product Image Thumbnail */}
                   <div className={`w-12 h-12 rounded-xl bg-white border shrink-0 overflow-hidden flex items-center justify-center shadow-2xs transition-colors ${isUnpriced
-                      ? 'border-rose-200 group-hover:border-rose-300'
-                      : 'border-gray-200/90 group-hover:border-emerald-300'
+                    ? 'border-rose-200 group-hover:border-rose-300'
+                    : 'border-gray-200/90 group-hover:border-emerald-300'
                     }`}>
                     {itemPhoto ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1251,13 +1291,13 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Distance ({Math.ceil(distanceKm)} km)</span>
+                <span className="text-gray-500 font-bold">Distance ({Math.max(1, Math.ceil(distanceKm))} km)</span>
                 <span className="font-bold text-gray-900">৳{estdPricing.distanceFee}</span>
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 font-bold">Approximate Weight ({Math.ceil(order.weightKg || 0)}kg)</span>
-                <span className="font-bold text-gray-900">{estdPricing.weightFee > 0 ? `৳${estdPricing.weightFee}` : `${Math.ceil(order.weightKg || 0)} kg`}</span>
+                <span className="text-gray-500 font-bold">Approximate Weight ({Math.max(1, Math.ceil(order.weightKg || 1))}kg)</span>
+                <span className="font-bold text-gray-900">{estdPricing.weightFee > 0 ? `৳${estdPricing.weightFee}` : `${Math.max(1, Math.ceil(order.weightKg || 1))} kg`}</span>
               </div>
 
               {effectiveProcessingFee > 0 && (
@@ -1356,7 +1396,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
         )}
 
         {/* ── CUSTOMER PAYMENT ACTION / STATUS (FULL WIDTH UNDER CALCULATION SUMMARY) ── */}
-        {order.customerPayment?.transactionId ? (
+        {order.customerPayment?.transactionId && (
           <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-3xl p-4 shadow-soft space-y-2.5 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
@@ -1418,18 +1458,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
               )}
             </div>
           </div>
-        ) : canShowPayNowButton ? (
-          <div className="space-y-1">
-            <button
-              type="button"
-              onClick={openPayNowModal}
-              className="w-full py-3.5 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-sm shadow-sm active:scale-[0.99] transition-all flex items-center justify-center space-x-2"
-            >
-              <Wallet className="w-4 h-4" />
-              <span>Pay Now • ৳{grandTotalPayable}</span>
-            </button>
-          </div>
-        ) : null}
+        )}
 
 
         {/* ── ADDRESSES & LOCATION ── */}
@@ -1723,7 +1752,7 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       {showPayModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
           <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200 flex flex-col max-h-[90vh] overflow-hidden">
-            
+
             {/* Modal Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 shrink-0 bg-gray-50/70">
               <div className="flex items-center space-x-2">

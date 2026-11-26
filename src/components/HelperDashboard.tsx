@@ -31,7 +31,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
 }) => {
   const { user, updateHelperLocation, openAuthModal } = useAuth();
   const { showAlert, showConfirm, showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'NEW' | 'ACTIVE' | 'SCHEDULED' | 'COMPLETED'>('NEW');
+  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'SCHEDULED' | 'COMPLETED'>('ACTIVE');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACCEPTED' | 'PURCHASED_EXECUTED' | 'ON_THE_WAY' | 'ARRIVED'>('ALL');
   const [twoWayOnly, setTwoWayOnly] = useState(false);
   const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('LIST');
@@ -62,7 +62,7 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
     // A still-open order reaches here from the popup's "View" button — the
     // popup itself is raised by HelperOrderAlerts, on any screen.
     if (order.status === 'PENDING') {
-      setActiveTab('NEW');
+      setActiveTab('ACTIVE');
     } else if (['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status)) {
       setActiveTab('ACTIVE');
     } else if (
@@ -575,21 +575,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
   const scheduledLoaderRef = useRef<HTMLDivElement | null>(null);
   const completedLoaderRef = useRef<HTMLDivElement | null>(null);
 
-  const hasMoreNew = newVisibleCount < visibleAvailable.length;
-  useEffect(() => {
-    if (activeTab !== 'NEW' || !hasMoreNew) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          setNewVisibleCount((prev) => prev + PAGE_SIZE);
-        }
-      },
-      { threshold: 0.1, rootMargin: '100px' }
-    );
-    if (newLoaderRef.current) observer.observe(newLoaderRef.current);
-    return () => observer.disconnect();
-  }, [activeTab, hasMoreNew, newVisibleCount, visibleAvailable.length]);
-
   const hasMoreActive = activeVisibleCount < filteredActiveOrders.length;
   useEffect(() => {
     if (activeTab !== 'ACTIVE' || !hasMoreActive) return;
@@ -862,8 +847,8 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
         return null;
       })()}
 
-      {/* Pre-Tab Alert Banner: Running + Unviewed Active Orders */}
-      {(activeOrders.length > 0 || unviewedActiveCount > 0) && (
+      {/* Pre-Tab Alert Banner: Only shown when helper visits other tabs */}
+      {activeTab !== 'ACTIVE' && activeOrders.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-300">
           <div className="flex items-center space-x-3 min-w-0">
             <div className="relative flex h-3 w-3 shrink-0">
@@ -871,20 +856,9 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
               <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
             </div>
             <div className="min-w-0">
-              {unviewedActiveCount > 0 && (
-                <h4 className="font-extrabold text-xs text-amber-900">
-                  {unviewedActiveCount} order{unviewedActiveCount > 1 ? 's' : ''} not yet viewed,{' '}
-                  আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
-                </h4>
-              )}
-              {unviewedActiveCount === 0 && activeOrders.length > 0 && (
-                <h4 className="font-extrabold text-xs text-amber-900">
-                  আপনার {activeOrders.length}টি অর্ডার রানিং আছে!
-                </h4>
-              )}
-              <p className="text-[10px] text-amber-700 font-medium">
-                অর্ডারটি দ্রুত এবং সফলভাবে ডেলিভারি করার চেষ্টা করুন।
-              </p>
+              <h4 className="font-extrabold text-xs text-amber-900">
+                আপনার {activeOrders.length}টি অর্ডার রানিং
+              </h4>
             </div>
           </div>
           <button
@@ -897,30 +871,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
       )}
 
       <div className="flex space-x-2 bg-gray-100 p-1.5 rounded-2xl">
-        <button
-          onClick={() => {
-            setActiveTab('NEW');
-            setNewVisibleCount(PAGE_SIZE);
-            setSeenOrderIds((prev) => {
-              const updated = new Set(prev);
-              newOrderIds.forEach((id) => updated.add(id));
-              return updated;
-            });
-            setNewOrderIds(new Set());
-          }}
-          className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative ${activeTab === 'NEW'
-            ? 'bg-white text-emerald-800 shadow-sm'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <span>New{visibleAvailable.length > 0 && ` (${visibleAvailable.length})`}</span>
-          {newOrderIds.size > 0 && activeTab !== 'NEW' && (
-            <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-extrabold flex items-center justify-center animate-bounce shadow-md">
-              {newOrderIds.size}
-            </span>
-          )}
-        </button>
-
         <button
           onClick={() => { setActiveTab('ACTIVE'); setActiveVisibleCount(PAGE_SIZE); }}
           className={`flex-1 py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all relative flex items-center justify-center gap-0.5 ${activeTab === 'ACTIVE'
@@ -964,58 +914,6 @@ export const HelperDashboard: React.FC<HelperDashboardProps> = ({
           <span>Completed{filteredCompletedOrders.length > 0 && ` (${filteredCompletedOrders.length})`}</span>
         </button>
       </div>
-
-      {/* NEW TAB */}
-      {activeTab === 'NEW' && (
-        <div className="space-y-3">
-          {newOrderIds.size > 0 && (
-            <div className="flex items-center space-x-2 p-3 rounded-2xl bg-red-50 border border-red-200 shadow-sm animate-in fade-in duration-300">
-              <div className="p-1.5 rounded-xl bg-red-100 text-red-600 shrink-0">
-                <Bell className="w-4 h-4 animate-bounce" />
-              </div>
-              <div className="flex-1">
-                <p className="text-xs font-extrabold text-red-800">{newOrderIds.size} new order{newOrderIds.size > 1 ? 's' : ''} just arrived!</p>
-                <p className="text-[11px] text-red-600 font-medium">These are new requests not seen before.</p>
-              </div>
-              <Zap className="w-4 h-4 text-red-400 animate-pulse shrink-0" />
-            </div>
-          )}
-
-          {visibleAvailable.length === 0 ? (
-            <div className="py-12 bg-white rounded-3xl border border-gray-100 text-center p-6 shadow-soft">
-              <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <h4 className="font-bold text-gray-900 text-sm mb-1">
-                এখন আশেপাশে কোনো নতুন request নেই
-              </h4>
-              <p className="text-xs text-gray-500">
-                নতুন রিকুয়েস্ট এলে নোটিফিকেশন পাবেন।
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {visibleAvailable.slice(0, newVisibleCount).map((ord) => (
-                <HelperRequestCard
-                  key={ord.id}
-                  order={ord}
-                  onAccept={handleAcceptOrder}
-                  onViewDetails={handleViewOrderDetails}
-                  activeOrdersCount={activeOrders.length}
-                  activeOrderLimit={activeOrderLimit}
-                  isNew={newOrderIds.has(ord.id)}
-                  isFirstOrder={firstOrderIds.has(ord.id)}
-                  helperLocation={user?.helperLocation}
-                />
-              ))}
-              {hasMoreNew && (
-                <div ref={newLoaderRef} className="py-4 text-center flex items-center justify-center space-x-2 text-xs font-semibold text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-                  <span>Loading more orders... ({visibleAvailable.length - newVisibleCount} remaining)</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Dedicated Helper Application Modal */}
       {showDedicatedAppModal && (

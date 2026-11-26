@@ -182,17 +182,30 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, o
               </button>
 
               {isDedicatedHelper && (
-                <button id="nav-tab-explore" onClick={() => handleTabChange('explore')} className={tabClass(activeTab === 'explore')} aria-label="Explore">
+                <button
+                  id="nav-tab-explore"
+                  onClick={() => handleTabChange('explore')}
+                  className={
+                    exploreCount > 0
+                      ? `relative flex flex-col items-center space-y-1 py-1 px-3 rounded-2xl transition-all duration-200 tap-spring cursor-pointer touch-manipulation select-none min-w-[48px] text-red-600 font-extrabold ${
+                          activeTab === 'explore' ? 'bg-red-50 ring-1 ring-red-200' : 'bg-red-50/70 hover:bg-red-100/80'
+                        }`
+                      : tabClass(activeTab === 'explore')
+                  }
+                  aria-label="Explore"
+                >
                   <div className="relative">
-                    <Compass className="w-5 h-5" />
+                    <Compass className={`w-5 h-5 ${exploreCount > 0 ? 'text-red-600 animate-pulse' : ''}`} />
                     {exploreCount > 0 && (
-                      <span className="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse">
+                      <span className="absolute -top-1.5 -right-2.5 bg-red-600 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full min-w-[18px] h-[18px] flex items-center justify-center shadow-md animate-pulse">
                         {exploreCount > 99 ? '99+' : exploreCount}
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px]">Explore</span>
-                  {activeTab === 'explore' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
+                  <span className={`text-[11px] ${exploreCount > 0 ? 'text-red-600 font-extrabold' : ''}`}>Explore</span>
+                  {activeTab === 'explore' && (
+                    <span className={`absolute bottom-0 w-1 h-1 rounded-full ${exploreCount > 0 ? 'bg-red-600' : 'bg-emerald-600'}`} />
+                  )}
                 </button>
               )}
 
@@ -204,7 +217,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, o
 
               <button id="nav-tab-fee-details" onClick={() => handleTabChange('fee_details')} className={tabClass(activeTab === 'fee_details')} aria-label="Fee Calculator">
                 <Calculator className="w-5 h-5" />
-                <span className="text-[11px] whitespace-nowrap">Fee</span>
+                <span className="text-[10px] sm:text-[11px] whitespace-nowrap">Fee Calculator</span>
                 {activeTab === 'fee_details' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
               </button>
             </>
@@ -267,7 +280,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, o
               {/* Fee */}
               <button id="nav-tab-fee-details" onClick={() => handleTabChange('fee_details')} className={tabClass(activeTab === 'fee_details')} aria-label="Fee Calculator">
                 <Calculator className="w-5 h-5" />
-                <span className="text-[11px]">Fee</span>
+                <span className="text-[10px] sm:text-[11px] whitespace-nowrap">Fee Calculator</span>
                 {activeTab === 'fee_details' && <span className="absolute bottom-0 w-1 h-1 rounded-full bg-emerald-600" />}
               </button>
             </>

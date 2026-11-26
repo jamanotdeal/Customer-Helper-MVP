@@ -63,6 +63,18 @@ export default function PageClient() {
   const { showAlert, showConfirm, showPermissionModal } = useModal();
   const [activeTab, setActiveTab] = useState<'request' | 'my_orders' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'store_products'>('request');
   const [customerHomeResetTrigger, setCustomerHomeResetTrigger] = useState(0);
+  const [orderDetailsOpenCount, setOrderDetailsOpenCount] = useState(0);
+  const isOrderDetailsOpen = orderDetailsOpenCount > 0;
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent<{ delta?: number }>;
+      const delta = customEvent.detail?.delta || 0;
+      setOrderDetailsOpenCount((c) => Math.max(0, c + delta));
+    };
+    window.addEventListener('order-details-visibility', handler);
+    return () => window.removeEventListener('order-details-visibility', handler);
+  }, []);
   const [showGlobalCustomRequestModal, setShowGlobalCustomRequestModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
@@ -874,22 +886,24 @@ export default function PageClient() {
   return (
     <div className={isAdminView ? "w-full min-h-screen bg-slate-50/80 flex flex-col" : "mobile-container relative flex flex-col min-h-screen"}>
       {/* Header */}
-      <AppHeader
-        onOpenNotifications={() => setShowNotifications(true)}
-        onNavigate={(tab) => setActiveTab(tab as any)}
-      />
+      {!isOrderDetailsOpen && (
+        <AppHeader
+          onOpenNotifications={() => setShowNotifications(true)}
+          onNavigate={(tab) => setActiveTab(tab as any)}
+        />
+      )}
 
 
 
       {/* Main Content Body */}
       <main className={isAdminView ? "flex-1 w-full" : "flex-1 w-full"}>
-        <div className={isAdminView ? "w-full" : "content-container p-4 pb-20"}>
+        <div className={isAdminView ? "w-full" : isOrderDetailsOpen ? "content-container pb-6" : "content-container p-4 pb-20"}>
           {renderCurrentView()}
         </div>
       </main>
 
       {/* Mobile Bottom Navigation (Only for non-admin modes) */}
-      {user && !isAdminView && (
+      {user && !isAdminView && !isOrderDetailsOpen && (
         <BottomNav
           activeTab={activeTab}
           setActiveTab={(tab) => {
@@ -903,8 +917,8 @@ export default function PageClient() {
         />
       )}
 
-      {/* Global Missing Item Floating Button (visible even when logged out for customers) */}
-      {!isAdminView && (
+      {/* Global Missing Item Floating Button (visible even when logged out for customers, hidden on order details) */}
+      {!isAdminView && !isOrderDetailsOpen && (
         <MissingItemFloatingButton
           onOpenCustomRequest={() => {
             setShowGlobalCustomRequestModal(true);

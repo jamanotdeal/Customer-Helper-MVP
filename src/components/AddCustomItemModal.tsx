@@ -3,7 +3,8 @@
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { OrderItem } from '@/types';
-import { X, Plus, Sparkles, MapPin, AlertCircle, Check } from 'lucide-react';
+import { X, Plus, Sparkles, AlertCircle, Check } from 'lucide-react';
+import { StorePickupInput } from './StorePickupInput';
 
 export function parseCustomItemNames(text: string): string[] {
   if (!text) return [];
@@ -216,20 +217,15 @@ export const AddCustomItemModal: React.FC<AddCustomItemModalProps> = ({
             <label className="block text-[11px] font-bold text-gray-700 mb-1">
               স্থান / কোথা থেকে সংগ্রহ করতে হবে? <span className="text-rose-500">*</span>
             </label>
-            <div className="relative">
-              <MapPin className="w-4 h-4 text-emerald-600 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                required
-                value={buyFrom}
-                onChange={(e) => {
-                  setBuyFrom(e.target.value);
-                  if (error) setError('');
-                }}
-                placeholder="যেমন: নির্দিষ্ট দোকান, ফার্মেসি, কাঁচাবাজার, কুরিয়ার অফিস, বা যেকোনো ঠিকানা"
-                className="w-full pl-9 pr-3.5 py-2.5 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-xs"
-              />
-            </div>
+            <StorePickupInput
+              required
+              value={buyFrom}
+              onChange={(val) => {
+                setBuyFrom(val);
+                if (error) setError('');
+              }}
+              placeholder="যেমন: নির্দিষ্ট দোকান, ফার্মেসি, কাঁচাবাজার, কুরিয়ার অফিস, বা যেকোনো ঠিকানা"
+            />
           </div>
 
 

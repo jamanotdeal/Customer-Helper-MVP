@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { MapPin, X, Navigation, Check, Search, AlertTriangle, ArrowRight, RefreshCw } from 'lucide-react';
+import { MapPin, X, Navigation, Check, Search, AlertTriangle, ArrowRight, RotateCcw } from 'lucide-react';
 import { calculateDistanceKm } from '@/lib/pricing';
 import { LocationData } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
@@ -20,12 +20,12 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
   onSelectDistance,
 }) => {
   // Leaflet consumes the drag itself, so the native pull gesture must be
-  // disarmed while this map is on screen. Passing `isOpen` matters: these modals
-  // stay mounted and toggle visibility, so an unconditional lock would disable
-  // pull-to-refresh permanently (RequestComposer mounts two of these at once).
+  // disarmed while this map is on screen.
   usePullToRefreshLock(isOpen);
+
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const leafletRef = useRef<any>(null);
   const pickupMarkerRef = useRef<any>(null);
   const deliveryMarkerRef = useRef<any>(null);
   const polylineRef = useRef<any>(null);
@@ -34,36 +34,209 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
   const [pickupLoc, setPickupLoc] = useState<LocationData | null>(null);
   const [deliveryLoc, setDeliveryLoc] = useState<LocationData | null>(null);
 
+  // Refs synced with state so Leaflet event listeners never read stale closures
+  const activePinTypeRef = useRef<'pickup' | 'delivery'>('pickup');
+  const pickupLocRef = useRef<LocationData | null>(null);
+  const deliveryLocRef = useRef<LocationData | null>(null);
+
+  useEffect(() => {
+    activePinTypeRef.current = activePinType;
+  }, [activePinType]);
+
+  useEffect(() => {
+    pickupLocRef.current = pickupLoc;
+  }, [pickupLoc]);
+
+  useEffect(() => {
+    deliveryLocRef.current = deliveryLoc;
+  }, [deliveryLoc]);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [mapError, setMapError] = useState<boolean>(false);
 
-  // Computed distance
+  // Computed distance between A and B
   const calculatedKm =
-    pickupLoc?.lat && pickupLoc?.lng && deliveryLoc?.lat && deliveryLoc?.lng
+    pickupLoc?.lat != null && pickupLoc?.lng != null && deliveryLoc?.lat != null && deliveryLoc?.lng != null
       ? parseFloat(
-          calculateDistanceKm(pickupLoc.lat, pickupLoc.lng, deliveryLoc.lat, deliveryLoc.lng).toFixed(1)
+          Math.max(
+            0.1,
+            calculateDistanceKm(pickupLoc.lat, pickupLoc.lng, deliveryLoc.lat, deliveryLoc.lng)
+          ).toFixed(1)
         )
       : null;
+
+  const updateMarkersAndLine = useCallback(
+    (newPickup: LocationData | null, newDelivery: LocationData | null) => {
+      const map = mapInstanceRef.current;
+      const leaflet = leafletRef.current;
+      if (!map || !leaflet) return;
+
+      // 1. Pickup Marker (A)
+      if (newPickup?.lat != null && newPickup?.lng != null) {
+        if (pickupMarkerRef.current) {
+          pickupMarkerRef.current.setLatLng([newPickup.lat, newPickup.lng]);
+        } else {
+          const greenIcon = leaflet.divIcon({
+            className: 'custom-leaflet-marker',
+            html: `<div style="background:#059669;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;border:2.5px solid #fff;box-shadow:0 4px 10px rgba(0,0,0,0.35)">A</div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+          });
+          const marker = leaflet
+            .marker([newPickup.lat, newPickup.lng], {
+              icon: greenIcon,
+              draggable: true,
+            })
+            .addTo(map);
+
+          marker.on('dragend', () => {
+            const pos = marker.getLatLng();
+            const updated: LocationData = {
+              address: `পিকআপ (${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)})`,
+              lat: pos.lat,
+              lng: pos.lng,
+            };
+            pickupLocRef.current = updated;
+            setPickupLoc(updated);
+            updateMarkersAndLine(updated, deliveryLocRef.current);
+          });
+
+          pickupMarkerRef.current = marker;
+        }
+      } else if (pickupMarkerRef.current) {
+        map.removeLayer(pickupMarkerRef.current);
+        pickupMarkerRef.current = null;
+      }
+
+      // 2. Delivery Marker (B)
+      if (newDelivery?.lat != null && newDelivery?.lng != null) {
+        if (deliveryMarkerRef.current) {
+          deliveryMarkerRef.current.setLatLng([newDelivery.lat, newDelivery.lng]);
+        } else {
+          const blueIcon = leaflet.divIcon({
+            className: 'custom-leaflet-marker',
+            html: `<div style="background:#2563eb;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;border:2.5px solid #fff;box-shadow:0 4px 10px rgba(0,0,0,0.35)">B</div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+          });
+          const marker = leaflet
+            .marker([newDelivery.lat, newDelivery.lng], {
+              icon: blueIcon,
+              draggable: true,
+            })
+            .addTo(map);
+
+          marker.on('dragend', () => {
+            const pos = marker.getLatLng();
+            const updated: LocationData = {
+              address: `ডেলিভারি (${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)})`,
+              lat: pos.lat,
+              lng: pos.lng,
+            };
+            deliveryLocRef.current = updated;
+            setDeliveryLoc(updated);
+            updateMarkersAndLine(pickupLocRef.current, updated);
+          });
+
+          deliveryMarkerRef.current = marker;
+        }
+      } else if (deliveryMarkerRef.current) {
+        map.removeLayer(deliveryMarkerRef.current);
+        deliveryMarkerRef.current = null;
+      }
+
+      // 3. Draw Connecting Line between A and B
+      if (
+        newPickup?.lat != null &&
+        newPickup?.lng != null &&
+        newDelivery?.lat != null &&
+        newDelivery?.lng != null
+      ) {
+        const latlngs = [
+          [newPickup.lat, newPickup.lng],
+          [newDelivery.lat, newDelivery.lng],
+        ];
+        if (polylineRef.current) {
+          polylineRef.current.setLatLngs(latlngs);
+        } else {
+          polylineRef.current = leaflet
+            .polyline(latlngs, {
+              color: '#10b981',
+              weight: 4,
+              dashArray: '8, 8',
+              opacity: 0.9,
+            })
+            .addTo(map);
+        }
+        map.fitBounds(latlngs, { padding: [56, 56], maxZoom: 16 });
+      } else if (polylineRef.current) {
+        map.removeLayer(polylineRef.current);
+        polylineRef.current = null;
+      }
+    },
+    []
+  );
+
+  const placePin = useCallback(
+    (lat: number, lng: number, label?: string) => {
+      const currentPin = activePinTypeRef.current;
+
+      if (currentPin === 'pickup') {
+        const updatedPickup: LocationData = {
+          address: label || `পিকআপ (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+          lat,
+          lng,
+        };
+        pickupLocRef.current = updatedPickup;
+        setPickupLoc(updatedPickup);
+        updateMarkersAndLine(updatedPickup, deliveryLocRef.current);
+
+        // Auto-advance to delivery pin if not set yet
+        if (!deliveryLocRef.current) {
+          activePinTypeRef.current = 'delivery';
+          setActivePinType('delivery');
+        }
+      } else {
+        const updatedDelivery: LocationData = {
+          address: label || `ডেলিভারি (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+          lat,
+          lng,
+        };
+        deliveryLocRef.current = updatedDelivery;
+        setDeliveryLoc(updatedDelivery);
+        updateMarkersAndLine(pickupLocRef.current, updatedDelivery);
+      }
+    },
+    [updateMarkersAndLine]
+  );
 
   useEffect(() => {
     if (!isOpen) return;
 
-    // Reset local states
+    // Reset all state & marker refs cleanly on open
     setPickupLoc(null);
     setDeliveryLoc(null);
     setActivePinType('pickup');
+    pickupLocRef.current = null;
+    deliveryLocRef.current = null;
+    activePinTypeRef.current = 'pickup';
+    pickupMarkerRef.current = null;
+    deliveryMarkerRef.current = null;
+    polylineRef.current = null;
     setSearchQuery('');
     setMapError(false);
 
-    let L: any = null;
+    let cancelled = false;
 
     const initMap = async () => {
       try {
-        if (!mapContainerRef.current) return;
+        if (!mapContainerRef.current || cancelled) return;
 
-        L = await import('leaflet');
+        const L = await import('leaflet');
+        if (cancelled || !mapContainerRef.current) return;
+        leafletRef.current = L;
 
         // Inject Leaflet CSS if missing
         if (!document.getElementById('leaflet-css-picker')) {
@@ -98,17 +271,17 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
           maxZoom: 20,
         }).addTo(map);
 
-        // Handle Map Click
+        // Handle Map Click using ref-backed placePin (no stale closure)
         map.on('click', (e: any) => {
           const { lat, lng } = e.latlng;
-          handleMapClickAt(lat, lng, L);
+          placePin(lat, lng);
         });
 
         // Try getting current GPS to center map initially
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
-              if (mapInstanceRef.current) {
+              if (!cancelled && mapInstanceRef.current && !pickupLocRef.current && !deliveryLocRef.current) {
                 mapInstanceRef.current.setView([pos.coords.latitude, pos.coords.longitude], 15);
               }
             },
@@ -118,7 +291,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
         }
       } catch (err) {
         console.warn('[DistanceMapModal] Leaflet error:', err);
-        setMapError(true);
+        if (!cancelled) setMapError(true);
       }
     };
 
@@ -127,105 +300,17 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
     }, 60);
 
     return () => {
+      cancelled = true;
       clearTimeout(timer);
+      pickupMarkerRef.current = null;
+      deliveryMarkerRef.current = null;
+      polylineRef.current = null;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
     };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
-
-  const updateMarkersAndLine = (
-    newPickup: LocationData | null,
-    newDelivery: LocationData | null,
-    L: any
-  ) => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    const leaflet = L || (window as any).L;
-    if (!leaflet) return;
-
-    // 1. Pickup Marker
-    if (newPickup?.lat && newPickup?.lng) {
-      if (pickupMarkerRef.current) {
-        pickupMarkerRef.current.setLatLng([newPickup.lat, newPickup.lng]);
-      } else {
-        const greenIcon = leaflet.divIcon({
-          className: 'custom-leaflet-marker',
-          html: `<div style="background:#10b981;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;border:2px solid #fff;box-shadow:0 4px 10px rgba(0,0,0,0.3)">A</div>`,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
-        });
-        pickupMarkerRef.current = leaflet.marker([newPickup.lat, newPickup.lng], {
-          icon: greenIcon,
-        }).addTo(map);
-      }
-    } else if (pickupMarkerRef.current) {
-      map.removeLayer(pickupMarkerRef.current);
-      pickupMarkerRef.current = null;
-    }
-
-    // 2. Delivery Marker
-    if (newDelivery?.lat && newDelivery?.lng) {
-      if (deliveryMarkerRef.current) {
-        deliveryMarkerRef.current.setLatLng([newDelivery.lat, newDelivery.lng]);
-      } else {
-        const blueIcon = leaflet.divIcon({
-          className: 'custom-leaflet-marker',
-          html: `<div style="background:#3b82f6;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;border:2px solid #fff;box-shadow:0 4px 10px rgba(0,0,0,0.3)">B</div>`,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
-        });
-        deliveryMarkerRef.current = leaflet.marker([newDelivery.lat, newDelivery.lng], {
-          icon: blueIcon,
-        }).addTo(map);
-      }
-    } else if (deliveryMarkerRef.current) {
-      map.removeLayer(deliveryMarkerRef.current);
-      deliveryMarkerRef.current = null;
-    }
-
-    // 3. Draw Connecting Line between A and B
-    if (newPickup?.lat && newPickup?.lng && newDelivery?.lat && newDelivery?.lng) {
-      const latlngs = [
-        [newPickup.lat, newPickup.lng],
-        [newDelivery.lat, newDelivery.lng],
-      ];
-      if (polylineRef.current) {
-        polylineRef.current.setLatLngs(latlngs);
-      } else {
-        polylineRef.current = leaflet.polyline(latlngs, {
-          color: '#10b981',
-          weight: 4,
-          dashArray: '8, 8',
-          opacity: 0.9,
-        }).addTo(map);
-      }
-      map.fitBounds(latlngs, { padding: [50, 50] });
-    } else if (polylineRef.current) {
-      map.removeLayer(polylineRef.current);
-      polylineRef.current = null;
-    }
-  };
-
-  const handleMapClickAt = (lat: number, lng: number, L?: any) => {
-    if (activePinType === 'pickup') {
-      const updatedPickup: LocationData = { address: `পিকআপ পয়েন্ট (${lat.toFixed(4)}, ${lng.toFixed(4)})`, lat, lng };
-      setPickupLoc(updatedPickup);
-      updateMarkersAndLine(updatedPickup, deliveryLoc, L);
-      // Auto switch to delivery pin selection if delivery not set yet
-      if (!deliveryLoc) {
-        setActivePinType('delivery');
-      }
-    } else {
-      const updatedDelivery: LocationData = { address: `ডেলিভারি পয়েন্ট (${lat.toFixed(4)}, ${lng.toFixed(4)})`, lat, lng };
-      setDeliveryLoc(updatedDelivery);
-      updateMarkersAndLine(pickupLoc, updatedDelivery, L);
-    }
-  };
+  }, [isOpen, placePin]);
 
   // Search using Nominatim
   const handleSearch = async (e: React.FormEvent) => {
@@ -238,7 +323,9 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
 
     let countryParam = '';
     if (mapPref === 'BD') countryParam = '&countrycodes=bd';
-    else if (mapPref === 'CUSTOM' && customCode) countryParam = `&countrycodes=${encodeURIComponent(customCode.trim())}`;
+    else if (mapPref === 'CUSTOM' && customCode) {
+      countryParam = `&countrycodes=${encodeURIComponent(customCode.trim())}`;
+    }
 
     try {
       const res = await fetch(
@@ -251,8 +338,14 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
           if (data && data.length > 0) {
             const lat = parseFloat(data[0].lat);
             const lng = parseFloat(data[0].lon);
+            const shortName = String(data[0].display_name || searchQuery)
+              .split(',')
+              .slice(0, 2)
+              .join(',')
+              .trim();
             mapInstanceRef.current.setView([lat, lng], 16);
-            handleMapClickAt(lat, lng);
+            placePin(lat, lng, shortName);
+            setSearchQuery('');
           } else {
             if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
               (window as any).showCustomAlert('স্থান পাওয়া যায়নি', 'কোনো স্থান পাওয়া যায়নি। আবার চেষ্টা করুন।', 'warning');
@@ -279,7 +372,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
         if (mapInstanceRef.current) {
           mapInstanceRef.current.setView([lat, lng], 17);
         }
-        handleMapClickAt(lat, lng);
+        placePin(lat, lng, 'বর্তমান লোকেশন');
         setIsLocating(false);
       },
       () => {
@@ -294,8 +387,18 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
     );
   };
 
+  const handleResetPins = () => {
+    pickupLocRef.current = null;
+    deliveryLocRef.current = null;
+    activePinTypeRef.current = 'pickup';
+    setPickupLoc(null);
+    setDeliveryLoc(null);
+    setActivePinType('pickup');
+    updateMarkersAndLine(null, null);
+  };
+
   const handleConfirm = () => {
-    if (!calculatedKm || calculatedKm <= 0) {
+    if (!pickupLoc || !deliveryLoc || calculatedKm === null) {
       if (typeof window !== 'undefined' && (window as any).showCustomAlert) {
         (window as any).showCustomAlert('স্থান নির্বাচন করুন', 'দয়া করে ম্যাপে পিকআপ ও ডেলিভারি দুইটি স্থান সিলেক্ট করুন।', 'warning');
       } else {
@@ -322,53 +425,90 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
         <div className="shrink-0 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 shadow-sm z-20">
           <div className="flex items-center space-x-2 text-gray-900 font-extrabold text-sm">
             <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>ম্যাপে দূরত্ব নির্ণয় করুন (Pick Distance)</span>
+            <span>ম্যাপে দূরত্ব নির্ণয়</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all border border-red-200"
-          >
-            <X className="w-4 h-4" />
-            <span>Close</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {(pickupLoc || deliveryLoc) && (
+              <button
+                type="button"
+                onClick={handleResetPins}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold transition-all"
+                title="পিন রিসেট করুন"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>রিসেট</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition-all border border-red-200"
+            >
+              <X className="w-4 h-4" />
+              <span>বন্ধ</span>
+            </button>
+          </div>
         </div>
 
         {/* Pin selector tabs */}
-        <div className="shrink-0 bg-emerald-50/60 p-2 border-b border-emerald-100 flex items-center justify-center gap-2 z-20">
+        <div className="shrink-0 bg-gray-50 p-2 border-b border-gray-100 flex items-center justify-center gap-2 z-20">
           <button
             type="button"
-            onClick={() => setActivePinType('pickup')}
-            className={`flex-1 flex items-center justify-center space-x-1.5 py-2 px-3 rounded-2xl text-xs font-bold transition-all ${
+            onClick={() => {
+              activePinTypeRef.current = 'pickup';
+              setActivePinType('pickup');
+            }}
+            className={`flex-1 flex items-center justify-center space-x-1.5 py-2 px-3 rounded-2xl text-xs font-bold transition-all min-w-0 ${
               activePinType === 'pickup'
-                ? 'bg-emerald-600 text-white shadow-md scale-102'
+                ? 'bg-emerald-600 text-white shadow-md'
                 : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
             }`}
           >
-            <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-black">A</span>
-            <span>১. পিকআপ স্থান {pickupLoc ? '✓' : ''}</span>
+            <span
+              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                activePinType === 'pickup' ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-700'
+              }`}
+            >
+              A
+            </span>
+            <span className="truncate">
+              {pickupLoc ? pickupLoc.address : '১. পিকআপ স্থান'}
+            </span>
+            {pickupLoc && <Check className="w-3.5 h-3.5 shrink-0" />}
           </button>
 
           <ArrowRight className="w-4 h-4 text-gray-400 shrink-0" />
 
           <button
             type="button"
-            onClick={() => setActivePinType('delivery')}
-            className={`flex-1 flex items-center justify-center space-x-1.5 py-2 px-3 rounded-2xl text-xs font-bold transition-all ${
+            onClick={() => {
+              activePinTypeRef.current = 'delivery';
+              setActivePinType('delivery');
+            }}
+            className={`flex-1 flex items-center justify-center space-x-1.5 py-2 px-3 rounded-2xl text-xs font-bold transition-all min-w-0 ${
               activePinType === 'delivery'
-                ? 'bg-blue-600 text-white shadow-md scale-102'
+                ? 'bg-blue-600 text-white shadow-md'
                 : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
             }`}
           >
-            <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-black">B</span>
-            <span>২. ডেলিভারি স্থান {deliveryLoc ? '✓' : ''}</span>
+            <span
+              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                activePinType === 'delivery' ? 'bg-white/25 text-white' : 'bg-blue-100 text-blue-700'
+              }`}
+            >
+              B
+            </span>
+            <span className="truncate">
+              {deliveryLoc ? deliveryLoc.address : '২. ডেলিভারি স্থান'}
+            </span>
+            {deliveryLoc && <Check className="w-3.5 h-3.5 shrink-0" />}
           </button>
         </div>
 
         {/* Map Body */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 relative">
           {mapError ? (
-            <div className="p-8 text-center bg-amber-50 flex flex-col items-center justify-center space-y-3">
+            <div className="p-8 text-center bg-amber-50 flex flex-col items-center justify-center space-y-3 h-full">
               <AlertTriangle className="w-8 h-8 text-amber-600" />
               <h4 className="font-extrabold text-gray-900 text-sm">ম্যাপ লোড করা সম্ভব হয়নি</h4>
               <p className="text-xs text-gray-600">আপনি সরাসরি ইনপুট বক্সে দূরত্ব (km) লিখে দিতে পারেন।</p>
@@ -385,8 +525,8 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
                     type="text"
                     placeholder={
                       activePinType === 'pickup'
-                        ? 'পিকআপ স্থান খুঁজুন...'
-                        : 'ডেলিভারি স্থান খুঁজুন...'
+                        ? 'পিকআপ (A) স্থান খুঁজুন...'
+                        : 'ডেলিভারি (B) স্থান খুঁজুন...'
                     }
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -407,10 +547,10 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
               <div ref={mapContainerRef} className="w-full h-full z-10" />
 
               {/* Floating instruction pill */}
-              <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 text-white text-[11px] font-bold px-3 py-1 rounded-full shadow-lg backdrop-blur-md border border-slate-700 pointer-events-none text-center">
+              <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 text-white text-[11px] font-bold px-3 py-1 rounded-full shadow-lg backdrop-blur-md border border-slate-700 pointer-events-none text-center whitespace-nowrap">
                 {activePinType === 'pickup'
-                  ? 'ম্যাপে ট্যাপ করে পিকআপ পিন A বসান'
-                  : 'ম্যাপে ট্যাপ করে ডেলিভারি পিন B বসান'}
+                  ? 'ম্যাপে ট্যাপ করে পিকআপ পিন (A) বসান'
+                  : 'ম্যাপে ট্যাপ করে ডেলিভারি পিন (B) বসান'}
               </div>
 
               {/* GPS button */}
@@ -419,7 +559,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
                 onClick={handleCurrentGPS}
                 disabled={isLocating}
                 className="absolute bottom-4 right-3 z-20 p-2.5 bg-white border border-emerald-200 rounded-2xl shadow-lg text-emerald-700 hover:bg-emerald-50 active:scale-95 transition-all"
-                title="বর্তমান লোকেশন"
+                title="বর্তমান লোকেশন বসান"
               >
                 <Navigation className={`w-5 h-5 ${isLocating ? 'animate-spin' : ''}`} />
               </button>
@@ -430,9 +570,15 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
         {/* Footer info & confirm */}
         <div className="shrink-0 p-3.5 bg-slate-900 text-white flex items-center justify-between gap-3 z-20">
           <div>
-            <span className="text-[10px] text-gray-400 font-medium block">আনুমানিক দূরত্ব (Calculated Distance):</span>
+            <span className="text-[10px] text-gray-400 font-medium block">
+              {pickupLoc && deliveryLoc
+                ? 'A থেকে B আনুমানিক দূরত্ব'
+                : !pickupLoc
+                ? 'প্রথমে পিকআপ (A) নির্বাচন করুন'
+                : 'এবার ডেলিভারি (B) নির্বাচন করুন'}
+            </span>
             <span className="text-lg font-black text-emerald-400">
-              {calculatedKm !== null ? `${calculatedKm} km` : 'সিলেক্ট করুন'}
+              {calculatedKm !== null ? `${calculatedKm} km` : '—'}
             </span>
           </div>
 
@@ -447,7 +593,7 @@ export const DistanceCalculatorMapModal: React.FC<DistanceCalculatorMapModalProp
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={!calculatedKm}
+              disabled={calculatedKm === null}
               className="flex items-center space-x-1 px-4 py-2 rounded-xl text-xs font-extrabold bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-40 transition-all active:scale-95 shadow-md shadow-emerald-500/20"
             >
               <Check className="w-4 h-4" />

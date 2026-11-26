@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus } from '@/types';
-import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store, UserX, ChevronDown, ChevronUp } from 'lucide-react';
+import { MapPin, ArrowRight, Clock, Calendar, CheckCircle2, XCircle, Truck, PackageCheck, AlertCircle, UserCheck, ShoppingBag, Eye, FileText, FileEdit, RotateCcw, Store, UserX, ChevronDown, ChevronUp, Phone } from 'lucide-react';
 import { formatCreatedAt, formatPlacedDateTime, getElapsedTime, getDeliveryDurationText, getHelperUrgencyBgClass } from '@/lib/timeUtils';
 import { useSecondTick } from '@/hooks/useSecondTick';
 import { calculateDistanceKm } from '@/lib/pricing';
@@ -162,6 +162,10 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const fromStore = isOrderFromStore(order);
   const serviceInfo = getServiceIconInfo(order.service);
   const isCustomerPaid = Boolean(order.customerPayment?.transactionId || order.isPaid);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const customerUser = order.customerId ? fallbackStore.users.get(order.customerId) : undefined;
+  const customerPhoto = customerUser?.photoURL;
+  const customerInitial = ((order.customerName || 'Customer').trim().charAt(0) || 'C').toUpperCase();
 
   // One shared clock for every card on screen, paused while the app is hidden,
   // instead of one interval per card ticking behind a dark screen.
@@ -245,8 +249,55 @@ export const OrderCard: React.FC<OrderCardProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 text-[10px] text-gray-500 font-medium truncate mt-0.5">
-                  <span className="truncate">👤 {order.customerName || 'Customer'}</span>
+                <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium truncate mt-0.5">
+                  <span className="w-4 h-4 rounded-full overflow-hidden shrink-0 inline-flex items-center justify-center bg-emerald-100 text-emerald-800 font-black text-[9px] border border-emerald-200">
+                    {customerPhoto && !avatarFailed ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={customerPhoto}
+                        alt={order.customerName || 'Customer'}
+                        onError={() => setAvatarFailed(true)}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      customerInitial
+                    )}
+                  </span>
+                  <span className="truncate">{order.customerName || 'Customer'}</span>
+                  {(() => {
+                    const custPhone = order.alternativePhone || order.customerPhone;
+                    if (!custPhone) return null;
+                    const cleanDigits = custPhone.replace(/\D/g, '');
+                    const waNumber = cleanDigits.startsWith('880')
+                      ? cleanDigits
+                      : cleanDigits.startsWith('0')
+                        ? `88${cleanDigits}`
+                        : `880${cleanDigits}`;
+                    return (
+                      <span className="inline-flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <a
+                          href={`tel:${custPhone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Call ${custPhone}`}
+                          className="w-5 h-5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                        >
+                          <Phone className="w-2.5 h-2.5" />
+                        </a>
+                        <a
+                          href={`https://wa.me/${waNumber}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title={`WhatsApp ${custPhone}`}
+                          className="w-5 h-5 rounded-md bg-[#25D366] hover:bg-[#1ebe5d] text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                        >
+                          <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                          </svg>
+                        </a>
+                      </span>
+                    );
+                  })()}
                   {order.deliveredAt && (
                     <span className="shrink-0 text-gray-400">• {formatPlacedDateTime(order.deliveredAt)}</span>
                   )}
@@ -284,16 +335,20 @@ export const OrderCard: React.FC<OrderCardProps> = ({
 
     return (
       <div
-        onClick={onClick}
-        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.99] overflow-hidden ${getHelperCardContainerStyle()}`}
+        className={`rounded-3xl border shadow-soft hover:shadow-lg transition-all duration-200 overflow-hidden ${getHelperCardContainerStyle()}`}
       >
         {/* Status accent bar at top */}
         <div className={`h-1.5 w-full ${getHelperTopBarColor()}`} />
 
         <div className="p-4 space-y-3">
-          {/* Top metadata row: Order ID badge (top-left) & Timer/Status (top-right) */}
+          {/* Top metadata row: Order ID & Status badge (top-left) & Timer (top-right) */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 flex-wrap">
+              {/* Status */}
+              <span className={`flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${badge.color}`}>
+                <BadgeIcon className="w-2.5 h-2.5" />
+                <span>{badge.label}</span>
+              </span>
               <span className="bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shrink-0 shadow-xs">
                 #{order.id}
               </span>
@@ -330,12 +385,6 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               }`} title={urgency.isPaused ? 'Two-Way Order: Timer is paused until scheduled return' : undefined}>
                 <Clock className={`w-4 h-4 ${urgency.isPaused ? 'text-indigo-600' : urgency.urgencyLevel === 'red' ? 'text-red-700 animate-spin' : 'text-red-600 animate-spin-slow'}`} />
                 <span>{urgency.isPaused ? `⏸ ${elapsed}` : elapsed}</span>
-              </span>
-
-              {/* Status */}
-              <span className={`flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${badge.color}`}>
-                <BadgeIcon className="w-2.5 h-2.5" />
-                <span>{badge.label}</span>
               </span>
 
               {/* Collapse button for finished orders */}
@@ -386,20 +435,76 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           {/* Customer Name & Short Delivery Address */}
           <div className="flex flex-col gap-1 py-1.5 px-2.5 rounded-xl bg-gray-50/80 border border-gray-100 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-bold text-gray-900 truncate flex items-center gap-1.5 flex-wrap">
-                <span>👤 {order.customerName || 'Customer'}</span>
-                {isCustomerPaid && (
-                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
-                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                    <span>Customer Paid</span>
-                  </span>
-                )}
-                {fromStore && (
-                  <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
-                    STORE
-                  </span>
-                )}
-              </span>
+              <div className="flex items-start gap-2 min-w-0 flex-1">
+                <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center bg-emerald-100 text-emerald-800 font-black text-xs border border-emerald-200 mt-0.5">
+                  {customerPhoto && !avatarFailed ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={customerPhoto}
+                      alt={order.customerName || 'Customer'}
+                      onError={() => setAvatarFailed(true)}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    customerInitial
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap leading-snug">
+                    <span className="truncate">{order.customerName || 'Customer'}</span>
+                    {isCustomerPaid && (
+                      <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
+                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                        <span>Customer Paid</span>
+                      </span>
+                    )}
+                    {fromStore && (
+                      <span className="px-1.5 py-0.2 rounded bg-purple-600 text-white text-[9px] font-black tracking-wide">
+                        STORE
+                      </span>
+                    )}
+                  </div>
+                  {(order.alternativePhone || order.customerPhone) && (
+                    <p className="text-[10px] font-mono font-semibold text-gray-500 leading-tight mt-0.5">
+                      {order.alternativePhone || order.customerPhone}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {(() => {
+                const custPhone = order.alternativePhone || order.customerPhone;
+                if (!custPhone) return null;
+                const cleanDigits = custPhone.replace(/\D/g, '');
+                const waNumber = cleanDigits.startsWith('880')
+                  ? cleanDigits
+                  : cleanDigits.startsWith('0')
+                    ? `88${cleanDigits}`
+                    : `880${cleanDigits}`;
+                return (
+                  <div className="inline-flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <a
+                      href={`tel:${custPhone}`}
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Call ${custPhone}`}
+                      className="w-7 h-7 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-xs transition-all active:scale-90"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                    </a>
+                    <a
+                      href={`https://wa.me/${waNumber}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={`WhatsApp ${custPhone}`}
+                      className="w-7 h-7 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white flex items-center justify-center shadow-xs transition-all active:scale-90"
+                    >
+                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                      </svg>
+                    </a>
+                  </div>
+                );
+              })()}
             </div>
             {order.deliveryLocation?.address && (
               <div className="flex items-center gap-1 text-gray-600 text-[11px] font-medium min-w-0">
@@ -579,21 +684,64 @@ export const OrderCard: React.FC<OrderCardProps> = ({
               <span className={`p-2 rounded-xl border ${serviceInfo.bgClass} ${serviceInfo.borderClass} ${serviceInfo.colorClass} shrink-0 flex items-center justify-center shadow-xs`}>
                 <ServiceIcon service={order.service} className="w-5 h-5" />
               </span>
-              <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
-                {order.customerName || 'Customer'}
-              </h3>
-              {isCustomerPaid && (
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
-                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                  <span>Customer Paid</span>
-                </span>
-              )}
-              {fromStore && (
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
-                  <Store className="w-2.5 h-2.5 text-purple-600" />
-                  <span>Store</span>
-                </span>
-              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <h3 className="font-extrabold text-gray-900 text-base leading-tight line-clamp-1">
+                    {order.customerName || 'Customer'}
+                  </h3>
+                  {(() => {
+                    const custPhone = order.alternativePhone || order.customerPhone;
+                    if (!custPhone) return null;
+                    const cleanDigits = custPhone.replace(/\D/g, '');
+                    const waNumber = cleanDigits.startsWith('880')
+                      ? cleanDigits
+                      : cleanDigits.startsWith('0')
+                        ? `88${cleanDigits}`
+                        : `880${cleanDigits}`;
+                    return (
+                      <div className="inline-flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <a
+                          href={`tel:${custPhone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Call ${custPhone}`}
+                          className="w-6 h-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-xs transition-all active:scale-90"
+                        >
+                          <Phone className="w-3 h-3" />
+                        </a>
+                        <a
+                          href={`https://wa.me/${waNumber}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title={`WhatsApp ${custPhone}`}
+                          className="w-6 h-6 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white flex items-center justify-center shadow-xs transition-all active:scale-90"
+                        >
+                          <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                          </svg>
+                        </a>
+                      </div>
+                    );
+                  })()}
+                  {isCustomerPaid && (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black shadow-xs shrink-0">
+                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                      <span>Customer Paid</span>
+                    </span>
+                  )}
+                  {fromStore && (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black shadow-xs shrink-0">
+                      <Store className="w-2.5 h-2.5 text-purple-600" />
+                      <span>Store</span>
+                    </span>
+                  )}
+                </div>
+                {(order.alternativePhone || order.customerPhone) && (
+                  <p className="text-[10px] font-mono font-semibold text-gray-500 leading-tight mt-0.5">
+                    {order.alternativePhone || order.customerPhone}
+                  </p>
+                )}
+              </div>
             </div>
             <span className="inline-block mt-1 bg-slate-900 text-white font-black font-mono text-[10px] px-2 py-0.5 rounded-md shadow-xs">
               #{order.id}

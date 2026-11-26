@@ -430,7 +430,16 @@ export function calculateEstimatedFee(
   const distanceFee = Math.round(distanceKm * perKmRate);
   const weightFee = Math.round(weightKg * perKgRate);
 
-  let deliverySubtotal = distanceFee + weightFee;
+  // Custom Store fee calculation
+  const customStoreEnabled = settings?.customStorePricingEnabled !== false;
+  let customStoreFee = 0;
+  const customStoreItemCount = customStoreEnabled ? Math.max(0, Number(params.customStoreItemCount) || 0) : 0;
+  const customStoreUnitFee = customStoreEnabled ? (Number(settings?.customStorePricingAmount ?? 15) || 15) : 0;
+  if (customStoreEnabled && customStoreItemCount > 0) {
+    customStoreFee = customStoreItemCount * customStoreUnitFee;
+  }
+
+  let deliverySubtotal = distanceFee + weightFee + customStoreFee;
   if (deliverySubtotal < minFee) {
     deliverySubtotal = minFee;
   }
@@ -448,18 +457,9 @@ export function calculateEstimatedFee(
     }
   }
 
-  // Custom Store fee calculation
-  const customStoreEnabled = settings?.customStorePricingEnabled !== false;
-  let customStoreFee = 0;
-  const customStoreItemCount = customStoreEnabled ? Math.max(0, Number(params.customStoreItemCount) || 0) : 0;
-  const customStoreUnitFee = customStoreEnabled ? (Number(settings?.customStorePricingAmount ?? 15) || 15) : 0;
-  if (customStoreEnabled && customStoreItemCount > 0) {
-    customStoreFee = customStoreItemCount * customStoreUnitFee;
-  }
-
   const discount = Math.max(0, Number(params.discountAmount) || 0);
 
-  const rawTotal = deliverySubtotal + returnFee + processingFee + customStoreFee - discount;
+  const rawTotal = deliverySubtotal + returnFee + processingFee - discount;
   const totalFee = Math.max(0, Math.round(rawTotal));
 
   return {

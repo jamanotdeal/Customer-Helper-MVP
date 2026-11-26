@@ -175,7 +175,12 @@ export const HomeSearchBox: React.FC<HomeSearchBoxProps> = ({
   useEffect(() => {
     const sync = () => {
       const unblockedShops = Array.from(fallbackStore.shops.values()).filter(
-        (s) => !s.isBlocked && s.status !== 'Rejected' && s.status !== 'REJECTED' && (!s.status || s.status === 'Approved' || s.status === 'APPROVED')
+        (s) =>
+          !s.isBlocked &&
+          s.status !== 'Rejected' &&
+          s.status !== 'REJECTED' &&
+          (!s.status || s.status === 'Approved' || s.status === 'APPROVED') &&
+          fallbackStore.getProductsForShop(s.id, s.ownerUserId).length > 0
       );
       const validShopIds = new Set(unblockedShops.map((s) => s.id));
       unblockedShops.forEach((s) => {

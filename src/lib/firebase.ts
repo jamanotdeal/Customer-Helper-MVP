@@ -1070,6 +1070,8 @@ class FallbackStore {
   private _rangeReads: Map<string, { at: number; promise: Promise<void> }> = new Map();
   private _lifetimePromise: Promise<void> | null = null;
   private _lifetimeReady = false;
+  private _helperWalletPromises: Map<string, Promise<void>> = new Map();
+  private _helperWalletReadyFor: Set<string> = new Set();
   // Orders being re-read after leaving one of the admin's live queries.
   private _recheckingOrders: Set<string> = new Set();
   // When each whole collection was last read in full for the admin's filters
@@ -2490,6 +2492,8 @@ class FallbackStore {
     this._rangeReads.clear();
     this._lifetimePromise = null;
     this._lifetimeReady = false;
+    this._helperWalletPromises.clear();
+    this._helperWalletReadyFor.clear();
     this.notifications.clear();
     this._knownNotifIds.clear();
     if (typeof sessionStorage !== 'undefined') {
@@ -3690,6 +3694,82 @@ class FallbackStore {
 
   public isAdminLifetimeDataReady(): boolean {
     return this._lifetimeReady;
+  }
+
+  public isHelperWalletDataReady(helperId: string): boolean {
+    return Boolean(helperId && this._helperWalletReadyFor.has(helperId));
+  }
+
+  /**
+   * Ensures every order, shopOrder, withdrawal, shop, and pricingSetting needed
+   * to compute a helper's exact wallet & payback is loaded from Firestore.
+   */
+  public ensureHelperWalletData(helperId: string, force = false): Promise<void> {
+    if (!helperId) return Promise.resolve();
+    if (!force && this._helperWalletReadyFor.has(helperId)) return Promise.resolve();
+    const existing = this._helperWalletPromises.get(helperId);
+    if (existing && !force) return existing;
+
+    const role = this._listenersRole;
+    const promise = Promise.all([
+      getDocs(query(collection(db, 'orders'), where('helperId', '==', helperId))),
+      getDocs(query(collection(db, 'shopOrders'), where('helperId', '==', helperId))),
+      getDocs(query(collection(db, 'withdrawals'), where('helperId', '==', helperId))),
+      getDocs(collection(db, 'shops')),
+      getDoc(doc(db, 'settings', 'pricing')),
+      getDocs(collection(db, 'storeApplications')).catch(() => null),
+    ])
+      .then(([ordersSnap, shopOrdersSnap, withdrawalsSnap, shopsSnap, pricingSnap, storeAppsSnap]) => {
+        if (this._listenersRole !== role) return;
+
+        ordersSnap.forEach((docSnap) => {
+          const data = docSnap.data() as Order;
+          const id = data.id || docSnap.id;
+          this.orders.set(id, this.resolveOrderLocations({ ...data, id }));
+        });
+
+        shopOrdersSnap.forEach((docSnap) => {
+          const data = docSnap.data() as ShopOrder;
+          const id = data.id || docSnap.id;
+          this.shopOrders.set(id, { ...data, id });
+        });
+
+        withdrawalsSnap.forEach((docSnap) => {
+          const data = docSnap.data() as WithdrawalRequest;
+          const id = data.id || docSnap.id;
+          this.withdrawals.set(id, { ...data, id });
+        });
+
+        shopsSnap.forEach((docSnap) => {
+          const s = docSnap.data() as Shop;
+          const id = s.id || docSnap.id;
+          this.shops.set(id, { ...s, id });
+        });
+
+        if (pricingSnap.exists()) {
+          this.pricingSettings = { ...DEFAULT_PRICING_SETTINGS, ...(pricingSnap.data() as PricingSettings) };
+        }
+
+        if (storeAppsSnap) {
+          storeAppsSnap.forEach((docSnap) => {
+            const app = docSnap.data() as StoreApplication;
+            const id = app.id || docSnap.id;
+            this.storeApplications.set(id, { ...app, id });
+          });
+        }
+
+        this._helperWalletReadyFor.add(helperId);
+        this.notify();
+      })
+      .catch((err) => {
+        console.warn('[Firestore] ensureHelperWalletData note:', err?.message || err);
+        if (this._helperWalletPromises.get(helperId) === promise) {
+          this._helperWalletPromises.delete(helperId);
+        }
+      });
+
+    this._helperWalletPromises.set(helperId, promise);
+    return promise;
   }
 
   /**
@@ -6004,7 +6084,7 @@ class FallbackStore {
             ? Math.max(updated.originalDeliveryFee || 0, minFee)
             : Math.max(updated.deliveryFee || 0, minFee);
           const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
-          await this.creditHelperEarning(helperId, helperShare, baseFeeForHelper, updated.id);
+          await this.creditHelperEarning(helperId, helperShare, baseFeeForHelper, updated.id, updated.processingFee || 0);
         } else if (previousStatus === 'DELIVERED' && updated.status !== 'DELIVERED') {
           // Status reverted/canceled from DELIVERED: Reverse previously credited earnings
           const baseFeeForHelper = existing.isFreeDelivery
@@ -6028,7 +6108,7 @@ class FallbackStore {
               ? Math.max(updated.originalDeliveryFee || 0, minFee)
               : Math.max(updated.deliveryFee || 0, minFee);
             const newHelperShare = calculateHelperCommission(newFee, this.pricingSettings);
-            await this.creditHelperEarning(updated.helperId, newHelperShare, newFee, updated.id);
+            await this.creditHelperEarning(updated.helperId, newHelperShare, newFee, updated.id, updated.processingFee || 0);
           } else {
             // Delivery fee or free-delivery settings adjusted on an already delivered order
             const oldBaseFee = existing.isFreeDelivery
@@ -6919,11 +6999,11 @@ class FallbackStore {
    * app for ten seconds. Anything that needs more than one wallet asks here.
    */
   public getHelperWallets(helperIds: Iterable<string>): Map<string, Wallet> {
-    type Tally = { earned: number; platformShare: number; returnableStoreAmount: number; storeCommission: number; paid: number };
+    type Tally = { earned: number; platformShare: number; returnableStoreAmount: number; storeCommission: number; processingFee: number; paid: number };
     const tallies = new Map<string, Tally>();
     Array.from(helperIds).forEach((id) => {
       if (id && !tallies.has(id)) {
-        tallies.set(id, { earned: 0, platformShare: 0, returnableStoreAmount: 0, storeCommission: 0, paid: 0 });
+        tallies.set(id, { earned: 0, platformShare: 0, returnableStoreAmount: 0, storeCommission: 0, processingFee: 0, paid: 0 });
       }
     });
 
@@ -6942,6 +7022,7 @@ class FallbackStore {
       const helperShare = calculateHelperCommission(baseFeeForHelper, this.pricingSettings);
       tally.earned += helperShare;
       tally.platformShare += baseFeeForHelper - helperShare;
+      tally.processingFee += o.processingFee || 0;
     });
 
     // All approved withdrawals are the single source of truth for paid commission.
@@ -6971,7 +7052,18 @@ class FallbackStore {
       if (parentOrder && !isDelivered(parentOrder)) return;
 
       const isMyself = so.shopId === 'myself';
-      const shop = !isMyself ? this.shops.get(so.shopId) : null;
+      let shop: Shop | null = null;
+      if (!isMyself && so.shopId) {
+        const cleanId = so.shopId.startsWith('store-') ? so.shopId.replace('store-', '') : so.shopId;
+        shop =
+          this.shops.get(so.shopId) ||
+          this.shops.get(cleanId) ||
+          this.shops.get(`store-${cleanId}`) ||
+          Array.from(this.shops.values()).find(
+            (s) => s.id === so.shopId || s.ownerUserId === so.shopId || s.id === `store-${cleanId}`
+          ) ||
+          null;
+      }
       const canReceive = !isMyself && !!shop && shop.canReceiveOrders !== false;
 
       if (canReceive) {
@@ -7001,7 +7093,7 @@ class FallbackStore {
     const updatedAt = new Date().toISOString();
     const wallets = new Map<string, Wallet>();
     tallies.forEach((tally, helperId) => {
-      const totalPayableToCompany = tally.platformShare + tally.returnableStoreAmount + tally.storeCommission;
+      const totalPayableToCompany = tally.platformShare + tally.returnableStoreAmount + tally.storeCommission + tally.processingFee;
       wallets.set(helperId, {
         userId: helperId,
         balance: Math.max(0, totalPayableToCompany - tally.paid),
@@ -7276,8 +7368,8 @@ class FallbackStore {
   }
 
 
-  public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string) {
-    const platformShare = Math.max(0, deliveryFee - helperShare);
+  public async creditHelperEarning(helperId: string, helperShare: number, deliveryFee: number, orderId: string, processingFee: number = 0) {
+    const platformShare = Math.max(0, deliveryFee - helperShare) + processingFee;
     const commissionPercent = 100 - (this.pricingSettings.helperCommissionPercent ?? 80);
 
     // ── Wallet: purely additive increment ──────────────────────────────────
@@ -7653,7 +7745,7 @@ class FallbackStore {
         storeOwed += o.productCost;
       }
 
-      const totalOwed = platformShare + storeOwed;
+      const totalOwed = platformShare + storeOwed + (o.processingFee || 0);
       return {
         order: o,
         totalOwed,

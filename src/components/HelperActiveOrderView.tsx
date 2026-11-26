@@ -107,11 +107,20 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       })()
   );
 
-  const [weightInput, setWeightInput] = useState(order.weightKg !== undefined ? String(order.weightKg) : '0');
+  const [weightInput, setWeightInput] = useState(
+    String(Math.max(1, order.weightKg || 1))
+  );
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('order-details-visibility', { detail: { delta: 1 } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent('order-details-visibility', { detail: { delta: -1 } }));
+    };
+  }, []);
 
   useEffect(() => {
     setProductCostInput(order.productCost !== undefined ? String(order.productCost) : '');
-    setWeightInput(order.weightKg !== undefined ? String(order.weightKg) : '0');
+    setWeightInput(String(Math.max(1, order.weightKg || 1)));
     setFeeInput(order.deliveryFee ? String(order.deliveryFee) : '');
     setHelperNoteInput(order.helperNote || '');
   }, [order.id, order.productCost, order.weightKg, order.deliveryFee, order.helperNote]);
@@ -362,8 +371,51 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     [fallbackStore.shops]
   );
 
-  // Best matched top 3 stores on our server when helper is typing custom cost store name
-  const topMatchedStores = useMemo(() => {
+  // Saved custom (unlisted) stores in localStorage for helper convenience
+  interface SavedCustomStore {
+    name: string;
+    phone: string;
+    updatedAt: number;
+  }
+  const SAVED_CUSTOM_STORES_KEY = 'helper_saved_custom_stores_v1';
+  const [savedCustomStores, setSavedCustomStores] = useState<SavedCustomStore[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = window.localStorage.getItem(SAVED_CUSTOM_STORES_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((s) => s && typeof s.name === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveCustomStoreToLocal = (name: string, phone: string) => {
+    const cleanName = name.trim();
+    const cleanPhone = phone.trim();
+    if (!cleanName) return;
+    setSavedCustomStores((prev) => {
+      const norm = cleanName.toLowerCase();
+      const next: SavedCustomStore[] = [
+        { name: cleanName, phone: cleanPhone, updatedAt: Date.now() },
+        ...prev.filter((s) => s.name.trim().toLowerCase() !== norm),
+      ].slice(0, 60);
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(SAVED_CUSTOM_STORES_KEY, JSON.stringify(next));
+        }
+      } catch {
+        // ignore storage quota errors
+      }
+      return next;
+    });
+  };
+
+  type StoreSearchSuggestion =
+    | { kind: 'listed'; shop: Shop; score: number }
+    | { kind: 'saved_custom'; store: SavedCustomStore; score: number };
+
+  // Best matched stores (saved custom stores + listed server stores) when helper is typing custom cost store name
+  const topMatchedStores = useMemo<StoreSearchSuggestion[]>(() => {
     const rawQuery = customSellerName.trim().toLowerCase();
     if (!rawQuery) return [];
 
@@ -373,42 +425,47 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     }
 
     const cleanDigits = rawQuery.replace(/\D/g, '');
+    const listedNamesSet = new Set(allShops.map((s) => (s.name || '').trim().toLowerCase()));
 
-    const scored = allShops
+    const scoreNameAndPhone = (nameRaw: string, phoneRaw: string, extraText = '') => {
+      const name = nameRaw.trim().toLowerCase();
+      const phone = phoneRaw.replace(/\D/g, '');
+      const extra = extraText.trim().toLowerCase();
+      if (name === rawQuery) return 1000;
+      if (name.startsWith(rawQuery)) return 500 - (name.length - rawQuery.length);
+      const words = name.split(/\s+/);
+      if (words.some((w) => w.startsWith(rawQuery))) return 300 - (name.length - rawQuery.length);
+      if (name.includes(rawQuery)) return 150 - (name.length - rawQuery.length);
+      if (cleanDigits.length >= 3 && phone.includes(cleanDigits)) return 100;
+      if (extra && extra.includes(rawQuery)) return 40;
+      return 0;
+    };
+
+    const savedMatches: StoreSearchSuggestion[] = savedCustomStores
+      .filter((st) => st.name && !listedNamesSet.has(st.name.trim().toLowerCase()))
+      .map((store) => ({
+        kind: 'saved_custom' as const,
+        store,
+        score: scoreNameAndPhone(store.name, store.phone || '') + 10, // prioritize helper's saved stores on tie
+      }))
+      .filter((item) => item.score > 10);
+
+    const listedMatches: StoreSearchSuggestion[] = allShops
       .map((shop) => {
-        const name = (shop.name || '').trim().toLowerCase();
-        const type = (shop.type || shop.category || '').trim().toLowerCase();
-        const address = (shop.location?.address || '').trim().toLowerCase();
-        const whatsapp = (shop.whatsapp || '').replace(/\D/g, '');
-        const managerWhatsapp = (shop.managerWhatsapp || '').replace(/\D/g, '');
-
-        let score = 0;
-        if (name === rawQuery) {
-          score = 1000;
-        } else if (name.startsWith(rawQuery)) {
-          score = 500 - (name.length - rawQuery.length);
-        } else {
-          const words = name.split(/\s+/);
-          if (words.some((w) => w.startsWith(rawQuery))) {
-            score = 300 - (name.length - rawQuery.length);
-          } else if (name.includes(rawQuery)) {
-            score = 150 - (name.length - rawQuery.length);
-          } else if (cleanDigits.length >= 3 && (whatsapp.includes(cleanDigits) || managerWhatsapp.includes(cleanDigits))) {
-            score = 100;
-          } else if (type.includes(rawQuery)) {
-            score = 50;
-          } else if (address.includes(rawQuery)) {
-            score = 30;
-          }
-        }
-
-        return { shop, score };
+        const phone = `${shop.whatsapp || ''} ${shop.managerWhatsapp || ''}`;
+        const extra = `${shop.type || shop.category || ''} ${shop.location?.address || ''}`;
+        return {
+          kind: 'listed' as const,
+          shop,
+          score: scoreNameAndPhone(shop.name || '', phone, extra),
+        };
       })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score);
+      .filter((item) => item.score > 0);
 
-    return scored.slice(0, 3).map((item) => item.shop);
-  }, [customSellerName, allShops, selectedListedShop]);
+    return [...savedMatches, ...listedMatches]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }, [customSellerName, allShops, savedCustomStores, selectedListedShop]);
 
   const handleSelectStoreSuggestion = (shop: Shop) => {
     setCustomSellerName(shop.name);
@@ -420,6 +477,19 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       autoFilledPhoneRef.current = '';
     }
     setSelectedListedShop(shop);
+    setShowStoreSuggestions(false);
+  };
+
+  const handleSelectSavedCustomStore = (store: SavedCustomStore) => {
+    setCustomSellerName(store.name);
+    if (store.phone) {
+      setCustomSellerPhone(store.phone);
+      autoFilledPhoneRef.current = store.phone;
+    } else {
+      autoFilledPhoneRef.current = '';
+    }
+    // Always treat localStorage saved custom store as UNLISTED (not a partner yet)
+    setSelectedListedShop(null);
     setShowStoreSuggestions(false);
   };
 
@@ -442,6 +512,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   const [customShopItemPrice, setCustomShopItemPrice] = useState('');
   const [showAddCustomShopItem, setShowAddCustomShopItem] = useState(false);
   const [viewRequestItems, setViewRequestItems] = useState<SelectedItemEntry[]>([]);
+  const [viewRequestSingleItemTarget, setViewRequestSingleItemTarget] = useState<{ id: string; name: string } | null>(null);
+  const [isDeletingViewRequest, setIsDeletingViewRequest] = useState(false);
+  const [showViewRequestStoreContact, setShowViewRequestStoreContact] = useState(false);
   const [storeInstructionNote, setStoreInstructionNote] = useState('');
 
   // Selected custom items for actions (Request To Store / Custom Cost)
@@ -536,6 +609,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             const matchesId = soItemIds.has(it.id);
             const matchesName = soItemNames.has(normalizeItemName(it.name || ''));
             if (matchesStore || matchesId || matchesName) {
+              // If it had a storeId (store order), keep it under that store as unordered so helper can re-order or Make Custom
+              if (it.storeId) {
+                return {
+                  ...it,
+                  purchased: false,
+                };
+              }
               return {
                 ...it,
                 purchased: false,
@@ -884,7 +964,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           return {
             ...it,
             isCustom: true,
-            buyFrom: it.storeName || storeName || it.buyFrom,
+            buyFrom: undefined,
             storeId: undefined,
             storeName: undefined,
           };
@@ -947,7 +1027,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
           return {
             ...it,
             isCustom: true,
-            buyFrom: it.storeName || it.buyFrom,
+            buyFrom: undefined,
             storeId: undefined,
             storeName: undefined,
           };
@@ -975,7 +1055,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   const handleAddCustomCostForSelected = () => {
     const allItems = order.items || [];
-    const customItems = allItems.filter(it => it.isCustom || !it.storeId || !!order.isStoreClosedAtOrder);
+    const customItems = allItems.filter(it => (it.isCustom || !it.storeId || !!order.isStoreClosedAtOrder) && !getItemConnectedOrder(it.name, it.id));
     const selectedEntries: SelectedItemEntry[] = customItems
       .filter((it) => selectedCustomItemIds.includes(it.id))
       .map((it) => ({
@@ -983,31 +1063,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         originalId: it.id,
         name: it.name,
         qty: it.qty,
-        price: it.price ? String(it.price) : '',
+        price: '',
         isChecked: true,
         isNote: false,
       }));
 
     setCustomCostItems(selectedEntries.length > 0 ? selectedEntries : getInitialSelectedItemList());
-    const existingSO = shopOrders.find(
-      (so) => so.shopId === 'myself' && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED'
-    );
-    if (existingSO) {
-      customCostDraftIdRef.current = existingSO.id;
-    } else {
-      customCostDraftIdRef.current = null;
-    }
-    const prevSellerName = existingSO?.sellerName || '';
-    const prevSellerPhone = existingSO?.sellerPhone || '';
-    setCustomSellerName(prevSellerName);
-    setCustomSellerPhone(prevSellerPhone);
-    const matchedPrevShop = existingSO?.matchedShopId
-      ? allShops.find((s) => s.id === existingSO.matchedShopId && s.name && s.name.trim().toLowerCase() === prevSellerName.trim().toLowerCase())
-      : allShops.find((s) =>
-          prevSellerName && s.name && s.name.trim().toLowerCase() === prevSellerName.trim().toLowerCase()
-        );
-    setSelectedListedShop(matchedPrevShop || null);
-    autoFilledPhoneRef.current = matchedPrevShop ? (matchedPrevShop.whatsapp || matchedPrevShop.managerWhatsapp || '') : '';
+    customCostDraftIdRef.current = null;
+    setCustomSellerName('');
+    setCustomSellerPhone('');
+    setSelectedListedShop(null);
+    autoFilledPhoneRef.current = '';
     setShowStoreSuggestions(false);
     setShowCustomCostModal(true);
   };
@@ -1070,36 +1136,59 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       .trim();
   };
 
-  const getItemConnectedOrder = (itemName: string, itemId?: string): ShopOrder | null => {
+  const getItemConnectedOrder = (itemName: string, itemId?: string, storeId?: string): ShopOrder | null => {
     const targetNorm = normalizeItemName(itemName);
-    if (!targetNorm) return null;
-    for (const so of shopOrders) {
-      if (so.parentOrderId && so.parentOrderId !== order.id) continue;
-      if (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED') continue;
+    if (!targetNorm && !itemId) return null;
 
-      // 1. Exact match in itemsWithPrice by itemId or normalized name
-      if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
-        if (so.itemsWithPrice.some((ip: any) => {
-          if (itemId && (ip.itemId === itemId || ip.originalId === itemId)) return true;
-          return normalizeItemName(ip.name) === targetNorm;
-        })) {
+    const activeSOs = shopOrders.filter(
+      (so) =>
+        (!so.parentOrderId || so.parentOrderId === order.id) &&
+        so.status !== 'CANCELED' &&
+        (so.status as string) !== 'CANCELLED'
+    );
+
+    // Pass 1: Strict match by itemId / originalId in itemsWithPrice
+    if (itemId) {
+      for (const so of activeSOs) {
+        if (storeId && so.shopId !== storeId && so.matchedShopId !== storeId) continue;
+        if (so.itemsWithPrice?.some((ip: any) => ip.itemId === itemId || ip.originalId === itemId)) {
           return so;
         }
       }
-
-      // 2. Exact match in separated requestText parts
-      const rawLines = (so.requestText || '').split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
-      const parts: string[] = [];
-      rawLines.forEach((line) => {
-        line.split(/,/).forEach((p) => {
-          const trimmed = normalizeItemName(p);
-          if (trimmed) parts.push(trimmed);
-        });
-      });
-
-      if (parts.some((p) => p === targetNorm)) {
-        return so;
+      for (const so of activeSOs) {
+        if (so.itemsWithPrice?.some((ip: any) => ip.itemId === itemId || ip.originalId === itemId)) {
+          return so;
+        }
       }
+    }
+
+    // Pass 2: Match by normalized name (preferring matching storeId if provided)
+    if (!targetNorm) return null;
+    const matchByName = (so: ShopOrder) => {
+      if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
+        if (so.itemsWithPrice.some((ip: any) => normalizeItemName(ip.name) === targetNorm)) {
+          return true;
+        }
+      }
+      const rawLines = (so.requestText || '').split(/\r?\n/).filter((l) => !l.startsWith('নোট:'));
+      for (const line of rawLines) {
+        for (const p of line.split(/,/)) {
+          if (normalizeItemName(p) === targetNorm) return true;
+        }
+      }
+      return false;
+    };
+
+    if (storeId) {
+      for (const so of activeSOs) {
+        if ((so.shopId === storeId || so.matchedShopId === storeId) && matchByName(so)) {
+          return so;
+        }
+      }
+    }
+    for (const so of activeSOs) {
+      if (storeId && so.shopId !== 'myself' && so.shopId !== storeId) continue;
+      if (matchByName(so)) return so;
     }
     return null;
   };
@@ -1493,12 +1582,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
       .reduce((sum, i) => sum + (parseFloat(i.price || '0') || 0) * getItemQuantityNum(i), 0);
   }, [shopOrderItems]);
 
-  const openViewRequestDetails = (so: ShopOrder) => {
+  const openViewRequestDetails = (so: ShopOrder, targetItem?: { id: string; name: string }) => {
     let items: SelectedItemEntry[] = [];
     if (so.itemsWithPrice && so.itemsWithPrice.length > 0) {
       items = so.itemsWithPrice.map((it, idx) => ({
-        id: `vri-${idx}`,
-        originalId: `vri-${idx}`,
+        id: it.itemId || `vri-${idx}`,
+        originalId: it.originalId || it.itemId || `vri-${idx}`,
         name: it.name,
         qty: it.unit,
         price: it.price !== undefined ? String(it.price) : '',
@@ -1525,6 +1614,26 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
         isNote: false,
       }));
     }
+
+    if (targetItem && so.shopId === 'myself') {
+      const tNorm = normalizeItemName(targetItem.name);
+      const byId = items.filter(
+        (it) =>
+          (targetItem.id && (it.id === targetItem.id || it.originalId === targetItem.id))
+      );
+      const byName = items.filter(
+        (it) => normalizeItemName(it.name) === tNorm || it.name.toLowerCase().trim() === targetItem.name.toLowerCase().trim()
+      );
+      const matched = byId.length > 0 ? byId : byName;
+      if (matched.length > 0) {
+        setViewRequestSingleItemTarget(targetItem);
+        setViewRequestItems(matched.slice(0, 1));
+        setViewRequestDetails(so);
+        return;
+      }
+    }
+
+    setViewRequestSingleItemTarget(null);
     setViewRequestItems(items);
     setViewRequestDetails(so);
   };
@@ -2020,11 +2129,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
             return (
               <div
                 key={st.id}
-                className={`p-2.5 rounded-xl border space-y-1.5 transition-all ${
-                  isFurthest
-                    ? 'bg-emerald-50/80 border-emerald-300 ring-1 ring-emerald-200'
-                    : 'bg-white border-gray-200'
-                }`}
+                className={`p-2.5 rounded-xl border space-y-1.5 transition-all ${isFurthest
+                  ? 'bg-emerald-50/80 border-emerald-300 ring-1 ring-emerald-200'
+                  : 'bg-white border-gray-200'
+                  }`}
               >
                 {/* Top Row: Store Info & Top-Right Merged Distance / Direction Button */}
                 <div className="flex items-start justify-between gap-2">
@@ -2115,12 +2223,27 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     return calculateOrderProductCost(order, validSOs);
   }, [order, shopOrders]);
 
+  const customStoreEnabled = fallbackStore.pricingSettings.customStorePricingEnabled !== false;
+  const customStorePricingForOrder = calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops);
+  const effectiveCustomStoreFeeForOrder = customStoreEnabled
+    ? (customStorePricingForOrder.totalFee > 0 ? customStorePricingForOrder.totalFee : (order.customStoreFee || 0))
+    : 0;
+  const effectiveCustomStoreCountForOrder = customStoreEnabled
+    ? (customStorePricingForOrder.count > 0 ? customStorePricingForOrder.count : (effectiveCustomStoreFeeForOrder > 0 ? Math.max(1, Math.round(effectiveCustomStoreFeeForOrder / (customStorePricingForOrder.unitFee || 15))) : 0))
+    : 0;
+
   const estdPricing = calculateEstimatedFee({
-    distanceKm: Math.ceil(distanceKm),
-    weightKg: Math.ceil(order.weightKg || 0),
+    distanceKm: Math.max(1, Math.ceil(distanceKm)),
+    weightKg: Math.max(1, Math.ceil(order.weightKg || 1)),
     isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
     productPrice: activeProductCost,
+    customStoreItemCount: effectiveCustomStoreCountForOrder,
   }, fallbackStore.pricingSettings);
+
+  const computedDeliverySubtotal = Math.max(
+    estdPricing.distanceFee + estdPricing.weightFee + effectiveCustomStoreFeeForOrder,
+    estdPricing.minFee
+  );
 
   // Validation: helper must enter product cost (which auto-sets delivery fee) before advancing
   const hasCostAndFee = order.productCost !== undefined;
@@ -2407,12 +2530,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const val = parseFloat(productCostInput);
     if (isNaN(val) || val < 0) return;
 
-    const currentWeight = parseFloat(weightInput) || 0;
+    const currentWeight = Math.max(1, parseFloat(weightInput) || 1);
     const settings = fallbackStore.pricingSettings;
 
     const estdBase = calculateEstimatedFee({
-      distanceKm: Math.ceil(distanceKm),
-      weightKg: 0,
+      distanceKm: Math.max(1, Math.ceil(distanceKm)),
+      weightKg: 1,
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
       productPrice: 0,
     }, settings);
@@ -2421,10 +2544,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
     const weightFee = Math.ceil(currentWeight) * perKgRate;
 
     const estd = calculateEstimatedFee({
-      distanceKm: Math.ceil(distanceKm),
-      weightKg: Math.ceil(currentWeight),
+      distanceKm: Math.max(1, Math.ceil(distanceKm)),
+      weightKg: Math.max(1, Math.ceil(currentWeight)),
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
       productPrice: val,
+      customStoreItemCount: effectiveCustomStoreCountForOrder,
     }, settings);
     const finalFee = estd.totalFee;
 
@@ -2440,30 +2564,32 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   };
 
   const updateEstdPricing = (newCost: number, newWeight: number) => {
+    const safeWeight = Math.max(1, newWeight || 1);
     const settings = fallbackStore.pricingSettings;
 
     const estdBase = calculateEstimatedFee({
-      distanceKm: Math.ceil(distanceKm),
-      weightKg: 0,
+      distanceKm: Math.max(1, Math.ceil(distanceKm)),
+      weightKg: 1,
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
       productPrice: newCost,
     }, settings);
 
     const perKgRate = settings.feeCalculatorPerKgRate ?? 5;
-    const weightFee = Math.ceil(newWeight) * perKgRate;
+    const weightFee = Math.ceil(safeWeight) * perKgRate;
 
     const estd = calculateEstimatedFee({
-      distanceKm: Math.ceil(distanceKm),
-      weightKg: Math.ceil(newWeight),
+      distanceKm: Math.max(1, Math.ceil(distanceKm)),
+      weightKg: Math.max(1, Math.ceil(safeWeight)),
       isReturnRequested: !!order.needReturnItems || !!order.needDeliveryBack,
       productPrice: newCost,
+      customStoreItemCount: effectiveCustomStoreCountForOrder,
     }, settings);
     const finalFee = estd.totalFee;
 
     fallbackStore.updateOrder(order.id, (o) => ({
       ...o,
       productCost: newCost,
-      weightKg: newWeight,
+      weightKg: safeWeight,
       deliveryFee: o.isFreeDelivery ? 0 : finalFee,
       originalDeliveryFee: o.isFreeDelivery ? 0 : finalFee,
       lastEditedBy: 'helper',
@@ -2573,7 +2699,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
 
   const handleConfirmDeliveryWithModal = () => {
-    const effectiveFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+    const effectiveFee = Math.max(order.deliveryFee || 0, computedDeliverySubtotal);
     const earned = calculateHelperCommission(effectiveFee, fallbackStore.pricingSettings);
     setEarnedAmount(earned);
     handleUpdateStatus('DELIVERED');
@@ -2582,23 +2708,21 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
   if (order.status === 'CANCELED' || order.cancellationRequest?.status === 'APPROVED') {
     return (
-      <div className="w-full bg-white min-h-screen pb-20">
-        <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            <span className="text-xs font-bold">Back</span>
-          </button>
-          <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-1">
-            <span className="p-1.5 rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0 flex items-center justify-center shadow-xs">
-              <ServiceIcon service={order.service} className="w-5 h-5 text-emerald-700" />
+      <div className="w-full bg-white min-h-screen pt-16 pb-10">
+        <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 pt-safe shadow-xs">
+          <div className="max-w-[480px] mx-auto px-4 py-3 flex items-center justify-between">
+            <button
+              onClick={onBack}
+              className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span className="text-xs font-bold">Back</span>
+            </button>
+            <span className="text-xs font-black font-mono text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+              Order #{order.id}
             </span>
-            <span className="font-extrabold text-sm text-gray-800 truncate min-w-0">{order.service || order.title || 'Helper Order'}</span>
-            <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded-md border border-slate-200 shrink-0">#{order.id}</span>
+            <div className="w-14" />
           </div>
-          <div className="w-8" />
         </div>
 
         <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 p-8 text-center bg-white rounded-3xl border border-red-100 shadow-sm my-6 max-w-md mx-auto">
@@ -2621,24 +2745,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
   }
 
   return (
-    <div className="w-full bg-white min-h-screen pb-20 animate-in fade-in duration-200">
-      {/* Top Bar */}
-      <div className="sticky top-14 z-20 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between">
-        <button
-          onClick={onBack}
-          className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          <span className="text-xs font-bold">Back</span>
-        </button>
-        <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-1">
-          <span className="p-1.5 rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0 flex items-center justify-center shadow-xs">
-            <ServiceIcon service={order.service} className="w-5 h-5 text-emerald-700" />
+    <div className="w-full bg-white min-h-screen pt-16 pb-10 animate-in fade-in duration-200">
+      {/* Fixed Top Bar */}
+      <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 pt-safe shadow-xs">
+        <div className="max-w-[480px] mx-auto px-4 py-3 flex items-center justify-between">
+          <button
+            onClick={onBack}
+            className="p-2 rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            <span className="text-xs font-bold">Back</span>
+          </button>
+          <span className="text-xs font-black font-mono text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+            Order #{order.id}
           </span>
-          <span className="font-extrabold text-sm text-gray-800 truncate min-w-0">{order.service || order.title || 'Helper Order'}</span>
-          <span className="text-[10px] font-black font-mono text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded-md border border-slate-200 shrink-0">#{order.id}</span>
+          <div className="w-14" />
         </div>
-        <div className="w-8" />
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-5">
@@ -3351,7 +3473,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           bodyBg: 'bg-amber-50/50 divide-amber-200/80',
                         };
                       }
-                      if (status === 'ACCEPTED' || status === 'PREPARING' || status === 'READY' || status === 'HANDOVER') {
+                      if (status === 'ACCEPTED' || status === 'PREPARING' || status === 'READY' || status === 'HANDOVER' || status === 'DELIVERED') {
                         return {
                           wrapBorder: 'border-emerald-400 shadow-sm shadow-emerald-100 ring-1 ring-emerald-300',
                           hdrBg: 'bg-emerald-100 border-b-emerald-300',
@@ -3386,8 +3508,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       isStoreBlock: boolean = false
                     ) => {
                       const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
-                      const connectedSO = parsed ? getItemConnectedOrder(parsed.name, parsed.id) : getItemConnectedOrder(it.name, it.id);
-                      const effectiveSO = groupSO || connectedSO || undefined;
+                      const connectedSO = getItemConnectedOrder(it.name, it.id, it.storeId) || (parsed ? getItemConnectedOrder(parsed.name, parsed.id, it.storeId) : null);
+                      const effectiveSO = connectedSO || groupSO || undefined;
                       const isPurchased = parsed?.purchased ?? !!it.purchased;
                       const itemPrice = parsed ? getItemIndividualPrice(parsed.name, connectedSO) : (it.price || undefined);
                       const hasPhoto = !!it.photoUrl;
@@ -3405,7 +3527,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       const isCustomItem = it.isCustom || !it.storeId || isCustomBlock || !!order.isStoreClosedAtOrder;
 
                       const groupSOActive = groupSO && groupSO.status !== 'CANCELED' && (groupSO.status as string) !== 'CANCELLED';
-                      const groupSOAccepted = groupSOActive && (groupSO.status === 'ACCEPTED' || groupSO.status === 'PREPARING' || groupSO.status === 'READY' || groupSO.status === 'HANDOVER');
+                      const groupSOAccepted = groupSOActive && (groupSO.status === 'ACCEPTED' || groupSO.status === 'PREPARING' || groupSO.status === 'READY' || groupSO.status === 'HANDOVER' || groupSO.status === 'DELIVERED');
+                      const isLockedChecked = Boolean((isCustomItem && connectedSO) || (isStoreBlock && groupSOAccepted));
 
                       const hasPrice = (priceDetails && priceDetails.totalPrice > 0) || (effectiveSO?.price && Number(effectiveSO.price) > 0) || (it.price && Number(it.price) > 0);
 
@@ -3416,14 +3539,15 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             if (isDone) return;
                             if (isCustomBlock) {
                               if (connectedSO) {
-                                openViewRequestDetails(connectedSO);
+                                openViewRequestDetails(connectedSO, { id: it.id, name: it.name });
                               } else {
                                 handleToggleCustomItemSelection(it.id);
                               }
                             } else if (isStoreBlock) {
-                              // Store block: only allow purchased toggle if store has accepted
-                              if (groupSOAccepted) {
-                                if (parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
+                              // Store block: if store order is active/accepted, open the pricing & commission modal
+                              const targetStoreSO = connectedSO || groupSO;
+                              if (groupSOActive && targetStoreSO) {
+                                openViewRequestDetails(targetStoreSO);
                               } else {
                                 const sid = it.storeId || groupSO?.shopId || '';
                                 const storeShop = sid ? fallbackStore.shops.get(sid) : undefined;
@@ -3446,18 +3570,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             }
                           }}
                           className={`flex items-center gap-3 p-3 rounded-2xl border transition-all select-none ${isSelected
-                              ? 'bg-amber-100/90 border-amber-400 ring-2 ring-amber-300'
-                              : 'bg-white/95 border-gray-200/80 hover:border-gray-300'
+                            ? 'bg-amber-100/90 border-amber-400 ring-2 ring-amber-300'
+                            : 'bg-white/95 border-gray-200/80 hover:border-gray-300'
                             } ${isDone ? 'cursor-default' : 'cursor-pointer active:scale-[0.99]'}`}
                         >
                           <div
-                            className={`relative w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden transition-all select-none ${
-                              isSelected
-                                ? 'ring-2 ring-amber-500 border-amber-500 shadow-xs'
-                                : isPurchased
-                                  ? 'border-emerald-500 shadow-xs'
-                                  : 'bg-gray-100 border-gray-200'
-                            }`}
+                            className={`relative w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden transition-all select-none ${isSelected
+                              ? 'ring-2 ring-amber-500 border-amber-500 shadow-xs'
+                              : isPurchased
+                                ? 'border-emerald-500 shadow-xs'
+                                : 'bg-gray-100 border-gray-200'
+                              }`}
                           >
                             {hasPhoto ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -3477,13 +3600,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                   e.stopPropagation();
                                   handleToggleCustomItemSelection(it.id);
                                 }}
-                                className={`absolute inset-0 w-full h-full rounded-xl flex items-center justify-center cursor-pointer transition-all ${
-                                  isSelected
-                                    ? 'bg-amber-500/90 text-white shadow-inner'
-                                    : hasPhoto
-                                      ? 'bg-black/20 hover:bg-black/30 border-2 border-dashed border-amber-400'
-                                      : 'bg-amber-50/70 hover:bg-amber-100 border-2 border-amber-400'
-                                }`}
+                                className={`absolute inset-0 w-full h-full rounded-xl flex items-center justify-center cursor-pointer transition-all ${isSelected
+                                  ? 'bg-amber-500/90 text-white shadow-inner'
+                                  : hasPhoto
+                                    ? 'bg-black/20 hover:bg-black/30 border-2 border-dashed border-amber-400'
+                                    : 'bg-amber-50/70 hover:bg-amber-100 border-2 border-amber-400'
+                                  }`}
                                 title={isSelected ? 'আনচেক করতে ক্লিক করুন' : 'চেক করতে ক্লিক করুন'}
                               >
                                 {isSelected ? (
@@ -3494,18 +3616,22 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             )}
 
-                            {/* Full-size Check overlay (same size as image/icon) for purchased items */}
-                            {isPurchased && (
+                            {/* Full-size Check overlay (same size as image/icon) for purchased, store-accepted, or custom-costed items */}
+                            {(isPurchased || isLockedChecked) && (
                               <div
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (isLockedChecked) return; // Do not allow unchecking when cost/store order is already added/accepted
                                   if (!isDone && parsed) toggleParsedItemPurchased(parsed.id, parsed.originalId, parsed.name);
                                 }}
-                                title="আনচেক করতে ক্লিক করুন (Click to uncheck)"
-                                className="absolute inset-0 w-full h-full rounded-xl bg-emerald-600/90 text-white flex items-center justify-center cursor-pointer shadow-inner transition-all group/uncheck"
+                                title={isLockedChecked ? 'Added / Accepted' : 'আনচেক করতে ক্লিক করুন (Click to uncheck)'}
+                                className={`absolute inset-0 w-full h-full rounded-xl bg-emerald-600/90 text-white flex items-center justify-center shadow-inner transition-all ${isLockedChecked ? 'cursor-default' : 'cursor-pointer group/uncheck'
+                                  }`}
                               >
-                                <Check className="w-6 h-6 stroke-[3] group-hover/uncheck:hidden drop-shadow-xs" />
-                                <X className="w-6 h-6 hidden group-hover/uncheck:block drop-shadow-xs" />
+                                <Check className={`w-6 h-6 stroke-[3] drop-shadow-xs ${isLockedChecked ? '' : 'group-hover/uncheck:hidden'}`} />
+                                {!isLockedChecked && (
+                                  <X className="w-6 h-6 hidden group-hover/uncheck:block drop-shadow-xs" />
+                                )}
                               </div>
                             )}
 
@@ -3520,7 +3646,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             )}
 
                             {/* Full-size check button for store items once store accepted */}
-                            {!isPurchased && isStoreBlock && !isDone && groupSOAccepted && (
+                            {!isPurchased && !isLockedChecked && isStoreBlock && !isDone && groupSOAccepted && (
                               <div
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3580,25 +3706,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </p>
                             ) : null}
 
-                            {/* Under each custom order item if helper requested to store or add custom cost then the store name should show */}
+                            {/* Under each custom order item, always show customer-given store name if present */}
                             {isCustomItem ? (
-                              connectedSO?.shopId && connectedSO.shopId !== 'myself' ? (
-                                <div className="flex items-center gap-1 text-[11px] text-purple-700 font-bold mt-0.5 flex-wrap">
-                                  <Store className="w-3 h-3 text-purple-600 shrink-0" />
-                                  <span>দোকান: {shop?.name || connectedSO.shopName || connectedSO.shopId}</span>
-                                  {sAddr && <span className="text-gray-400 font-normal truncate">({sAddr})</span>}
-                                </div>
-                              ) : (connectedSO?.shopId === 'myself' || (customPlace && customPlace !== 'Custom Cost')) ? (
-                                <div className="flex items-center gap-1 text-[11px] text-amber-800 font-bold mt-0.5 flex-wrap">
-                                  <Store className="w-3 h-3 text-amber-600 shrink-0" />
-                                  <span>দোকান: {connectedSO?.sellerName || customPlace || 'Custom Seller'}</span>
-                                  {connectedSO?.isListedStore && (
-                                    <span className="text-[9px] bg-emerald-100 text-emerald-800 font-black px-1.5 py-0.2 rounded-md">
-                                      Listed Store (৳০ Fee)
-                                    </span>
-                                  )}
-                                </div>
-                              ) : it.buyFrom ? (
+                              it.buyFrom ? (
                                 <div className="flex items-center gap-1 text-[10px] text-gray-500 mt-0.5 flex-wrap">
                                   <Store className="w-2.5 h-2.5 text-gray-400 shrink-0" />
                                   <span>পছন্দের দোকান: {it.buyFrom}</span>
@@ -3617,8 +3727,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                               </div>
                             ) : null}
 
-                            {/* Actions + Status in a single row */}
-                            {(!isDone || soStatus || (effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id))) && (
+                            {/* Actions + Status in a single row (hidden for custom items already grouped under a store block) */}
+                            {!(isCustomBlock && connectedSO) && (!isDone || soStatus || (effectiveSO && effectiveSO.shopId !== 'myself' && fallbackStore.isShopOrderUnsent(effectiveSO.id))) && (
                               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                 {/* Convert Single Item to Custom Button */}
                                 {!isDone && !isCustomItem && (
@@ -3647,13 +3757,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                   </span>
                                 )}
 
-                                {/* Status badge */}
-                                {soStatus && (
+                                {/* Status badge (hidden for store block items since shown in store header) */}
+                                {!isStoreBlock && soStatus && (
                                   <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full inline-block ${soStatus === 'PENDING'
-                                      ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                                      : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY' || soStatus === 'DELIVERED' || soStatus === 'HANDOVER'
-                                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                                        : 'bg-rose-100 text-rose-900 border border-rose-200'
+                                    ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                    : soStatus === 'ACCEPTED' || soStatus === 'PREPARING' || soStatus === 'READY' || soStatus === 'DELIVERED' || soStatus === 'HANDOVER'
+                                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                      : 'bg-rose-100 text-rose-900 border border-rose-200'
                                     }`}>
                                     {soStatus === 'PENDING' ? '⏳ Pending' :
                                       soStatus === 'ACCEPTED' ? '✓ Accepted' :
@@ -3711,184 +3821,183 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     const orderedStoreEntries = storeEntries.filter(([sid]) => isStoreEntryOrdered(sid));
 
                     const renderStoreBlock = ([sid, items]: [string, typeof allItems]) => {
-                          const shop = fallbackStore.shops.get(sid);
-                          const groupSO = getGroupShopOrder(sid);
-                          const storeName = shop?.name || groupSO?.shopName || items.find(i => i.storeName)?.storeName || sid;
-                          const storeAddress = shop?.location?.address || (shop as any)?.address;
-                          const groupStatus = groupSO?.status;
-                          const isLoading = !!orderNowLoading[sid];
-                          const isAcceptedGroup = groupStatus === 'ACCEPTED' || groupStatus === 'PREPARING';
-                          const isCancelledGroup = groupStatus === 'CANCELED' || (groupStatus as string) === 'CANCELLED';
-                          const style = getBlockStyle(groupStatus);
+                      const shop = fallbackStore.shops.get(sid);
+                      const groupSO = getGroupShopOrder(sid);
+                      const storeName = shop?.name || groupSO?.shopName || items.find(i => i.storeName)?.storeName || sid;
+                      const storeAddress = shop?.location?.address || (shop as any)?.address;
+                      const groupStatus = groupSO?.status;
+                      const isLoading = !!orderNowLoading[sid];
+                      const isAcceptedGroup = groupStatus === 'ACCEPTED' || groupStatus === 'PREPARING';
+                      const isCancelledGroup = groupStatus === 'CANCELED' || (groupStatus as string) === 'CANCELLED';
+                      const style = getBlockStyle(isCancelledGroup ? null : groupStatus);
 
-                          return (
-                            <div key={sid} className={`rounded-2xl border overflow-hidden ${style.wrapBorder}`}>
-                              <div className={`px-3 py-2.5 border-b space-y-1.5 ${style.hdrBg}`}>
-                                {/* Row 1: Store name & Order button on the same line */}
-                                <div className="flex items-center justify-between gap-2">
-                                  {/* 1. Store name click opens info popup (no separate info button) */}
-                                  <div className="min-w-0 flex-1">
+                      return (
+                        <div key={sid} className={`rounded-2xl border overflow-hidden ${style.wrapBorder}`}>
+                          <div className={`px-3 py-2.5 border-b space-y-1.5 ${style.hdrBg}`}>
+                            {/* Row 1: Store name & Order button on the same line */}
+                            <div className="flex items-center justify-between gap-2">
+                              {/* 1. Store name click opens info popup (no separate info button) */}
+                              <div className="min-w-0 flex-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setStoreInfoShopId(sid); }}
+                                  className="flex items-center gap-1.5 group/store hover:opacity-80 transition-opacity text-left cursor-pointer min-w-0"
+                                  title="দোকানের তথ্য ও যোগাযোগের নম্বর দেখতে ক্লিক করুন"
+                                >
+                                  <Store className="w-4 h-4 shrink-0 opacity-80" />
+                                  <span className={`text-xs font-black uppercase tracking-wide break-words underline-offset-2 group-hover/store:underline ${style.hdrText}`}>
+                                    {storeName}
+                                  </span>
+                                </button>
+                                {storeAddress && (
+                                  <div className={`flex items-center gap-1 text-[10px] ${style.hdrText} opacity-85 pl-5.5 mt-0.5`}>
+                                    <MapPin className="w-2.5 h-2.5 shrink-0 text-emerald-500" />
+                                    <span className="truncate">{storeAddress}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Right side: Order Now button or status action */}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {/* 2. Order Now / Add Cost button: when not yet sent or cancelled */}
+                                {!isDone && (!groupSO || isCancelledGroup) && (() => {
+                                  const storeShop = fallbackStore.shops.get(sid);
+                                  const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
+                                  return (
                                     <button
                                       type="button"
-                                      onClick={(e) => { e.stopPropagation(); setStoreInfoShopId(sid); }}
-                                      className="flex items-center gap-1.5 group/store hover:opacity-80 transition-opacity text-left cursor-pointer min-w-0"
-                                      title="দোকানের তথ্য ও যোগাযোগের নম্বর দেখতে ক্লিক করুন"
-                                    >
-                                      <Store className="w-4 h-4 shrink-0 opacity-80" />
-                                      <span className={`text-xs font-black uppercase tracking-wide break-words underline-offset-2 group-hover/store:underline ${style.hdrText}`}>
-                                        {storeName}
-                                      </span>
-                                    </button>
-                                    {storeAddress && (
-                                      <div className={`flex items-center gap-1 text-[10px] ${style.hdrText} opacity-85 pl-5.5 mt-0.5`}>
-                                        <MapPin className="w-2.5 h-2.5 shrink-0 text-emerald-500" />
-                                        <span className="truncate">{storeAddress}</span>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Right side: Order Now button or status action */}
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    {/* 2. Order Now / Add Cost button: when not yet sent or cancelled */}
-                                    {!isDone && (!groupSO || isCancelledGroup) && (() => {
-                                      const storeShop = fallbackStore.shops.get(sid);
-                                      const isStoreNonAccepting = storeShop?.canReceiveOrders === false;
-                                      return (
-                                        <button
-                                          type="button"
-                                          disabled={isLoading}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (isStoreNonAccepting && storeShop) {
-                                              openPlaceShopOrder(storeShop);
-                                              return;
-                                            }
-                                            const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
-                                            const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
-                                            setOrderNowConfirmTarget({
-                                              sid,
-                                              storeName,
-                                              storeAddress,
-                                              items,
-                                              totalOrdered,
-                                              itemsText,
-                                            });
-                                          }}
-                                          className={`flex items-center gap-1 px-2.5 py-1.5 disabled:opacity-60 text-white rounded-lg text-[10px] font-extrabold transition-all active:scale-95 shadow-xs cursor-pointer ${
-                                            isStoreNonAccepting ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-500 hover:bg-emerald-600'
-                                          }`}
-                                        >
-                                          {isLoading ? (
-                                            <span className="animate-pulse">...</span>
-                                          ) : (
-                                            <>
-                                              {isStoreNonAccepting ? <DollarSign className="w-3 h-3" /> : <ShoppingCart className="w-3 h-3" />}
-                                              <span>{isStoreNonAccepting ? 'Add Cost (খরচ যুক্ত করুন)' : 'Order Now'}</span>
-                                            </>
-                                          )}
-                                        </button>
-                                      );
-                                    })()}
-
-                                    {/* Active Store Order Status & Cancel Button (allowed even if already ordered/delivered while order is active) */}
-                                    {!isDone && groupSO && !isCancelledGroup && (
-                                      <div className="flex items-center gap-1">
-                                        {groupStatus === 'PENDING' ? (
-                                          <span className="flex items-center gap-1 px-2 py-1 bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold">
-                                            <Clock className="w-3 h-3 text-amber-700 animate-spin" />
-                                            <span>Pending...</span>
-                                          </span>
-                                        ) : isAcceptedGroup ? (
-                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
-                                            <Check className="w-3 h-3" />
-                                            <span>{groupStatus === 'PREPARING' ? 'Preparing' : 'Accepted'}</span>
-                                          </span>
-                                        ) : groupStatus === 'DELIVERED' ? (
-                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
-                                            <Check className="w-3 h-3" />
-                                            <span>Delivered</span>
-                                          </span>
-                                        ) : (
-                                          <span className="flex items-center gap-1 px-2.5 py-1 bg-teal-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
-                                            <span>{groupStatus === 'READY' ? 'Ready' : groupStatus === 'HANDOVER' ? 'Handover' : groupStatus}</span>
-                                          </span>
-                                        )}
-                                        <button
-                                          type="button"
-                                          disabled={cancellingShopOrderId === groupSO?.id}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (groupSO) {
-                                              setCancelShopOrderConfirmTarget({
-                                                shopOrderId: groupSO.id,
-                                                storeName,
-                                              });
-                                            }
-                                          }}
-                                          title="দোকানের অর্ডার বাতিল করুন (Cancel Store Order)"
-                                          className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer shrink-0"
-                                        >
-                                          <X className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Row 2: Underneath Store Name - Make Custom button + Store status */}
-                                <div className="flex items-center gap-2 flex-wrap pt-0.5">
-                                  {/* 5. Convert button: "Make Custom" */}
-                                  {!isDone && (
-                                    <button
-                                      type="button"
+                                      disabled={isLoading}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        setConvertConfirmTarget({ sid, storeName, itemCount: items.length });
+                                        if (isStoreNonAccepting && storeShop) {
+                                          openPlaceShopOrder(storeShop);
+                                          return;
+                                        }
+                                        const totalOrdered = items.reduce((sum, i) => sum + ((Number(i.price) || 0) * getItemQuantityNum(i)), 0);
+                                        const itemsText = items.map(i => `${i.name}${getItemQtyDisplay(i)}`).join(', ');
+                                        setOrderNowConfirmTarget({
+                                          sid,
+                                          storeName,
+                                          storeAddress,
+                                          items,
+                                          totalOrdered,
+                                          itemsText,
+                                        });
                                       }}
-                                      className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-black text-white text-[10px] font-bold transition-all active:scale-95 border border-slate-700 shadow-xs cursor-pointer"
-                                      title="এই দোকানের পণ্যগুলোকে কাস্টম আইটেমে রূপান্তর করুন"
+                                      className={`flex items-center gap-1 px-2.5 py-1.5 disabled:opacity-60 text-white rounded-lg text-[10px] font-extrabold transition-all active:scale-95 shadow-xs cursor-pointer ${isStoreNonAccepting ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-500 hover:bg-emerald-600'
+                                        }`}
                                     >
-                                      <Sparkles className="w-3 h-3 text-amber-400" />
-                                      <span className="text-white underline underline-offset-2">Make Custom</span>
+                                      {isLoading ? (
+                                        <span className="animate-pulse">...</span>
+                                      ) : (
+                                        <>
+                                          {isStoreNonAccepting ? <DollarSign className="w-3 h-3" /> : <ShoppingCart className="w-3 h-3" />}
+                                          <span>{isStoreNonAccepting ? 'Add Cost (খরচ যুক্ত করুন)' : 'Order Now'}</span>
+                                        </>
+                                      )}
                                     </button>
-                                  )}
+                                  );
+                                })()}
 
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${style.tagBg}`}>
-                                    STORE
-                                  </span>
-
-                                  {groupStatus && (
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${groupStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
-                                        isAcceptedGroup ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
-                                          isCancelledGroup ? 'bg-rose-200 text-rose-900 border border-rose-300' :
-                                            'bg-gray-200 text-gray-700'
-                                      }`}>
-                                      {groupStatus === 'PENDING' ? '⏳ Pending' :
-                                        groupStatus === 'ACCEPTED' ? '✓ Accepted' :
-                                          groupStatus === 'PREPARING' ? '🍳 Preparing' :
-                                            isCancelledGroup ? '✕ Cancelled' :
-                                              groupStatus}
-                                    </span>
-                                  )}
-
-                                  {(() => {
-                                    const s = fallbackStore.shops.get(sid);
-                                    if (s?.isOpen === false) {
-                                      return (
-                                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-rose-200 text-rose-900 border border-rose-300 shrink-0">
-                                          বন্ধ (Closed)
-                                        </span>
-                                      );
-                                    }
-                                    return null;
-                                  })()}
-                                </div>
-                              </div>
-                              <div className={`divide-y px-2 py-1 ${style.bodyBg}`}>
-                                {items.map(it => renderItem(it, it.id, groupSO || undefined, false, true))}
+                                {/* Active Store Order Status & Cancel Button (allowed even if already ordered/delivered while order is active) */}
+                                {!isDone && groupSO && !isCancelledGroup && (
+                                  <div className="flex items-center gap-1">
+                                    {groupStatus === 'PENDING' ? (
+                                      <span className="flex items-center gap-1 px-2 py-1 bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold">
+                                        <Clock className="w-3 h-3 text-amber-700 animate-spin" />
+                                        <span>Pending...</span>
+                                      </span>
+                                    ) : isAcceptedGroup ? (
+                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                        <Check className="w-3 h-3" />
+                                        <span>{groupStatus === 'PREPARING' ? 'Preparing' : 'Accepted'}</span>
+                                      </span>
+                                    ) : groupStatus === 'DELIVERED' ? (
+                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                        <Check className="w-3 h-3" />
+                                        <span>Delivered</span>
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center gap-1 px-2.5 py-1 bg-teal-600 text-white rounded-lg text-[10px] font-extrabold shadow-xs">
+                                        <span>{groupStatus === 'READY' ? 'Ready' : groupStatus === 'HANDOVER' ? 'Handover' : groupStatus}</span>
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={cancellingShopOrderId === groupSO?.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (groupSO) {
+                                          setCancelShopOrderConfirmTarget({
+                                            shopOrderId: groupSO.id,
+                                            storeName,
+                                          });
+                                        }
+                                      }}
+                                      title="দোকানের অর্ডার বাতিল করুন (Cancel Store Order)"
+                                      className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer shrink-0"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </div>
-                          );
+
+                            {/* Row 2: Underneath Store Name - Make Custom button + Store status */}
+                            <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                              {/* 5. Convert button: "Make Custom" */}
+                              {!isDone && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConvertConfirmTarget({ sid, storeName, itemCount: items.length });
+                                  }}
+                                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-black text-white text-[10px] font-bold transition-all active:scale-95 border border-slate-700 shadow-xs cursor-pointer"
+                                  title="এই দোকানের পণ্যগুলোকে কাস্টম আইটেমে রূপান্তর করুন"
+                                >
+                                  <Sparkles className="w-3 h-3 text-amber-400" />
+                                  <span className="text-white underline underline-offset-2">Make Custom</span>
+                                </button>
+                              )}
+
+                              <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${style.tagBg}`}>
+                                Listed
+                              </span>
+
+                              {groupStatus && !isCancelledGroup && (
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${groupStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
+                                  isAcceptedGroup ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
+                                    isCancelledGroup ? 'bg-rose-200 text-rose-900 border border-rose-300' :
+                                      'bg-gray-200 text-gray-700'
+                                  }`}>
+                                  {groupStatus === 'PENDING' ? '⏳ Pending' :
+                                    groupStatus === 'ACCEPTED' ? '✓ Accepted' :
+                                      groupStatus === 'PREPARING' ? '🍳 Preparing' :
+                                        isCancelledGroup ? '✕ Cancelled' :
+                                          groupStatus}
+                                </span>
+                              )}
+
+                              {(() => {
+                                const s = fallbackStore.shops.get(sid);
+                                if (s?.isOpen === false) {
+                                  return (
+                                    <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-rose-200 text-rose-900 border border-rose-300 shrink-0">
+                                      বন্ধ (Closed)
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
+                            </div>
+                          </div>
+                          <div className={`divide-y px-2 py-1 ${style.bodyBg}`}>
+                            {items.map(it => renderItem(it, it.id, isCancelledGroup ? undefined : (groupSO || undefined), false, true))}
+                          </div>
+                        </div>
+                      );
                     };
 
                     const unconfirmedCustomItems = customItems.filter(it => {
@@ -3897,104 +4006,301 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     });
                     const hasUnorderedCustomItems = customItems.length > 0 && unconfirmedCustomItems.length > 0;
 
-                    const renderCustomBlock = () => {
-                          if (customItems.length === 0) return null;
-                          const customItemsWithSO = customItems.map(it => {
-                            const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
-                            return parsed ? getItemConnectedOrder(parsed.name, parsed.id) : null;
-                          });
-                          const allAccepted = customItemsWithSO.length > 0 && customItemsWithSO.every(so => so && (so.status === 'ACCEPTED' || so.status === 'PREPARING' || so.status === 'READY' || so.status === 'HANDOVER'));
-                          const hasPending = customItemsWithSO.some(so => so && so.status === 'PENDING');
-                          const hasCancelled = customItemsWithSO.some(so => so && (so.status === 'CANCELED' || (so.status as string) === 'CANCELLED'));
-                          const customBlockStatus = hasPending ? 'PENDING' : allAccepted ? 'ACCEPTED' : hasCancelled ? 'CANCELLED' : null;
-                          const customStyle = getBlockStyle(customBlockStatus);
+                    const renderUnorderedCustomBlock = () => {
+                      if (unconfirmedOnlyItems.length === 0) return null;
+                      const customStyle = getBlockStyle(null);
+                      const allSelected = unconfirmedOnlyItems.every(it => selectedCustomItemIds.includes(it.id));
 
-                          const sortedCustomItems = [...customItems].sort((a, b) => {
-                            const pA = parsedItems.find(p => p.originalId === a.id || p.id === a.id);
-                            const pB = parsedItems.find(p => p.originalId === b.id || p.id === b.id);
-                            const aOrdered = (pA ? getItemConnectedOrder(pA.name, pA.id) : getItemConnectedOrder(a.name, a.id)) !== null ? 1 : 0;
-                            const bOrdered = (pB ? getItemConnectedOrder(pB.name, pB.id) : getItemConnectedOrder(b.name, b.id)) !== null ? 1 : 0;
-                            return aOrdered - bOrdered;
-                          });
+                      const toggleSelectAll = (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        if (allSelected) {
+                          setSelectedCustomItemIds(prev => prev.filter(id => !unconfirmedOnlyItems.some(it => it.id === id)));
+                        } else {
+                          setSelectedCustomItemIds(prev => Array.from(new Set([...prev, ...unconfirmedOnlyItems.map(it => it.id)])));
+                        }
+                      };
 
-                          const allSelected = unconfirmedCustomItems.length > 0 && unconfirmedCustomItems.every(it => selectedCustomItemIds.includes(it.id));
-
-                          const toggleSelectAll = (e: React.MouseEvent) => {
-                            e.stopPropagation();
-                            if (allSelected) {
-                              setSelectedCustomItemIds(prev => prev.filter(id => !unconfirmedCustomItems.some(it => it.id === id)));
-                            } else {
-                              setSelectedCustomItemIds(prev => Array.from(new Set([...prev, ...unconfirmedCustomItems.map(it => it.id)])));
-                            }
-                          };
-
-                          return (
-                            <div className={`rounded-2xl border overflow-hidden ${customStyle.wrapBorder}`}>
-                              <div className={`flex items-center justify-between gap-2 px-3 py-2 border-b ${customStyle.hdrBg}`}>
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                                  <span className={`text-[11px] font-black uppercase tracking-wide ${customStyle.hdrText}`}>
-                                    {order.isStoreClosedAtOrder ? 'দোকান বন্ধ ছিল / Custom' : 'Custom / Any Store'}
-                                  </span>
-                                  {customBlockStatus && (
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${customBlockStatus === 'PENDING' ? 'bg-amber-200 text-amber-900 border border-amber-300' :
-                                        customBlockStatus === 'ACCEPTED' ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' :
-                                          'bg-rose-200 text-rose-900 border border-rose-300'
-                                      }`}>
-                                      {customBlockStatus === 'PENDING' ? '⏳ Pending' : customBlockStatus === 'ACCEPTED' ? '✓ Accepted' : '✕ Cancelled'}
-                                    </span>
-                                  )}
-                                </div>
-
-                                {!isDone && unconfirmedCustomItems.length > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={toggleSelectAll}
-                                    className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-black/10 hover:bg-black/20 transition-all border border-black/10"
-                                  >
-                                    {allSelected ? 'Deselect All' : 'Select All'}
-                                  </button>
-                                )}
-                              </div>
-
-                              <div className={`divide-y px-2 py-1 ${customStyle.bodyBg}`}>
-                                {sortedCustomItems.map(it => renderItem(it, it.id, undefined, true, false))}
-                              </div>
-
-                              {/* 3. Underneath Selected Custom Items: 2 Action Buttons */}
-                              {!isDone && selectedCustomItemIds.length > 0 && (
-                                <div className="p-2.5 bg-slate-900 border-t border-slate-700 flex flex-col sm:flex-row items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRequestCustomItemsToStore()}
-                                    className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
-                                  >
-                                    <Store className="w-3.5 h-3.5" />
-                                    <span>Request To Store ({selectedCustomItemIds.length})</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleAddCustomCostForSelected()}
-                                    className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                    <span>Custom Cost ({selectedCustomItemIds.length})</span>
-                                  </button>
-                                </div>
-                              )}
+                      return (
+                        <div className={`rounded-2xl border overflow-hidden ${customStyle.wrapBorder}`}>
+                          <div className={`flex items-center justify-between gap-2 px-3 py-2 border-b ${customStyle.hdrBg}`}>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span className={`text-[11px] font-black uppercase tracking-wide ${customStyle.hdrText}`}>
+                                {order.isStoreClosedAtOrder ? 'দোকান বন্ধ ছিল / Custom' : 'Custom / Any Store'}
+                              </span>
                             </div>
-                          );
+
+                            {!isDone && (
+                              <button
+                                type="button"
+                                onClick={toggleSelectAll}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-black/10 hover:bg-black/20 transition-all border border-black/10"
+                              >
+                                {allSelected ? 'Deselect All' : 'Select All'}
+                              </button>
+                            )}
+                          </div>
+
+                          <div className={`divide-y px-2 py-1 ${customStyle.bodyBg}`}>
+                            {unconfirmedOnlyItems.map(it => renderItem(it, it.id, undefined, true, false))}
+                          </div>
+
+                          {!isDone && selectedCustomItemIds.length > 0 && (
+                            <div className="p-2.5 bg-slate-900 border-t border-slate-700 flex flex-col sm:flex-row items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleRequestCustomItemsToStore()}
+                                className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                              >
+                                <Store className="w-3.5 h-3.5" />
+                                <span>Request To Store ({selectedCustomItemIds.length})</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAddCustomCostForSelected()}
+                                className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Custom Cost ({selectedCustomItemIds.length})</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
                     };
+
+                    const getCustomSO = (it: typeof allItems[0]) => {
+                      const parsed = parsedItems.find(p => p.originalId === it.id || p.id === it.id);
+                      return parsed ? getItemConnectedOrder(parsed.name, parsed.id) : getItemConnectedOrder(it.name, it.id);
+                    };
+
+                    const confirmedCustomItems = customItems.filter((it) => {
+                      const so = getCustomSO(it);
+                      return Boolean(so && so.status !== 'CANCELED' && (so.status as string) !== 'CANCELLED');
+                    });
+
+                    const unconfirmedOnlyItems = customItems.filter((it) => {
+                      const so = getCustomSO(it);
+                      return !so || so.status === 'CANCELED' || (so.status as string) === 'CANCELLED';
+                    });
+
+                    // Group confirmed custom items by their given store name / shopOrder
+                    const groupedByStore: {
+                      key: string;
+                      storeName: string;
+                      sellerPhone?: string;
+                      isListedStore?: boolean;
+                      isMyself: boolean;
+                      status?: string | null;
+                      items: typeof allItems;
+                    }[] = [];
+
+                    confirmedCustomItems.forEach((it) => {
+                      const so = getCustomSO(it)!;
+                      const isMyself = so.shopId === 'myself';
+                      const shop = !isMyself && so.shopId ? fallbackStore.shops.get(so.shopId) : undefined;
+                      const storeName = isMyself
+                        ? (so.sellerName?.trim() || it.buyFrom || 'Custom Store')
+                        : (shop?.name || so.shopName || so.shopId);
+                      const key = isMyself
+                        ? `myself::${storeName.toLowerCase()}::${(so.sellerPhone || '').trim()}`
+                        : `store::${so.shopId}`;
+                      let group = groupedByStore.find((g) => g.key === key);
+                      if (!group) {
+                        group = {
+                          key,
+                          storeName,
+                          sellerPhone: isMyself ? so.sellerPhone : (shop?.whatsapp || shop?.managerWhatsapp),
+                          isListedStore: isMyself ? so.isListedStore : true,
+                          isMyself,
+                          status: so.status,
+                          items: [],
+                        };
+                        groupedByStore.push(group);
+                      }
+                      group.items.push(it);
+                    });
+
+                    const hasOrderedOrCostedItems = orderedStoreEntries.length > 0 || groupedByStore.length > 0;
 
                     return (
                       <>
                         {/* Unordered items / blocks at the top */}
-                        {hasUnorderedCustomItems && renderCustomBlock()}
-                        {unorderedStoreEntries.map(renderStoreBlock)}
+                        {renderUnorderedCustomBlock()}
+                        {unorderedStoreEntries.map((entry) => renderStoreBlock(entry))}
 
-                        {/* Ordered store / custom blocks below */}
-                        {orderedStoreEntries.map(renderStoreBlock)}
-                        {!hasUnorderedCustomItems && renderCustomBlock()}
+                        {/* All ordered / cost-added items in a single unified block with separate store names & details */}
+                        {hasOrderedOrCostedItems && (
+                          <div className="rounded-2xl border border-emerald-300 bg-emerald-50/30 overflow-hidden divide-y divide-emerald-200/80 shadow-xs">
+                            {orderedStoreEntries.map(([sid, items]) => {
+                              const shop = fallbackStore.shops.get(sid);
+                              const groupSO = getGroupShopOrder(sid);
+                              const storeName = shop?.name || groupSO?.shopName || items.find(i => i.storeName)?.storeName || sid;
+                              const storeAddress = shop?.location?.address || (shop as any)?.address;
+                              const groupStatus = groupSO?.status;
+                              const isAcceptedGroup = groupStatus === 'ACCEPTED' || groupStatus === 'PREPARING';
+                              const style = getBlockStyle(groupStatus);
+                              return (
+                                <div key={sid} className="overflow-hidden">
+                                  <div className={`px-3 py-2.5 border-b space-y-1.5 ${style.hdrBg}`}>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => { e.stopPropagation(); setStoreInfoShopId(sid); }}
+                                          className="flex items-center gap-1.5 group/store hover:opacity-80 transition-opacity text-left cursor-pointer min-w-0"
+                                          title="দোকানের তথ্য ও যোগাযোগের নম্বর দেখতে ক্লিক করুন"
+                                        >
+                                          <Store className="w-4 h-4 shrink-0 opacity-80" />
+                                          <span className={`text-xs font-black uppercase tracking-wide break-words underline-offset-2 group-hover/store:underline ${style.hdrText}`}>
+                                            {storeName}
+                                          </span>
+                                        </button>
+                                        {storeAddress && (
+                                          <div className={`flex items-center gap-1 text-[10px] ${style.hdrText} opacity-85 pl-5.5 mt-0.5`}>
+                                            <MapPin className="w-2.5 h-2.5 shrink-0 text-emerald-500" />
+                                            <span className="truncate">{storeAddress}</span>
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {!isDone && groupSO && (
+                                        <button
+                                          type="button"
+                                          disabled={cancellingShopOrderId === groupSO.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setCancelShopOrderConfirmTarget({
+                                              shopOrderId: groupSO.id,
+                                              storeName,
+                                            });
+                                          }}
+                                          title="দোকানের অর্ডার বাতিল করুন (Cancel Store Order)"
+                                          className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-700 flex items-center justify-center transition-all active:scale-90 cursor-pointer shrink-0"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                                      {!isDone && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setConvertConfirmTarget({ sid, storeName, itemCount: items.length });
+                                          }}
+                                          className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-black text-white text-[10px] font-bold transition-all active:scale-95 border border-slate-700 shadow-xs cursor-pointer"
+                                          title="এই দোকানের পণ্যগুলোকে কাস্টম আইটেমে রূপান্তর করুন"
+                                        >
+                                          <Sparkles className="w-3 h-3 text-amber-400" />
+                                          <span className="text-white underline underline-offset-2">Make Custom</span>
+                                        </button>
+                                      )}
+                                      {groupStatus && (
+                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
+                                          groupStatus === 'PENDING'
+                                            ? 'bg-amber-200 text-amber-900 border border-amber-300'
+                                            : isAcceptedGroup || groupStatus === 'READY' || groupStatus === 'HANDOVER' || groupStatus === 'DELIVERED'
+                                              ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                                              : 'bg-gray-200 text-gray-700'
+                                        }`}>
+                                          {groupStatus === 'PENDING' ? '⏳ Pending' :
+                                            groupStatus === 'ACCEPTED' ? '✓ Accepted' :
+                                              groupStatus === 'PREPARING' ? '🍳 Preparing' :
+                                                groupStatus === 'DELIVERED' ? '✓ Delivered' :
+                                                  groupStatus === 'READY' ? '✅ Ready' :
+                                                    groupStatus === 'HANDOVER' ? 'Handover' :
+                                                      groupStatus}
+                                        </span>
+                                      )}
+                                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${style.tagBg}`}>
+                                        Listed
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className={`divide-y px-2 py-1 ${style.bodyBg}`}>
+                                    {items.map(it => renderItem(it, it.id, groupSO || undefined, false, true))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            {groupedByStore.map((group) => {
+                              const grpStyle = getBlockStyle(group.status);
+                              return (
+                                <div key={group.key} className="overflow-hidden">
+                                  <div className={`flex items-center justify-between gap-2 px-3 py-2 border-b ${grpStyle.hdrBg}`}>
+                                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                      <Store className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                      <span className={`text-[11px] font-black uppercase tracking-wide truncate ${grpStyle.hdrText}`}>
+                                        {group.storeName}
+                                      </span>
+                                      {group.sellerPhone && (() => {
+                                        const cleanDigits = group.sellerPhone.replace(/\D/g, '');
+                                        const waNumber = cleanDigits.startsWith('880')
+                                          ? cleanDigits
+                                          : cleanDigits.startsWith('0')
+                                            ? `88${cleanDigits}`
+                                            : `880${cleanDigits}`;
+                                        return (
+                                          <span className="inline-flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                            <a
+                                              href={`tel:${group.sellerPhone}`}
+                                              onClick={(e) => e.stopPropagation()}
+                                              title={`Call ${group.sellerPhone}`}
+                                              className="w-5 h-5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                                            >
+                                              <Phone className="w-2.5 h-2.5" />
+                                            </a>
+                                            <a
+                                              href={`https://wa.me/${waNumber}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                              title={`WhatsApp ${group.sellerPhone}`}
+                                              className="w-5 h-5 rounded-md bg-[#25D366] hover:bg-[#1ebe5d] text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                                            >
+                                              <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                                                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                                              </svg>
+                                            </a>
+                                          </span>
+                                        );
+                                      })()}
+                                      {group.isMyself ? (
+                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${group.isListedStore
+                                          ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                                          : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                          }`}>
+                                          {group.isListedStore ? 'Listed Store' : 'Custom Store'}
+                                        </span>
+                                      ) : (
+                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${grpStyle.tagBg}`}>
+                                          Listed
+                                        </span>
+                                      )}
+                                    </div>
+                                    {!group.isMyself && group.status && (
+                                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${group.status === 'PENDING'
+                                        ? 'bg-amber-200 text-amber-900 border border-amber-300'
+                                        : group.status === 'ACCEPTED' || group.status === 'PREPARING' || group.status === 'READY' || group.status === 'HANDOVER'
+                                          ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                                          : 'bg-rose-200 text-rose-900 border border-rose-300'
+                                        }`}>
+                                        {group.status === 'PENDING' ? '⏳ Pending' : group.status === 'ACCEPTED' ? '✓ Accepted' : group.status}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className={`divide-y px-2 py-1 ${grpStyle.bodyBg}`}>
+                                    {group.items.map(it => renderItem(it, it.id, undefined, true, false))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </>
                     );
                   })()}
@@ -4143,8 +4449,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           setShowDeliveryBackModal(true);
                         } else {
                           const baseFee = calculateEstimatedFee({
-                            distanceKm: Math.ceil(distanceKm),
-                            weightKg: Math.ceil(order.weightKg || 0),
+                            distanceKm: Math.max(1, Math.ceil(distanceKm)),
+                            weightKg: Math.max(1, Math.ceil(order.weightKg || 1)),
                             isReturnRequested: false,
                             productPrice: 0,
                           }, fallbackStore.pricingSettings).totalFee;
@@ -4203,74 +4509,12 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               )}
 
-              {/* 5. CUSTOMER CONTACT NUMBER */}
-              <div className="pt-2 border-t border-gray-100">
-                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
-                  <Phone className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Customer Contact</span>
-                </h4>
-                <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100 flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    {/* Line 1: Phone number + label badges */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-black text-gray-900 text-xs font-mono tracking-wide">
-                        {order.alternativePhone || order.customerPhone || 'Not provided'}
-                      </span>
-                    </div>
-                    {/* Line 2: Customer name */}
-                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                      <p className="text-[11px] text-gray-650 font-bold">{order.customerName}</p>
-                      {(order.customerPayment?.transactionId || order.isPaid) && (
-                        <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-black shadow-xs shrink-0">
-                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                          <span>Customer Paid</span>
-                        </span>
-                      )}
-                    </div>
-                    {/* Line 3: Customer labels under customer name */}
-                    {customerLabels.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {customerLabels.map((lbl, idx) => (
-                          <span
-                            key={idx}
-                            className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow-xs border border-amber-300/30 uppercase tracking-wider shrink-0"
-                          >
-                            🏷️ {lbl}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  {/* Call / WhatsApp buttons */}
-                  {(order.alternativePhone || order.customerPhone) && (
-                    <div className="flex items-center space-x-1.5 shrink-0">
-                      <a
-                        href={`tel:${order.alternativePhone || order.customerPhone}`}
-                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                      >
-                        <Phone className="w-3.5 h-3.5" />
-                        <span>Call</span>
-                      </a>
-                      <a
-                        href={`https://wa.me/880${(order.alternativePhone || order.customerPhone || '').replace(/^0/, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
-                      >
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                        <span>WhatsApp</span>
-                      </a>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* 6. COMBINED ADDRESSES BLOCK — inline Pickup/Delivery format */}
+              {/* 5. COMBINED CUSTOMER CONTACT + ADDRESSES & DISTANCE BLOCK */}
               <div className="pt-2 border-t border-gray-100">
                 <div className="flex items-center justify-between mb-1.5">
                   <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center space-x-1">
                     <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Addresses & Distance</span>
+                    <span>Customer Contact &amp; Addresses</span>
                   </h4>
                   {distanceKm > 0 && (
                     <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
@@ -4278,101 +4522,156 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200/80 space-y-2 text-xs animate-in fade-in">
-                  {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
-                    <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
-                      <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span className="truncate">Pickup Location Not Set</span>
+
+                <div className="rounded-2xl bg-gray-50 border border-gray-200/80 overflow-hidden animate-in fade-in">
+                  {/* Top part: Customer Contact */}
+                  <div className="p-3 bg-emerald-50/60 border-b border-emerald-100/80 flex items-center justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-gray-900 text-xs font-mono tracking-wide">
+                          {order.alternativePhone || order.customerPhone || 'Not provided'}
+                        </span>
                       </div>
-                      {!isDone && (
-                        <button
-                          onClick={() => setActiveMapPicker('pickup')}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
-                          title="Set pickup address"
-                        >
-                          <MapPin className="w-3 h-3 text-white" />
-                          <span>+ Set Pickup</span>
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {order.isStoreClosedAtOrder && (
-                        <div className="flex items-start gap-1.5 bg-amber-50 px-2.5 py-2 rounded-xl border border-amber-300">
-                          <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0 mt-0.5" />
-                          <p className="text-[10px] text-amber-800 font-semibold leading-snug">
-                            ⚠️ দোকান বন্ধ ছিল — <strong>যেকোনো কাছের দোকান</strong> থেকে পণ্য সংগ্রহ করুন।
-                          </p>
-                        </div>
-                      )}
-                      <div className="flex items-start justify-between gap-2 min-w-0">
-                        <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area'}>
-                          <strong className="font-extrabold text-emerald-800">Pickup: </strong>
-                          <span>{order.pickupLocation.address}</span>
-                          {order.isStoreClosedAtOrder && (
-                            <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 font-black px-1 py-0.5 rounded border border-amber-200 uppercase">বন্ধ</span>
-                          )}
-                        </p>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenStoreDirection({
-                              lat: order.pickupLocation?.lat,
-                              lng: order.pickupLocation?.lng,
-                              address: order.pickupLocation?.address,
-                              name: 'Pickup Location',
-                            })}
-                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
-                            title="Direction to pickup location"
-                          >
-                            <Navigation className="w-3 h-3" />
-                          </button>
-                          {!isDone && (
-                            <button
-                              onClick={() => setActiveMapPicker('pickup')}
-                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
-                              title="Edit pickup address"
+                      <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                        <p className="text-[11px] text-gray-650 font-bold">{order.customerName}</p>
+                        {(order.customerPayment?.transactionId || order.isPaid) && (
+                          <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-black shadow-xs shrink-0">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                            <span>Customer Paid</span>
+                          </span>
+                        )}
+                      </div>
+                      {customerLabels.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {customerLabels.map((lbl, idx) => (
+                            <span
+                              key={idx}
+                              className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow-xs border border-amber-300/30 uppercase tracking-wider shrink-0"
                             >
-                              <FileEdit className="w-3 h-3 text-gray-700" />
-                            </button>
-                          )}
+                              🏷️ {lbl}
+                            </span>
+                          ))}
                         </div>
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex items-start justify-between gap-2 min-w-0">
-                    <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
-                      <strong className="font-extrabold text-emerald-800">Delivery: </strong>
-                      <span>{order.deliveryLocation?.address || 'N/A'}</span>
-                    </p>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const dLat = order.deliveryLocation?.lat;
-                          const dLng = order.deliveryLocation?.lng;
-                          const dAddr = order.deliveryLocation?.address;
-                          const destStr = dLat && dLng ? `${dLat},${dLng}` : encodeURIComponent(dAddr || '');
-                          window.open(`https://www.google.com/maps/dir/?api=1&destination=${destStr}&travelmode=driving`, '_blank');
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
-                        title="Direction to delivery"
-                      >
-                        <Navigation className="w-3 h-3" />
-                      </button>
-                      {!isDone && (
-                        <button
-                          onClick={() => setActiveMapPicker('delivery')}
-                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
-                          title="Edit delivery address"
-                        >
-                          <FileEdit className="w-3 h-3 text-emerald-700" />
-                        </button>
                       )}
                     </div>
+                    {(order.alternativePhone || order.customerPhone) && (
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <a
+                          href={`tel:${order.alternativePhone || order.customerPhone}`}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>Call</span>
+                        </a>
+                        <a
+                          href={`https://wa.me/880${(order.alternativePhone || order.customerPhone || '').replace(/^0/, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold text-[10px] flex items-center space-x-1 shadow-sm transition-all active:scale-95"
+                        >
+                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                          <span>WhatsApp</span>
+                        </a>
+                      </div>
+                    )}
                   </div>
 
+                  {/* Bottom part: Pickup & Delivery Addresses */}
+                  <div className="p-3.5 space-y-2 text-xs">
+                    {(!order.pickupLocation?.address || order.pickupLocation.address === 'Local Helper Area') ? (
+                      <div className="flex items-center justify-between gap-2 min-w-0 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200">
+                        <div className="flex items-center space-x-1.5 min-w-0 flex-1 text-[11px] text-amber-900 font-bold">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span className="truncate">Pickup Location Not Set</span>
+                        </div>
+                        {!isDone && (
+                          <button
+                            onClick={() => setActiveMapPicker('pickup')}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10px] transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
+                            title="Set pickup address"
+                          >
+                            <MapPin className="w-3 h-3 text-white" />
+                            <span>+ Set Pickup</span>
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {order.isStoreClosedAtOrder && (
+                          <div className="flex items-start gap-1.5 bg-amber-50 px-2.5 py-2 rounded-xl border border-amber-300">
+                            <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-amber-800 font-semibold leading-snug">
+                              ⚠️ দোকান বন্ধ ছিল — <strong>যেকোনো কাছের দোকান</strong> থেকে পণ্য সংগ্রহ করুন।
+                            </p>
+                          </div>
+                        )}
+                        <div className="flex items-start justify-between gap-2 min-w-0">
+                          <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.pickupLocation?.address || 'Local Helper Area'}>
+                            <strong className="font-extrabold text-emerald-800">Pickup: </strong>
+                            <span>{order.pickupLocation.address}</span>
+                            {order.isStoreClosedAtOrder && (
+                              <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 font-black px-1 py-0.5 rounded border border-amber-200 uppercase">বন্ধ</span>
+                            )}
+                          </p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenStoreDirection({
+                                lat: order.pickupLocation?.lat,
+                                lng: order.pickupLocation?.lng,
+                                address: order.pickupLocation?.address,
+                                name: 'Pickup Location',
+                              })}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
+                              title="Direction to pickup location"
+                            >
+                              <Navigation className="w-3 h-3" />
+                            </button>
+                            {!isDone && (
+                              <button
+                                onClick={() => setActiveMapPicker('pickup')}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-extrabold text-[10px] transition-all shrink-0 active:scale-95 cursor-pointer"
+                                title="Edit pickup address"
+                              >
+                                <FileEdit className="w-3 h-3 text-gray-700" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <p className="text-[11px] text-gray-700 flex-1 min-w-0 whitespace-normal break-words" title={order.deliveryLocation?.address || 'N/A'}>
+                        <strong className="font-extrabold text-emerald-800">Delivery: </strong>
+                        <span>{order.deliveryLocation?.address || 'N/A'}</span>
+                      </p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const dLat = order.deliveryLocation?.lat;
+                            const dLng = order.deliveryLocation?.lng;
+                            const dAddr = order.deliveryLocation?.address;
+                            const destStr = dLat && dLng ? `${dLat},${dLng}` : encodeURIComponent(dAddr || '');
+                            window.open(`https://www.google.com/maps/dir/?api=1&destination=${destStr}&travelmode=driving`, '_blank');
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] transition-all shadow-2xs active:scale-95 cursor-pointer"
+                          title="Direction to delivery"
+                        >
+                          <Navigation className="w-3 h-3" />
+                        </button>
+                        {!isDone && (
+                          <button
+                            onClick={() => setActiveMapPicker('delivery')}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-extrabold text-[10px] transition-all shrink-0 border border-emerald-300 shadow-2xs active:scale-95 cursor-pointer"
+                            title="Edit delivery address"
+                          >
+                            <FileEdit className="w-3 h-3 text-emerald-700" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -4394,13 +4693,13 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   <div className="flex items-center justify-between">
                     {distanceKm > 0 ? (
                       <>
-                        <span className="text-gray-500 font-bold">Distance ({distanceKm.toFixed(1)} km)</span>
+                        <span className="text-gray-500 font-bold">Distance ({Math.max(1, distanceKm).toFixed(1)} km)</span>
                         <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.distanceFee}</span>
                       </>
                     ) : (
                       <>
                         <span className="text-amber-700 font-bold flex items-center gap-1">
-                          <span>Distance (Pickup not set)</span>
+                          <span>Distance (1.0 km min • Pickup not set)</span>
                         </span>
                         {!isDone ? (
                           <button
@@ -4411,7 +4710,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             + Set Location
                           </button>
                         ) : (
-                          <span className="text-xs sm:text-sm font-bold text-gray-400 font-mono">৳0</span>
+                          <span className="text-xs sm:text-sm font-bold text-gray-900 font-mono">৳{estdPricing.distanceFee}</span>
                         )}
                       </>
                     )}
@@ -4423,18 +4722,34 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       {!isDone ? (
                         <input
                           type="number"
-                          min="0"
+                          min="1"
                           step="0.5"
                           value={weightInput}
                           onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            setWeightInput(e.target.value);
-                            updateEstdPricing(activeProductCost, val);
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              setWeightInput('');
+                              return;
+                            }
+                            const parsed = parseFloat(raw);
+                            if (isNaN(parsed) || parsed < 1) {
+                              setWeightInput('1');
+                              updateEstdPricing(activeProductCost, 1);
+                            } else {
+                              setWeightInput(raw);
+                              updateEstdPricing(activeProductCost, parsed);
+                            }
+                          }}
+                          onBlur={() => {
+                            const parsed = parseFloat(weightInput);
+                            const safeVal = isNaN(parsed) || parsed < 1 ? 1 : parsed;
+                            setWeightInput(String(safeVal));
+                            updateEstdPricing(activeProductCost, safeVal);
                           }}
                           className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-xs outline-none focus:border-emerald-500 bg-white"
                         />
                       ) : (
-                        <span className="text-xs sm:text-sm font-bold text-gray-900">{Math.ceil(order.weightKg || 0)} kg</span>
+                        <span className="text-xs sm:text-sm font-bold text-gray-900">{Math.max(1, Math.ceil(order.weightKg || 1))} kg</span>
                       )}
                       {estdPricing.weightFee > 0 && (
                         <span className="text-[10px] text-gray-500">(+৳{estdPricing.weightFee})</span>
@@ -4514,17 +4829,14 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                   {(() => {
                     const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
-                    const calcFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                    const calcFee = order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, computedDeliverySubtotal);
                     const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
                     const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
                     const dueAmt = order.appliedDuePayment?.amount || 0;
-                    const custStoreFee = fallbackStore.pricingSettings.customStorePricingEnabled === false
-                      ? 0
-                      : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0);
-                    const totalDeliveryFee = order.isFreeDelivery ? 0 : (calcFee + procFee + retFee + custStoreFee);
+                    const totalDeliveryFee = order.isFreeDelivery ? 0 : (calcFee + procFee + retFee);
                     const isPendingConfirm = !order.isFreeDelivery && maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
                     const effDelivery = isPendingConfirm ? 0 : calcFee;
-                    const totalToCollect = activeProductCost + effDelivery + procFee + retFee + dueAmt + custStoreFee;
+                    const totalToCollect = activeProductCost + effDelivery + procFee + retFee + dueAmt;
 
                     return (
                       <>
@@ -4640,7 +4952,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           )}
                         </div>
                         <p className="text-xs font-black text-gray-900">
-                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, estdPricing.minFee)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0) + (fallbackStore.pricingSettings.customStorePricingEnabled === false ? 0 : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0)))}
+                          ৳{order.customerPayment?.amount ?? (activeProductCost + (order.isFreeDelivery ? 0 : Math.max(order.deliveryFee || 0, computedDeliverySubtotal)) + ((((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0))) + (estdPricing.returnFee > 0 ? estdPricing.returnFee : 0) + (order.appliedDuePayment?.amount || 0))}
                         </p>
                       </div>
                     </div>
@@ -4701,22 +5013,18 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     placeholder="গোপন নোট লিখুন..."
                     className="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50/50 text-xs font-semibold text-gray-900 outline-none focus:border-purple-600 focus:ring-4 focus:ring-purple-600/10 h-16 resize-none"
                   />
-                  <div className="flex items-center justify-between pt-0.5">
-                    {noteSavedAlert ? (
-                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-200 animate-in fade-in">
-                        ✓ নোট সংরক্ষিত হয়েছে!
-                      </span>
-                    ) : (
-                      <span className="text-[9px] text-purple-700 font-medium"> </span>
-                    )}
-                    <button
-                      type="submit"
-                      className="px-2.5 py-1.5 bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-[10px] rounded-lg shadow-sm transition-all active:scale-95 flex items-center space-x-1"
-                    >
-                      <FileText className="w-3 h-3" />
-                      <span>সেভ করুন</span>
-                    </button>
-                  </div>
+                  {noteSavedAlert && (
+                    <div className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2.5 py-1 rounded-lg border border-emerald-200 animate-in fade-in text-center">
+                      ✓ নোট সংরক্ষিত হয়েছে!
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-purple-900 hover:bg-purple-950 text-white font-extrabold text-xs rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center space-x-1.5"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>সেভ করুন</span>
+                  </button>
                 </form>
               </div>
             </>
@@ -4800,8 +5108,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   onClick={() => {
                     if (returnWhen === 'schedule' && !deliveryBackTimeInput) return;
                     const estd = calculateEstimatedFee({
-                      distanceKm: Math.ceil(distanceKm),
-                      weightKg: Math.ceil(order.weightKg || 0),
+                      distanceKm: Math.max(1, Math.ceil(distanceKm)),
+                      weightKg: Math.max(1, Math.ceil(order.weightKg || 1)),
                       isReturnRequested: true,
                       productPrice: 0,
                     }, fallbackStore.pricingSettings);
@@ -4858,72 +5166,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               </div>
             )}
 
-            {/* ACTIVE ACTIONS SECTION WITH BIDIRECTIONAL NAVIGATION */}
-            {(['ACCEPTED', 'PURCHASED_EXECUTED', 'ON_THE_WAY', 'ARRIVED'].includes(order.status) || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
-              <div className="space-y-3">
-                {/* Main Action (Forward) */}
-                {(order.status === 'ACCEPTED' || (order.status === 'PENDING' && isAcceptedByThisHelper)) && (
-                  <button
-                    onClick={() => handleUpdateStatusWithCheck('PURCHASED_EXECUTED')}
-                    className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-indigo-600/25 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <PackageCheck className="w-5 h-5" />
-                    <span>Mark as Processing</span>
-                  </button>
-                )}
-
-                {order.status === 'PURCHASED_EXECUTED' && (
-                  <button
-                    onClick={() => handleUpdateStatusWithCheck('ON_THE_WAY')}
-                    className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <Truck className="w-5 h-5" />
-                    <span>I'm On The Way!</span>
-                  </button>
-                )}
-
-                {order.status === 'ON_THE_WAY' && (
-                  <button
-                    onClick={() => handleUpdateStatusWithCheck('ARRIVED')}
-                    className="w-full py-3.5 rounded-2xl bg-teal-600 hover:bg-teal-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-teal-600/25 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <MapPin className="w-5 h-5" />
-                    <span>I've Arrived at Location!</span>
-                  </button>
-                )}
-
-                {order.status === 'ARRIVED' && (
-                  <button
-                    onClick={() => setShowDeliveryConfirmModal(true)}
-                    className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center space-x-2"
-                  >
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>Confirm Order Delivered!</span>
-                  </button>
-                )}
-
-                {/* Back Navigation Button */}
-                {order.status !== 'ACCEPTED' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const prevStatusMap: Record<string, OrderStatus> = {
-                        PURCHASED_EXECUTED: 'ACCEPTED',
-                        ON_THE_WAY: 'PURCHASED_EXECUTED',
-                        ARRIVED: 'ON_THE_WAY',
-                      };
-                      const prev = prevStatusMap[order.status];
-                      if (prev) {
-                        handleUpdateStatus(prev, `Status reverted back to ${prev}`);
-                      }
-                    }}
-                    className="w-full py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors flex items-center justify-center space-x-1.5"
-                  >
-                    <span>← Go Back to Previous Status</span>
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -5250,13 +5492,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     {(() => {
                       if (order.isFreeDelivery) return '৳0 (Reward Claimed)';
                       const maxLim = fallbackStore.pricingSettings.feeCalculatorMaxLimit ?? 70;
-                      const calcFee = Math.max(order.deliveryFee || 0, estdPricing.minFee);
+                      const calcFee = Math.max(order.deliveryFee || 0, computedDeliverySubtotal);
                       const procFee = ((fallbackStore.pricingSettings.feeCalculatorProcessingFee ?? 0) > 0 && estdPricing.processingFee > 0) ? estdPricing.processingFee : (order.processingFee || 0);
                       const retFee = estdPricing.returnFee > 0 ? estdPricing.returnFee : 0;
-                      const custStoreFee = fallbackStore.pricingSettings.customStorePricingEnabled === false
-                      ? 0
-                      : (calculateCustomStoreFee(order, shopOrders, fallbackStore.pricingSettings, fallbackStore.shops).totalFee || order.customStoreFee || 0);
-                      const totalDeliveryFee = calcFee + procFee + retFee + custStoreFee;
+                      const totalDeliveryFee = calcFee + procFee + retFee;
                       const isPending = maxLim > 0 && totalDeliveryFee > maxLim && !order.exceededFeeConfirmed;
                       return isPending ? 'N/A' : `৳${calcFee}`;
                     })()}
@@ -5993,8 +6232,8 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         type="button"
                         onClick={() => setStorePickerCategory(cat)}
                         className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider shrink-0 transition-all ${storePickerCategory === cat
-                            ? 'bg-purple-700 text-white shadow-xs'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          ? 'bg-purple-700 text-white shadow-xs'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
                       >
                         {cat === 'ALL' ? 'সব' : cat}
@@ -6395,10 +6634,42 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 <div className="p-2.5 rounded-2xl bg-purple-100 text-purple-700">
                   <Store className="w-6 h-6" />
                 </div>
-                <div>
-                  <h3 className="font-black text-base text-gray-900 leading-tight">
-                    {isMyself ? (viewRequestDetails.sellerName || 'Custom Cost / নিজের কেনা') : viewRequestDetails.shopName}
-                  </h3>
+                <div className="min-w-0 flex-1 pr-8">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <h3 className="font-black text-base text-gray-900 leading-tight truncate">
+                      {isMyself ? (viewRequestDetails.sellerName || 'Custom Cost / নিজের কেনা') : viewRequestDetails.shopName}
+                    </h3>
+                    {isMyself && contactNum && (() => {
+                      const cleanDigits = contactNum.replace(/\D/g, '');
+                      const waNumber = cleanDigits.startsWith('880')
+                        ? cleanDigits
+                        : cleanDigits.startsWith('0')
+                          ? `88${cleanDigits}`
+                          : `880${cleanDigits}`;
+                      return (
+                        <span className="inline-flex items-center gap-1 shrink-0">
+                          <a
+                            href={`tel:${contactNum}`}
+                            title={`Call ${contactNum}`}
+                            className="w-6 h-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                          >
+                            <Phone className="w-3 h-3" />
+                          </a>
+                          <a
+                            href={`https://wa.me/${waNumber}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`WhatsApp ${contactNum}`}
+                            className="w-6 h-6 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white inline-flex items-center justify-center shadow-xs transition-all active:scale-90"
+                          >
+                            <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                            </svg>
+                          </a>
+                        </span>
+                      );
+                    })()}
+                  </div>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
                       {isMyself ? (viewRequestDetails.isListedStore ? 'Listed Store' : 'Direct Purchase') : (shop?.type || 'Store')}
@@ -6424,12 +6695,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   </div>
                 </div>
               </div>
-
-              {!isMyself && shop?.description && (
-                <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-xl border border-gray-100 leading-relaxed font-medium">
-                  {shop.description}
-                </p>
-              )}
 
               {/* Separated Items List (Non-editable item names, check/uncheck + per-item price) */}
               <div className="space-y-1.5 pt-1">
@@ -6521,19 +6786,24 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               {/* Cost Calculation Summary */}
               {(() => {
                 const total = totalItemsPrice > 0 ? totalItemsPrice : (viewRequestDetails.price || 0);
-                const commPct = !isMyself ? shop?.commissionPercent : undefined;
+                if (isMyself) {
+                  return (
+                    <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
+                      <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Cost:</span>
+                      <span className="font-mono font-black text-sm text-purple-950">৳{Number(total).toFixed(2).replace(/\.00$/, '')}</span>
+                    </div>
+                  );
+                }
+                const commPct = shop?.commissionPercent;
                 const hasComm = commPct && commPct > 0 && total > 0;
                 const commAmt = hasComm ? Math.round(total * (commPct! / 100)) : 0;
                 const payable = hasComm ? Math.max(0, total - commAmt) : total;
                 return (
-                  <div className={`rounded-2xl border overflow-hidden bg-gradient-to-br ${isMyself
-                    ? 'border-amber-200 from-amber-50 to-amber-50/30'
-                    : 'border-purple-200 from-purple-50 to-emerald-50'
-                    }`}>
+                  <div className="rounded-2xl border overflow-hidden bg-gradient-to-br border-purple-200 from-purple-50 to-emerald-50">
                     <div className="px-3 pt-2.5 pb-1.5 space-y-1">
                       <div className="flex items-center justify-between text-xs font-bold text-gray-600">
                         <span>Total Cost</span>
-                        <span className={`font-mono ${isMyself ? 'text-amber-900' : 'text-gray-900'}`}>
+                        <span className="font-mono text-gray-900">
                           ৳{Number(total).toFixed(2).replace(/\.00$/, '')}
                         </span>
                       </div>
@@ -6544,10 +6814,9 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         </div>
                       )}
                     </div>
-                    <div className={`mx-2 mb-2 rounded-xl px-3 py-2 flex items-center justify-between shadow-sm ${isMyself ? 'bg-amber-600' : 'bg-emerald-600'
-                      }`}>
+                    <div className="mx-2 mb-2 rounded-xl px-3 py-2 flex items-center justify-between shadow-sm bg-emerald-600">
                       <span className="text-[10px] font-black text-white/80 uppercase tracking-wider">
-                        {isMyself ? 'Total Spent' : 'পরিশোধযোগ্য'}
+                        পরিশোধযোগ্য
                       </span>
                       <span className="font-mono font-black text-base text-white">৳{payable.toFixed(2).replace(/\.00$/, '')}</span>
                     </div>
@@ -6555,69 +6824,150 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 );
               })()}
 
-              {/* Contact Details */}
-              {!isMyself && shop && (
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2">
-                  <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider block">Store Contact</span>
-                  <div className="text-xs font-bold text-gray-800">
-                    {shop.contactPerson && <p className="text-gray-700">{shop.contactPerson}{shop.managerName && shop.managerName !== shop.contactPerson ? ` / ${shop.managerName}` : ''}</p>}
-                    {(shop.whatsapp || shop.managerWhatsapp) && (
-                      <p className="font-mono text-gray-900 mt-0.5">{shop.whatsapp || shop.managerWhatsapp}</p>
-                    )}
-                    {shop.location?.address && (
-                      <p className="text-gray-500 font-medium text-[11px] mt-0.5">{shop.location.address}</p>
-                    )}
+              {/* Editable Custom Store Name & Number */}
+              {isMyself && !isDone && (
+                <div className="space-y-2.5 pt-1">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">Seller / Shop Name *</label>
+                    <input
+                      type="text"
+                      value={viewRequestDetails.sellerName || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setViewRequestDetails((prev) => (prev ? { ...prev, sellerName: val } : null));
+                      }}
+                      placeholder="e.g. Bhai Bhai Store"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 bg-white text-xs font-bold text-gray-900 outline-none focus:border-purple-500"
+                    />
                   </div>
-                  {(shop.whatsapp || shop.managerWhatsapp) && (
-                    <div className="flex items-center space-x-2">
-                      <a
-                        href={`tel:${shop.whatsapp || shop.managerWhatsapp}`}
-                        className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
-                      >
-                        <Phone className="w-3.5 h-3.5" />
-                        <span>Call Store</span>
-                      </a>
-                      <a
-                        href={`https://wa.me/880${(shop.whatsapp || shop.managerWhatsapp || '').replace(/^0/, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
-                      >
-                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                        <span>WhatsApp</span>
-                      </a>
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">Seller Phone Number *</label>
+                    <input
+                      type="tel"
+                      value={viewRequestDetails.sellerPhone || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setViewRequestDetails((prev) => (prev ? { ...prev, sellerPhone: val } : null));
+                      }}
+                      placeholder="01XXXXXXXXX"
+                      className="w-full p-2.5 rounded-xl border border-gray-200 bg-white text-xs font-bold font-mono text-gray-900 outline-none focus:border-purple-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Contact Details Accordion */}
+              {!isMyself && shop && (
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowViewRequestStoreContact((prev) => !prev)}
+                    className="w-full p-3 flex items-center justify-between text-left hover:bg-gray-100/70 transition-colors cursor-pointer"
+                  >
+                    <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider flex items-center gap-1.5">
+                      <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Store Contact</span>
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${showViewRequestStoreContact ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showViewRequestStoreContact && (
+                    <div className="px-3 pb-3 pt-0.5 space-y-2 border-t border-gray-200/70 animate-in slide-in-from-top-1 duration-150">
+                      <div className="text-xs font-bold text-gray-800 pt-1.5">
+                        {shop.contactPerson && <p className="text-gray-700">{shop.contactPerson}{shop.managerName && shop.managerName !== shop.contactPerson ? ` / ${shop.managerName}` : ''}</p>}
+                        {(shop.whatsapp || shop.managerWhatsapp) && (
+                          <p className="font-mono text-gray-900 mt-0.5">{shop.whatsapp || shop.managerWhatsapp}</p>
+                        )}
+                        {shop.location?.address && (
+                          <p className="text-gray-500 font-medium text-[11px] mt-0.5">{shop.location.address}</p>
+                        )}
+                      </div>
+                      {(shop.whatsapp || shop.managerWhatsapp) && (
+                        <div className="flex items-center space-x-2">
+                          <a
+                            href={`tel:${shop.whatsapp || shop.managerWhatsapp}`}
+                            className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                            <span>Call Store</span>
+                          </a>
+                          <a
+                            href={`https://wa.me/880${(shop.whatsapp || shop.managerWhatsapp || '').replace(/^0/, '')}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                            <span>WhatsApp</span>
+                          </a>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-              {isMyself && contactNum && (
-                <div className="flex items-center space-x-2">
-                  <a
-                    href={`tel:${contactNum}`}
-                    className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                    <span>Call Seller</span>
-                  </a>
-                  <a
-                    href={`https://wa.me/880${contactNum.replace(/^0/, '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-sm transition-all active:scale-95"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                    <span>WhatsApp</span>
-                  </a>
-                </div>
-              )}
-
               {!isDone && (
                 <div className="flex space-x-2 pt-2 border-t border-gray-100">
                   <button
                     type="button"
+                    disabled={isDeletingViewRequest}
                     onClick={async () => {
-                      const confirmDel = await showConfirm("Confirm removal", "Are you sure you want to remove this request?");
-                      if (confirmDel) {
+                      if (isDeletingViewRequest) return;
+                      const isSingleCustomCancel =
+                        Boolean(viewRequestSingleItemTarget) &&
+                        isMyself &&
+                        Boolean(viewRequestDetails.itemsWithPrice && viewRequestDetails.itemsWithPrice.length > 1);
+
+                      const confirmDel = await showConfirm(
+                        "Confirm Delete",
+                        isSingleCustomCancel
+                          ? `Delete "${viewRequestSingleItemTarget!.name}" and move it back to item list?`
+                          : "Are you sure you want to delete this request?"
+                      );
+                      if (!confirmDel) return;
+
+                      setIsDeletingViewRequest(true);
+                      try {
+                        if (isSingleCustomCancel && viewRequestSingleItemTarget && viewRequestDetails.itemsWithPrice) {
+                          const targetNorm = viewRequestSingleItemTarget.name.toLowerCase().trim();
+                          const remainingItems = viewRequestDetails.itemsWithPrice.filter((orig) => {
+                            const isMatch =
+                              (orig.itemId && orig.itemId === viewRequestSingleItemTarget.id) ||
+                              (orig.originalId && orig.originalId === viewRequestSingleItemTarget.id) ||
+                              orig.name.toLowerCase().trim() === targetNorm;
+                            return !isMatch;
+                          });
+                          const remainingText = remainingItems.map((i) => i.name).join(', ');
+                          const remainingTotal = remainingItems.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
+
+                          await fallbackStore.updateShopOrder(
+                            viewRequestDetails.id,
+                            (so) => ({
+                              ...so,
+                              requestText: remainingText,
+                              price: remainingTotal,
+                              itemsWithPrice: remainingItems,
+                            }),
+                            'helper'
+                          );
+
+                          fallbackStore.updateOrder(order.id, (o) => ({
+                            ...o,
+                            items: (o.items || []).map((it) => {
+                              const isMatch =
+                                it.id === viewRequestSingleItemTarget.id ||
+                                it.name.toLowerCase().trim() === targetNorm;
+                              return isMatch
+                                ? { ...it, purchased: false, isCustom: true, storeId: undefined, storeName: undefined, price: undefined }
+                                : it;
+                            }),
+                          }));
+
+                          setViewRequestDetails(null);
+                          setViewRequestItems([]);
+                          setViewRequestSingleItemTarget(null);
+                          return;
+                        }
+
                         const itemNames = (viewRequestItems.length > 0 ? viewRequestItems : (viewRequestDetails.itemsWithPrice || []))
                           .map((i) => i.name.toLowerCase().trim())
                           .concat(
@@ -6634,7 +6984,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             const itName = it.name.toLowerCase().trim();
                             const isMatched = itemNames.some((rn) => itName.includes(rn) || rn.includes(itName));
                             return isMatched
-                              ? { ...it, purchased: false, isCustom: true, storeId: undefined, storeName: undefined }
+                              ? { ...it, purchased: false, isCustom: true, storeId: undefined, storeName: undefined, price: undefined }
                               : it;
                           }),
                         }));
@@ -6665,14 +7015,25 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                         await fallbackStore.deleteShopOrder(viewRequestDetails.id);
                         setViewRequestDetails(null);
                         setViewRequestItems([]);
+                        setViewRequestSingleItemTarget(null);
+                      } finally {
+                        setIsDeletingViewRequest(false);
                       }
                     }}
-                    className="flex-1 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-705 font-extrabold text-xs transition-colors"
+                    className="flex-1 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 disabled:opacity-60 text-red-700 font-extrabold text-xs transition-colors flex items-center justify-center gap-1.5"
                   >
-                    Remove
+                    {isDeletingViewRequest ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                        <span>Deleting...</span>
+                      </>
+                    ) : (
+                      <span>Delete</span>
+                    )}
                   </button>
                   <button
                     type="button"
+                    disabled={isDeletingViewRequest}
                     onClick={async () => {
                       const checkedItems = viewRequestItems.filter((i) => i.isChecked);
                       if (checkedItems.length === 0) {
@@ -6690,23 +7051,54 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       );
 
                       if (isMyself) {
-                        const updatedItemsWithPrice: ShopOrderItemPrice[] = checkedItems.map((i) => ({
-                          name: i.name,
-                          unit: i.qty ? String(i.qty) : undefined,
-                          price: parseFloat(i.price || '0') || 0,
-                          itemId: i.id,
-                          originalId: i.originalId,
-                        }));
+                        let updatedItemsWithPrice: ShopOrderItemPrice[];
+                        let finalItemsListText = itemsListText;
+                        let finalTotal = calculatedTotal;
+
+                        if (viewRequestSingleItemTarget && viewRequestDetails.itemsWithPrice && viewRequestDetails.itemsWithPrice.length > 1) {
+                          const targetNorm = viewRequestSingleItemTarget.name.toLowerCase().trim();
+                          const editedEntry = checkedItems[0];
+                          const editedPrice = parseFloat(editedEntry.price || '0') || 0;
+                          updatedItemsWithPrice = viewRequestDetails.itemsWithPrice.map((orig) => {
+                            const isMatch =
+                              (orig.itemId && orig.itemId === viewRequestSingleItemTarget.id) ||
+                              (orig.originalId && orig.originalId === viewRequestSingleItemTarget.id) ||
+                              orig.name.toLowerCase().trim() === targetNorm;
+                            return isMatch ? { ...orig, price: editedPrice } : orig;
+                          });
+                          finalItemsListText = updatedItemsWithPrice.map((i) => i.name).join(', ');
+                          finalTotal = updatedItemsWithPrice.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
+                        } else {
+                          updatedItemsWithPrice = checkedItems.map((i) => ({
+                            name: i.name,
+                            unit: i.qty ? String(i.qty) : undefined,
+                            price: parseFloat(i.price || '0') || 0,
+                            itemId: i.id,
+                            originalId: i.originalId,
+                          }));
+                        }
+
+                        const editedSellerName = viewRequestDetails.sellerName?.trim() || '';
+                        const editedSellerPhone = viewRequestDetails.sellerPhone?.trim() || '';
+                        const matchedEditedShop = allShops.find(
+                          (s) => s.name && s.name.trim().toLowerCase() === editedSellerName.toLowerCase()
+                        ) || null;
+
+                        if (!matchedEditedShop && editedSellerName) {
+                          saveCustomStoreToLocal(editedSellerName, editedSellerPhone);
+                        }
 
                         await fallbackStore.updateShopOrder(
                           viewRequestDetails.id,
                           (so) => ({
                             ...so,
-                            requestText: itemsListText,
-                            price: calculatedTotal > 0 ? calculatedTotal : viewRequestDetails.price,
+                            requestText: finalItemsListText,
+                            price: finalTotal > 0 ? finalTotal : viewRequestDetails.price,
                             itemsWithPrice: updatedItemsWithPrice,
-                            sellerName: viewRequestDetails.sellerName?.trim() || undefined,
-                            sellerPhone: viewRequestDetails.sellerPhone?.trim() || undefined,
+                            sellerName: editedSellerName || undefined,
+                            sellerPhone: editedSellerPhone || undefined,
+                            isListedStore: Boolean(matchedEditedShop),
+                            matchedShopId: matchedEditedShop ? matchedEditedShop.id : undefined,
                           }),
                           'helper'
                         );
@@ -6760,7 +7152,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                                 ...it,
                                 price: newPrice,
                                 purchased: true,
-                                ...(isMyself ? { buyFrom: viewRequestDetails.sellerName?.trim() || it.buyFrom || 'MySelf' } : {}),
                               };
                             }
                             return it;
@@ -6808,6 +7199,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
 
                       setViewRequestDetails(null);
                       setViewRequestItems([]);
+                      setViewRequestSingleItemTarget(null);
                     }}
                     className="flex-1 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs shadow-sm transition-all"
                   >
@@ -7250,7 +7642,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                             isCustom: !effectiveShop,
                             price: newPrice,
                             purchased: true,
-                            buyFrom: customSellerName.trim() || it.buyFrom,
                           };
                         }
                         return it;
@@ -7283,9 +7674,17 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     };
                   });
 
+                  // Save unlisted custom store into helper's localStorage for faster search next time
+                  if (!effectiveShop && customSellerName.trim()) {
+                    saveCustomStoreToLocal(customSellerName.trim(), customSellerPhone.trim());
+                  }
+
                   // Immediately sync React state so the summary re-renders without waiting for the subscription
                   setShopOrders(allUpdatedSOs);
                   customCostDraftIdRef.current = null;
+                  setSelectedCustomItemIds((prev) =>
+                    prev.filter((id) => !checkedItems.some((ci) => ci.id === id || ci.originalId === id))
+                  );
                   setShowCustomCostModal(false);
                   setCustomCostItems([]);
                   setCustomSellerName('');
@@ -7302,7 +7701,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
               }}
               className="space-y-3"
             >
-              {selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase() ? (
+              {selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase() && (
                 <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
@@ -7315,9 +7714,6 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                           Listed Store
                         </span>
                       </div>
-                      <p className="text-[11px] text-emerald-700 font-medium leading-tight mt-0.5">
-                        সার্ভারে তালিকাভুক্ত স্টোর — কোনো অতিরিক্ত কাস্টম স্টোর চার্জ যুক্ত হবে না (৳০ Fee)।
-                      </p>
                     </div>
                   </div>
                   <button
@@ -7336,22 +7732,7 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                     Change
                   </button>
                 </div>
-              ) : fallbackStore.pricingSettings.customStorePricingEnabled !== false ? (
-                <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950">
-                  <div className="font-bold flex items-center justify-between text-indigo-900 mb-1">
-                    <span className="flex items-center gap-1.5">
-                      <Store className="w-3.5 h-3.5 text-indigo-600" />
-                      Custom Store Fee
-                    </span>
-                    <span className="font-extrabold text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
-                      +৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}/স্টোর
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-gray-600 leading-relaxed">
-                    সার্ভারে তালিকাভুক্ত নয় এমন দোকান থেকে কেনার জন্য প্রতি স্টোরে <strong>৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}</strong> কাস্টম স্টোর চার্জ যুক্ত হবে। প্ল্যাটফর্মে ইতিমধ্যে থাকা তালিকাভুক্ত স্টোর নির্বাচন করলে কোনো চার্জ যুক্ত হবে না (৳০ Fee)।
-                  </p>
-                </div>
-              ) : null}
+              )}
 
               {/* Items with Per-Item Price Input */}
               <div className="space-y-1.5">
@@ -7418,35 +7799,61 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                 </div>
               </div>
 
-              {/* Total Cost Display + Live Store Fee Indicator */}
-              <div className="space-y-1.5">
-                <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
-                  <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
-                  <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
-                </div>
-                {fallbackStore.pricingSettings.customStorePricingEnabled !== false && (
-                  <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition-colors ${
-                    (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
-                    allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                      ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950 font-bold'
-                      : 'bg-indigo-50/90 border-indigo-200 text-indigo-950 font-bold'
-                  }`}>
-                    <span className="flex items-center gap-1.5 text-[11px]">
-                      <Store className="w-3.5 h-3.5 shrink-0" />
-                      {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
-                      allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                        ? 'Store Fee (Listed Store):'
-                        : 'Custom Store Fee (Unlisted Store):'}
-                    </span>
-                    <span className="font-mono font-black text-[11px]">
-                      {(selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()) ||
-                      allShops.some((s) => s.name && s.name.trim().toLowerCase() === customSellerName.trim().toLowerCase())
-                        ? '৳0 (No Fee)'
-                        : `+৳${fallbackStore.pricingSettings.customStorePricingAmount ?? 15}`}
-                    </span>
+              {/* Total Cost / Payable Display + Live Store Fee Indicator */}
+              {(() => {
+                const trimmedCustomName = customSellerName.trim().toLowerCase();
+                const matchedListedShopForModal =
+                  (selectedListedShop && selectedListedShop.name.trim().toLowerCase() === trimmedCustomName ? selectedListedShop : null) ||
+                  (trimmedCustomName ? allShops.find((s) => s.name && s.name.trim().toLowerCase() === trimmedCustomName) || null : null);
+
+                const commPct = matchedListedShopForModal?.commissionPercent || 0;
+                const hasComm = Boolean(matchedListedShopForModal && commPct > 0 && totalCustomCost > 0);
+                const commAmt = hasComm ? Math.round(totalCustomCost * (commPct / 100)) : 0;
+                const payableAmount = matchedListedShopForModal ? Math.max(0, totalCustomCost - commAmt) : totalCustomCost;
+
+                return (
+                  <div className="space-y-1.5">
+                    {matchedListedShopForModal ? (
+                      <div className="rounded-2xl border border-emerald-200 overflow-hidden bg-gradient-to-br from-emerald-50 to-teal-50/40">
+                        {hasComm && (
+                          <div className="px-3 pt-2.5 pb-1.5 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-gray-600">
+                              <span>Total Product Cost:</span>
+                              <span className="font-mono">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] font-bold text-rose-600">
+                              <span>কমিশন ({commPct}%):</span>
+                              <span className="font-mono">− ৳{commAmt}</span>
+                            </div>
+                          </div>
+                        )}
+                        <div className={`mx-2 mb-2 ${hasComm ? '' : 'mt-2'} rounded-xl px-3 py-2.5 flex items-center justify-between shadow-sm bg-emerald-600`}>
+                          <span className="text-xs font-black text-white uppercase tracking-wider">Payable</span>
+                          <span className="font-mono font-black text-base text-white">৳{payableAmount.toFixed(2).replace(/\.00$/, '')}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100 flex items-center justify-between">
+                          <span className="text-xs font-black text-purple-900 uppercase tracking-wider">Total Product Cost:</span>
+                          <span className="font-mono font-black text-sm text-purple-950">৳{totalCustomCost.toFixed(2).replace(/\.00$/, '')}</span>
+                        </div>
+                        {fallbackStore.pricingSettings.customStorePricingEnabled !== false && (
+                          <div className="p-2.5 rounded-xl border flex items-center justify-between text-xs bg-indigo-50/90 border-indigo-200 text-indigo-950 font-bold">
+                            <span className="flex items-center gap-1.5 text-[11px]">
+                              <Store className="w-3.5 h-3.5 shrink-0" />
+                              <span>Custom Store Fee (Unlisted Store):</span>
+                            </span>
+                            <span className="font-mono font-black text-[11px]">
+                              +৳{fallbackStore.pricingSettings.customStorePricingAmount ?? 15}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
 
               <div ref={storeSuggestionRef} className="relative">
                 <label className="text-xs font-bold text-gray-700 block mb-1">Seller / Shop Name *</label>
@@ -7463,6 +7870,11 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       );
                       if (match) {
                         setSelectedListedShop(match);
+                        const phone = match.whatsapp || match.managerWhatsapp || '';
+                        if (phone && (!customSellerPhone.trim() || customSellerPhone === autoFilledPhoneRef.current)) {
+                          setCustomSellerPhone(phone);
+                          autoFilledPhoneRef.current = phone;
+                        }
                       } else {
                         setSelectedListedShop(null);
                         // If phone was auto-filled from previously selected listed store, clear it
@@ -7478,11 +7890,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                       }
                     }}
                     placeholder="e.g. Bhai Bhai Store or Karim"
-                    className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${
-                      selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
-                        ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
-                        : 'border-gray-200 bg-white focus:border-purple-500'
-                    }`}
+                    className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
+                      ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
+                      : 'border-gray-200 bg-white focus:border-purple-500'
+                      }`}
                     required
                   />
                   {selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase() && (
@@ -7493,19 +7904,57 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   )}
                 </div>
 
-                {/* Top 3 Matched Stores Dropdown */}
+                {/* Top Matched Stores Dropdown (Saved Custom + Listed Server Stores) */}
                 {showStoreSuggestions && topMatchedStores.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white rounded-2xl shadow-2xl border border-purple-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="mt-1.5 bg-white rounded-2xl shadow-lg border border-purple-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in zoom-in-95 duration-100 max-h-56 overflow-y-auto">
                     <div className="px-3 py-1.5 bg-purple-50/90 border-b border-purple-100 flex items-center justify-between text-[11px] font-bold text-purple-900">
                       <span className="flex items-center gap-1">
                         <Store className="w-3.5 h-3.5 text-purple-600" />
-                        Top Matched Stores (তালিকাভুক্ত স্টোর)
+                        Matched Stores
                       </span>
-                      <span className="text-[10px] text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded-md">
-                        ৳০ ফি
+                      <span className="text-[10px] text-gray-500 font-bold">
+                        Select to autofill
                       </span>
                     </div>
-                    {topMatchedStores.map((shop) => {
+                    {topMatchedStores.map((entry) => {
+                      if (entry.kind === 'saved_custom') {
+                        const st = entry.store;
+                        const customFeeAmt = fallbackStore.pricingSettings.customStorePricingAmount ?? 15;
+                        return (
+                          <button
+                            key={`saved-${st.name}-${st.phone}`}
+                            type="button"
+                            onClick={() => handleSelectSavedCustomStore(st)}
+                            className="w-full text-left p-2.5 hover:bg-indigo-50/70 active:bg-indigo-100 transition-colors flex items-center justify-between gap-2 group cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                                <Store className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-xs text-gray-900 group-hover:text-indigo-900 truncate">
+                                  {st.name}
+                                </div>
+                                <div className="text-[10px] text-indigo-600 font-semibold truncate">
+                                  Saved Store (Unlisted)
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              {st.phone && (
+                                <div className="text-[10px] font-mono font-bold text-gray-600">
+                                  {st.phone}
+                                </div>
+                              )}
+                              <span className="inline-block text-[9px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
+                                {fallbackStore.pricingSettings.customStorePricingEnabled !== false ? `Select (+৳${customFeeAmt} ফি)` : 'Select'}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      }
+
+                      const shop = entry.shop;
                       const phone = shop.whatsapp || shop.managerWhatsapp || '';
                       return (
                         <button
@@ -7551,11 +8000,10 @@ export const HelperActiveOrderView: React.FC<HelperActiveOrderViewProps> = ({
                   value={customSellerPhone}
                   onChange={(e) => setCustomSellerPhone(e.target.value)}
                   placeholder="01XXXXXXXXX"
-                  className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${
-                    selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
-                      ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
-                      : 'border-gray-200 bg-white focus:border-purple-500'
-                  }`}
+                  className={`w-full p-3 rounded-2xl border font-bold text-sm outline-none transition-all ${selectedListedShop && selectedListedShop.name.trim().toLowerCase() === customSellerName.trim().toLowerCase()
+                    ? 'border-emerald-400 bg-emerald-50/40 text-emerald-950 focus:border-emerald-600'
+                    : 'border-gray-200 bg-white focus:border-purple-500'
+                    }`}
                   required
                 />
               </div>

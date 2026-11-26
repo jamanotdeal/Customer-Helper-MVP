@@ -215,6 +215,7 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
     };
     sync();
     fallbackStore.loadShops();
+    fallbackStore.loadStoreProducts();
     fallbackStore.getAllOrderFeedbacks().catch(() => { });
     const unsub = fallbackStore.subscribe(sync);
     return () => unsub();
@@ -270,7 +271,9 @@ export const StoreGrid: React.FC<StoreGridProps> = ({
       }
     }
 
-    return deduplicated;
+    return deduplicated.filter(
+      (shop) => fallbackStore.getProductsForShop(shop.id, shop.ownerUserId).length > 0
+    );
   }, [shops, currentService, serviceStoreTypeMap]);
 
   const visible = filteredShops.slice(0, visibleCount);
