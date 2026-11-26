@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Order, OrderItem, OrderStatus, OrderEditChange, OrderEditHistoryItem, ShopOrder, Shop } from '@/types';
 import { fallbackStore, db } from '@/lib/firebase';
-import { collection, doc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, doc, query, where, onSnapshot, getDocs, getDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import {
   ArrowLeft, CheckCircle2, Clock, MapPin, Phone, XCircle,
@@ -119,6 +119,57 @@ export const OrderDetailsView: React.FC<OrderDetailsViewProps> = ({ orderId, onB
       if (unsubDoc) unsubDoc();
     };
   }, [orderId]);
+
+  // ── Live helper user-profile listener ──────────────────────────────────────
+  // The helper's phone/name may change after the order was placed.
+  // `fallbackStore.users` only holds the *customer's* own profile by default,
+  // so we explicitly fetch + subscribe to the helper's Firestore user document
+  // so customers always see the latest contact number.
+  const [helperProfileLoaded, setHelperProfileLoaded] = useState(false);
+  useEffect(() => {
+    const helperId = order?.helperId;
+    if (!helperId || !db) return;
+
+    let isCancelled = false;
+
+    // 1. Immediate fetch in case the helper profile is not yet cached
+    if (!fallbackStore.users.get(helperId)) {
+      getDoc(doc(db, 'users', helperId))
+        .then((snap) => {
+          if (!isCancelled && snap.exists()) {
+            fallbackStore.users.set(helperId, snap.data() as any);
+            fallbackStore.notify();
+            setHelperProfileLoaded((v) => !v); // force re-render
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 2. Real-time listener so phone/name updates propagate immediately
+    let unsubHelper: (() => void) | undefined;
+    try {
+      unsubHelper = onSnapshot(
+        doc(db, 'users', helperId),
+        (snap) => {
+          if (isCancelled) return;
+          if (snap.exists()) {
+            fallbackStore.users.set(helperId, snap.data() as any);
+            fallbackStore.notify();
+            setHelperProfileLoaded((v) => !v); // force re-render
+          }
+        },
+        (err) => console.warn('[OrderDetailsView] helper user listener note:', err)
+      );
+    } catch (e) {
+      console.warn('[OrderDetailsView] helper user listener setup error:', e);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (unsubHelper) unsubHelper();
+    };
+  }, [order?.helperId]);
+  // ───────────────────────────────────────────────────────────────────────────
 
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
 
