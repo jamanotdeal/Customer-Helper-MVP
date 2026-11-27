@@ -1,10 +1,17 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { UserProfile, Order, UserRole } from '@/types';
+import { UserProfile, Order, UserRole, Referral } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
 import { calculateHelperCommission } from '@/lib/pricing';
 import { useModal } from '../CustomModal';
+import { AdminDatePreset, rangeForPreset, rangeBoundsIso, isInRange } from '@/lib/adminDateRange';
+
+type PresetType = AdminDatePreset;
+const presetLabels: Record<string, string> = {
+  TODAY: 'Today', YESTERDAY: 'Yesterday', THIS_WEEK: 'This Week',
+  THIS_MONTH: 'This Month', ALL_TIME: 'All Time', LAST_7: 'Last 7 Days', LAST_30: 'Last 30 Days',
+};
 import {
   X,
   User,
@@ -207,6 +214,7 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
   // Fetch real-time user data
   const user = fallbackStore.users.get(userId);
+  const loadingUser = !user;
 
   // Edit info states
   const [isEditingInfo, setIsEditingInfo] = useState(false);

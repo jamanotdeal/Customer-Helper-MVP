@@ -2,7 +2,7 @@
 // YYYY-MM-DD and read back as `${day}T00:00:00` — the same convention the
 // admin's date inputs and reports already use.
 
-export type AdminDatePreset = 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'LAST_30' | 'THIS_MONTH' | 'CUSTOM';
+export type AdminDatePreset = 'TODAY' | 'YESTERDAY' | 'LAST_7' | 'LAST_30' | 'THIS_WEEK' | 'THIS_MONTH' | 'ALL_TIME' | 'CUSTOM';
 
 export interface AdminDateRange {
   preset: AdminDatePreset;
@@ -30,11 +30,19 @@ export function rangeForPreset(preset: Exclude<AdminDatePreset, 'CUSTOM'>): Admi
       return { preset, start: daysAgo(6), end: today };
     case 'LAST_30':
       return { preset, start: daysAgo(29), end: today };
+    case 'THIS_WEEK': {
+      const d = new Date();
+      const day = d.getDay(); // 0=Sun
+      d.setDate(d.getDate() - day);
+      return { preset, start: toLocalDay(d), end: today };
+    }
     case 'THIS_MONTH': {
       const d = new Date();
       d.setDate(1);
       return { preset, start: toLocalDay(d), end: today };
     }
+    case 'ALL_TIME':
+      return { preset, start: '2000-01-01', end: today };
     default:
       return { preset: 'TODAY', start: today, end: today };
   }
@@ -61,7 +69,9 @@ export function describeRange(range: AdminDateRange): string {
     case 'YESTERDAY': return 'yesterday';
     case 'LAST_7': return 'last 7 days';
     case 'LAST_30': return 'last 30 days';
+    case 'THIS_WEEK': return 'this week';
     case 'THIS_MONTH': return 'this month';
+    case 'ALL_TIME': return 'all time';
     default: return range.start === range.end ? range.start : `${range.start} – ${range.end}`;
   }
 }

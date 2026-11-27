@@ -737,15 +737,6 @@ const NOTIFY_COALESCE_MS = 50;
 /** Debounce on serialising the whole cache to localStorage. */
 const SAVE_DEBOUNCE_MS = 5000;
 
-/**
- * Server addresses (the shared address book behind autocomplete): a device
- * re-reads the whole collection at most this often; in between it only
- * listens for documents written since its last sync (see _syncServerAddresses).
- */
-const ADDRESS_FULL_SYNC_MS = 24 * 60 * 60 * 1000;
-const ADDRESS_FULL_AT_KEY = 'jamanot_server_addresses_full_at';
-const ADDRESS_CURSOR_KEY = 'jamanot_server_addresses_cursor';
-
 /** When this device last read every order feedback — see getAllOrderFeedbacks. */
 const FEEDBACK_FULL_READ_KEY = 'jamanot_feedbacks_full_read_at';
 const FEEDBACK_FULL_READ_TTL_MS = 24 * 60 * 60 * 1000;

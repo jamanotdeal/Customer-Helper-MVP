@@ -3,6 +3,7 @@
 import React from 'react';
 import { Shop } from '@/types';
 import { fallbackStore } from '@/lib/firebase';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
 import { useBrokenImage } from '../ShopPhoto';
 import { useModal } from '../CustomModal';
 import {

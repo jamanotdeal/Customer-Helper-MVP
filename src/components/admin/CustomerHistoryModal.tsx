@@ -8,6 +8,13 @@ import { AdminOrderDetailsModal } from './AdminOrderDetailsModal';
 import { PaginationControl } from './PaginationControl';
 import { LifetimeDataNotice } from './LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
+import { AdminDatePreset, rangeForPreset, rangeBoundsIso, isInRange } from '@/lib/adminDateRange';
+
+type PresetType = AdminDatePreset;
+const presetLabels: Record<string, string> = {
+  TODAY: 'Today', YESTERDAY: 'Yesterday', THIS_WEEK: 'This Week',
+  THIS_MONTH: 'This Month', ALL_TIME: 'All Time', LAST_7: 'Last 7 Days', LAST_30: 'Last 30 Days',
+};
 
 interface CustomerHistoryModalProps {
   customerId: string;
@@ -37,8 +44,8 @@ export const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({
     let cancelled = false;
     setIsFetchingCustomerOrders(true);
     fallbackStore
-      .fetchOrdersForUser(customerId, 'customer')
-      .catch((err) => console.warn('[CustomerHistoryModal] fetchOrdersForUser error:', err))
+      .fetchCustomerOrders(customerId)
+      .catch((err: any) => console.warn('[CustomerHistoryModal] fetchOrdersForUser error:', err))
       .finally(() => {
         if (!cancelled) {
           setIsFetchingCustomerOrders(false);

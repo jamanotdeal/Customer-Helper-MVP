@@ -236,7 +236,7 @@ export const AdminExportHelperModal: React.FC<AdminExportHelperModalProps> = ({
         exportFleetComparisonToCSV(exportTargets, allOrders, allFeedbacks, periodLabelText);
       } else if (currentHelper) {
         // Ensure helper's orders are fetched
-        await fallbackStore.fetchOrdersForUser(currentHelper.id, 'helper');
+        await fallbackStore.fetchCustomerOrders(currentHelper.id);
         const helperTarget: HelperExportTarget = {
           id: currentHelper.id,
           name: currentHelper.name,
@@ -265,7 +265,7 @@ export const AdminExportHelperModal: React.FC<AdminExportHelperModalProps> = ({
     if (!currentHelper || isExportAllFleet) return;
     setIsExporting(true);
     try {
-      await fallbackStore.fetchOrdersForUser(currentHelper.id, 'helper');
+      await fallbackStore.fetchCustomerOrders(currentHelper.id);
       const helperTarget: HelperExportTarget = {
         id: currentHelper.id,
         name: currentHelper.name,

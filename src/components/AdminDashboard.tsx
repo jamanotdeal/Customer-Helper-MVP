@@ -126,7 +126,10 @@ import { AdminDateRangeFilter } from './admin/AdminDateRangeFilter';
 import { LifetimeDataNotice } from './admin/LifetimeDataNotice';
 import { useAdminLifetimeData } from '@/hooks/useAdminLifetimeData';
 import { AdminDateRange, rangeForPreset, rangeBoundsIso, isInRange, describeRange } from '@/lib/adminDateRange';
-import { DEFAULT_STORE_TYPES, parseStoreTypes } from '@/lib/pricing';
+import { matchesQuery, matchesAnyField } from '@/lib/searchUtils';
+import { SettingsAccordionSection } from './admin/SettingsAccordionSection';
+import { compressImage, uploadImageIfInline, IMAGE_UPLOAD_FAILED_MESSAGE } from '@/lib/imageUtils';
+import { DEFAULT_STORE_TYPES, parseStoreTypes, DEFAULT_SERVICES, getStoreTypesForService, calculateHelperCommission } from '@/lib/pricing';
 import {
   exportUsersToCSV,
   exportUsersToPDF,
@@ -1248,8 +1251,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!q || q.length < 2) return;
     setIsFetchingServer(true);
     fallbackStore
-      .searchAdminOrdersFromServer(q)
-      .catch((err) => {
+      .loadAdminOrderHistory()
+      .catch((err: any) => {
         console.warn('[AdminDashboard] searchAdminOrdersFromServer error:', err);
       })
       .finally(() => {

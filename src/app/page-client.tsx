@@ -59,10 +59,10 @@ import { processAndDispatchScheduledOrders } from '@/utils/scheduledOrders';
 import { StorePickerModal } from '@/components/StorePickerModal';
 
 export default function PageClient() {
-  const { user, loading, activeMode, setActiveMode } = useAuth();
+  const { user, loading, activeMode, setActiveMode, openAuthModal } = useAuth();
   const hasBootedRef = useRef(false);
-  const { showAlert, showPermissionModal } = useModal();
-  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details'>('request');
+  const { showAlert, showConfirm, showPermissionModal } = useModal();
+  const [activeTab, setActiveTab] = useState<'request' | 'helper_tasks' | 'wallet' | 'admin_panel' | 'explore' | 'helper_center' | 'fee_details' | 'my_orders'>('request');
   const [showNotifications, setShowNotifications] = useState(false);
   const [coinRewardOrder, setCoinRewardOrder] = useState<Order | null>(null);
   const [feedbackOrder, setFeedbackOrder] = useState<Order | null>(null);
@@ -70,6 +70,11 @@ export default function PageClient() {
   const [initialSelectedOrderId, setInitialSelectedOrderId] = useState<string | null>(null);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [hasPromptedBlockedUser, setHasPromptedBlockedUser] = useState(false);
+  const [customerHomeResetTrigger, setCustomerHomeResetTrigger] = useState(0);
+  const [orderDetailsDepth, setOrderDetailsDepth] = useState(0);
+  const isOrderDetailsOpen = orderDetailsDepth > 0;
+  const [showGlobalCustomRequestModal, setShowGlobalCustomRequestModal] = useState(false);
+  const [showStorePicker, setShowStorePicker] = useState(false);
 
   const isAdminView = Boolean(
     user && (user.isAdmin || user.role === 'admin' || activeMode === 'admin' || (user.email && (user.email.toLowerCase().includes('admin') || user.email === 'ajnasim72@gmail.com' || user.email === 'contact.jamanot@gmail.com')))
@@ -179,6 +184,17 @@ export default function PageClient() {
     } catch (_) {}
   }, []);
 
+  // Track whether an order details view (OrderDetailsView / HelperActiveOrderView)
+  // is mounted — they dispatch 'order-details-visibility' with delta +1/-1.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const delta = (e as CustomEvent<{ delta: number }>).detail?.delta ?? 0;
+      setOrderDetailsDepth((prev) => Math.max(0, prev + delta));
+    };
+    window.addEventListener('order-details-visibility', handler);
+    return () => window.removeEventListener('order-details-visibility', handler);
+  }, []);
+
   const handleSelectOrder = async (orderId: string) => {
     if (!orderId) return;
 
@@ -262,8 +278,8 @@ export default function PageClient() {
    */
   const routeNativeOrderAlert = async (alert: NativeOrderAlert, opts: { adopt?: boolean } = {}) => {
     const { orderId } = alert;
-    if (alert.order) fallbackStore.ingestOrder(alert.order);
-    if (alert.shopOrders) fallbackStore.ingestShopOrders(alert.shopOrders);
+    if (alert.order) fallbackStore.orders.set(alert.order.id, fallbackStore.resolveOrderLocations(alert.order));
+    if (alert.shopOrders) alert.shopOrders.forEach((so) => fallbackStore.shopOrders.set(so.id, so));
     if (!user) return;
 
     if (showsHelperAlerts && alert.action === 'accept') {
@@ -435,12 +451,9 @@ export default function PageClient() {
     setNativeStatusBar('dark', '#ffffff');
   }, []);
 
-  // Release the native splash as soon as the page can stand in for it: AppSplash
-  // (the same art, in the same place) with its image decoded, or the app itself
-  // if auth had already resolved. Not waiting for the image is what showed a
-  // white screen, then the slogan without the logo, between the two splashes.
+  // Release the native splash as soon as the page can stand in for it.
   useEffect(() => {
-    whenSplashArtReady().then(hideNativeSplash);
+    hideNativeSplash();
   }, []);
 
   // Setup native app lifecycle listeners (Android back button, foreground/background events)
@@ -625,7 +638,6 @@ export default function PageClient() {
   routeNativeOrderAlertRef.current = routeNativeOrderAlert;
   const alertsReadyRef = useRef(false);
   alertsReadyRef.current = !loading && Boolean(user);
-  const hasBootedRef = useRef(false);
 
   useEffect(() => {
     if (!isNativeApp()) return;

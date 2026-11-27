@@ -20,7 +20,8 @@ import {
   Download,
   Check,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  PieChart
 } from 'lucide-react';
 
 interface GrowthAnalyticsProps {
