@@ -1727,6 +1727,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return hours > 0 ? (hours >= 10 ? Math.round(hours).toString() : hours.toFixed(1)) : '0';
   }, [scopedAllOrders, rangeStartIso, rangeEndIso]);
 
+  // Fulfillment and cancellation indicators for orders placed in the selected date range.
+  const orderOutcomeStats = React.useMemo(() => {
+    const inRange = scopedAllOrders.filter((o) => isInRange(o.createdAt, rangeStartIso, rangeEndIso));
+    const total = inRange.length;
+    const delivered = inRange.filter((o) => o.status === 'DELIVERED').length;
+    const canceledOrders = inRange.filter((o) => o.status === 'CANCELED');
+    const canceled = canceledOrders.length;
+    const unassignedCanceled = canceledOrders.filter((o) => !o.helperId).length;
+    return {
+      total,
+      delivered,
+      canceled,
+      unassignedCanceled,
+      fulfillmentRate: total > 0 ? Math.round((delivered / total) * 100) : 0,
+      cancellationRate: total > 0 ? Math.round((canceled / total) * 100) : 0,
+    };
+  }, [scopedAllOrders, rangeStartIso, rangeEndIso]);
+
   const totalPendingPayoutAmount = pendingWds.reduce((sum, w) => sum + w.amount, 0);
 
   const approvedHelpersCount = useMemo(() => {
@@ -2290,6 +2308,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (statusFilter !== 'ALL') {
       if (statusFilter === 'UNASSIGNED') {
         list = list.filter((o) => !o.helperId && o.status !== 'CANCELED' && o.status !== 'DELIVERED');
+      } else if (statusFilter === 'UNASSIGNED_CANCELED') {
+        list = list.filter((o) => o.status === 'CANCELED' && !o.helperId);
       } else if (statusFilter === 'DELIVERY_BACK') {
         list = list.filter((o) => !!o.needDeliveryBack);
       } else if (statusFilter === 'PAID') {
@@ -3170,7 +3190,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Total Orders Metric */}
         <div
-          onClick={() => isTabAllowed('ORDERS') && setActiveTab('ORDERS')}
+          onClick={() => {
+            if (isTabAllowed('ORDERS')) {
+              setStatusFilter('ALL');
+              setCurrentPage(1);
+              setActiveTab('ORDERS');
+            }
+          }}
           className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('ORDERS')
             ? 'bg-white border-gray-100 hover:border-emerald-300 cursor-pointer'
             : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
@@ -3313,32 +3339,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Active Helpers Metric */}
+        {/* Order Fulfillment, Cancellation & Unassigned Rates Metric */}
         <div
           onClick={() => {
-            if (isTabAllowed('HELPERS')) {
-              setActiveTab('HELPERS');
-              setHelperSubView('APPLICATIONS');
+            if (isTabAllowed('ORDERS')) {
+              setStatusFilter('ALL');
+              setCurrentPage(1);
+              setActiveTab('ORDERS');
             }
           }}
-          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('HELPERS')
-            ? 'bg-white border-gray-100 hover:border-indigo-300 cursor-pointer'
+          className={`p-5 rounded-3xl border shadow-soft transition-all ${isTabAllowed('ORDERS')
+            ? 'bg-white border-gray-100 hover:border-emerald-300 cursor-pointer'
             : 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-100'
             }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">
-              Active Helpers
+              Order Rates · {describeRange(dateRange)}
             </span>
-            <div className="p-2 rounded-2xl bg-indigo-100 text-indigo-700">
-              <Bike className="w-5 h-5" />
+            <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-700">
+              <CheckCircle2 className="w-5 h-5" />
             </div>
           </div>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-extrabold text-gray-900">
-              {isZoneFiltered ? approvedHelpersCount : (exactActiveHelpers !== null ? exactActiveHelpers : approvedHelpersCount)}
-            </span>
-            <span className="text-xs text-amber-600 font-semibold">({pendingApps.length} pending app)</span>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isTabAllowed('ORDERS')) {
+                  setStatusFilter('DELIVERED');
+                  setCurrentPage(1);
+                  setActiveTab('ORDERS');
+                }
+              }}
+              title={`Fulfilled (${describeRange(dateRange)}): ${orderOutcomeStats.delivered}/${orderOutcomeStats.total}`}
+              className="text-left rounded-xl px-1.5 py-0.5 -mx-1.5 hover:bg-emerald-50 transition-colors"
+            >
+              <div className="text-xl font-extrabold text-emerald-700 leading-tight">
+                {rangeStatus === 'loading' ? '…' : `${orderOutcomeStats.fulfillmentRate}%`}
+              </div>
+              <div className="text-[11px] font-bold text-emerald-700/80">Fulfilled</div>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isTabAllowed('ORDERS')) {
+                  setStatusFilter('CANCELED');
+                  setCurrentPage(1);
+                  setActiveTab('ORDERS');
+                }
+              }}
+              title={`Canceled (${describeRange(dateRange)}): ${orderOutcomeStats.canceled}/${orderOutcomeStats.total}`}
+              className="text-left rounded-xl px-1.5 py-0.5 hover:bg-rose-50 transition-colors"
+            >
+              <div className="text-xl font-extrabold text-rose-600 leading-tight">
+                {rangeStatus === 'loading' ? '…' : `${orderOutcomeStats.cancellationRate}%`}
+              </div>
+              <div className="text-[11px] font-bold text-rose-600/80">Canceled</div>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isTabAllowed('ORDERS')) {
+                  setStatusFilter('UNASSIGNED_CANCELED');
+                  setCurrentPage(1);
+                  setActiveTab('ORDERS');
+                }
+              }}
+              title={`Unassigned canceled orders (${describeRange(dateRange)}): ${orderOutcomeStats.unassignedCanceled} canceled without a helper`}
+              className="text-left rounded-xl px-1.5 py-0.5 hover:bg-amber-50 transition-colors"
+            >
+              <div className="text-xl font-extrabold text-amber-600 leading-tight">
+                {rangeStatus === 'loading' ? '…' : orderOutcomeStats.unassignedCanceled}
+              </div>
+              <div className="text-[11px] font-bold text-amber-700/80">Unassigned</div>
+            </button>
           </div>
         </div>
       </div>
@@ -3697,6 +3774,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="ALL">All Statuses</option>
                   {activeTab === 'ORDERS' && <option value="UNASSIGNED">Unassigned Orders</option>}
+                  {activeTab === 'ORDERS' && <option value="UNASSIGNED_CANCELED">Unassigned Canceled</option>}
                   {activeTab === 'ORDERS' && <option value="DELIVERY_BACK">🔁 Need Delivery Back</option>}
                   <option value="PENDING">Pending (Not Accepted)</option>
                   <option value="ACCEPTED">Accepted</option>
